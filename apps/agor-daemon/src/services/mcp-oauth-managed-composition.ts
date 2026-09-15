@@ -73,6 +73,7 @@ export async function createManagedOAuthServices(input: {
   await registry.refresh().catch(() => undefined);
   const flows = new MCPOAuthPendingFlowAuthority(input.db, masterSecret);
   const acknowledgeMetadata = createManagedOAuthAcknowledger({
+    db: input.db,
     sender: deployment.sender,
     assertOwner: (owner) => {
       const capability = registry.capabilities();

@@ -123,6 +123,15 @@ export class AmbiguousRefreshError extends Error {
   }
 }
 
+/** No terminal journal result: only the original claim's receipt may be recovered. */
+export class ManagedRefreshInProgressError extends Error {
+  readonly code = 'managed_refresh_in_progress';
+  constructor() {
+    super('Managed OAuth refresh is awaiting its original operation receipt');
+    this.name = 'ManagedRefreshInProgressError';
+  }
+}
+
 export class FailedRefreshError extends Error {
   readonly code = 'failed_refresh';
   constructor(message = 'The observed OAuth refresh failed; retry or reconnect safely') {
@@ -458,6 +467,41 @@ async function settleObservedRefresh(
   return token.oauth_access_token;
 }
 
+/**
+ * A short receipt-read deadline or HTTP failure is not the two-minute owner
+ * deadline and cannot retire another replica's live claim. The dispatch owner
+ * has the same uncertainty after a lost response. Keep that exact claim so a
+ * later receipt-only reader can recover it; claimRefresh/maintenance enforce
+ * expiry using database time. Never release it or allocate another operation.
+ */
+async function observeManagedRefreshAfterUncertainty(
+  deps: RefreshAndPersistDeps,
+  fence: MCPOAuthRefreshVersion & { claimId: string },
+  operationId: string
+): Promise<string> {
+  await deps.assertCurrent?.();
+  return tenantWork(deps, async (db) => {
+    const token = await new UserMCPOAuthTokenRepository(db).getToken(deps.userId, deps.mcpServerId);
+    if (!token) throw new InvalidGrantError();
+    if (!exactGrantMatches(token, fence)) throw new GrantConfigurationChangedError();
+    await assertGrantSubjectForRefresh(deps, db);
+    await assertGrantStillAuthorized(deps, token, db);
+    if (token.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+    if (
+      token.refresh_status === 'idle' &&
+      token.refresh_generation === fence.refreshGeneration &&
+      token.refresh_success_generation === fence.refreshGeneration &&
+      token.managed_metadata?.operation_id === operationId &&
+      token.managed_metadata.claim.claim_id === fence.claimId
+    )
+      return token.oauth_access_token;
+    if (token.refresh_status === 'idle') throw new FailedRefreshError();
+    // This is not a no-consumption certificate: acquisition must not infer
+    // that an uncertain operation was rejected or reuse a rotating token.
+    throw new ManagedRefreshInProgressError();
+  });
+}
+
 // Shared symbol survives independently bundled entry points but cannot arrive in
 // JSON/HTTP errors. Only this adapter mints it before invoking ANY client request.
 const managedUndispatched = Symbol.for('agor.internal.managed-oauth.local-undispatched.v1');
@@ -680,6 +724,9 @@ async function refreshManagedPostgres(
         notifyInvalidGrant(deps);
         throw new InvalidGrantError();
       }
+      // The exact result CAS also durably throttles admission/client failures
+      // lacking a D0 retry_after_ms. This proof retains only the original permit;
+      // a subsequent request must pass current grant/use authorization again.
       if (
         outcome.status === 'not_dispatched' ||
         outcome.status === 'client_configuration_failed' ||
@@ -689,15 +736,7 @@ async function refreshManagedPostgres(
       // App-client pause/rejection remains distinct from user grant invalidation.
       throw error;
     }
-    await tenantWork(deps, (db) =>
-      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
-        deps.userId,
-        deps.mcpServerId,
-        fence,
-        'ambiguous'
-      )
-    );
-    throw new AmbiguousRefreshError();
+    return observeManagedRefreshAfterUncertainty(deps, fence, request.operation_id);
   }
   let committed: boolean;
   try {
@@ -716,16 +755,10 @@ async function refreshManagedPostgres(
         }
       );
     });
-  } catch (error) {
-    await tenantWork(deps, (db) =>
-      new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
-        deps.userId,
-        deps.mcpServerId,
-        fence,
-        'ambiguous'
-      )
-    );
-    throw error;
+  } catch {
+    // A failed/lost local COMMIT acknowledgement is not proof that the broker
+    // operation is ambiguous either. Adopt only our exact committed result.
+    return observeManagedRefreshAfterUncertainty(deps, fence, request.operation_id);
   }
   if (!committed) return observeCommittedRefresh(deps, fence);
   try {

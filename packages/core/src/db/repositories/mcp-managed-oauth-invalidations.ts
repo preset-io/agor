@@ -50,8 +50,6 @@ function union(...sets: MCPManagedOAuthInvalidation[][]): MCPManagedOAuthInvalid
       const old = byKey.get(k);
       if (!old || BigInt(old.epoch) < BigInt(item.epoch)) byKey.set(k, item);
     }
-  if (byKey.size > MAX_TOMBSTONES)
-    throw new RepositoryError('Managed invalidation capacity exceeded; checkpoint cannot advance');
   return [...byKey.values()];
 }
 export class MCPManagedOAuthInvalidationRepository {
@@ -60,6 +58,50 @@ export class MCPManagedOAuthInvalidationRepository {
     const k = key(scope);
     await lockTenantAuthoritySubject(this.db, scope.tenant_id, `mcp-managed-invalidation:${k}`);
     return k;
+  }
+  /**
+   * One MVCC statement observes both sides of the atomic pending -> token transfer.
+   * Never use a fresh clock to expire rows from an older repeatable-read snapshot:
+   * even expired pending rows conservatively pin evidence until durably terminal.
+   * New attempts cannot reuse a globally unique closed handle; deleted refresh
+   * owners cannot insert a replacement token via their update-only completion CAS.
+   */
+  private async compact(
+    scope: MCPManagedOAuthInvalidationScope,
+    values: MCPManagedOAuthInvalidation[]
+  ): Promise<MCPManagedOAuthInvalidation[]> {
+    const ownerScope = JSON.stringify({
+      workspace_id: scope.tenant_id,
+      cell_id: scope.cell_id,
+      environment: scope.environment,
+      residency_region: scope.residency_region,
+      recovery_incarnation: scope.recovery_incarnation,
+    });
+    const rows = rawRows(
+      await executeRaw(
+        this.db,
+        sql`SELECT managed_metadata->>'handle' AS handle, false AS pending
+          FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${scope.tenant_id} AND credential_origin='cloud_managed_v1'
+            AND managed_metadata->'owner' @> ${ownerScope}::jsonb
+          UNION ALL
+          SELECT NULL AS handle, true AS pending WHERE EXISTS (
+            SELECT 1 FROM public.mcp_oauth_pending_flows
+            WHERE tenant_id=${scope.tenant_id} AND credential_origin='cloud_managed_v1'
+              AND managed_metadata->'owner' @> ${ownerScope}::jsonb
+              AND is_current AND status IN ('pending','exchanging'))`
+      )
+    );
+    const pending = rows.some((row) => row.pending === true);
+    const handles = new Set(rows.filter((row) => !row.pending).map((row) => row.handle));
+    const retained = values.filter(
+      (item) => pending || item.handle === null || handles.has(item.handle)
+    );
+    if (retained.length > MAX_TOMBSTONES)
+      throw new RepositoryError(
+        'Managed invalidation capacity exceeded; checkpoint cannot advance'
+      );
+    return retained;
   }
   /** Missing/restarted/partial state is denied by the consumer, never treated as an empty allow-list. */
   async readForGrant(
@@ -99,7 +141,7 @@ export class MCPManagedOAuthInvalidationRepository {
     return {
       status: row.status as MCPManagedOAuthInvalidationRead['status'],
       cursor: row.cursor as string | null,
-      items: union(items(row.items), items(row.staged_items)),
+      items: await this.compact(scope, union(items(row.items), items(row.staged_items))),
     };
   }
   async requireSnapshot(scope: MCPManagedOAuthInvalidationScope): Promise<void> {
@@ -142,8 +184,8 @@ export class MCPManagedOAuthInvalidationRepository {
     )
       throw new RepositoryError('Managed invalidation page fence mismatch');
     const selected = page.items.filter((item) => item.workspace_id === scope.tenant_id);
-    // Never discard known invalidations while staging or publishing a snapshot.
-    const merged = union(old.items, selected);
+    // Snapshot staging retains every invalidation which can still affect local authority.
+    const merged = await this.compact(scope, union(old.items, selected));
     const status = options.snapshot && !page.snapshot_complete ? 'snapshot_staging' : 'ready';
     const digest = createHash('sha256').update(JSON.stringify(page)).digest('hex');
     await executeRaw(

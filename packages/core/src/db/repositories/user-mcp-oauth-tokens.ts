@@ -195,6 +195,12 @@ export interface MCPOAuthRefreshVersion {
   refreshGeneration: number;
 }
 
+// Architecture §8 permits a fresh operation only after certified no-send/non-
+// consumption. D0 provides no retry_after_ms for admission/client failures: use
+// a conservative 30s local throttle, not a broker retry instruction or permission
+// to bypass a profile pause. Every later operation still needs fresh admission.
+const MANAGED_REFRESH_ADMISSION_BACKOFF_MS = 30_000;
+
 // Only a locked, exact-version DB backoff observation can mint this proof. A
 // structural copy, serialized result, or caller-created `observed` is not proof.
 const managedDeferredClaims = new WeakMap<object, Readonly<MCPOAuthRefreshVersion>>();
@@ -1271,17 +1277,43 @@ export class UserMCPOAuthTokenRepository {
       return this.finishRefreshClaim(userId, serverId, claim, 'ambiguous');
     }
     const next = 'next_sequence' in response ? response.next_sequence : response.sequence;
+    const retryAfterMs =
+      response.status === 'rejected_non_consuming'
+        ? response.retry_after_ms
+        : MANAGED_REFRESH_ADMISSION_BACKOFF_MS;
     const result = await executeRaw(
       this.db,
       sql`UPDATE public.user_mcp_oauth_tokens
       SET managed_metadata=jsonb_set(managed_metadata,'{next_sequence}',to_jsonb(${next}::text)),
-        managed_refresh_not_before=CASE WHEN ${response.status === 'rejected_non_consuming'}
-          THEN GREATEST(managed_refresh_not_before,clock_timestamp()+(${response.status === 'rejected_non_consuming' ? response.retry_after_ms : 0} * interval '1 millisecond'))
-          ELSE managed_refresh_not_before END,
+        managed_refresh_not_before=GREATEST(managed_refresh_not_before,
+          clock_timestamp()+(${retryAfterMs} * interval '1 millisecond')),
         refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
       WHERE tenant_id=${tenantId} AND user_id=${userId} AND mcp_server_id=${serverId} AND refresh_claim_id=${claim.claimId}
         AND managed_operation_id=${response.operation_id} AND managed_metadata->>'next_sequence'=${response.sequence}
         AND refresh_claimed_at>clock_timestamp()-interval '2 minutes' RETURNING mcp_server_id`
+    );
+    return rowsOf(result).length === 1;
+  }
+
+  /** Exact committed receipt only. A delayed ACK cannot mark a replacement or later rotation. */
+  async markManagedReceiptAcknowledged(input: MCPManagedOAuthGrantMetadata): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed receipts require PostgreSQL');
+    const metadata = MCPManagedOAuthGrantMetadataSchema.parse(input);
+    if (metadata.owner.workspace_id !== this.tenantId())
+      throw new RepositoryError('Managed ACK scope mismatch');
+    const result = await executeRaw(
+      this.db,
+      sql`
+      UPDATE public.user_mcp_oauth_tokens
+      SET managed_metadata=jsonb_set(managed_metadata,'{receipt_acknowledged}','true'::jsonb)
+      WHERE tenant_id=${this.tenantId()} AND user_id=${metadata.owner.cell_local_user_id}
+        AND mcp_server_id=${metadata.owner.server_id} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->'owner'=${JSON.stringify(metadata.owner)}::jsonb
+        AND managed_metadata->>'operation_id'=${metadata.operation_id}
+        AND managed_metadata->>'receipt_id'=${metadata.receipt_id}
+        AND managed_metadata->>'signed_receipt'=${metadata.signed_receipt}
+        AND managed_metadata->'claim'=${JSON.stringify(metadata.claim)}::jsonb
+      RETURNING mcp_server_id`
     );
     return rowsOf(result).length === 1;
   }
@@ -1308,6 +1340,7 @@ export class UserMCPOAuthTokenRepository {
         sql`
       SELECT managed_metadata FROM public.user_mcp_oauth_tokens
       WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->>'receipt_acknowledged' IS DISTINCT FROM 'true'
         AND (${afterOperationId ?? null}::text IS NULL OR managed_metadata->>'operation_id'>${afterOperationId ?? null})
       ORDER BY managed_metadata->>'operation_id' LIMIT ${limit}
     `

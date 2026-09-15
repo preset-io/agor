@@ -33,6 +33,8 @@ export const MCPManagedOAuthGrantMetadataSchema = z.strictObject({
   next_sequence: McpOAuthPositiveEpochSchema,
   operation_id: McpOAuthIdSchema,
   receipt_id: McpOAuthIdSchema,
+  // Local delivery bookkeeping only; never part of broker or use authority.
+  receipt_acknowledged: z.literal(true).optional(),
   claim: McpOAuthClaimSchema,
   signed_receipt: McpOAuthSignedArtifactSchema,
   receipt_claims: McpOAuthReceiptClaimsSchema,
