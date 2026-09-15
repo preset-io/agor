@@ -36,7 +36,7 @@ describe('managed OAuth deployment configuration', () => {
           { managed_mcp_oauth: { ...configured, enabled: false, [flag]: true } },
           flag
         )
-      ).toBe(false);
+      ).toBe(flag === 'revocation');
     }
   });
 

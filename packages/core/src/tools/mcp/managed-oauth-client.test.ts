@@ -13,6 +13,7 @@ import valid from './__fixtures__/managed-v1/valid.json';
 import {
   executeManagedOAuthOperation,
   ManagedMCPOAuthClient,
+  recoverManagedOAuthOperation,
   validateManagedOAuthSuccess,
   verifyManagedOAuthArtifact,
 } from './managed-oauth-client';
@@ -156,6 +157,56 @@ describe('single dispatch and original-claim receipt recovery', () => {
     await expect(executeManagedOAuthOperation(makeOptions(() => now))).rejects.toThrow(
       'claim_expired'
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('supports receipt-only failover with 25 seconds remaining and no token replay', async () => {
+    fetchMock.mockImplementationOnce(success);
+    const options = makeOptions(() => expected.claim.deadline_at - 25_000);
+    const { request: _request, sequence: _sequence, ...recovery } = options;
+    await expect(recoverManagedOAuthOperation({ ...recovery, expected })).resolves.toMatchObject({
+      use: valid.use_claims,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/operations/operation_alpha/receipt');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty('refresh_token');
+    expect(body).not.toHaveProperty('pkce_verifier');
+  });
+  it('rejects sequence disagreement and sender-owner swaps before any secret dispatch', async () => {
+    await expect(
+      executeManagedOAuthOperation({ ...makeOptions(), sequence: '1' })
+    ).rejects.toThrow();
+    const options = makeOptions();
+    options.request.owner.environment = 'production';
+    await expect(executeManagedOAuthOperation(options)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('validates in-progress owner before recovery and enforces total terminal-response budget', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          operation_id: 'other_operation',
+          owner: expected.owner,
+          claim: expected.claim,
+          status: 'in_progress',
+          failure_code: 'operation_in_progress',
+          sequence: '0',
+        }),
+        { headers: { 'content-type': 'application/json' } }
+      )
+    );
+    await expect(executeManagedOAuthOperation(makeOptions())).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockClear();
+    let now = policy.now;
+    fetchMock.mockImplementationOnce(() => {
+      now += 11_000;
+      return success();
+    });
+    await expect(
+      recoverManagedOAuthOperation({ ...makeOptions(() => now), expected })
+    ).rejects.toThrow('unavailable');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   it('preserves client-configuration failure as a journal disposition, not invalid grant', async () => {

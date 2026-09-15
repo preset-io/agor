@@ -7,3 +7,5 @@ coverage
 pnpm-lock.yaml
 .turbo
 storybook-static
+# Byte-pinned cross-repository protocol fixtures; checked by managed-contract.test.ts.
+packages/core/src/tools/mcp/__fixtures__/managed-v1/*.json

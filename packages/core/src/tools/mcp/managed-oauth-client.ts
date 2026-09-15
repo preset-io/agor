@@ -14,6 +14,7 @@ import {
   McpOAuthOperationResponseSchema,
   McpOAuthOriginSchema,
   type McpOAuthOwner,
+  McpOAuthOwnerSchema,
   McpOAuthReceiptClaimsSchema,
   McpOAuthReceiptRequestSchema,
   type McpOAuthRefreshRequest,
@@ -240,6 +241,16 @@ export class ManagedMCPOAuthClient {
     timeoutMs?: number;
   }): Promise<T> {
     try {
+      if (options.body.owner !== undefined) {
+        const owner = McpOAuthOwnerSchema.parse(options.body.owner);
+        if (
+          owner.cell_id !== this.config.cellId ||
+          owner.environment !== this.config.environment ||
+          owner.residency_region !== this.config.region
+        ) {
+          throw new ManagedMCPOAuthProtocolError('invalid_response');
+        }
+      }
       let path: string = MCP_OAUTH_ROUTES[options.operation];
       if (path.includes(':id')) {
         // Grant handles satisfy this subset too. No URL parser normalization at this boundary.
@@ -289,17 +300,19 @@ export class ManagedMCPOAuthClient {
         ),
         assertCurrent: options.assertCurrent,
       });
-      if (
-        !response.ok ||
-        response.headers.get('content-type')?.split(';')[0].trim() !== 'application/json'
-      ) {
-        throw new Error();
+      if (!response.ok) throw new ManagedMCPOAuthProtocolError('unavailable');
+      try {
+        if (response.headers.get('content-type')?.split(';')[0].trim() !== 'application/json')
+          throw new Error();
+        return options.schema.parse(
+          mcpOAuthParseJson(await response.text(), MCP_OAUTH_LIMITS.response_bytes)
+        );
+      } catch {
+        throw new ManagedMCPOAuthProtocolError('invalid_response');
       }
-      return options.schema.parse(
-        mcpOAuthParseJson(await response.text(), MCP_OAUTH_LIMITS.response_bytes)
-      );
-    } catch {
+    } catch (error) {
       // No cause, provider body, URL, token or arbitrary schema diagnostic escapes.
+      if (error instanceof ManagedMCPOAuthProtocolError) throw error;
       throw new ManagedMCPOAuthProtocolError('unavailable');
     }
   }
@@ -334,6 +347,9 @@ export async function executeManagedOAuthOperation(options: {
   const request = refresh
     ? McpOAuthRefreshRequestSchema.parse(options.request)
     : McpOAuthExchangeRequestSchema.parse(options.request);
+  if (options.sequence !== ('sequence' in request ? request.sequence : '0')) {
+    throw new ManagedMCPOAuthProtocolError('invalid_response');
+  }
   const expected: ManagedOAuthExpectedOperation = {
     owner: request.owner,
     claim: request.claim,
@@ -361,38 +377,8 @@ export async function executeManagedOAuthOperation(options: {
     // Network and HTTP failures do not establish whether provider dispatch occurred.
   }
   if (!response || response.status === 'in_progress') {
-    // At most 10 seconds total recovery, still inside the ORIGINAL local claim.
-    const recoveryDeadline = Math.min(
-      request.claim.deadline_at,
-      options.now() + MCP_OAUTH_LIMITS.recovery_timeout_ms
-    );
-    const monotonicDeadline = performance.now() + Math.max(0, recoveryDeadline - options.now());
-    do {
-      await assertLive(false);
-      const remaining = Math.floor(
-        Math.min(recoveryDeadline - options.now(), monotonicDeadline - performance.now())
-      );
-      if (remaining <= 0) throw new ManagedMCPOAuthProtocolError('unavailable');
-      response = await options.client.request({
-        operation: 'receipt',
-        id: request.operation_id,
-        recovery: true,
-        timeoutMs: remaining,
-        body: McpOAuthReceiptRequestSchema.parse({
-          protocol_version: 1,
-          operation_id: randomUUID(),
-          owner: request.owner,
-          target_operation_id: request.operation_id,
-          claim: request.claim,
-        }),
-        schema: McpOAuthOperationResponseSchema,
-        assertCurrent: () => assertLive(false),
-      });
-      if (response.status !== 'in_progress') break;
-      if (options.now() >= recoveryDeadline || performance.now() >= monotonicDeadline)
-        throw new ManagedMCPOAuthProtocolError('unavailable');
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    } while (options.now() < recoveryDeadline && performance.now() < monotonicDeadline);
+    if (response) validateManagedOAuthOutcome(response, expected, options.now());
+    return recoverManagedOAuthOperation({ ...options, expected });
   }
   if (!response) throw new ManagedMCPOAuthProtocolError('unavailable');
   await assertLive(false);
@@ -403,4 +389,60 @@ export async function executeManagedOAuthOperation(options: {
     keys: options.keys,
     now: options.now(),
   });
+}
+
+/** Failover is receipt-only and needs neither code/verifier nor refresh token. */
+export async function recoverManagedOAuthOperation(options: {
+  client: ManagedMCPOAuthClient;
+  expected: ManagedOAuthExpectedOperation;
+  issuer: string;
+  keys: ReadonlyMap<string, KeyObject>;
+  now: () => number;
+  assertCurrent: () => void | Promise<void>;
+}) {
+  const { expected } = options;
+  const recoveryDeadline = Math.min(
+    expected.claim.deadline_at,
+    options.now() + MCP_OAUTH_LIMITS.recovery_timeout_ms
+  );
+  const monotonicDeadline = performance.now() + Math.max(0, recoveryDeadline - options.now());
+  const assertLive = async () => {
+    await options.assertCurrent();
+    if (!mcpOAuthClaimIsLive(expected.claim, options.now()))
+      throw new ManagedMCPOAuthProtocolError('claim_expired');
+    if (options.now() >= recoveryDeadline || performance.now() >= monotonicDeadline)
+      throw new ManagedMCPOAuthProtocolError('unavailable');
+  };
+  while (true) {
+    await assertLive();
+    const remaining = Math.floor(
+      Math.min(recoveryDeadline - options.now(), monotonicDeadline - performance.now())
+    );
+    if (remaining <= 0) throw new ManagedMCPOAuthProtocolError('unavailable');
+    const response = await options.client.request({
+      operation: 'receipt',
+      id: expected.operationId,
+      recovery: true,
+      timeoutMs: remaining,
+      body: McpOAuthReceiptRequestSchema.parse({
+        protocol_version: 1,
+        operation_id: randomUUID(),
+        owner: expected.owner,
+        target_operation_id: expected.operationId,
+        claim: expected.claim,
+      }),
+      schema: McpOAuthOperationResponseSchema,
+      assertCurrent: assertLive,
+    });
+    await assertLive();
+    const outcome = validateManagedOAuthOutcome(response, expected, options.now());
+    if (outcome.status === 'succeeded')
+      return validateManagedOAuthSuccess(outcome, expected, {
+        issuer: options.issuer,
+        keys: options.keys,
+        now: options.now(),
+      });
+    if (outcome.status !== 'in_progress') throw new ManagedMCPOAuthOperationError(outcome);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+  }
 }
