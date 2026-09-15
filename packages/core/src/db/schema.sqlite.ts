@@ -14,12 +14,13 @@ import type {
   EffortLevel,
   Message,
   PermissionMode,
+  RepoCleanupPolicy,
   SandpackConfig,
   Session,
   Task,
   UserExternalIdentity,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, DEFAULT_REPO_CLEANUP_POLICY } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
@@ -640,6 +641,11 @@ export const repos = sqliteTable(
     // Retired nullable compatibility stamp retained for rollback/audit only.
     unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
 
+    cleanup_policy: t
+      .json<RepoCleanupPolicy>('cleanup_policy')
+      .notNull()
+      .default(DEFAULT_REPO_CLEANUP_POLICY),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -717,6 +723,8 @@ export const branches = sqliteTable(
       .references(() => repos.repo_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
+
+    cleanup_protected: t.bool('cleanup_protected').notNull().default(false),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
@@ -827,6 +835,11 @@ export const branches = sqliteTable(
         // Daemon-private shared maintenance authority. Never accept through generic patches.
         maintenance?: import('../types/branch-deletion').BranchMaintenanceClaim;
         maintenance_generation?: number;
+        workspace_snapshot?: import('../types/branch-cleanup').BranchWorkspaceSnapshot;
+        workspace_operation?: import('../types/branch-cleanup').BranchWorkspaceOperation;
+        cleanup_last_error?: import('../types/branch-cleanup').BranchWorkspaceError;
+        last_cleanup_succeeded_at?: string;
+        last_cleanup_operation_id?: import('../types/id').UUID;
         path: string; // Absolute path to branch directory
 
         // Git state (current)

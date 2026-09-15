@@ -182,7 +182,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0098_board_branch_capability_policies',
     '0099_shared_session_prompting',
     '0100_claude_oauth_attempts',
-    '0109_user_provider_oauth_grants',
+    '0110_user_provider_oauth_grants',
     '0102_mcp_oauth_client_registrations',
     '0103_oauth_authority_watermark_reconciliation',
     '0102_shared_session_prompting',

@@ -97,6 +97,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   GATEWAY_CHANNEL_WRITE_FIELDS,
@@ -496,6 +497,7 @@ export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
   BRANCH_DELETION_REPORT_SERVICE,
+  BRANCH_CLEANUP_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   'sessions',
   'sessions/:id/mcp-servers',
@@ -1418,7 +1420,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         around: {
           all: [
             async (context: HookContext, next: () => Promise<void>) => {
-              const external = path === 'gateway' || path === BRANCH_DELETION_REPORT_SERVICE;
+              const external =
+                path === 'gateway' ||
+                path === BRANCH_DELETION_REPORT_SERVICE ||
+                path === BRANCH_CLEANUP_REPORT_SERVICE ||
+                (path === 'branches' && context.method === 'clean');
               return (external ? tenantIdentityAround : tenantDatabaseScopeAround)(context, next);
             },
           ],
@@ -2380,13 +2386,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace',
+        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace' | 'clean',
         Array<(context: HookContext) => HookContext>
       >;
     }): void;
   };
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
+      clean: [requireMinimumRole(ROLES.MEMBER, 'clean branches')],
       updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
@@ -3134,6 +3141,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: { all: [requireAuth] },
   });
   safeService(ENVIRONMENT_COMMAND_REPORT_SERVICE)?.hooks({ before: { all: [requireAuth] } });
+  safeService(BRANCH_CLEANUP_REPORT_SERVICE)?.hooks({ before: { all: [requireAuth] } });
   safeService(BRANCH_DELETION_REPORT_SERVICE)?.hooks({ before: { all: [requireAuth] } });
 
   // ============================================================================

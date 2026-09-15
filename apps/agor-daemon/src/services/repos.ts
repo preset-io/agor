@@ -48,7 +48,12 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import {
+  hasMinimumRole,
+  ROLES,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+  validateRepoCleanupPolicy,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
@@ -141,6 +146,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
     const rows = Array.isArray(data) ? data : [data];
+    for (const row of rows) this.validateCleanupPolicyWrite(row, params);
     if (
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth' &&
       rows.some((row) => row.repo_type === 'local')
@@ -157,6 +163,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
+    this.validateCleanupPolicyWrite(data, params);
     if (
       data.repo_type === 'local' &&
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
@@ -174,6 +181,28 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
     return super.patch(id, data, params);
+  }
+
+  override async update(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
+    this.validateCleanupPolicyWrite(data, params);
+    return super.update(id, data, params);
+  }
+
+  private validateCleanupPolicyWrite(data: Partial<Repo>, params?: RepoParams): void {
+    if (!Object.hasOwn(data, 'cleanup_policy')) return;
+    // Executable repo configuration uses the existing admin boundary, even
+    // for direct in-process service callers. Branch management is insufficient.
+    const user = (params as AuthenticatedParams | undefined)?.user;
+    if (!user || !hasMinimumRole(user.role, ROLES.ADMIN)) {
+      throw new Forbidden('Admin access is required to configure repository workspace cleanup');
+    }
+    try {
+      data.cleanup_policy = validateRepoCleanupPolicy(data.cleanup_policy);
+    } catch {
+      throw new BadRequest(
+        'Invalid cleanup policy: supply boolean settings and a command of at most 4096 characters, nonempty when enabled, with no NUL'
+      );
+    }
   }
 
   /**

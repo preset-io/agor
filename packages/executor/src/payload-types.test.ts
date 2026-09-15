@@ -742,6 +742,8 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
     expect(commands).toContain('claude.auth-file');
-    expect(commands.length).toBe(29);
+    expect(commands).toContain('branch.clean');
+    expect(commands).toContain('branch.archive');
+    expect(commands.length).toBe(31);
   });
 });

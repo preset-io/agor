@@ -2246,3 +2246,24 @@ describe('agor_teammates_list', () => {
     });
   });
 });
+
+describe('agor_branches_clean', () => {
+  it('uses the authenticated clean route and returns acceptance without claiming completion', async () => {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const accepted = { branch_id: branchId, operation_id: 'operation', status: 'accepted' };
+    const create = vi.fn().mockResolvedValue(accepted);
+    const baseServiceParams = { provider: 'mcp', user: { user_id: 'manager', role: 'member' } };
+    const app = {
+      service: (path: string) => {
+        if (path === 'branches') return { get: vi.fn().mockResolvedValue({ branch_id: branchId }) };
+        if (path === '/branches/:id/clean') return { create };
+        throw new Error(path);
+      },
+    };
+    const clean = registerAndCaptureHandler('agor_branches_clean', { app, baseServiceParams });
+    const result = await clean({ branchId });
+    expect(create).toHaveBeenCalledWith({}, { ...baseServiceParams, route: { id: branchId } });
+    expect(JSON.stringify(result)).toContain('accepted');
+    expect(JSON.stringify(result)).not.toContain('cleaned successfully');
+  });
+});

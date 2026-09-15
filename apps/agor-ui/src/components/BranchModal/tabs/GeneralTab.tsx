@@ -1,20 +1,36 @@
 import type {
+  AgorClient,
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
   MCPServer,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
-import { isTeammate } from '@agor-live/client';
-import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
-import { Alert, Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
+import { hasMinimumRole, isTeammate, ROLES, resolveRepoCleanupPolicy } from '@agor-live/client';
+import { DownOutlined, FolderOutlined, LinkOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Collapse,
+  Descriptions,
+  Form,
+  Input,
+  Select,
+  Space,
+  Tooltip,
+  Typography,
+} from 'antd';
 import { useState } from 'react';
 import { useAgorStore } from '../../../store/agorStore';
 import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
+import { RepoCleanupSettingsModal } from '../../ArchiveDeleteBranchModal/RepoCleanupSettingsModal';
 import { boardSelectOptions } from '../../BoardTile';
+import { BranchWorkspaceStatus } from '../../BranchWorkspaceStatus';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -26,6 +42,8 @@ export type { BranchUpdate } from '../useBranchModalForm';
 const { TextArea } = Input;
 
 interface GeneralTabProps {
+  client?: AgorClient | null;
+  currentUser?: User | null;
   branch: Branch;
   repo: Repo;
   sessions: Session[]; // Used to gauge environment risk on Archive/Delete
@@ -42,6 +60,8 @@ interface GeneralTabProps {
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
+  client,
+  currentUser,
   branch,
   repo,
   sessions,
@@ -55,6 +75,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   boardAttachError = null,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const policy = resolveRepoCleanupPolicy(repo.cleanup_policy);
   const branchById = useAgorStore(selectBranchById);
 
   const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
@@ -66,6 +88,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        <BranchWorkspaceStatus branch={branch} />
         {branch.deletion_status && (
           <Alert
             type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
@@ -130,6 +153,66 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             </Typography.Text>
           </Descriptions.Item>
         </Descriptions>
+
+        <Collapse
+          ghost
+          expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+          destroyOnHidden={false}
+          items={[
+            {
+              key: 'cleanup',
+              label: <Typography.Text strong>Branch cleanup</Typography.Text>,
+              forceRender: true,
+              children: (
+                <Space orientation="vertical" style={{ width: '100%' }}>
+                  <Alert
+                    type="warning"
+                    showIcon
+                    description="Cleanup can delete valuable files with no undo. Protection does not prevent permanent deletion."
+                  />
+                  {!policy.allow_branch_protection && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      description="Repository policy overrides saved protection. Your preference is retained and takes effect again if protection is allowed."
+                    />
+                  )}
+                  <Typography.Text>
+                    {policy.enabled
+                      ? 'Enabled for this repository'
+                      : 'Disabled for this repository'}
+                  </Typography.Text>
+                  <Typography.Text code>
+                    {policy.command || 'No cleanup command configured'}
+                  </Typography.Text>
+                  <Checkbox
+                    checked={state.cleanupProtected}
+                    disabled={!canEdit || !policy.allow_branch_protection}
+                    onChange={(event) => setField('cleanupProtected', event.target.checked)}
+                  >
+                    Protect this branch from cleanup
+                  </Checkbox>
+                  <Typography.Text type="secondary">
+                    Save branch changes to apply this preference.
+                  </Typography.Text>
+                  {client && currentUser && hasMinimumRole(currentUser.role, ROLES.ADMIN) && (
+                    <Button onClick={() => setSettingsOpen(true)}>Open repository settings</Button>
+                  )}
+                  {client && currentUser && settingsOpen && (
+                    <RepoCleanupSettingsModal
+                      client={client}
+                      user={currentUser}
+                      repo={repo}
+                      open={settingsOpen}
+                      onCancel={() => setSettingsOpen(false)}
+                      onSaved={() => setSettingsOpen(false)}
+                    />
+                  )}
+                </Space>
+              ),
+            },
+          ]}
+        />
 
         {/* Work Context */}
         <div>
@@ -252,6 +335,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           </ArchiveActionButton>
         </Space>
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={branch}
           sessionCount={sessions.length}

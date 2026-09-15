@@ -7,7 +7,11 @@
  * 3. Returning an ExecutorResult
  */
 
-import { BRANCH_DELETION_COMMAND } from '@agor/core/types';
+import {
+  BRANCH_ARCHIVE_COMMAND,
+  BRANCH_CLEANUP_COMMAND,
+  BRANCH_DELETION_COMMAND,
+} from '@agor/core/types';
 import { ToolRegistry } from '../handlers/sdk/tool-registry.js';
 import type {
   AgenticToolInvokePayload,
@@ -20,6 +24,7 @@ import {
   handleBranchArtifactPublish,
   handleBranchArtifactValidate,
 } from './artifacts.js';
+import { handleBranchArchive, handleBranchClean } from './branch-cleanup.js';
 import { handleBranchDelete } from './branch-deletion.js';
 import { handleClaudeAuthFile } from './claude-auth-file.js';
 import { handleCodexAuthFile } from './codex-auth-file.js';
@@ -247,6 +252,8 @@ registerCommand('git.branch.add', handleGitBranchAdd);
 registerCommand('git.branch.remove', handleGitBranchRemove);
 registerCommand(BRANCH_DELETION_COMMAND, handleBranchDelete);
 registerCommand('git.branch.clean', handleGitBranchClean);
+registerCommand(BRANCH_CLEANUP_COMMAND, handleBranchClean);
+registerCommand(BRANCH_ARCHIVE_COMMAND, handleBranchArchive);
 registerCommand('branch.files.list', handleBranchFilesList);
 registerCommand('branch.files.browse', handleBranchFilesBrowse);
 registerCommand('branch.files.read', handleBranchFilesRead);

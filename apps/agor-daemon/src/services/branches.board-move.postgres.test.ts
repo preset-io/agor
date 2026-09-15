@@ -134,14 +134,22 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const fixture = await runWithTenantDatabaseScope(db, a, async (scoped) => {
           const branches = new BranchRepository(scoped);
           const victim = await branches.create({
-            ...fa.branch,
+            repo_id: fa.branch.repo_id,
+            ref: fa.branch.ref,
+            created_by: fa.branch.created_by,
+            board_id: fa.branch.board_id,
+            permission_binding: fa.branch.permission_binding,
             branch_id: generateId() as BranchID,
             name: 'victim',
             path: `/tmp/${a}/victim`,
             branch_unique_id: 2,
           });
           const teammate = await branches.create({
-            ...fa.branch,
+            repo_id: fa.branch.repo_id,
+            ref: fa.branch.ref,
+            created_by: fa.branch.created_by,
+            board_id: fa.branch.board_id,
+            permission_binding: fa.branch.permission_binding,
             branch_id: generateId() as BranchID,
             name: 'teammate',
             path: `/tmp/${a}/teammate`,

@@ -90,10 +90,19 @@ export type TerminationCause =
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
   'Authorization to continue this task was revoked.';
 
-/** Why a durable termination request is waiting for another HA coordinator. */
+/**
+ * Why a durable termination request is not settled yet.
+ *
+ * `non_owner_replica` and `coordination_in_progress` wait for another HA
+ * coordinator. `awaiting_remote_executor` waits for a templated/remote
+ * executor that has not connected yet; it can still observe the durable stop
+ * request when it starts, so the daemon must not declare containment
+ * unverified before the remote startup deadline.
+ */
 export const TERMINATION_COORDINATION_PENDING_CODES = [
   'non_owner_replica',
   'coordination_in_progress',
+  'awaiting_remote_executor',
 ] as const;
 
 export type TerminationCoordinationPendingCode =
@@ -299,6 +308,24 @@ export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<
  * continue. CREATED and QUEUED are intentionally excluded: CREATED is a
  * pre-executor row and QUEUED is waiting for a future turn.
  */
+/**
+ * A templated/remote executor that has not claimed its dispatch cannot have
+ * received the stop request yet. Its startup path reads the durable request
+ * and reports quiescence, so the request is pending rather than unverified.
+ * A pure predicate over the Task DTO; shared by the termination coordinator
+ * and the runtime reconciler.
+ */
+export function isAwaitingRemoteExecutor(task: Task): boolean {
+  return (
+    task.status === TaskStatus.STOPPING &&
+    task.executor_mode === 'templated' &&
+    !task.executor_connected_at &&
+    !!task.termination_request &&
+    !task.termination_request.executor_quiesced_at &&
+    task.sdk_failure?.termination !== 'unverified'
+  );
+}
+
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,

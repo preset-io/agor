@@ -247,7 +247,10 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 **Filesystem options:**
 
 - **Leave untouched**: Metadata-only archival. Files stay on disk.
-- **Clean workspace**: Runs `git clean -fdx` (removes `node_modules`, builds, untracked files).
+- **Clean workspace**: Requires an explicitly enabled repository cleanup policy,
+  effective branch protection to be off, and Manager authority with writable
+  workspace access. The configured default is `git clean -fdX` (uppercase X:
+  ignored files only). Disabled policy is never a fallback to the old `-fdx` command.
 - **Delete completely**: Removes the branch directory from disk.
 
 **Metadata options:**
@@ -255,7 +258,62 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
 - **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
 
-**Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
+When cleanup is unavailable, the archive dialog defaults to **Leave untouched**
+and warns that workspace files will remain on disk. It never selects full deletion
+automatically. A repository administrator can open **Repository settings** above
+the archive dialog; saving refreshes the command without submitting archive or
+overriding an explicit Preserve/Delete choice.
+
+### Branch cleanup settings
+
+In **Settings → Repositories → Edit**, configure **Branch cleanup**. Cleanup is
+disabled by default, including for existing repositories. The command can be
+prepared while disabled. Enabling it is executable-configuration approval and
+requires repository administrator access; Branch Manager access is not sufficient.
+
+The branch modal's **General** tab shows the repository policy and a **Protect this
+branch from cleanup** preference. Managers can save protection before
+repository enablement. If the repository disables **Allow branch protection**,
+saved preferences remain stored but are ineffective until allowance is restored.
+Protection does not prevent full filesystem deletion.
+
+`git clean -fdX` preserves tracked modifications, staged files, ordinary untracked
+files, and stashes. Ignored `.env` files, datasets, local databases, and ignored
+source can still be valuable. There is no undo. Only the exact built-in command
+`git clean -fdX` is currently executable. Custom command settings are preserved,
+but execution is blocked until the executor can prove that cleanup-created detached
+descendants have stopped. This is separate from best-effort closure of existing
+terminals. Never put secrets in saved commands.
+
+### Requesting cleanup
+
+Agents can call **agor_branches_clean** with a branch ID. API clients can call
+`branches.clean({ branchId })` or POST an empty object to
+`/branches/:id/clean`. The response is **accepted**, not completed. Read the
+branch's `workspace_operation` or watch branch updates for its result. The card
+and General tab display pending/running/succeeded/failed/unknown state and safe
+errors in a compact, dismissible notification; hover for its timestamp. Dismissal
+hides the current notification in that view, not the durable operation history.
+A new operation or status change shows a fresh notification.
+`last_cleanup_succeeded_at` records command success, not bytes reclaimed.
+
+Stop environments and finish/cancel outstanding tasks before requesting maintenance.
+One durable Branch-row claim excludes competing work; duplicate active requests
+are rejected, not dispatched again. Built-in cleanup is bounded to five minutes;
+stdout/stderr are drained without retaining file listings or secrets. Unknown or
+lost results stay fenced for operator reconciliation and are never automatically
+retried. After six minutes without a final report, reads display an unknown outcome.
+
+Archive Clean uses the same executor cycle and policy. Archive metadata may already
+be saved when a filesystem command fails; filesystem status changes only after
+verified success. Preserve and explicit workspace deletion retain conversation data
+and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
+Permanent deletion remains the separate full-resource workflow.
+
+V1 checks known task, upload and environment activity. Terminal closure is best-effort;
+detached/unmanaged processes are **not proven stopped**. Delegated/external execution
+is rejected until its containment is supported. Branch `updated_at` is metadata
+activity, not evidence of filesystem inactivity. There is no scheduler or age cutoff.
 
 ### Deletion and retained data
 

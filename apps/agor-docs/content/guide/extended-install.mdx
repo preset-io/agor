@@ -372,7 +372,7 @@ keep encrypted personal grants in the backend. Refresh credentials never reach
 agent/helper runtimes: only a task actor's access token is delivered through the
 existing authenticated task RPC. API keys and pasted tokens remain available.
 
-The additive `0109_user_provider_oauth_grants` schema introduces an incompatible
+The additive `0110_user_provider_oauth_grants` schema introduces an incompatible
 source/attempt protocol and requires the offline stop → migrate → start procedure
 above. No mixed old/new writer cohort or automatic filesystem import is supported.
 Tenant re-home and restored historical rotating grants require reconnect.

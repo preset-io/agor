@@ -19,6 +19,20 @@ import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
 
+dbTest('repo protection override preserves the branch preference', async ({ db }) => {
+  const repoRepository = new RepoRepository(db);
+  const branchRepository = new BranchRepository(db);
+  const repo = await repoRepository.create(createRepoData());
+  const branch = await branchRepository.create(createBranchData({ repo_id: repo.repo_id }));
+  expect(branch.cleanup_protected).toBe(false);
+  await branchRepository.update(branch.branch_id, { cleanup_protected: true });
+  await repoRepository.update(repo.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: false },
+  });
+  await branchRepository.update(branch.branch_id, { notes: 'An unrelated patch' });
+  expect((await branchRepository.findById(branch.branch_id))?.cleanup_protected).toBe(true);
+});
+
 /**
  * Create test repo data (needed as FK for branches)
  */

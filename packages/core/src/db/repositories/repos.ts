@@ -8,6 +8,7 @@ import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
+import { resolveRepoCleanupPolicy, validateRepoCleanupPolicy } from '../../types/branch-cleanup';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
 import {
@@ -98,6 +99,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         ...data,
+        cleanup_policy: resolveRepoCleanupPolicy(row.cleanup_policy),
         remote_url,
         environment,
         environment_config,
@@ -145,6 +147,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
       repo_type: repo.repo_type,
+      cleanup_policy: validateRepoCleanupPolicy(resolveRepoCleanupPolicy(repo.cleanup_policy)),
       data: {
         name: repo.name ?? repo.slug,
         remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
@@ -405,6 +408,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           // repoToInsert re-derives this projection from the replacement.
           merged.environment_config = undefined;
         }
+        if (Object.hasOwn(updates, 'cleanup_policy')) {
+          merged.cleanup_policy = validateRepoCleanupPolicy(updates.cleanup_policy);
+        }
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
@@ -415,6 +421,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
+            cleanup_policy: insertData.cleanup_policy,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))

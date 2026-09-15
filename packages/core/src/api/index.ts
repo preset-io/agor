@@ -795,16 +795,18 @@ export interface BranchesService extends AgorService<Branch> {
    */
   archiveOrDelete(
     id: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: import('../types').BranchArchiveOrDeleteOptions,
     params?: Params
   ): Promise<Branch | { deleted: true; branch_id: string }>;
 
   /**
    * Unarchive a branch
    */
+  clean(
+    input: { branchId: import('../types').BranchID },
+    params?: Params
+  ): Promise<import('../types').BranchCleanAccepted>;
+
   unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Branch>;
 }
 
@@ -1342,7 +1344,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
+    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace', 'clean');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

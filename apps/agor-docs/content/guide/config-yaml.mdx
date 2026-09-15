@@ -109,7 +109,7 @@ until provider expiry or normal Stop. Cloud's existing internal HTTP channel
 relies on the trusted cluster network, not mTLS; verify network policy before
 rollout.
 
-Migration `0109_user_provider_oauth_grants` ships for both database dialects and
+Migration `0110_user_provider_oauth_grants` ships for both database dialects and
 requires an **offline cohort cutover**: drain tasks/attempts, stop all old writers,
 snapshot the DB, run `agor db migrate --offline-cutover --yes`, then start only
 compatible replicas sharing the existing master secret. Do not import native

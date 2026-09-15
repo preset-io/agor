@@ -96,3 +96,64 @@ describe('ReposTable authority fencing', () => {
     );
   });
 });
+
+describe('ReposTable cleanup configuration authority', () => {
+  it.each([false, true])('omits unchanged policy from metadata saves (admin=%s)', async (admin) => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
+    });
+    const onUpdate = vi.fn();
+    const view = (row: Repo) => (
+      <ReposTable
+        repoById={new Map([[row.repo_id, row]])}
+        identityKey={admin ? 'admin:admin' : 'member:member'}
+        operationScope={[admin ? 'admin:admin' : 'member:member', 1]}
+        canConfigureCleanup={admin}
+        onUpdate={onUpdate}
+      />
+    );
+    const rendered = render(view(repo));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    if (!admin)
+      expect(screen.queryByRole('button', { name: /Branch cleanup/ })).not.toBeInTheDocument();
+    // A concurrent policy update must not be replaced by this metadata-only draft.
+    rendered.rerender(
+      view({
+        ...repo,
+        cleanup_policy: { ...repo.cleanup_policy!, command: './new-policy.sh' },
+      })
+    );
+    fireEvent.change(screen.getByLabelText('Default Branch'), { target: { value: 'develop' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toEqual({ slug: repo.slug, default_branch: 'develop' });
+  });
+
+  it('saves a deliberately changed administrator policy even when collapsed', async () => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
+    });
+    const onUpdate = vi.fn();
+    render(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+        canConfigureCleanup
+        onUpdate={onUpdate}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Branch cleanup/ }));
+    fireEvent.change(screen.getByLabelText('Cleanup command'), {
+      target: { value: './changed.sh' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Branch cleanup/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1].cleanup_policy).toEqual({
+      ...repo.cleanup_policy,
+      command: './changed.sh',
+    });
+  });
+});

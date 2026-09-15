@@ -657,12 +657,14 @@ export function buildAuthenticatedGitTransportEnvironment(
 
 function createGitClient(
   baseDir: string | undefined,
-  spawnEnv: Record<string, string>
+  spawnEnv: Record<string, string>,
+  timeoutMs?: number
 ): { git: ReturnType<typeof simpleGit> } {
   const git = simpleGit({
     baseDir,
     binary: getGitBinary(),
     config: [],
+    ...(timeoutMs === undefined ? {} : { timeout: { block: timeoutMs } }),
     unsafe: {
       // simple-git's scanner cannot distinguish Agor's fixed defensive
       // GIT_CONFIG_* entries from attacker-controlled overrides. These are
@@ -689,10 +691,13 @@ function createGitClient(
  * transport uses the separate clean-staging capability below; filesystem
  * isolation remains the responsibility of the configured execution mode.
  */
-export function createGit(baseDir?: string): { git: ReturnType<typeof simpleGit> } {
+export function createGit(
+  baseDir?: string,
+  timeoutMs?: number
+): { git: ReturnType<typeof simpleGit> } {
   const localConfig: [string, string][] = [...FIXED_GIT_SECURITY_CONFIG];
   if (baseDir) localConfig.push(['safe.directory', baseDir]);
-  return createGitClient(baseDir, buildFixedGitEnvironment(localConfig, process.env));
+  return createGitClient(baseDir, buildFixedGitEnvironment(localConfig, process.env), timeoutMs);
 }
 
 /**
@@ -2103,6 +2108,21 @@ export async function cleanBranch(branchPath: string): Promise<{ filesRemoved: n
   }
 
   return { filesRemoved };
+}
+
+/** Ignored-only cleanup. No preview, file list, output parser, or warning-as-success. */
+export async function cleanIgnoredWorkspace(branchPath: string, timeoutMs: number): Promise<void> {
+  const { git } = createGit(branchPath, timeoutMs);
+  git.outputHandler((_command, stdout, stderr) => {
+    // simple-git normally buffers every chunk before invoking its parser. This
+    // command consumes exit status only: replace those data collectors and drain
+    // the streams so even millions of diagnostic lines cannot accumulate.
+    for (const stream of [stdout, stderr]) {
+      stream.removeAllListeners('data');
+      stream.resume();
+    }
+  });
+  await git.raw(['clean', '-fdX']);
 }
 
 /**

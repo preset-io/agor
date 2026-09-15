@@ -773,7 +773,8 @@ describe('createClient', () => {
       };
       expect(branchesService.methods).toHaveBeenCalledWith(
         'updateEnvironment',
-        'ensureTeammateKnowledgeNamespace'
+        'ensureTeammateKnowledgeNamespace',
+        'clean'
       );
     });
 

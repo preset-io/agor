@@ -35,7 +35,7 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | --------------------- | ------------------------------------------------------------------------------------------------------- |
 | **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
 | **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                       |
-| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially   |
+| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup   |
 | **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
 | **Tasks & Reports**   | Fetch task history, create follow-up tasks, log progress, generate reports                              |
 | **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                            |
@@ -355,3 +355,18 @@ execution:
 - [TypeScript Client](/guide/typescript-client) (the non-agent doorway: drive Agor from JS/TS apps, scripts, and services)
 - [Architecture: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server)
 - [SDK Comparison](/guide/sdk-comparison)
+
+## Branch cleanup
+
+`agor_branches_clean({ branchId })` requests the repository-approved cleanup command.
+It requires branch Manager/owner authority and write access; disabled policy,
+effective protection, outstanding tasks/uploads, and active environments block it.
+The default command is `git clean -fdX` (ignored files only), but cleanup is disabled
+until a repository administrator enables it. Custom command settings are retained
+but cannot execute until descendant containment is supported.
+
+The response is `{ branch_id, operation_id, status: "accepted" }`. Inspect the
+branch's `workspace_operation` for completion or a safe failure/unknown outcome;
+acceptance does not prove files changed. There is no force, command/path override,
+dry-run, or built-in age threshold. Never automatically retry an unknown operation.
+See [Branch cleanup](/guide/branches#requesting-cleanup) for runtime limits and recovery.

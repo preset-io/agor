@@ -201,6 +201,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'General',
       children: (
         <GeneralTab
+          client={client}
+          currentUser={currentUser}
           branch={branch}
           repo={repo}
           sessions={sessions}

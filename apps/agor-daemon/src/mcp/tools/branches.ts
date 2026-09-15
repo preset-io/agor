@@ -1,5 +1,10 @@
 import { PAGINATION } from '@agor/core/config';
-import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  CapabilityPolicyRepository,
+  RepoRepository,
+  shortId,
+} from '@agor/core/db';
 import type {
   Board,
   BoardID,
@@ -12,7 +17,12 @@ import type {
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { getTeammateConfig, isTeammate } from '@agor/core/types';
+import {
+  getBranchCleanupBlockReason,
+  getTeammateConfig,
+  isTeammate,
+  resolveRepoCleanupPolicy,
+} from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
@@ -25,6 +35,7 @@ import type {
 import type { BranchParams } from '../../services/branches.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
+import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
@@ -571,6 +582,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         archived_at: branch.archived_at,
         archived_by: branch.archived_by ?? null,
         last_used: branch.last_used ?? null,
+        cleanup_protected: branch.cleanup_protected ?? false,
+        cleanup_policy: resolveRepoCleanupPolicy(repo?.cleanup_policy),
+        cleanup_policy_block_reason:
+          getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false) ??
+          null,
+        workspace_operation: branch.workspace_operation ?? null,
+        cleanup_last_error: branch.cleanup_last_error ?? null,
+        last_cleanup_succeeded_at: branch.last_cleanup_succeeded_at ?? null,
         filesystem_status: normalizeFilesystemStatus(branch),
         storage_mode: branch.storage_mode ?? 'worktree',
         path: branch.path,
@@ -1549,12 +1568,34 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  server.registerTool(
+    'agor_branches_clean',
+    {
+      description:
+        'Request branch cleanup using the enabled repository command (default git clean -fdX, ignored files only). Requires branch Manager/owner and writable workspace access; rejects protected/busy branches. Returns acceptance, not completion. Inspect branch workspace_operation for the result. No command/path/force overrides or dry-run.',
+      annotations: { destructiveHint: true },
+      inputSchema: z
+        .object({
+          branchId: mcpRequiredId('branchId', 'Branch', 'Branch to clean (UUIDv7 or short ID)'),
+        })
+        .strict(),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      return textResult(
+        await ctx.app
+          .service('/branches/:id/clean')
+          .create({}, { ...ctx.baseServiceParams, route: { id: branchId } })
+      );
+    }
+  );
+
   // Tool 6: agor_branches_archive
   server.registerTool(
     'agor_branches_archive',
     {
       description:
-        'Archive a branch (soft delete). Stops the environment if running, optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
+        'Archive a branch (soft delete). Requires idle tasks and a stopped environment; optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),
@@ -1562,13 +1603,36 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .enum(['preserved', 'cleaned', 'deleted'])
           .optional()
           .describe(
-            'What to do with the branch files on disk. "preserved" leaves files untouched, "cleaned" runs git clean -fdx (removes node_modules, builds, untracked files), "deleted" removes the entire branch directory. Default: "cleaned".'
+            'What to do with the branch files on disk. "preserved" leaves files untouched, "cleaned" runs the enabled repository cleanup command (default git clean -fdX, ignored files only), "deleted" removes the entire branch directory. Default: "cleaned" only when policy and execution access permit it; otherwise "preserved".'
           ),
       }),
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
+      const filesystemAction =
+        (args.filesystemAction as BranchFilesystemAction | undefined) ??
+        (await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+          const repository = new BranchRepository(db);
+          const branch = await repository.findById(branchId);
+          if (!branch) return 'preserved' as const;
+          const repo = await new RepoRepository(db).findById(branch.repo_id);
+          if (getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false))
+            return 'preserved' as const;
+          try {
+            await ensureBranchWorkspaceAccess(
+              repository,
+              branch,
+              ctx.baseServiceParams.user?.user_id,
+              ctx.baseServiceParams.user?.role as import('@agor/core/types').UserRole,
+              'all',
+              'write',
+              ctx.app.get('config').execution?.allow_superadmin === true
+            );
+            return 'cleaned' as const;
+          } catch {
+            return 'preserved' as const;
+          }
+        }));
       const result = await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(
@@ -1578,7 +1642,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         branch: result,
-        message: 'Branch archived successfully.',
+        message: 'Archive accepted. Inspect branch workspace_operation for filesystem completion.',
       });
     }
   );

@@ -1,6 +1,7 @@
 // src/types/repo.ts
 
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './branch';
+import type { RepoCleanupPolicy } from './branch-cleanup';
 import type { SessionID, UUID } from './id';
 
 /**
@@ -36,6 +37,9 @@ export type BranchName = string;
 export type RepoType = 'remote' | 'local';
 
 export interface Repo {
+  /** Deployment-local workspace cleanup; absent legacy policy is disabled. */
+  cleanup_policy?: RepoCleanupPolicy;
+
   /** Unique repository identifier (UUIDv7) */
   repo_id: UUID;
 

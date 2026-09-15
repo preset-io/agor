@@ -31,6 +31,7 @@ import {
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { BranchWorkspaceStatus } from '../BranchWorkspaceStatus';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { MarkdownPreview } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
@@ -535,6 +536,7 @@ const BranchCardComponent = ({
         </Space>
       </div>
 
+      <BranchWorkspaceStatus branch={branch} />
       {branch.deletion_status && (
         <div
           role="status"
@@ -635,6 +637,8 @@ const BranchCardComponent = ({
       {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
       {archiveDeleteModalMounted && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUserId ? userById.get(currentUserId) : null}
           open={archiveDeleteModalOpen}
           branch={branch}
           sessionCount={sessions.length}

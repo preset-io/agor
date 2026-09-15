@@ -196,8 +196,10 @@ describe('TaskRuntimeReconciler', () => {
 
     await create({ localOwnerGraceMs: 1000 }).checkOnce();
 
+    // A discovered remote request whose executor never connected has passed
+    // the database-time startup deadline, so it resumes as deadline-expired.
     expect(requestExecutorTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: remote.task_id })
+      expect.objectContaining({ taskId: remote.task_id, remoteConnectDeadlineExpired: true })
     );
     expect(requestExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -205,6 +207,9 @@ describe('TaskRuntimeReconciler', () => {
         allowUnownedLocalContainment: true,
         unownedLocalOwnerGraceMs: 1000,
       })
+    );
+    expect(requestExecutorTermination).not.toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: local.task_id, remoteConnectDeadlineExpired: true })
     );
     expect(getTrackedExecutor).toHaveBeenCalledWith(local.session_id, expect.anything());
   });

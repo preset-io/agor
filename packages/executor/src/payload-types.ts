@@ -17,6 +17,9 @@ import {
 import {
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
+  BRANCH_ARCHIVE_COMMAND,
+  BRANCH_CLEANUP_COMMAND,
+  BRANCH_CLEANUP_COMMAND_MAX_LENGTH,
   BRANCH_DELETION_COMMAND,
 } from '@agor/core/types';
 import { z } from 'zod';
@@ -385,6 +388,60 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
 });
 
 export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
+
+/** Server-resolved operation identity and immutable-at-admission executable configuration. */
+const BranchCleanupSpecificationSchema = z.object({
+  command: z
+    .string()
+    .min(1)
+    .max(BRANCH_CLEANUP_COMMAND_MAX_LENGTH)
+    .refine((value) => !value.includes('\0')),
+});
+const BranchMaintenanceParamsSchema = z.object({
+  branchId: z.string().uuid(),
+  operationId: z.string().uuid(),
+  generation: z.number().int().positive(),
+  executionId: z.string().uuid(),
+  deadlineAt: z.number().positive(),
+});
+const BranchCleanupParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('cleaned'),
+  cwd: z.string().min(1),
+  principalBranchAccess: z.literal('write'),
+  sandboxHomeStore: z.string().optional(),
+  sandboxWorktreesRoot: z.string().optional(),
+  sandboxBaseRepoPath: z.string().optional(),
+  cleanup: BranchCleanupSpecificationSchema,
+}).strict();
+// Fixed storage-owner operation, deliberately without a branch-shell cwd/mount.
+const BranchWorkspaceRemovalParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('deleted'),
+  removal: z
+    .object({
+      branchPath: z.string().min(1),
+      branchesRoot: z.string().min(1),
+      repoPath: z.string().min(1),
+      storageMode: z.enum(['worktree', 'clone']),
+    })
+    .strict(),
+}).strict();
+export const BranchCleanPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_CLEANUP_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: BranchCleanupParamsSchema,
+});
+export type BranchCleanPayload = z.infer<typeof BranchCleanPayloadSchema>;
+export const BranchArchivePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_ARCHIVE_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: z.discriminatedUnion('filesystemAction', [
+    BranchCleanupParamsSchema,
+    BranchWorkspaceRemovalParamsSchema,
+  ]),
+});
+export type BranchArchivePayload = z.infer<typeof BranchArchivePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
 // Branch Files List Payload
@@ -905,6 +962,8 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
+  BranchCleanPayloadSchema,
+  BranchArchivePayloadSchema,
   BranchFilesListPayloadSchema,
   BranchFilesBrowsePayloadSchema,
   BranchFilesReadPayloadSchema,
@@ -983,6 +1042,8 @@ export function getSupportedCommands(): string[] {
     'git.branch.add',
     'git.branch.remove',
     'git.branch.clean',
+    BRANCH_CLEANUP_COMMAND,
+    BRANCH_ARCHIVE_COMMAND,
     'git.repo.inspect',
     'git.managed-credentials.reconcile',
     'branch.files.list',

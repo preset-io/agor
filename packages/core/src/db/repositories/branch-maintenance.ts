@@ -159,13 +159,13 @@ export class BranchMaintenanceRepository {
   /** Validate exact ownership in the same short transaction as each DB chunk. */
   async withClaim<T>(
     claim: BranchMaintenanceClaim,
-    work: (db: Database) => Promise<T>
+    work: (db: Database, row: typeof branches.$inferSelect) => Promise<T>
   ): Promise<T> {
     return this.locked(claim.branch_id, async (tx, row) => {
       const current = this.assertClaim(row, claim);
       if (current.execution_id)
         throw new RepositoryError('Executor outcome must settle before database cleanup');
-      return work(tx);
+      return work(tx, row);
     });
   }
 
@@ -232,13 +232,18 @@ export class BranchMaintenanceRepository {
   }
 
   /** One durable winner before any external work, even if dispatch is delivered twice. */
-  async claimExecution(claim: BranchMaintenanceClaim, executionId: UUID): Promise<void> {
+  async claimExecution(
+    claim: BranchMaintenanceClaim,
+    executionId: UUID,
+    validate?: (tx: Database) => Promise<void>
+  ): Promise<void> {
     await this.locked(claim.branch_id, async (tx, row) => {
       const current = this.assertClaim(row, claim);
       if (current.execution_id !== executionId)
         throw new RepositoryError('Executor invocation changed');
       if (current.execution_claimed_at)
         throw new RepositoryError('Executor invocation already claimed');
+      await validate?.(tx);
       // Reconciliation may have fenced an unacknowledged dispatch. Do not start it late.
       if (row.deletion_status === 'deletion_failed')
         throw new RepositoryError('Deletion dispatch is no longer active');

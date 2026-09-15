@@ -1502,117 +1502,33 @@ describe('BranchesService.unarchive', () => {
 });
 
 describe('BranchesService.archiveOrDelete', () => {
-  it('preserves placement and manually emits the tenant-aware archive transition', async () => {
-    const { service, boardObjectsService, sessionsService, branchesService } =
-      createServiceHarness();
-    const branchId = 'wt-archive-op' as BranchID;
-    const userId = 'user-1' as UUID;
-
-    vi.spyOn(service, 'get').mockResolvedValue({
-      branch_id: branchId,
-      name: 'WT Archive Op',
-      path: '/tmp/wt-archive-op',
-      archived: false,
-      board_id: 'board-a',
-      filesystem_status: 'ready',
-      environment_instance: { status: 'stopped' },
-    } as never);
-    vi.spyOn(service, 'patch').mockResolvedValue({
-      branch_id: branchId,
-      name: 'WT Archive Op',
-      path: '/tmp/wt-archive-op',
-      archived: true,
-      board_id: 'board-a',
-    } as never);
-    boardObjectsService.findByBranchId.mockResolvedValue({
-      object_id: 'obj-branch',
-      zone_id: 'zone-review',
-    });
-
-    const params = {
-      user: { user_id: userId },
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    } as never;
-    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
-
-    await service.archiveOrDelete(
-      branchId,
-      { metadataAction: 'archive', filesystemAction: 'preserved' },
-      params
-    );
-
-    expect(sessionsService.archiveBranchSessions).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({ provider: undefined })
-    );
-    expect(boardObjectsService.findByBranchId).not.toHaveBeenCalled();
-    expect(boardObjectsService.patch).not.toHaveBeenCalled();
-    expect(branchesService.emit).toHaveBeenCalledTimes(1);
-    expect(branchesService.emit).toHaveBeenCalledWith(
-      'patched',
-      expect.objectContaining({ branch_id: branchId, archived: true }),
-      expect.objectContaining({
-        path: 'branches',
-        method: 'patch',
-        event: 'patched',
-        id: branchId,
-        params: expect.objectContaining({
-          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-        }),
-      })
-    );
-  });
-
-  it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
-    const { service, sessionTokenService } = createServiceHarness();
-    const branchId = 'wt-delete-files' as BranchID;
-    const branch = {
-      branch_id: branchId,
-      name: 'WT Delete Files',
-      path: '/safe/worktrees/repo/feature',
-      archived: false,
-      board_id: 'board-a',
-      storage_mode: 'clone',
-      environment_instance: { status: 'stopped' },
-    } as never;
-    vi.spyOn(service, 'get').mockResolvedValue(branch);
-    vi.spyOn(service, 'patch').mockResolvedValue({ ...branch, archived: true });
-    const params = {
-      user: { user_id: 'user-1' as UUID },
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    } as never;
-    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
-
-    await service.archiveOrDelete(
-      branchId,
-      { metadataAction: 'archive', filesystemAction: 'deleted' },
-      params
-    );
-
-    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'git.branch.remove',
-        params: expect.objectContaining({
+  it.each(['preserved', 'cleaned', 'deleted'] as const)(
+    'routes archive %s through the shared maintenance workflow',
+    async (filesystemAction) => {
+      const { service } = createServiceHarness();
+      const branchId = 'wt-archive-op' as BranchID;
+      const branch = { branch_id: branchId, archived: true };
+      vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+      const request = vi
+        .spyOn(service as never, 'requestWorkspaceOperation')
+        .mockResolvedValue({ status: 'accepted' } as never);
+      const params = { user: { user_id: 'user-1' } } as never;
+      markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+      expect(
+        await service.archiveOrDelete(
           branchId,
-          branchPath: branch.path,
-          repoPath: '/tmp/repo',
-          storageMode: 'clone',
-        }),
-      }),
-      expect.objectContaining({
-        logPrefix: `[BranchesService.delete ${branch.name}]`,
-        templateVariables: {
-          branch_id: branchId,
-          user_id: 'user-1',
-          branch_fs_access: 'write',
-        },
-      })
-    );
-    const payload = mockedSpawnExecutor.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(payload).not.toHaveProperty('sessionToken');
-    expect(payload).not.toHaveProperty('daemonUrl');
-    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
-  });
+          { metadataAction: 'archive', filesystemAction },
+          params
+        )
+      ).toEqual(branch);
+      expect(request).toHaveBeenCalledWith(
+        branchId,
+        { action: 'archive', filesystemAction },
+        params
+      );
+      expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects filesystem cleanup when a Manager has no write grant', async () => {
     const { service, branchRepo } = createServiceHarness();

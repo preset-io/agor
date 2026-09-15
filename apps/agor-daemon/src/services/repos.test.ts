@@ -106,6 +106,40 @@ beforeEach(() => {
   });
 });
 
+describe('repository cleanup configuration boundary', () => {
+  const policy = { enabled: true, command: './cleanup.sh', allow_branch_protection: true };
+
+  it.each(['viewer', 'member', undefined])(
+    'rejects policy writes without configuration authority (%s), including direct service calls',
+    async (role) => {
+      const instance = new ReposService({} as never, { get: () => ({}) } as unknown as Application);
+      const params = { user: role ? { user_id: 'test-caller', role } : undefined };
+      const requestParams = params as Parameters<ReposService['patch']>[2];
+      await expect(instance.create({ cleanup_policy: policy }, requestParams)).rejects.toThrow(
+        'Admin access'
+      );
+      await expect(
+        instance.patch('repo', { cleanup_policy: policy }, requestParams)
+      ).rejects.toThrow('Admin access');
+      await expect(
+        instance.update('repo', { cleanup_policy: policy }, requestParams)
+      ).rejects.toThrow('Admin access');
+      expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+      expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects malformed policy before persistence even for an admin', async () => {
+    const instance = new ReposService({} as never, { get: () => ({}) } as unknown as Application);
+    const params = { user: { user_id: 'test-admin', role: 'admin' } } as Parameters<
+      ReposService['patch']
+    >[2];
+    await expect(
+      instance.patch('repo', { cleanup_policy: { ...policy, command: ' ' } }, params)
+    ).rejects.toThrow('Invalid cleanup policy');
+  });
+});
+
 describe('ReposService .agor.yml normalized branch access', () => {
   const repo = {
     repo_id: '550e8400-e29b-41d4-a716-446655440001',
