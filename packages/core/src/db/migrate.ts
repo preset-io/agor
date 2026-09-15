@@ -775,12 +775,7 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
       FROM pg_catalog.pg_roles r WHERE r.rolname=current_user`
       )
     );
-    if (
-      !role ||
-      role.rolsuper !== false ||
-      role.rolbypassrls !== false ||
-      role.owns_or_inherits !== false
-    )
+    if (role?.rolsuper !== false || role.rolbypassrls !== false || role.owns_or_inherits !== false)
       throw new Error();
     const folder = getMigrationsFolder(db);
     const journal = JSON.parse(await readFile(join(folder, 'meta', '_journal.json'), 'utf8')) as {
