@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
+import type { Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { createDatabase, type Database } from './client';
@@ -187,130 +189,166 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('detects the collision, requires an offline cutover, and reconciles both authorities', async () => {
       if (!db) throw new Error('PostgreSQL test database was not initialized');
 
-      const beforeColumns = rawRows(
-        await executeRaw(
-          db,
-          sql`SELECT table_name, column_name
-              FROM information_schema.columns
-              WHERE table_schema = 'public'
-                AND table_name IN ('claude_oauth_attempts', 'mcp_oauth_client_registrations')`
-        )
-      );
-      expect(beforeColumns).toContainEqual(
-        expect.objectContaining({
-          table_name: 'mcp_oauth_client_registrations',
-          column_name: 'registration_generation',
-        })
-      );
-      expect(beforeColumns.some((row) => row.table_name === 'claude_oauth_attempts')).toBe(false);
-
-      const legacyRegistrationId = generateId();
-      await runWithTenantDatabaseScope(db, 'old-head-reconciliation', async (scoped) => {
-        const owner = await new UsersRepository(scoped).create({
-          email: `${generateId()}@example.test`,
-          name: 'Old head migration owner',
-          role: 'admin',
-        });
-        const server = await new MCPServerRepository(scoped).create({
-          name: `old-head-dcr-${generateId()}`,
-          transport: 'http',
-          url: 'https://provider.example.test/mcp',
-          scope: 'global',
-          enabled: true,
-          source: 'user',
-          owner_user_id: owner.user_id,
-          auth: { type: 'oauth', oauth_mode: 'per_user' },
-        });
-        await executeRaw(
-          scoped,
-          sql`INSERT INTO mcp_oauth_client_registrations (
-                tenant_id, registration_id, mcp_server_id,
-                registration_generation, binding_version, binding_fingerprint,
-                server_config_version, envelope_version, status, sealed_material,
-                claim_generation, dispatched_at, created_at, updated_at
-              ) VALUES (
-                'old-head-reconciliation', ${legacyRegistrationId}, ${server.mcp_server_id},
-                1, 1, ${'a'.repeat(64)}, 1, 1, 'registered', 'legacy-sealed-material',
-                1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-              )`
-        );
-      });
-
-      // Main's environment migration and both renumbered OAuth migrations are
-      // later than the archived timestamp. Bootstrap defers this existing
-      // legacy table to exact reconciliation in the same offline transaction.
-      await expect(checkMigrationStatus(db)).resolves.toMatchObject({
-        pending: pendingMigrations,
-        dbAheadOfBinary: false,
-      });
-      await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
-      await runMigrations(db, { allowOfflineCutover: true });
-
-      const afterColumns = rawRows(
-        await executeRaw(
-          db,
-          sql`SELECT table_name, column_name
-              FROM information_schema.columns
-              WHERE table_schema = 'public'
-                AND table_name IN ('claude_oauth_attempts', 'mcp_oauth_client_registrations')`
-        )
-      );
-      expect(afterColumns).toContainEqual(
-        expect.objectContaining({
-          table_name: 'claude_oauth_attempts',
-          column_name: 'attempt_generation',
-        })
-      );
-      expect(afterColumns).toContainEqual(
-        expect.objectContaining({
-          table_name: 'mcp_oauth_client_registrations',
-          column_name: 'claim_generation',
-        })
-      );
-      expect(afterColumns.some((row) => row.column_name === 'registration_generation')).toBe(false);
+      const rollback = new Error('rollback full upgrade to retain exact old-head fixture');
+      if (!isPostgresDatabase(db)) throw new Error('PostgreSQL test requires PostgreSQL');
+      // A real rollback preserves the historical schema for the next proof.
+      // Hand-removing future columns cannot recreate exact catalog metadata.
+      const postgresClient = (db as Database & { $client: Sql }).$client;
       await expect(
-        runWithTenantDatabaseScope(db, 'old-head-reconciliation', async (scoped) =>
-          rawRows(
+        postgresClient.begin(async (transaction) => {
+          // Drizzle's migrator opens a transaction through client.begin rather
+          // than the nested database API. Route it to a real postgres-js
+          // savepoint so the outer fixture transaction can undo the upgrade.
+          const nestedClient = Object.assign(transaction, {
+            options: postgresClient.options,
+            begin: transaction.savepoint.bind(transaction),
+          });
+          const db = drizzle(nestedClient as unknown as Sql) as unknown as Database;
+          const beforeColumns = rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT table_name, column_name
+                  FROM information_schema.columns
+                  WHERE table_schema = 'public'
+                    AND table_name IN ('claude_oauth_attempts', 'mcp_oauth_client_registrations')`
+            )
+          );
+          expect(beforeColumns).toContainEqual(
+            expect.objectContaining({
+              table_name: 'mcp_oauth_client_registrations',
+              column_name: 'registration_generation',
+            })
+          );
+          expect(beforeColumns.some((row) => row.table_name === 'claude_oauth_attempts')).toBe(
+            false
+          );
+
+          const legacyRegistrationId = generateId();
+          await runWithTenantDatabaseScope(db, 'old-head-reconciliation', async (scoped) => {
+            const owner = await new UsersRepository(scoped).create({
+              email: `${generateId()}@example.test`,
+              name: 'Old head migration owner',
+              role: 'admin',
+            });
+            const server = await new MCPServerRepository(scoped).create({
+              name: `old-head-dcr-${generateId()}`,
+              transport: 'http',
+              url: 'https://provider.example.test/mcp',
+              scope: 'global',
+              enabled: true,
+              source: 'user',
+              owner_user_id: owner.user_id,
+              auth: { type: 'oauth', oauth_mode: 'per_user' },
+            });
             await executeRaw(
               scoped,
-              sql`SELECT registration_id FROM mcp_oauth_client_registrations`
+              sql`INSERT INTO mcp_oauth_client_registrations (
+                    tenant_id, registration_id, mcp_server_id,
+                    registration_generation, binding_version, binding_fingerprint,
+                    server_config_version, envelope_version, status, sealed_material,
+                    claim_generation, dispatched_at, created_at, updated_at
+                  ) VALUES (
+                    'old-head-reconciliation', ${legacyRegistrationId}, ${server.mcp_server_id},
+                    1, 1, ${'a'.repeat(64)}, 1, 1, 'registered', 'legacy-sealed-material',
+                    1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                  )`
+            );
+          });
+
+          // Main's environment migration and both renumbered OAuth migrations are
+          // later than the archived timestamp. Bootstrap defers this existing
+          // legacy table to exact reconciliation in the same offline transaction.
+          await expect(checkMigrationStatus(db)).resolves.toMatchObject({
+            pending: pendingMigrations,
+            dbAheadOfBinary: false,
+          });
+          await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
+          await runMigrations(db, { allowOfflineCutover: true });
+
+          const afterColumns = rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT table_name, column_name
+                  FROM information_schema.columns
+                  WHERE table_schema = 'public'
+                    AND table_name IN ('claude_oauth_attempts', 'mcp_oauth_client_registrations')`
             )
-          )
-        )
-      ).resolves.toEqual([]);
+          );
+          expect(afterColumns).toContainEqual(
+            expect.objectContaining({
+              table_name: 'claude_oauth_attempts',
+              column_name: 'attempt_generation',
+            })
+          );
+          expect(afterColumns).toContainEqual(
+            expect.objectContaining({
+              table_name: 'mcp_oauth_client_registrations',
+              column_name: 'claim_generation',
+            })
+          );
+          expect(afterColumns.some((row) => row.column_name === 'registration_generation')).toBe(
+            false
+          );
+          await expect(
+            runWithTenantDatabaseScope(db, 'old-head-reconciliation', async (scoped) =>
+              rawRows(
+                await executeRaw(
+                  scoped,
+                  sql`SELECT registration_id FROM mcp_oauth_client_registrations`
+                )
+              )
+            )
+          ).resolves.toEqual([]);
 
-      const legacySequence = rawRows(
-        await executeRaw(
-          db,
-          sql`SELECT relname FROM pg_class
-              WHERE relkind = 'S'
-                AND relname = 'mcp_oauth_client_registration_generation_seq'`
-        )
-      );
-      expect(legacySequence).toEqual([]);
+          const legacySequence = rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT relname FROM pg_class
+                  WHERE relkind = 'S'
+                    AND relname = 'mcp_oauth_client_registration_generation_seq'`
+            )
+          );
+          expect(legacySequence).toEqual([]);
 
-      const ledger = rawRows(
-        await executeRaw(
-          db,
-          sql`SELECT MAX(created_at) AS max_ts FROM drizzle.__drizzle_migrations`
+          const ledger = rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT MAX(created_at) AS max_ts FROM drizzle.__drizzle_migrations`
+            )
+          );
+          const finalWatermark = Number(ledger[0]?.max_ts);
+          const currentJournal = JSON.parse(
+            await readFile(join(migrationsFolder, 'meta', '_journal.json'), 'utf8')
+          ) as { entries: Array<{ when: number }> };
+          expect(finalWatermark).toBe(Math.max(...currentJournal.entries.map(({ when }) => when)));
+          const oldHeadJournal = JSON.parse(
+            await readFile(join(oldHeadFolder!, 'meta', '_journal.json'), 'utf8')
+          ) as { entries: Array<{ tag: string; when: number }> };
+          // Run the exact production status classifier against b0585d76's real
+          // journal. Its daemon startup rejects this database-ahead result.
+          expect(classifyMigrationWatermark(oldHeadJournal.entries, finalWatermark)).toMatchObject({
+            hasPending: false,
+            dbAheadOfBinary: true,
+          });
+          await expect(checkMigrationStatus(db)).resolves.toMatchObject({
+            hasPending: false,
+            dbAheadOfBinary: false,
+          });
+          throw rollback;
+        })
+      ).rejects.toBe(rollback);
+      expect(
+        Number(
+          rawRows(
+            await executeRaw(
+              db,
+              sql`SELECT MAX(created_at) AS max_ts FROM drizzle.__drizzle_migrations`
+            )
+          )[0]?.max_ts
         )
-      );
-      const finalWatermark = Number(ledger[0]?.max_ts);
-      const currentJournal = JSON.parse(
-        await readFile(join(migrationsFolder, 'meta', '_journal.json'), 'utf8')
-      ) as { entries: Array<{ when: number }> };
-      expect(finalWatermark).toBe(Math.max(...currentJournal.entries.map(({ when }) => when)));
-      const oldHeadJournal = JSON.parse(
-        await readFile(join(oldHeadFolder!, 'meta', '_journal.json'), 'utf8')
-      ) as { entries: Array<{ tag: string; when: number }> };
-      // Run the exact production status classifier against b0585d76's real
-      // journal. Its daemon startup rejects this database-ahead result.
-      expect(classifyMigrationWatermark(oldHeadJournal.entries, finalWatermark)).toMatchObject({
-        hasPending: false,
-        dbAheadOfBinary: true,
-      });
+      ).toBe(OLD_HEAD_WATERMARK);
       await expect(checkMigrationStatus(db)).resolves.toMatchObject({
-        hasPending: false,
+        pending: pendingMigrations,
         dbAheadOfBinary: false,
       });
     });
@@ -318,6 +356,19 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('preserves an exact final DCR schema and rows when upgrading the pre-rebase watermark', async () => {
       if (!db || !isPostgresDatabase(db))
         throw new Error('PostgreSQL test database was not initialized');
+      // The previous proof rolled back to the archived b0585d76 database.
+      // Build the exact reviewed final authority before seeding its rows;
+      // this avoids fabricating an old watermark over a future physical schema.
+      await withPostgresTestTransaction(db, async (transaction) => {
+        const claudeSource = await readFile(
+          join(migrationsFolder, '0100_claude_oauth_attempts.sql'),
+          'utf8'
+        );
+        for (const statement of claudeSource.split('--> statement-breakpoint')) {
+          if (statement.trim()) await transaction.unsafe(statement);
+        }
+        await executeReconciliationTransaction(transaction);
+      });
       const registrationId = generateId();
       const relationOid = rawRows(
         await executeRaw(
@@ -355,21 +406,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               )`
         );
       });
-
-      // This fixture reuses the database upgraded by the preceding test. Remove
-      // later Slack recovery, consent-attribution, and cleanup policy additions as well as
-      // rewinding the ledger: the old head did not have these future columns.
-      await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
-      await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
-      await executeRaw(db, sql`DROP POLICY IF EXISTS branch_maintenance_discovery ON branches`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_status`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_error`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);
-      await executeRaw(db, sql`ALTER TABLE repos DROP COLUMN cleanup_policy`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN cleanup_protected`);
-
-      await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
-      await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
 
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try

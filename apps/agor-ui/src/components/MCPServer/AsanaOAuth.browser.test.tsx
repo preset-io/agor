@@ -109,6 +109,13 @@ function api() {
     },
   };
 }
+async function observeCompletion(h: ReturnType<typeof api>, result: MCPOAuthAttemptResult) {
+  h.complete(result);
+  // The real poll sleeps 750 ms. Testing Library's default 1 s DOM timeout
+  // must not double as its scheduling budget on a busy four-viewport runner.
+  // Observe the actual durable response first; do not mock polling or sleep.
+  await waitFor(() => expect(h.poll).toHaveLastResolvedWith(result), { timeout: 5000 });
+}
 function editor(h: ReturnType<typeof api>, identityKey = catalogUser.user_id) {
   return (
     <MCPServerEditModal
@@ -185,7 +192,7 @@ describe('Asana V2 saved OAuth in real Chromium', () => {
     expect(window.open).toHaveBeenCalledWith(authorizationUrl, '_blank', 'noopener,noreferrer');
     expect(refresh).not.toHaveBeenCalled();
     expect(h.status).not.toHaveBeenCalled();
-    h.complete({ status: 'succeeded' });
+    await observeCompletion(h, { status: 'succeeded' });
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     expect(h.status).toHaveBeenCalledOnce();
     expect(agorStore.getState().userAuthenticatedMcpServerIds.has(server.mcp_server_id)).toBe(true);
@@ -222,7 +229,7 @@ describe('Asana V2 saved OAuth in real Chromium', () => {
     expect(h.status).not.toHaveBeenCalled();
     // window.open can return null with noopener or a blocked popup: neither is success.
     expect(screen.queryByText('OAuth authentication successful!')).not.toBeInTheDocument();
-    h.complete({ status: 'succeeded' });
+    await observeCompletion(h, { status: 'succeeded' });
     await screen.findByText('OAuth authentication successful!');
     await waitFor(() =>
       expect(
@@ -267,7 +274,7 @@ describe('Asana V2 saved OAuth in real Chromium', () => {
     expect(
       screen.queryByText('Synthetic client rejected. Check the configured app.')
     ).not.toBeInTheDocument();
-    h.complete({ status: 'expired' });
+    await observeCompletion(h, { status: 'expired' });
     await screen.findByText('OAuth sign-in expired. Start a new sign-in.');
     expect(h.status).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Retry OAuth Flow' })).toBeEnabled();

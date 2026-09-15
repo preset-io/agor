@@ -6,6 +6,7 @@ import type { KeyObject } from 'node:crypto';
 import {
   type Database,
   getCurrentTenantId,
+  getManagedOAuthDeferredClaim,
   isPostgresDatabaseHandle,
   type MCPOAuthRefreshVersion,
   MCPServerRepository,
@@ -71,7 +72,14 @@ export function getManagedOAuthDeferredRefresh(
 }
 function certifyDeferredManagedRefresh(error: unknown, fence: MCPOAuthRefreshVersion): Error {
   const failure = error instanceof Error ? error : new Error('Managed OAuth refresh deferred');
-  deferredManagedRefreshes.set(failure, Object.freeze({ ...fence }));
+  deferredManagedRefreshes.set(
+    failure,
+    Object.freeze({
+      grantGeneration: fence.grantGeneration,
+      grantBindingFingerprint: fence.grantBindingFingerprint,
+      refreshGeneration: fence.refreshGeneration,
+    })
+  );
   return failure;
 }
 
@@ -750,6 +758,12 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
     }
     return repo.claimRefresh(deps.userId, deps.mcpServerId, expected);
   });
+  const deferred = getManagedOAuthDeferredClaim(claim);
+  if (deferred)
+    throw certifyDeferredManagedRefresh(
+      new Error('Managed OAuth refresh retry deferred'),
+      deferred
+    );
   if (claim.outcome === 'observed') {
     if (
       claim.token?.credential_origin === 'cloud_managed_v1' &&
