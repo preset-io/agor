@@ -387,3 +387,36 @@ recovery capabilities against the exact durable historical owner before each
 operation; a restored/mismatched recovery incarnation remains quarantined.
 This path cannot retry preparation to recover an unknown transaction, and
 cannot be supplied as the credential-vending or grant-admission adapter.
+
+Maintenance starts immediately, then schedules starts 30–35 seconds apart. Each
+pass admits at most 25 seconds of work and each worker request is bounded by ten
+seconds or the remaining pass budget. Passes never overlap. Tenant and job
+keyset cursors retain unprocessed work; the bounded page size is not a promise
+that every tenant is reconciled within 35 seconds under overload. Invalidation
+processing precedes cleanup, and expired use authorizations still deny locally
+even when maintenance cannot keep up.
+
+Monitor `mcp.managed_maintenance_capacity_limited` and
+`mcp.managed_maintenance_unavailable`, plus the aggregate
+`mcp.managed_maintenance` counters (`reconciled`, `acknowledged`, `closed`,
+`failures`). These contain no tenant, user, handle, endpoint, token or exception
+labels. Sustained backlog or authority unavailability requires operator
+attention; it must not be “fixed” by lengthening permits, skipping invalidation
+checks or discarding durable cleanup obligations. `closed` counts a completed
+local cleanup job, not an independent assertion of successful provider
+revocation.
+
+### Restore and rehome
+
+Managed grants, pending claims, receipts, permits, invalidation checkpoints and
+cleanup outboxes are not portable. Imported managed server definitions are
+disabled, lose Catalog provenance and retain their managed-mode marker so they
+cannot silently become direct OAuth connections. This applies to same-tenant
+archive restore as well as cross-tenant rehome. Reconnect through the destination
+Catalog; do not rewrite encrypted grants or rebind old handles to the new cell.
+
+Source deletion remains blocked while managed grants, active attempts or
+unfinished cleanup obligations exist. A backup/PITR copy is not an ordinary
+replica failover: its external recovery incarnation must remain quarantined
+until the separately approved recovery process admits a new cohort. Restoring
+database rows or copying attestation files does not establish that authority.

@@ -159,7 +159,11 @@ export async function loadManagedOAuthCleanupDeployment(
     );
     const restricted: Pick<ManagedMCPOAuthClient, 'request'> = Object.freeze({
       request: ((request) => {
-        if (!['cancel', 'close', 'cleanup', 'ack', 'capabilities'].includes(request.operation)) {
+        if (
+          !['cancel', 'cancel_reservation', 'close', 'cleanup', 'ack', 'capabilities'].includes(
+            request.operation
+          )
+        ) {
           return Promise.reject(new ManagedDeploymentError());
         }
         return sender.request(request);

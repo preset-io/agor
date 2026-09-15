@@ -1,4 +1,5 @@
 /** Production worker with disposable owned PG and the actual non-owner/column-limited definer. */
+import { createHash, randomUUID } from 'node:crypto';
 import {
   createTenantScopedDatabaseProxy,
   executeRaw,
@@ -9,7 +10,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
-import { MCP_OAUTH_DISABLED_FLAGS } from '@agor/core/types';
+import { MCP_OAUTH_DISABLED_FLAGS, type MCPOAuthAttemptID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { seedManagedRefreshGrant } from '../../../../packages/core/src/db/test-support/managed-oauth-fixture';
 import {
@@ -21,6 +22,7 @@ import {
   type ManagedOAuthMaintenanceDependencies,
 } from './mcp-oauth-managed-maintenance';
 import type { ManagedMCPOAuthRuntime } from './mcp-oauth-managed-runtime';
+import { MCPOAuthPendingFlowAuthority } from './mcp-oauth-pending-flow-authority';
 
 const master = 'synthetic-maintenance-worker-master';
 describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
@@ -183,7 +185,10 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       release();
       await first;
       expect(getCapabilities).toHaveBeenCalledTimes(1);
-      expect(f.acknowledge).toHaveBeenCalledWith(f.commit.metadata);
+      expect(f.acknowledge).toHaveBeenCalledWith(
+        f.commit.metadata,
+        expect.objectContaining({ timeoutMs: expect.any(Number) })
+      );
       expect(JSON.stringify(f.acknowledge.mock.calls)).not.toContain(f.commit.tokens.access_token);
       await worker.stop();
     });
@@ -236,6 +241,42 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
       expect(activeRequest).toHaveBeenCalled();
       expect(f.request.mock.calls.some(([r]) => r.operation === 'invalidations')).toBe(false);
+    });
+    it('retains unknown reservations without replaying prepare, even with a live canonical cell credential', async () => {
+      const f = await fixture();
+      const flows = new MCPOAuthPendingFlowAuthority(db, master);
+      const attemptId = randomUUID() as MCPOAuthAttemptID;
+      const verifier = 'P'.repeat(43);
+      const record = await flows.reserveManaged({
+        tenantId: f.tenant,
+        userId: f.user,
+        mcpServerId: f.server,
+        attemptId,
+        build: (generation) => {
+          const owner = { ...f.owner, attempt_id: attemptId, grant_generation: String(generation) };
+          return {
+            owner,
+            pkce_verifier: verifier,
+            prepare_request: {
+              protocol_version: 1,
+              operation_id: randomUUID(),
+              owner,
+              catalog_entry_name: 'synthetic',
+              pkce_challenge: createHash('sha256').update(verifier).digest('base64url'),
+              method: 'S256',
+              client_nonce_hash: 'c'.repeat(64),
+              replacement_handle: null,
+            },
+          };
+        },
+      });
+      await flows.retireManagedAttempt(record);
+      const [job] = await f.pending();
+      expect(job.kind).toBe('recover_prepare_cancel');
+      const worker = createManagedOAuthMaintenance(f.dependencies);
+      await worker.runOnce();
+      expect((await f.pending())[0].outbox_id).toBe(job.outbox_id);
+      expect(f.request.mock.calls.some(([r]) => r.operation === 'prepare')).toBe(false);
     });
   }
 );

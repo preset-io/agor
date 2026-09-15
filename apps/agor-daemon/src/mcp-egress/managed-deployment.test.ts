@@ -254,7 +254,7 @@ describe('cleanup-only deployment loader', () => {
       }
     }
   );
-  it.each(['cancel', 'close', 'cleanup', 'ack', 'capabilities'] as const)(
+  it.each(['cancel', 'cancel_reservation', 'close', 'cleanup', 'ack', 'capabilities'] as const)(
     'retains caller authority fence for %s',
     async (operation) => {
       const loaded = await loadManagedOAuthCleanupDeployment(cleanupConfig(), options);

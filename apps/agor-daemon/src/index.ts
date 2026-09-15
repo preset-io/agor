@@ -936,6 +936,7 @@ async function startDaemonWithOwnedMetrics(
     config: effectiveConfig,
     externalLaunchProvider,
     active: mcpManagedOAuthServices,
+    metrics,
   });
 
   // --------------------------------------------------------------------------

@@ -64,6 +64,55 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('production maintenance composition', () => {
+  it('does not restart the send budget after a capabilities round trip', async () => {
+    let elapsed = 0;
+    const monotonic = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+    try {
+      await createManagedOAuthMaintenanceServices(options());
+      request.mockImplementation(async (input) => {
+        if (input.operation === 'capabilities') {
+          elapsed += 3000;
+          return capabilities;
+        }
+        return {};
+      });
+      await state.deps!.sender.request({ operation: 'close', timeoutMs: 5000 } as never);
+      expect(request.mock.calls.at(-1)![0].timeoutMs).toBe(2000);
+      now += 1000;
+      elapsed = 0;
+      request.mockClear();
+      await expect(
+        state.deps!.sender.request({ operation: 'close', timeoutMs: 2000 } as never)
+      ).rejects.toThrow();
+      expect(request.mock.calls.map(([input]) => input.operation)).toEqual(['capabilities']);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+  it('emits bounded aggregate-only backlog and availability metrics', async () => {
+    const metrics = { increment: vi.fn(), gauge: vi.fn() };
+    await createManagedOAuthMaintenanceServices({ ...options(), metrics });
+    state.deps!.onResult!({
+      tenants: 1,
+      reconciled: 2,
+      acknowledged: 3,
+      closed: 4,
+      failures: 5,
+      capacityLimited: true,
+    });
+    state.deps!.onUnavailable!();
+    expect(metrics.increment.mock.calls).toEqual([
+      ['mcp.managed_maintenance', 2, { operation: 'reconciled' }],
+      ['mcp.managed_maintenance', 3, { operation: 'acknowledged' }],
+      ['mcp.managed_maintenance', 4, { operation: 'closed' }],
+      ['mcp.managed_maintenance', 5, { operation: 'failures' }],
+    ]);
+    expect(metrics.gauge.mock.calls).toEqual([
+      ['mcp.managed_maintenance_capacity_limited', 1],
+      ['mcp.managed_maintenance_unavailable', 0],
+      ['mcp.managed_maintenance_unavailable', 1],
+    ]);
+  });
   it('is entirely inert with both flags off', async () => {
     vi.mocked(loadManagedOAuthCleanupDeployment).mockClear();
     const input = options();

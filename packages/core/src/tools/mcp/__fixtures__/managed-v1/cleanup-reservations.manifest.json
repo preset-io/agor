@@ -1,0 +1,9 @@
+{
+  "protocol_version": 1,
+  "source_base_sha": "7f9b7959a2f6d5b3b97981fcf95e4b07f1de0bf3",
+  "files": {
+    "manifest.json": "adfdb192f988a4e0c86ecde3fdbcacce16b255681cdef8da66a70ebf02c2b46d",
+    "projection-results.json": "8aafba4adc550bfd616b5745901f47cf7aa16df685c2426172d895d3f24eef05",
+    "cleanup-reservations.json": "cbfbcb203814f0c2a39592fc56ee76f938abbe5f74a515441bab76f634e35b2f"
+  }
+}

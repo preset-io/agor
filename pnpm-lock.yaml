@@ -830,6 +830,9 @@ importers:
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
+      '@noble/hashes':
+        specifier: 2.4.0
+        version: 2.4.0
       '@oclif/core':
         specifier: ^4.13.3
         version: 4.13.3
