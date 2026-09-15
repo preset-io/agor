@@ -40,6 +40,11 @@ export interface OwnedPostgres {
   peer: Database;
   sql: postgres.Sql;
   dispose(): Promise<void>;
+  /** Fixture-only setup by the owned cluster bootstrap, reader still runs as non-owner. */
+  withMigrationLedgerDrift(
+    kind: 'hash' | 'missing' | 'extra',
+    reader: () => Promise<void>
+  ): Promise<void>;
 }
 
 /** No external endpoint option exists: the container ID is the ownership proof. */
@@ -142,7 +147,36 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
       sql
     );
     await assertNonOwnerPostgres(sql);
-    return { db, peer, sql, dispose: close };
+    return {
+      db,
+      peer,
+      sql,
+      dispose: close,
+      async withMigrationLedgerDrift(kind, reader) {
+        const [last] =
+          await bootstrap!`SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC,id DESC LIMIT 1`;
+        let extraId: number | undefined;
+        if (kind === 'hash')
+          await bootstrap!`UPDATE drizzle.__drizzle_migrations SET hash=${'0'.repeat(64)} WHERE id=${last.id}`;
+        if (kind === 'missing')
+          await bootstrap!`DELETE FROM drizzle.__drizzle_migrations WHERE id=${last.id}`;
+        if (kind === 'extra') {
+          const [extra] =
+            await bootstrap!`INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES (${'0'.repeat(64)},${String(BigInt(last.created_at) + 1n)}) RETURNING id`;
+          extraId = extra.id;
+        }
+        try {
+          await reader();
+        } finally {
+          if (kind === 'hash')
+            await bootstrap!`UPDATE drizzle.__drizzle_migrations SET hash=${last.hash} WHERE id=${last.id}`;
+          if (kind === 'missing')
+            await bootstrap!`INSERT INTO drizzle.__drizzle_migrations(id,hash,created_at) VALUES (${last.id},${last.hash},${last.created_at})`;
+          if (extraId !== undefined)
+            await bootstrap!`DELETE FROM drizzle.__drizzle_migrations WHERE id=${extraId}`;
+        }
+      },
+    };
   } catch (error) {
     await close();
     throw error;
