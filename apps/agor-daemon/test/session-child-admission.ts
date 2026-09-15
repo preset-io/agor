@@ -19,6 +19,7 @@ import {
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { expect, vi } from 'vitest';
+import type { z } from 'zod';
 import { generateId } from '../../../packages/core/src/lib/ids';
 import type { McpContext } from '../src/mcp/server';
 import { tenantScopedToolProxy } from '../src/mcp/tenant-scope';
@@ -138,8 +139,9 @@ export async function childAdmissionFixture(
     } as unknown as McpContext;
     const handlers: Record<string, Handler> = {};
     const server = {
-      registerTool: (name: string, _config: unknown, handler: Handler) => {
-        handlers[name] = handler;
+      registerTool: (name: string, config: { inputSchema: z.ZodType }, handler: Handler) => {
+        handlers[name] = (args) =>
+          handler(config.inputSchema.parse(args) as Record<string, unknown>);
       },
     } as unknown as McpServer;
     registerSessionTools(tenantScopedToolProxy(server, ctx), ctx);
