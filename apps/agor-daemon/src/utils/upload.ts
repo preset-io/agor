@@ -5,7 +5,7 @@
  */
 
 import path from 'node:path';
-import { Transform } from 'node:stream';
+import { pipeline, Transform } from 'node:stream';
 import { getTenantDataRoot } from '@agor/core/config';
 import type {
   SessionID,
@@ -157,7 +157,11 @@ export function createUploadStorage(
           done(null, chunk);
         },
       });
-      file.stream.pipe(aggregateLimiter);
+      // Forward parser errors/disconnects into staging so its own pipeline can
+      // close descriptors and remove partial bytes. Plain pipe() leaves the
+      // staging consumer waiting forever when the source fails. The store owns
+      // the completion callback below, including cleanup on pipeline failure.
+      pipeline(file.stream, aggregateLimiter, () => {});
       void store
         .stage({
           owner,
@@ -202,17 +206,22 @@ export function createUploadStorage(
 export function createUploadMiddleware(store: UploadStagingStore) {
   const limits = getUploadLimits();
   const storage = createUploadStorage(store, limits);
+  // @types/multer 2.2.0 does not yet declare the 2.3+ array-index guard.
+  const multipartLimits: NonNullable<multer.Options['limits']> & {
+    fieldArrayIndexLimit: number;
+  } = {
+    // Per-file ceiling; aggregate bytes are counted by the storage engine.
+    fileSize: limits.maxFileBytes,
+    files: limits.maxFiles,
+    // The browser sends scalar notifyAgent/message fields, not indexed arrays.
+    // This opt-in is required to remediate GHSA-535w-7cp7-47q4: upgrading alone
+    // still permits a sparse array index to consume unbounded CPU.
+    fieldArrayIndexLimit: 0,
+  };
 
   return multer({
     storage,
-    limits: {
-      // Per-file ceiling. Multer aborts the upload with `LIMIT_FILE_SIZE`
-      // if any single file exceeds this.
-      fileSize: limits.maxFileBytes,
-      // Hard ceiling on number of files per request.
-      files: limits.maxFiles,
-      // Aggregate bytes are counted by the streaming storage engine.
-    },
+    limits: multipartLimits,
     fileFilter: (_req, file, cb) => {
       // Match on the bare MIME (drop any `; charset=...` parameters).
       const mime = (file.mimetype || '').split(';')[0].trim().toLowerCase();
