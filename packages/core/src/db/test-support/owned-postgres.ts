@@ -129,6 +129,9 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`
     );
     await bootstrap.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+    // Runtime deletion checks only read the migration receipt, never mutate it.
+    await bootstrap.unsafe(`GRANT USAGE ON SCHEMA drizzle TO ${role}`);
+    await bootstrap.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO ${role}`);
     const url = `postgresql://${role}:${password}@${base}`;
     const db: Database = createDatabase({ dialect: 'postgresql', url });
     const peer: Database = createDatabase({ dialect: 'postgresql', url });
