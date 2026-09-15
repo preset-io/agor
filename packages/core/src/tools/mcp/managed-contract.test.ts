@@ -6,15 +6,22 @@ import {
   MCP_OAUTH_DISABLED_FLAGS,
   MCP_OAUTH_OWNER_FIELDS,
   MCP_OAUTH_ROUTES,
+  McpOAuthAckResponseSchema,
+  McpOAuthCancelResponseSchema,
+  McpOAuthCapabilitiesSchema,
   McpOAuthClaimSchema,
+  McpOAuthCleanupResponseSchema,
+  McpOAuthCloseResponseSchema,
   McpOAuthEpochSchema,
   McpOAuthExchangeRequestSchema,
   McpOAuthJwsHeaderSchema,
   McpOAuthOperationResponseSchema,
   McpOAuthOwnerSchema,
   McpOAuthPrepareRequestSchema,
+  McpOAuthProfileProjectionSchema,
   McpOAuthReceiptClaimsSchema,
   McpOAuthRefreshRequestSchema,
+  McpOAuthReturnTicketResponseSchema,
   McpOAuthSenderClaimsSchema,
   McpOAuthTokensSchema,
   McpOAuthUseClaimsSchema,
@@ -28,6 +35,8 @@ import {
 import vectors from './__fixtures__/managed-v1/hash-vectors.json';
 import invalid from './__fixtures__/managed-v1/invalid.json';
 import manifest from './__fixtures__/managed-v1/manifest.json';
+import projectionFixtures from './__fixtures__/managed-v1/projection-results.json';
+import projectionManifest from './__fixtures__/managed-v1/projection-results.manifest.json';
 import signatures from './__fixtures__/managed-v1/signature-vectors.json';
 import sourcePin from './__fixtures__/managed-v1/source-pin.json';
 import valid from './__fixtures__/managed-v1/valid.json';
@@ -164,4 +173,40 @@ describe('managed OAuth D0 canonical fixture contract', () => {
     expect(Object.values(MCP_OAUTH_DISABLED_FLAGS).every((value) => value === false)).toBe(true);
     expect(Object.values(MCP_OAUTH_ROUTES).some((route) => /renew/.test(route))).toBe(false);
   });
+});
+
+describe('paired immutable provider projection and responses', () => {
+  const parsers: Record<string, ZodType> = {
+    profile: McpOAuthProfileProjectionSchema,
+    public_profile: McpOAuthProfileProjectionSchema,
+    multiple_metadata_profile: McpOAuthProfileProjectionSchema,
+    capabilities: McpOAuthCapabilitiesSchema,
+    prepare: McpOAuthPrepareRequestSchema,
+    ack: McpOAuthAckResponseSchema,
+    cancel: McpOAuthCancelResponseSchema,
+    close: McpOAuthCloseResponseSchema,
+    cleanup: McpOAuthCleanupResponseSchema,
+    cleanup_uncertain: McpOAuthCleanupResponseSchema,
+    cleanup_in_progress: McpOAuthCleanupResponseSchema,
+    return_ticket: McpOAuthReturnTicketResponseSchema,
+  };
+  it('pins additive fixtures without rewriting original signatures', () => {
+    expect(
+      mcpOAuthSha256(
+        readFileSync(
+          new URL('./__fixtures__/managed-v1/projection-results.manifest.json', import.meta.url)
+        )
+      )
+    ).toBe(sourcePin.projection_manifest_sha256);
+    for (const [name, hash] of Object.entries(projectionManifest.files))
+      expect(
+        mcpOAuthSha256(readFileSync(new URL(`./__fixtures__/managed-v1/${name}`, import.meta.url)))
+      ).toBe(hash);
+  });
+  for (const [name, value] of Object.entries(projectionFixtures.valid))
+    it(`accepts producer ${name}`, () =>
+      expect(parsers[name]!.safeParse(value).success).toBe(true));
+  for (const [index, fixture] of projectionFixtures.invalid.entries())
+    it(`rejects producer negative ${index}`, () =>
+      expect(parsers[fixture.schema]!.safeParse(fixture.value).success).toBe(false));
 });

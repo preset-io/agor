@@ -15,6 +15,12 @@ import {
   shouldVerifyMCPOAuthGrantBinding,
 } from './mcp-oauth-grant-binding.js';
 
+export type ManagedGrantAuthorityValidator = (
+  db: GrantAuthorityDatabase,
+  server: MCPServer,
+  grant: MCPOAuthGrantAuthorityRecord
+) => Promise<boolean>;
+
 type GrantAuthorityDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 /**
@@ -26,10 +32,11 @@ type GrantAuthorityDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 export async function isMCPOAuthGrantAuthorizedForServer(
   db: GrantAuthorityDatabase,
   server: MCPServer,
-  grant: MCPOAuthGrantAuthorityRecord
+  grant: MCPOAuthGrantAuthorityRecord,
+  managedValidator?: ManagedGrantAuthorityValidator
 ): Promise<boolean> {
   if (!server.enabled) return false;
-  return isMCPOAuthGrantIdentityAuthorizedForServer(db, server, grant);
+  return isMCPOAuthGrantIdentityAuthorizedForServer(db, server, grant, managedValidator);
 }
 
 /**
@@ -40,9 +47,12 @@ export async function isMCPOAuthGrantAuthorizedForServer(
 export async function isMCPOAuthGrantIdentityAuthorizedForServer(
   db: GrantAuthorityDatabase,
   server: MCPServer,
-  grant: MCPOAuthGrantAuthorityRecord
+  grant: MCPOAuthGrantAuthorityRecord,
+  managedValidator?: ManagedGrantAuthorityValidator
 ): Promise<boolean> {
   if (server.auth?.type !== 'oauth') return false;
+  if (server.auth.oauth_client_mode === 'cloud_managed_v1')
+    return managedValidator ? managedValidator(db, server, grant) : false;
   const mode = server.auth.oauth_mode ?? 'per_user';
   if ((mode === 'shared') !== (grant.user_id === null)) return false;
 
@@ -70,6 +80,7 @@ export async function resolveMCPMarketplaceOAuthGrantAuthority(options: {
   serverIds: readonly MCPServerID[];
   serverRepository: MCPServerRepository;
   tokenRepository: UserMCPOAuthTokenRepository;
+  managedValidator?: ManagedGrantAuthorityValidator;
 }): Promise<ReadonlyMap<MCPServerID, boolean>> {
   const authority = new Map<MCPServerID, boolean>();
   if (options.serverIds.length === 0) return authority;
@@ -95,7 +106,13 @@ export async function resolveMCPMarketplaceOAuthGrantAuthority(options: {
     authority.set(
       server.mcp_server_id,
       Boolean(
-        grant && (await isMCPOAuthGrantIdentityAuthorizedForServer(options.db, server, grant))
+        grant &&
+          (await isMCPOAuthGrantIdentityAuthorizedForServer(
+            options.db,
+            server,
+            grant,
+            options.managedValidator
+          ))
       )
     );
   }
@@ -109,11 +126,15 @@ export async function isCurrentMCPOAuthGrantAuthorized(options: {
   grant: UserMCPOAuthToken;
   tenantId?: string;
   lockConfiguration?: boolean;
+  managedValidator?: ManagedGrantAuthorityValidator;
 }): Promise<boolean> {
   if (options.lockConfiguration && isPostgresDatabaseHandle(options.db)) {
     if (!options.tenantId) return false;
     await lockMCPOAuthGrantConfiguration(options.db, options.tenantId, options.serverId);
   }
   const server = await new MCPServerRepository(options.db).findById(options.serverId);
-  return !!server && isMCPOAuthGrantAuthorizedForServer(options.db, server, options.grant);
+  return (
+    !!server &&
+    isMCPOAuthGrantAuthorizedForServer(options.db, server, options.grant, options.managedValidator)
+  );
 }

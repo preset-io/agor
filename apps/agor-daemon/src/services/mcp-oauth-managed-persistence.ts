@@ -1,5 +1,6 @@
 /** Composition of the existing token persistence owner; no second managed token store. */
 import {
+  getMCPEgressGatewayMode,
   MCPServerRepository,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
@@ -44,7 +45,11 @@ export function createManagedOAuthPersistence(options: {
     await runWithTenantDatabaseScope(options.db, record.tenantId, async (db) => {
       await lockMCPOAuthGrantConfiguration(db, record.tenantId, record.mcpServerId);
       const server = await new MCPServerRepository(db).findById(record.mcpServerId);
-      if (!server || server.owner_user_id !== record.userId)
+      if (
+        (await getMCPEgressGatewayMode(db)) !== 'enforced' ||
+        !server ||
+        server.owner_user_id !== record.userId
+      )
         throw new ManagedOAuthUnavailableError();
       await assertManagedOAuthLocalOwner(
         db,
@@ -67,9 +72,9 @@ export function createManagedOAuthPersistence(options: {
       if (fingerprint !== record.configFingerprint || fingerprint !== owner.config_fingerprint)
         throw new ManagedOAuthUnavailableError();
       options.assertAdmission(input);
-      // The guarded deployment handle joins this existing native tenant transaction.
+      // Pass this exact native transaction: managed subject locking refuses a detached/proxy handle.
       await persistOAuthToken(
-        options.db,
+        db,
         commit.tokens,
         {
           mcpServerId: record.mcpServerId,

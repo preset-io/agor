@@ -9,6 +9,7 @@
 import {
   type SaveTokenInput,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
 import { assertMcpGrantSubjectEntitled } from '@agor/core/tools/mcp/grant-entitlement';
@@ -35,7 +36,7 @@ import type { MCPServerID, UserID } from '@agor/core/types';
  * Shared by both the callback handler and the manual oauth-complete service.
  */
 export async function persistOAuthToken(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tokenResponse: Pick<OAuthTokenResponse, 'access_token' | 'expires_in' | 'refresh_token'>,
   pendingFlow: {
     mcpServerId?: string;
