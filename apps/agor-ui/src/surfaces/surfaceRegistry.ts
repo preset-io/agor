@@ -77,7 +77,7 @@ export const MCP_RECOVERY_ROUTE_PATHS = ['/recover/mcp'] as const;
 export const MCP_RECOVERY_SURFACE = defineSurface({
   id: 'mcp-recovery',
   label: 'MCP recovery',
-  routePaths: MCP_RECOVERY_ROUTE_PATHS,
+  routePaths: [...MCP_RECOVERY_ROUTE_PATHS, '/mcp-oauth/complete'],
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,

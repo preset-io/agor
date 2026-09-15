@@ -27,6 +27,7 @@ export function ManagedOAuthServerModal(props: MCPServerEditModalProps) {
     showInfo,
     showSuccess,
     managed: supported,
+    managedUserId: props.identityKey,
   });
   const profile = server?.auth?.oauth_managed_profile;
   return (

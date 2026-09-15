@@ -20,83 +20,88 @@ const page = (cursor: string, items = [item(cursor)], complete = true) => ({
   items,
 });
 function fixture() {
-  const order: string[] = [];
   const options: Parameters<typeof synchronizeManagedInvalidations>[0] = {
     recoveryIncarnation: incarnation,
-    allowedWorkspaces: new Set(['tenant-a']),
     signal: new AbortController().signal,
     request: vi.fn(async () => page('2')),
-    readCursor: async () => '1',
-    persistInvalidations: vi.fn(async (items) => {
-      order.push(`persist:${items.map((i) => i.cursor)}`);
-    }),
-    advanceCursor: vi.fn(async (_old, next) => {
-      order.push(`advance:${next}`);
-      return true;
-    }),
+    readCheckpoint: async () => ({ status: 'ready', cursor: '1' }),
+    requireSnapshot: vi.fn(async () => true),
+    applyPage: vi.fn(async () => true),
   };
-  return { options, order };
+  return options;
 }
-describe('durable managed invalidation reconciliation', () => {
-  it('persists invalidations before cursor advance and sends no token/permit operation', async () => {
-    const { options, order } = fixture();
+describe('atomic managed invalidation reconciliation', () => {
+  it('passes the entire multiworkspace page to one tenant-bound atomic CAS', async () => {
+    const options = fixture();
+    const mixed = page('3', [item('2'), item('3', 'tenant-b')]);
+    options.request = vi.fn(async () => mixed);
     await synchronizeManagedInvalidations(options);
-    expect(order).toEqual(['persist:2', 'advance:2']);
+    expect(options.applyPage).toHaveBeenCalledExactlyOnceWith('1', mixed, { snapshot: false });
     expect(options.request).toHaveBeenCalledWith(
-      expect.objectContaining({ cursor: '1', snapshot: false, limit: 100 }),
+      expect.objectContaining({ cursor: '1', snapshot: false }),
       options.signal
     );
   });
-  it('requires a complete full snapshot after a gap and never advances a partial snapshot', async () => {
-    const { options, order } = fixture();
+  it('commits gap evidence before fetching a full snapshot, stages each page atomically', async () => {
+    const options = fixture();
+    const gap = { ...page('1', []), snapshot_required: true, snapshot_complete: false };
     options.request = vi
       .fn()
-      .mockResolvedValueOnce({
-        ...page('1', []),
-        snapshot_required: true,
-        snapshot_complete: false,
-      })
+      .mockResolvedValueOnce(gap)
       .mockResolvedValueOnce(page('2', [item('2')], false))
       .mockResolvedValueOnce(page('3'));
     await synchronizeManagedInvalidations(options);
-    expect(order).toEqual(['persist:2', 'persist:3', 'advance:3']);
+    expect(options.applyPage).toHaveBeenNthCalledWith(1, '1', gap, { snapshot: false });
+    expect(options.applyPage).toHaveBeenNthCalledWith(2, null, page('2', [item('2')], false), {
+      snapshot: true,
+    });
+    expect(options.applyPage).toHaveBeenNthCalledWith(3, '2', page('3'), { snapshot: true });
     expect(options.request).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ snapshot: true, cursor: null }),
-      options.signal
-    );
-    expect(options.request).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({ snapshot: true, cursor: '2' }),
+      expect.objectContaining({ cursor: null, snapshot: true }),
       options.signal
     );
   });
-  it('does not acknowledge failed persistence, and a losing cursor CAS cannot overwrite a peer', async () => {
-    const { options } = fixture();
-    options.persistInvalidations = vi.fn(async () => {
-      throw new Error('DB unavailable');
-    });
+  it('restarts incomplete snapshots from zero without losing known tombstones', async () => {
+    const options = fixture();
+    options.readCheckpoint = async () => ({ status: 'snapshot_staging', cursor: '8' });
+    await synchronizeManagedInvalidations(options);
+    expect(options.requireSnapshot).toHaveBeenCalledExactlyOnceWith('8');
+    expect(options.request).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: null, snapshot: true }),
+      options.signal
+    );
+    expect(options.applyPage).toHaveBeenCalledWith(null, page('2'), { snapshot: true });
+  });
+  it('stops after failed atomic persistence or a losing CAS', async () => {
+    for (const applyPage of [
+      vi.fn(async () => false),
+      vi.fn(async () => {
+        throw new Error('DB unavailable');
+      }),
+    ]) {
+      const options = fixture();
+      options.applyPage = applyPage;
+      await expect(synchronizeManagedInvalidations(options)).rejects.toThrow();
+      expect(options.request).toHaveBeenCalledOnce();
+    }
+  });
+  it('cannot reset a concurrently advanced snapshot checkpoint', async () => {
+    const options = fixture();
+    options.readCheckpoint = async () => ({ status: 'snapshot_required', cursor: '1' });
+    options.requireSnapshot = vi.fn(async () => false);
     await expect(synchronizeManagedInvalidations(options)).rejects.toThrow();
-    expect(options.advanceCursor).not.toHaveBeenCalled();
-    const peer = fixture();
-    peer.options.advanceCursor = vi.fn(async () => false);
-    await expect(synchronizeManagedInvalidations(peer.options)).rejects.toThrow();
-    expect(peer.options.advanceCursor).toHaveBeenCalledExactlyOnceWith('1', '2');
+    expect(options.request).not.toHaveBeenCalled();
   });
   it.each([
-    page('2', [item('2', 'tenant-b')]),
     { ...page('2'), recovery_incarnation: 'X'.repeat(43) },
     page('2', [item('3')]),
     page('0', []),
-    page('1', [], false),
-  ])(
-    'denies foreign scope, old incarnation and invalid pagination without persistence',
-    async (response) => {
-      const { options } = fixture();
-      options.request = vi.fn(async () => response);
-      await expect(synchronizeManagedInvalidations(options)).rejects.toThrow();
-      expect(options.persistInvalidations).not.toHaveBeenCalled();
-      expect(options.advanceCursor).not.toHaveBeenCalled();
-    }
-  );
+    page('2', [item('2'), item('2')]),
+  ])('refuses invalid incarnation or cursor evidence', async (bad) => {
+    const options = fixture();
+    options.request = vi.fn(async () => bad);
+    await expect(synchronizeManagedInvalidations(options)).rejects.toThrow();
+    expect(options.applyPage).not.toHaveBeenCalled();
+  });
 });

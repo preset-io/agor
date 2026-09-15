@@ -26,6 +26,49 @@ describe('Marketplace OAuth launch', () => {
     sessionStorage.clear();
   });
 
+  it.each([true, false])(
+    'binds the original transaction before navigation; storage available=%s',
+    async (stored) => {
+      const { client } = clientWith({
+        success: true,
+        authorizationUrl: 'https://fake.example/authorize',
+        attempt_id: 'attempt-a',
+        transaction_id: 'transaction-a',
+      });
+      const bindManagedFlow = vi.fn(() => stored);
+      const popup = {
+        operationId: '00000000-0000-4000-8000-000000000001',
+        navigate: vi.fn(() => true),
+        close: vi.fn(),
+        bindManagedFlow,
+      };
+      const managed = {
+        ...result,
+        mcp_server: {
+          ...result.mcp_server,
+          auth: { type: 'oauth', oauth_client_mode: 'cloud_managed_v1' },
+        },
+      } as MCPCatalogConnectResult;
+      const launched = launchMarketplaceOAuth(client, managed, popup, {
+        isCurrent: () => true,
+        userId: 'caller-a',
+      });
+      if (stored) await expect(launched).resolves.toEqual({ attemptId: 'attempt-a' });
+      else await expect(launched).rejects.toBeInstanceOf(MarketplaceOAuthStartError);
+      expect(bindManagedFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nonce: popup.operationId,
+          userId: 'caller-a',
+          transactionId: 'transaction-a',
+          attemptId: 'attempt-a',
+          serverId: 'server-oauth',
+        })
+      );
+      expect(popup.navigate).toHaveBeenCalledTimes(stored ? 1 : 0);
+      if (!stored) expect(popup.close).toHaveBeenCalledOnce();
+    }
+  );
+
   it('binds managed start to the pre-opened popup nonce without changing direct requests', async () => {
     const { client, create } = clientWith({ success: false, error: 'Unavailable' });
     const popup = { operationId: 'fake-popup-nonce', navigate: vi.fn(), close: vi.fn() };
