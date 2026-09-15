@@ -55,7 +55,7 @@ function matchesProfile(
     grant.oauth_authorization_endpoint === profile.authorizationEndpoint &&
     grant.oauth_token_endpoint === profile.tokenEndpoint &&
     grant.oauth_redirect_uri === profile.redirectUri &&
-    grant.oauth_token_endpoint_auth_method === profile.tokenEndpointAuthMethod
+    (grant.oauth_token_endpoint_auth_method ?? 'none') === profile.tokenEndpointAuthMethod
   );
 }
 
@@ -220,6 +220,22 @@ export function createManagedOAuthGrantAccess({
     }
   }
 
+  /** Caller-scoped status projection: no credential decryption or old-permit liveness. */
+  async function isServerGrantAuthorized(
+    db: GrantDb,
+    server: MCPServer,
+    userId: UserID
+  ): Promise<boolean> {
+    try {
+      const tenantId = getCurrentTenantId();
+      if (!tenantId || !userId) return false;
+      await authority(db, tenantId, userId, server, 'refresh');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function assertManagedUse({
     tenantDb,
     tenantId,
@@ -297,5 +313,5 @@ export function createManagedOAuthGrantAccess({
     await assertCurrent();
     return authorization;
   }
-  return { assertManagedUse, acquireAuthorization, isGrantAuthorized };
+  return { assertManagedUse, acquireAuthorization, isGrantAuthorized, isServerGrantAuthorized };
 }
