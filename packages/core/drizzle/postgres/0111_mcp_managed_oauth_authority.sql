@@ -12,6 +12,8 @@ ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_metadata jsonb;
 --> statement-breakpoint
 ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_operation_id text;
 --> statement-breakpoint
+ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_refresh_not_before timestamp with time zone;
+--> statement-breakpoint
 ALTER TABLE mcp_oauth_pending_flows ADD COLUMN managed_transaction_id text;
 --> statement-breakpoint
 ALTER TABLE user_mcp_oauth_tokens ADD COLUMN oauth_token_endpoint_auth_method text;
@@ -140,7 +142,7 @@ ALTER TABLE mcp_oauth_pending_flows ADD CONSTRAINT mcp_pending_managed_origin CH
  AND managed_metadata->'owner'=managed_metadata->'prepare_request'->'owner')) IS TRUE);
 --> statement-breakpoint
 ALTER TABLE user_mcp_oauth_tokens ADD CONSTRAINT mcp_grant_managed_origin CHECK ((
- (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND grant_binding_version IS DISTINCT FROM 5)
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND managed_refresh_not_before IS NULL AND grant_binding_version IS DISTINCT FROM 5)
  OR (credential_origin='cloud_managed_v1' AND user_id IS NOT NULL AND grant_binding_version=5 AND managed_metadata IS NOT NULL AND oauth_client_secret IS NULL
  AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
  AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text
