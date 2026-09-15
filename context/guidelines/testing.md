@@ -2,6 +2,9 @@
 
 **Vitest with co-located test files.**
 
+For agent-driven feature validation, exploration, evidence, and regression promotion,
+follow the [agentic QA protocol](agentic-qa.md) and [QA templates](../../qa/README.md).
+
 ---
 
 ## Philosophy
