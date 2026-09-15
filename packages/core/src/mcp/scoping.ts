@@ -20,7 +20,7 @@
  */
 
 import { resolveMCPAuthHeaders } from '../tools/mcp/jwt-auth';
-import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
+import type { MCPServer, MCPServerFilters, MCPServerID, Session, SessionID } from '../types';
 import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
@@ -50,6 +50,19 @@ export interface MCPAuthHeadersRepository {
   getAuthHeaders(
     mcpServerIds: MCPServerID[]
   ): Promise<Record<string, { authorization?: string; error?: string }>>;
+}
+
+/** Runtime set, not just the junction-table inventory shown by attachment UIs. */
+export async function resolveEffectiveSessionMcpServers(
+  session: Pick<Session, 'mcp_selection_explicit'>,
+  attached: MCPServer[],
+  loadGlobal: () => Promise<MCPServer[]>,
+  forUserId: string | undefined
+): Promise<MCPServer[]> {
+  const global = session.mcp_selection_explicit ? [] : await loadGlobal();
+  return [
+    ...new Map([...global, ...attached].map((server) => [server.mcp_server_id, server])).values(),
+  ].filter((server) => isMCPServerUsableBy(server, forUserId));
 }
 
 const DEBUG_MCP_SCOPING =
