@@ -26,9 +26,10 @@ import {
 } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { DrizzleService } from '../adapters/drizzle';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
-import { BranchesService } from './branches';
+import { BRANCH_MATERIALIZATION_INTENT, BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/spawn-executor.js')>();
@@ -3003,8 +3004,9 @@ describe('server-selected local teammate homes', () => {
       ) => Promise<Partial<import('@agor/core/types').Branch>>;
       assertTeammateKindIsStable: (current: unknown, patch: unknown) => void;
     };
-    return { internal, get };
+    return { internal, get, service };
   }
+  const materializationParams = { [BRANCH_MATERIALIZATION_INTENT]: true } as const;
   const data = { repo_id: 'repo' as UUID, custom_context: teammateContext };
 
   it.each([
@@ -3013,17 +3015,49 @@ describe('server-selected local teammate homes', () => {
     'git@github.com:preset-io/agor-teammate.git',
   ])('selects full clone for exact canonical destination %s', async (url) => {
     const { internal } = harness(url);
-    const result = await internal.applyBranchCreateDefaults({
-      ...data,
-      storage_mode: 'worktree',
-      clone_depth: 1,
-    });
+    const result = await internal.applyBranchCreateDefaults(
+      { ...data, storage_mode: 'worktree', clone_depth: 1 },
+      materializationParams
+    );
     expect(result).toMatchObject({
       storage_mode: 'clone',
       custom_context: { teammate: { localHome: true } },
     });
     expect(result.clone_depth).toBeUndefined();
     expect(data.custom_context).not.toHaveProperty('teammate.localHome');
+  });
+
+  it('rejects external metadata-only ready homes even with forged materialization params', async () => {
+    const { service, get } = harness('https://github.com/preset-io/agor-teammate.git');
+    const app = feathers();
+    app.use('branches', service);
+    const persist = vi.spyOn(DrizzleService.prototype, 'create');
+    const input = {
+      ...data,
+      board_id: 'board' as BoardID,
+      path: '/existing/shared-worktree',
+      filesystem_status: 'ready' as const,
+      storage_mode: 'worktree' as const,
+    };
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'caller' as UserID, role: 'member' as const },
+      tenant: { tenant_id: 'tenant-a', source: 'jwt' },
+      branchMaterializationIntent: true,
+      BRANCH_MATERIALIZATION_INTENT: true,
+      query: { branchMaterializationIntent: true },
+    };
+    for (const payload of [input, [input]]) {
+      await expect(app.service('branches').create(payload, params)).rejects.toThrow(
+        'through repos.createBranch'
+      );
+    }
+    // The same boundary protects in-process metadata callers; provider is not authority.
+    await expect(service.create(input)).rejects.toThrow('through repos.createBranch');
+    expect(get).toHaveBeenCalledWith(input.repo_id, expect.objectContaining(params));
+    expect(persist).not.toHaveBeenCalled();
+    expect(input).toMatchObject({ path: '/existing/shared-worktree', storage_mode: 'worktree' });
+    expect(input.custom_context).not.toHaveProperty('teammate.localHome');
   });
 
   it.each([
@@ -3044,7 +3078,7 @@ describe('server-selected local teammate homes', () => {
     const { internal } = harness(url, {
       execution: { branch_storage: { allowed_modes: ['worktree'] } },
     });
-    await expect(internal.applyBranchCreateDefaults(data)).rejects.toThrow();
+    await expect(internal.applyBranchCreateDefaults(data, materializationParams)).rejects.toThrow();
     expect(await internal.applyBranchCreateDefaults({ repo_id: data.repo_id })).toMatchObject({
       storage_mode: 'worktree',
     });
@@ -3052,7 +3086,7 @@ describe('server-selected local teammate homes', () => {
       await expect(
         harness(url, {
           execution: { unix_user_mode: 'delegated', executor_storage: { branch_workspace } },
-        }).internal.applyBranchCreateDefaults(data)
+        }).internal.applyBranchCreateDefaults(data, materializationParams)
       ).rejects.toThrow('persistent branch storage');
     }
     expect(
@@ -3064,7 +3098,7 @@ describe('server-selected local teammate homes', () => {
             base_repository: 'unavailable',
           },
         },
-      }).internal.applyBranchCreateDefaults(data)
+      }).internal.applyBranchCreateDefaults(data, materializationParams)
     ).toMatchObject({ storage_mode: 'clone' });
   });
 
@@ -3072,13 +3106,16 @@ describe('server-selected local teammate homes', () => {
     const { internal } = harness('https://github.com/preset-io/agor-teammate.git');
     for (const key of ['teammate', 'assistant', 'agent']) {
       await expect(
-        internal.applyBranchCreateDefaults({
-          ...data,
-          custom_context: { [key]: { kind: 'teammate', localHome: true } },
-        })
+        internal.applyBranchCreateDefaults(
+          {
+            ...data,
+            custom_context: { [key]: { kind: 'teammate', localHome: true } },
+          },
+          materializationParams
+        )
       ).rejects.toThrow('server-managed');
     }
-    const marked = await internal.applyBranchCreateDefaults(data);
+    const marked = await internal.applyBranchCreateDefaults(data, materializationParams);
     expect(() =>
       internal.assertTeammateKindIsStable(marked, {
         custom_context: { teammate: { localHome: null } },
@@ -3101,7 +3138,7 @@ describe('server-selected local teammate homes', () => {
 
   it('passes caller context to authorized repo lookup; foreign repo fails before creation', async () => {
     const { internal, get } = harness();
-    const params = { tenant: { tenant_id: 'tenant-b', source: 'jwt' } };
+    const params = { ...materializationParams, tenant: { tenant_id: 'tenant-b', source: 'jwt' } };
     get.mockRejectedValueOnce(new Error('Repo not found in tenant-b'));
     await expect(internal.applyBranchCreateDefaults(data, params)).rejects.toThrow('tenant-b');
     expect(get).toHaveBeenCalledWith(data.repo_id, params);

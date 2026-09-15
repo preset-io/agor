@@ -134,6 +134,10 @@ import {
   resolveCurrentTenantAuthorityActor,
 } from './tenant-authorization-fence.js';
 
+// Only repos.createBranch owns materialization. A Symbol cannot be supplied by
+// REST/WebSocket JSON, unlike a string-keyed "trusted" parameter or ready status.
+export const BRANCH_MATERIALIZATION_INTENT = Symbol('branchMaterializationIntent');
+
 /**
  * Branch service params
  */
@@ -149,6 +153,7 @@ export type BranchParams = QueryParams<{
 }> &
   AuthenticatedParams &
   InternalEnrichmentParams & {
+    [BRANCH_MATERIALIZATION_INTENT]?: true;
     /** Root-level include_sessions flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_sessions?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
@@ -977,6 +982,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (isTeammate(data)) {
       const repo = await this.app.service('repos').get(data.repo_id!, params);
       if (isCanonicalTeammateFrameworkRepo(repo)) {
+        if (!params?.[BRANCH_MATERIALIZATION_INTENT]) {
+          throw new BadRequest(
+            'Create local teammate homes through repos.createBranch so their files are materialized.'
+          );
+        }
         const storage = config.execution?.executor_storage?.branch_workspace;
         if (
           (config.execution?.unix_user_mode === 'delegated' ||
