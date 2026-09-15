@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { executeRaw, rawRows } from '../database-wrapper';
 import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertTenantWritableUnderLock } from '../tenant-write-gate';
 import { RepositoryError } from './base';
 
 const SAFE_AUTHORITY_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
@@ -58,6 +59,7 @@ export async function lockMCPManagedSubject(
   ) {
     throw new RepositoryError('Managed subject requires its active tenant transaction');
   }
+  await assertTenantWritableUnderLock(db, tenantId);
   const rows = rawRows(
     await executeRaw(
       db,
