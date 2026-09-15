@@ -284,6 +284,7 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   lockMCPOAuthGrantConfiguration,
 } from './services/mcp-oauth-grant-binding.js';
+import type { ManagedMCPOAuthRuntime } from './services/mcp-oauth-managed-runtime.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
@@ -381,6 +382,8 @@ export interface RegisterServicesContext {
   deployment: ResolvedDeploymentConfig;
   /** Startup-resolved callback URL from the frozen effective configuration. */
   mcpOAuthCallbackUrl?: string;
+  /** Managed adapter is deployment-admitted; absence always denies managed rows. */
+  mcpManagedOAuthRuntime?: ManagedMCPOAuthRuntime;
   /** Injectable durable authority for boundary tests; production derives it from PostgreSQL. */
   mcpOAuthPendingFlowAuthority?: MCPOAuthPendingFlowAuthority;
   /** Injectable fleet-wide DCR authority paired with PostgreSQL pending flows. */
@@ -4911,6 +4914,7 @@ export async function registerMCPServices(
         mcp_server_id?: string;
         client_id?: string;
         slack_recovery_token?: string;
+        client_nonce?: string;
       },
       params?: AuthenticatedParams
     ) {
@@ -5097,6 +5101,28 @@ export async function registerMCPServices(
           } satisfies MCPOAuthStartFailure;
         }
 
+        if (savedServer?.auth?.oauth_client_mode === 'cloud_managed_v1') {
+          if (
+            !ctx.mcpManagedOAuthRuntime ||
+            !tenantId ||
+            !userId ||
+            !data.client_nonce ||
+            data.client_id ||
+            data.slack_recovery_token ||
+            (data.mcp_url !== undefined && data.mcp_url !== savedServer.url)
+          ) {
+            throw new Forbidden('Agor-managed sign-in is unavailable for this request.');
+          }
+          return await ctx.mcpManagedOAuthRuntime.start({
+            tenantId,
+            userId: userId as UserID,
+            serverId: savedServer.mcp_server_id,
+            clientNonce: data.client_nonce,
+            assertCurrent: async () => {
+              assertRequestAuthority?.();
+            },
+          });
+        }
         if (savedServer?.auth?.type === 'oauth') {
           assertDirectMCPOAuthClient(savedServer.auth);
           oauthMode = savedServer.auth.oauth_mode || 'per_user';
@@ -5779,6 +5805,23 @@ export async function registerMCPServices(
           return {
             status: 'not_found' as const,
             recovery: recoveryForOAuthAttemptFailure('authorization_failed'),
+          };
+        }
+        if (attempt.credentialOrigin === 'cloud_managed_v1' && ctx.mcpManagedOAuthRuntime) {
+          // Only authenticated broker status can claim completion. Browser messages are hints.
+          await ctx.mcpManagedOAuthRuntime.reconcile(attempt).catch(() => undefined);
+          const current = await durableOAuthFlows.getForUser(
+            tenantId,
+            userId,
+            attemptId as MCPOAuthAttemptID
+          );
+          if (!current) return { status: 'not_found' as const };
+          return {
+            status: current.status,
+            mcp_server_id: current.mcpServerId,
+            oauth_mode: current.oauthMode,
+            failure_code: current.failureCode ?? undefined,
+            recovery: recoveryForOAuthAttemptFailure(current.failureCode, current.mcpServerId),
           };
         }
         return {
