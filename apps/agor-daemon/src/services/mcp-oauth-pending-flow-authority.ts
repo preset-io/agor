@@ -307,6 +307,20 @@ export class MCPOAuthPendingFlowAuthority {
     });
   }
 
+  async getManagedForTransaction(
+    tenantId: string,
+    userId: UserID,
+    transactionId: string
+  ): Promise<MCPOAuthPendingFlowRecord | null> {
+    return runWithTenantDatabaseScope(this.db, tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).getManagedForTransaction(
+        tenantId,
+        userId,
+        transactionId
+      )
+    );
+  }
+
   async retireManagedAttempt(
     record: MCPOAuthPendingFlowRecord,
     failureCode = 'attempt_canceled'

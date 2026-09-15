@@ -11,6 +11,7 @@ import {
   McpOAuthPositiveEpochSchema,
   McpOAuthPrepareRequestSchema,
   McpOAuthReceiptClaimsSchema,
+  type McpOAuthRefreshRequest,
   McpOAuthSignedArtifactSchema,
   type McpOAuthTokens,
   McpOAuthUseClaimsSchema,
@@ -47,6 +48,19 @@ export interface MCPManagedOAuthTokenCommit {
   expected_sequence: string;
   operation_id: string;
 }
+/** Transport under the existing runtime refresh claim/CAS owner; never a second owner. */
+export interface MCPManagedOAuthRefreshAdapter {
+  execute(input: {
+    request: McpOAuthRefreshRequest;
+    metadata: MCPManagedOAuthGrantMetadata;
+    /** Existing claimed operation: receipt lookup only, never resend the refresh token. */
+    recoveryOnly: boolean;
+    assertCurrent: () => void | Promise<void>;
+  }): Promise<MCPManagedOAuthTokenCommit>;
+  /** Called only after the atomic local token/receipt/permit transaction committed. */
+  acknowledge(commit: MCPManagedOAuthTokenCommit): Promise<void>;
+}
+
 export type MCPManagedOAuthInvalidation = z.infer<typeof McpOAuthInvalidationSchema>;
 export type MCPManagedOAuthInvalidationPage = z.infer<typeof McpOAuthInvalidationResponseSchema>;
 

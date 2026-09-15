@@ -53,6 +53,9 @@ export async function persistOAuthToken(
     tokenEndpoint?: SaveTokenInput['tokenEndpoint'];
     resourceUri?: SaveTokenInput['resourceUri'];
     grantBinding?: SaveTokenInput['grantBinding'];
+    tokenEndpointAuthMethod?: SaveTokenInput['tokenEndpointAuthMethod'];
+    /** Verified broker response; repository atomically stores its receipt and closes the pending claim. */
+    managed?: SaveTokenInput['managed'];
   },
   logPrefix: string
 ): Promise<void> {
@@ -61,9 +64,12 @@ export async function persistOAuthToken(
   // `tokenResponse.expires_in ?? 3600` defaulting that was asymmetric with
   // the refresh path and lied to the DB for providers like Notion that omit
   // `expires_in` entirely.
-  const expiry = resolveTokenExpiry(tokenResponse, tokenResponse.access_token);
+  const expiry = pendingFlow.managed
+    ? { expiresAt: new Date(pendingFlow.managed.tokens.expires_at), source: 'managed_receipt' }
+    : resolveTokenExpiry(tokenResponse, tokenResponse.access_token);
 
   if (!pendingFlow.mcpServerId) {
+    if (pendingFlow.managed) throw new Error('Managed OAuth requires its exact server binding');
     return;
   }
 
@@ -110,6 +116,8 @@ export async function persistOAuthToken(
       tokenEndpoint: pendingFlow.tokenEndpoint,
       resourceUri: pendingFlow.resourceUri,
       grantBinding: pendingFlow.grantBinding,
+      tokenEndpointAuthMethod: pendingFlow.tokenEndpointAuthMethod,
+      managed: pendingFlow.managed,
     },
     pendingFlow.userId as UserID
   );
