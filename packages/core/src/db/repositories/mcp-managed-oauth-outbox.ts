@@ -204,22 +204,37 @@ export class MCPManagedOAuthOutboxRepository {
       ).length === 1
     );
   }
-  /** Trusted lifecycle adapter only; caller holds a tenant transaction, never a network call. */
-  async retireTenantUnderWriteGate(tenantId: string, gateGeneration: string): Promise<void> {
+  /**
+   * Trusted lifecycle adapter only; caller holds a tenant transaction, never network I/O.
+   * Optional cellId narrows every mutation to that saved owner. The deployment caller
+   * verifies its immutable cell barrier separately; omission means explicit full-tenant retirement.
+   */
+  async retireTenantUnderWriteGate(
+    tenantId: string,
+    gateGeneration: string,
+    cellId?: string
+  ): Promise<void> {
     // Gate row first: identical ordering to the existing destructive deletion fence.
+    if (cellId !== undefined) McpOAuthIdSchema.parse(cellId);
     await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
-    await this.retireTenant(tenantId);
+    await this.retireTenant(tenantId, cellId);
   }
 
   /** Fresh readiness, not a portable certificate; valid only while this exact gate remains held. */
-  async isTenantRetirementReady(tenantId: string, gateGeneration: string): Promise<boolean> {
-    return (await this.getTenantRetirementStatus(tenantId, gateGeneration)).ready;
+  async isTenantRetirementReady(
+    tenantId: string,
+    gateGeneration: string,
+    cellId?: string
+  ): Promise<boolean> {
+    return (await this.getTenantRetirementStatus(tenantId, gateGeneration, cellId)).ready;
   }
 
   async getTenantRetirementStatus(
     tenantId: string,
-    gateGeneration: string
+    gateGeneration: string,
+    cellId?: string
   ): Promise<MCPManagedOAuthRetirementStatus> {
+    if (cellId !== undefined) McpOAuthIdSchema.parse(cellId);
     await assertTenantWriteGateGeneration(this.db, tenantId, gateGeneration);
     await this.lock(tenantId);
     const [row] = rawRows(
@@ -228,11 +243,14 @@ export class MCPManagedOAuthOutboxRepository {
         sql`
       SELECT
         (SELECT count(*)::text FROM public.mcp_managed_oauth_outbox
-          WHERE tenant_id=${tenantId} AND completed_at IS NULL) AS pending_cleanup,
+          WHERE tenant_id=${tenantId}
+          AND (${cellId ?? null}::text IS NULL OR managed_metadata->'owner'->>'cell_id'=${cellId ?? null}) AND completed_at IS NULL) AS pending_cleanup,
         (SELECT count(*)::text FROM public.user_mcp_oauth_tokens
-          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1') AS active_grants,
+          WHERE tenant_id=${tenantId}
+          AND (${cellId ?? null}::text IS NULL OR managed_metadata->'owner'->>'cell_id'=${cellId ?? null}) AND credential_origin='cloud_managed_v1') AS active_grants,
         (SELECT count(*)::text FROM public.mcp_oauth_pending_flows
-          WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+          WHERE tenant_id=${tenantId}
+          AND (${cellId ?? null}::text IS NULL OR managed_metadata->'owner'->>'cell_id'=${cellId ?? null}) AND credential_origin='cloud_managed_v1'
             AND status IN ('pending','exchanging')) AS pending_attempts
     `
       )
@@ -257,17 +275,20 @@ export class MCPManagedOAuthOutboxRepository {
   }
 
   /** Lifecycle close, before tenant erasure. Existing attempt/token owners produce exact-old cleanup entries. */
-  async retireTenant(tenantId: string): Promise<void> {
+  async retireTenant(tenantId: string, cellId?: string): Promise<void> {
+    if (cellId !== undefined) McpOAuthIdSchema.parse(cellId);
     await this.lock(tenantId);
     await executeRaw(
       this.db,
       sql`UPDATE public.mcp_oauth_pending_flows SET status=CASE WHEN status='exchanging' THEN 'ambiguous' ELSE 'failed' END,
       is_current=false,sealed_material=NULL,failure_code='tenant_retired',finished_at=clock_timestamp(),updated_at=clock_timestamp()
-      WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1' AND status IN ('pending','exchanging')`
+      WHERE tenant_id=${tenantId}
+          AND (${cellId ?? null}::text IS NULL OR managed_metadata->'owner'->>'cell_id'=${cellId ?? null}) AND credential_origin='cloud_managed_v1' AND status IN ('pending','exchanging')`
     );
     await executeRaw(
       this.db,
-      sql`DELETE FROM public.user_mcp_oauth_tokens WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'`
+      sql`DELETE FROM public.user_mcp_oauth_tokens WHERE tenant_id=${tenantId}
+          AND (${cellId ?? null}::text IS NULL OR managed_metadata->'owner'->>'cell_id'=${cellId ?? null}) AND credential_origin='cloud_managed_v1'`
     );
   }
 }

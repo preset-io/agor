@@ -56,8 +56,18 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await runMigrations(db, { allowOfflineCutover: true });
       for (const [tenant, fixture] of fixtures) {
         await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+          // Compare every historical column (including ciphertext and CAS state),
+          // not unrelated columns introduced after the attribution migration.
+          const historicalColumns = sql.join(
+            [...Object.keys(fixture.personal), 'granted_by_user_id'].map((column) =>
+              sql.identifier(column)
+            ),
+            sql`, `
+          );
           expect(
-            rawRows(await executeRaw(scoped, sql`SELECT * FROM user_mcp_oauth_tokens`))
+            rawRows(
+              await executeRaw(scoped, sql`SELECT ${historicalColumns} FROM user_mcp_oauth_tokens`)
+            )
           ).toEqual([{ ...fixture.personal, granted_by_user_id: fixture.userId }]);
         });
       }

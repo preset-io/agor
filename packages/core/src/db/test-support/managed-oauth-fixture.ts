@@ -104,7 +104,8 @@ export function managedCommit(
 export async function seedManagedRefreshGrant(
   db: import('../client').Database,
   masterSecret: string,
-  tenantOverride?: string
+  tenantOverride?: string,
+  cellId?: string
 ) {
   const { runWithTenantDatabaseScope } = await import('../tenant-scope');
   const { executeRaw } = await import('../database-wrapper');
@@ -120,10 +121,11 @@ export async function seedManagedRefreshGrant(
       email: `${randomUUID()}@example.test`,
       role: 'member',
     });
+    const cloudSubject = cellId === undefined ? 'cloud-subject' : `cloud-${user.user_id}`;
     await executeRaw(
       db,
       sql`INSERT INTO public.user_external_identities (tenant_id,identity_key,user_id,provider,issuer,subject,last_login_at,created_at,updated_at)
-      VALUES (${tenant},${randomUUID()},${user.user_id},'cloud','https://cloud.example.test/','cloud-subject',clock_timestamp(),clock_timestamp(),clock_timestamp())`
+      VALUES (${tenant},${randomUUID()},${user.user_id},'cloud','https://cloud.example.test/',${cloudSubject},clock_timestamp(),clock_timestamp(),clock_timestamp())`
     );
     const server = await new MCPServerRepository(db).create({
       name: 'Managed synthetic',
@@ -163,6 +165,8 @@ export async function seedManagedRefreshGrant(
       attempt,
       generation,
     });
+    if (cellId !== undefined) owner.cell_id = cellId;
+    owner.cloud_user_subject = cloudSubject;
     const transaction = randomUUID();
     await pending.create({
       ...subject,
@@ -196,14 +200,21 @@ export async function seedManagedRefreshGrant(
     );
     if (result.outcome !== 'claimed') throw new Error('Fixture exchange claim failed');
     const start = result.flow.exchangeStartedAt!.getTime();
-    const commit = managedCommit(owner, {
-      kind: 'exchange',
-      claim_id: result.flow.exchangeClaimId!,
-      claimed_at: start,
-      deadline_at: start + 120000,
-      refresh_generation: '0',
-      refresh_success_generation: '0',
-    });
+    const commit = managedCommit(
+      owner,
+      {
+        kind: 'exchange',
+        claim_id: result.flow.exchangeClaimId!,
+        claimed_at: start,
+        deadline_at: start + 120000,
+        refresh_generation: '0',
+        refresh_success_generation: '0',
+      },
+      '0',
+      cellId === undefined
+        ? undefined
+        : createHash('sha256').update(randomUUID()).digest('base64url')
+    );
     commit.metadata.transaction_id = transaction;
     await new UserMCPOAuthTokenRepository(db, masterSecret).saveToken(
       user.user_id,

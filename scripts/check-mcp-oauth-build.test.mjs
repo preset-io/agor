@@ -49,6 +49,14 @@ for (const format of ['js', 'cjs']) {
       refresh_success_generation: 2,
       refresh_status: 'idle',
     };
+    const read = t.mock.method(
+      dbModule.UserMCPOAuthTokenRepository.prototype,
+      'getToken',
+      async (userId, serverId) => {
+        assert.equal(dbModule.getCurrentTenantId(), 'tenant-a');
+        return userId === 'caller-a' && serverId === 'server-a' ? token : null;
+      }
+    );
     const claim = t.mock.method(
       dbModule.UserMCPOAuthTokenRepository.prototype,
       'claimRefresh',
@@ -77,6 +85,7 @@ for (const format of ['js', 'cjs']) {
     };
     assert.equal(await oauth.refreshAndPersistToken(input), token.oauth_access_token);
     assert.equal(claim.mock.callCount(), 1);
+    assert.equal(read.mock.callCount(), 1, 'mode admission must share the same repository owner');
     // Refresh persistence also rechecks subject standing inside the existing
     // tenant unit. Its separately built helper must share that unit too.
     const subject = t.mock.method(dbModule.UsersRepository.prototype, 'findById', async (id) => {

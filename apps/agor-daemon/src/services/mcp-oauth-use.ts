@@ -4,6 +4,7 @@ import { assertMcpGrantSubjectEntitled } from '@agor/core/tools/mcp/grant-entitl
 import {
   AmbiguousRefreshError,
   GrantConfigurationChangedError,
+  getManagedOAuthDeferredRefresh,
   MissingRefreshTokenError,
   needsRefresh,
   type RefreshAndPersistDeps,
@@ -111,14 +112,45 @@ export async function acquireMCPOAuthGrant(
         oauthMode: deps.userId === null ? 'shared' : 'per_user',
       })
     );
-    const accessToken = await refreshAndPersistToken({
-      ...deps,
-      observedRefreshVersion: {
-        grantGeneration: grant.grant_generation,
-        grantBindingFingerprint: grant.grant_binding_fingerprint,
-        refreshGeneration: grant.refresh_generation,
-      },
-    });
+    let accessToken: string;
+    try {
+      accessToken = await refreshAndPersistToken({
+        ...deps,
+        observedRefreshVersion: {
+          grantGeneration: grant.grant_generation,
+          grantBindingFingerprint: grant.grant_binding_fingerprint,
+          refreshGeneration: grant.refresh_generation,
+        },
+      });
+    } catch (error) {
+      const certified = managed && getManagedOAuthDeferredRefresh(error);
+      if (!certified) throw error;
+      const retained = await read();
+      // Distinct from successful rotation: a certified unconsumed attempt may
+      // advance the attempt/sequence, but never the successful generation,
+      // access token or original signed use authorization. No ambiguous or
+      // concurrently replaced/claimed row can be retained through this path.
+      if (
+        retained?.credential_origin !== 'cloud_managed_v1' ||
+        retained.refresh_status !== 'idle' ||
+        retained.grant_generation !== grant.grant_generation ||
+        retained.grant_generation !== certified.grantGeneration ||
+        retained.grant_binding_fingerprint !== grant.grant_binding_fingerprint ||
+        retained.grant_binding_fingerprint !== certified.grantBindingFingerprint ||
+        retained.refresh_generation !== certified.refreshGeneration ||
+        retained.refresh_success_generation !== grant.refresh_success_generation ||
+        !retained.oauth_access_token ||
+        retained.oauth_access_token !== grant.oauth_access_token ||
+        !retained.managed_metadata ||
+        retained.managed_metadata.use_authorization !== grant.managed_metadata!.use_authorization ||
+        !retained.oauth_token_expires_at ||
+        retained.oauth_token_expires_at.getTime() <= Date.now() ||
+        retained.managed_metadata.use_claims.expires_at <= Date.now()
+      )
+        throw error;
+      await deps.assertCurrent?.();
+      return retained;
+    }
     const committed = await read();
     if (
       !committed ||

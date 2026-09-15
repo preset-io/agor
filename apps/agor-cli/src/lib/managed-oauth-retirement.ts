@@ -1,4 +1,5 @@
 /** Trusted source-runtime CLI only: DB authority and identifiers, never provider I/O or token reads. */
+import { loadConfig } from '@agor/core/config';
 import {
   assertValidTenantId,
   beginManagedOAuthCellRetirement,
@@ -41,17 +42,28 @@ export function validateManagedRetirementRequest(input: MCPManagedOAuthRetiremen
 export async function executeManagedRetirement(
   db: Database,
   input: MCPManagedOAuthRetirementRequest,
-  retire: boolean
+  retire: boolean,
+  fence?: MCPManagedOAuthCellRetirementFence,
+  configuredCellId?: string
 ): Promise<MCPManagedOAuthRetirementReport> {
   validateManagedRetirementRequest(input);
+  if (fence) validateManagedCellRetirementFence(fence, configuredCellId);
   // Exact migrations/live catalog and real non-owner/NOBYPASSRLS role, not a version string.
   await runWithSystemDatabaseScope(db, 'managed lifecycle schema admission', (tx) =>
     readManagedOAuthSchemaDigest(tx)
   );
+  if (fence)
+    await runWithSystemDatabaseScope(
+      db,
+      'immutable cell retirement proof',
+      (tx) => requireManagedCellRetirementFence(tx, fence),
+      { capability: 'mcp_oauth_maintenance' }
+    );
   const status = await runWithTenantDatabaseScope(db, input.tenant_id, async (tx) => {
     const repo = new MCPManagedOAuthOutboxRepository(tx);
-    if (retire) await repo.retireTenantUnderWriteGate(input.tenant_id, input.gate_generation);
-    return repo.getTenantRetirementStatus(input.tenant_id, input.gate_generation);
+    if (retire)
+      await repo.retireTenantUnderWriteGate(input.tenant_id, input.gate_generation, fence?.cell_id);
+    return repo.getTenantRetirementStatus(input.tenant_id, input.gate_generation, fence?.cell_id);
   });
   return { version: 1, ...input, ...status };
 }
@@ -71,17 +83,8 @@ export async function listManagedRetirementTargets(
     db,
     'managed lifecycle routing identifiers',
     async (tx) => {
-      if (
-        fence &&
-        !(await readManagedOAuthCellRetirement(
-          tx,
-          fence.cell_id,
-          fence.operation_id,
-          fence.gate_generation
-        ))
-      )
-        throw new Error('Cell retirement barrier is missing');
-      return listManagedOAuthMaintenanceTenants(tx, after, limit);
+      if (fence) await requireManagedCellRetirementFence(tx, fence);
+      return listManagedOAuthMaintenanceTenants(tx, after, limit, fence?.cell_id);
     },
     { capability: 'mcp_oauth_maintenance' }
   );
@@ -100,11 +103,29 @@ export function validateManagedRetirementTargets(
   }
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     throw new Error('Invalid page limit');
-  if (fence) {
-    validateManagedCellRetirementRequest(fence, configuredCellId);
-    if (!isCanonicalFullUuid(fence.gate_generation))
-      throw new Error('Invalid cell gate generation');
-  }
+  if (fence) validateManagedCellRetirementFence(fence, configuredCellId);
+}
+
+export function validateManagedCellRetirementFence(
+  fence: MCPManagedOAuthCellRetirementFence,
+  configuredCellId: string | undefined
+): void {
+  validateManagedCellRetirementRequest(fence, configuredCellId);
+  if (!isCanonicalFullUuid(fence.gate_generation)) throw new Error('Invalid cell gate generation');
+}
+async function requireManagedCellRetirementFence(
+  db: Database,
+  fence: MCPManagedOAuthCellRetirementFence
+): Promise<void> {
+  if (
+    !(await readManagedOAuthCellRetirement(
+      db,
+      fence.cell_id,
+      fence.operation_id,
+      fence.gate_generation
+    ))
+  )
+    throw new Error('Cell retirement barrier is missing');
 }
 
 export function validateManagedCellRetirementRequest(
@@ -144,6 +165,9 @@ export async function beginManagedCellRetirement(
 export class ManagedRetirementCommand extends Command {
   protected retire = false;
   static override flags = {
+    'cell-id': Flags.string({ dependsOn: ['cell-operation-id', 'assert-cell-gate-generation'] }),
+    'cell-operation-id': Flags.string({ dependsOn: ['cell-id', 'assert-cell-gate-generation'] }),
+    'assert-cell-gate-generation': Flags.string({ dependsOn: ['cell-id', 'cell-operation-id'] }),
     'tenant-id': Flags.string({ required: true, description: 'Exact source tenant' }),
     'assert-gate-generation': Flags.string({
       required: true,
@@ -161,8 +185,19 @@ export class ManagedRetirementCommand extends Command {
       gate_generation: flags['assert-gate-generation'],
       operation_id: flags['operation-id'],
     };
+    let fence: MCPManagedOAuthCellRetirementFence | undefined;
+    let configuredCellId: string | undefined;
     try {
       validateManagedRetirementRequest(input);
+      if (flags['cell-id'] !== undefined) {
+        fence = {
+          cell_id: flags['cell-id'],
+          operation_id: flags['cell-operation-id']!,
+          gate_generation: flags['assert-cell-gate-generation']!,
+        };
+        configuredCellId = (await loadConfig()).managed_mcp_oauth?.cell_id;
+        validateManagedCellRetirementFence(fence, configuredCellId);
+      }
     } catch (error) {
       this.logToStderr(formatPortabilityError(error));
       await flushStderr();
@@ -172,7 +207,9 @@ export class ManagedRetirementCommand extends Command {
       const result = await executeManagedRetirement(
         createDatabase({ url: getDatabaseUrl() }),
         input,
-        this.retire
+        this.retire,
+        fence,
+        configuredCellId
       );
       await writeStdoutJson(result);
       await flushStderr();

@@ -809,7 +809,11 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
     const [role] = rawRows(
       await executeRaw(
         db,
-        sql`SELECT r.rolsuper,r.rolbypassrls,
+        sql`SELECT session_user=current_user AS same_session_role,
+      r.rolsuper,r.rolbypassrls,r.rolcreaterole,r.rolcreatedb,
+      EXISTS(SELECT 1 FROM pg_catalog.pg_roles privileged
+        WHERE (privileged.rolsuper OR privileged.rolbypassrls OR privileged.rolcreaterole)
+          AND pg_catalog.pg_has_role(current_user,privileged.oid,'MEMBER')) AS privileged_membership,
       EXISTS(SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname IN ('public','drizzle') AND c.relkind IN ('r','p','S') AND pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER'))
       OR EXISTS(SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
@@ -817,7 +821,15 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
       FROM pg_catalog.pg_roles r WHERE r.rolname=current_user`
       )
     );
-    if (role?.rolsuper !== false || role.rolbypassrls !== false || role.owns_or_inherits !== false)
+    if (
+      role?.same_session_role !== true ||
+      role.rolsuper !== false ||
+      role.rolbypassrls !== false ||
+      role.rolcreaterole !== false ||
+      role.rolcreatedb !== false ||
+      role.privileged_membership !== false ||
+      role.owns_or_inherits !== false
+    )
       throw new Error();
     const folder = getMigrationsFolder(db);
     const journal = JSON.parse(await readFile(join(folder, 'meta', '_journal.json'), 'utf8')) as {

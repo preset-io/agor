@@ -195,6 +195,15 @@ export interface MCPOAuthRefreshVersion {
   refreshGeneration: number;
 }
 
+// Only a locked, exact-version DB backoff observation can mint this proof. A
+// structural copy, serialized result, or caller-created `observed` is not proof.
+const managedDeferredClaims = new WeakMap<object, Readonly<MCPOAuthRefreshVersion>>();
+export function getManagedOAuthDeferredClaim(
+  result: MCPOAuthRefreshClaimResult
+): Readonly<MCPOAuthRefreshVersion> | undefined {
+  return managedDeferredClaims.get(result);
+}
+
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
@@ -742,6 +751,7 @@ export class UserMCPOAuthTokenRepository {
             credential_origin: input.managed ? 'cloud_managed_v1' : 'direct',
             managed_metadata: input.managed?.metadata ?? null,
             managed_operation_id: null,
+            managed_refresh_not_before: null,
             oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
             refresh_status: 'idle' as const,
             refresh_generation: 0,
@@ -995,6 +1005,33 @@ export class UserMCPOAuthTokenRepository {
         observed.managed_metadata!.owner.cell_id
       );
       await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+      const deferred = rowsOf(
+        await executeRaw(
+          this.db,
+          sql`SELECT * FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${this.tenantId()!} AND user_id=${userId} AND mcp_server_id=${serverId}
+            AND credential_origin='cloud_managed_v1' AND refresh_status='idle'
+            AND grant_generation=${expected.grantGeneration}
+            AND refresh_generation=${expected.refreshGeneration}
+            AND grant_binding_fingerprint IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}
+            AND refresh_claim_id IS NULL AND managed_operation_id IS NULL
+            AND oauth_refresh_token IS NOT NULL
+            AND managed_refresh_not_before>clock_timestamp()`
+        )
+      )[0];
+      if (deferred) {
+        const token = await this.mapRow(deferred as unknown as UserMCPOAuthTokenRow);
+        const result: MCPOAuthRefreshClaimResult = { outcome: 'observed', token };
+        managedDeferredClaims.set(
+          result,
+          Object.freeze({
+            grantGeneration: token.grant_generation,
+            refreshGeneration: token.refresh_generation,
+            grantBindingFingerprint: token.grant_binding_fingerprint,
+          })
+        );
+        return result;
+      }
     }
     const claimId = randomUUID();
     const userPredicate = userId === null ? sql`user_id IS NULL` : sql`user_id = ${userId}`;
@@ -1030,6 +1067,8 @@ export class UserMCPOAuthTokenRepository {
             AND refresh_generation = ${expected.refreshGeneration}
             AND credential_origin = ${observed?.credential_origin ?? 'direct'}
             AND refresh_status = 'idle'
+            AND (credential_origin<>'cloud_managed_v1' OR managed_refresh_not_before IS NULL
+              OR managed_refresh_not_before<=clock_timestamp())
             AND oauth_refresh_token IS NOT NULL
           RETURNING *
         `
@@ -1103,7 +1142,7 @@ export class UserMCPOAuthTokenRepository {
       AND refresh_claimed_at>clock_timestamp()-interval '2 minutes'`
       : sql`AND credential_origin='direct'`;
     const metadataAssignment = input.managed
-      ? sql`, managed_metadata=${JSON.stringify(input.managed.metadata)}::jsonb, managed_operation_id=NULL`
+      ? sql`, managed_metadata=${JSON.stringify(input.managed.metadata)}::jsonb, managed_operation_id=NULL, managed_refresh_not_before=NULL`
       : sql``;
     const sealedAccess = sealBoundSecret(
       input.accessToken,
@@ -1236,6 +1275,9 @@ export class UserMCPOAuthTokenRepository {
       this.db,
       sql`UPDATE public.user_mcp_oauth_tokens
       SET managed_metadata=jsonb_set(managed_metadata,'{next_sequence}',to_jsonb(${next}::text)),
+        managed_refresh_not_before=CASE WHEN ${response.status === 'rejected_non_consuming'}
+          THEN GREATEST(managed_refresh_not_before,clock_timestamp()+(${response.status === 'rejected_non_consuming' ? response.retry_after_ms : 0} * interval '1 millisecond'))
+          ELSE managed_refresh_not_before END,
         refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
       WHERE tenant_id=${tenantId} AND user_id=${userId} AND mcp_server_id=${serverId} AND refresh_claim_id=${claim.claimId}
         AND managed_operation_id=${response.operation_id} AND managed_metadata->>'next_sequence'=${response.sequence}

@@ -156,27 +156,24 @@ async function seedFixture(db: Database, fixture: Fixture): Promise<void> {
       [fixture.remoteAttemptId, fixture.remoteServerId, '3'],
     ] as const;
     for (const [attemptId, serverId, hashSuffix] of flowServerIds) {
-      await insert(scoped, pg.mcpOauthPendingFlows)
-        .values({
-          tenant_id: fixture.tenantId,
-          attempt_id: attemptId,
-          state_hash: `${fixture.hashPrefix}${hashSuffix}`.padEnd(64, fixture.hashPrefix),
-          user_id: fixture.userId,
-          mcp_server_id: serverId,
-          oauth_mode: 'per_user',
-          subject_user_id: fixture.userId,
-          grant_generation: 1,
-          config_fingerprint_version: 1,
-          config_fingerprint: fixture.hashPrefix.repeat(64),
-          envelope_version: 1,
-          is_current: true,
-          status: 'pending',
-          sealed_material: `sealed-test-flow-${serverId}`,
-          created_at: now,
-          updated_at: now,
-          expires_at: new Date(now.getTime() + 60_000),
-        })
-        .run();
+      // This database is still at 0095. The current Drizzle table also emits
+      // newer managed-OAuth columns, which must not leak into this old fixture.
+      await executeRaw(
+        scoped,
+        sql`INSERT INTO mcp_oauth_pending_flows (
+          tenant_id, attempt_id, state_hash, user_id, mcp_server_id, oauth_mode,
+          subject_user_id, grant_generation, config_fingerprint_version,
+          config_fingerprint, envelope_version, is_current, status,
+          sealed_material, created_at, updated_at, expires_at
+        ) VALUES (
+          ${fixture.tenantId}, ${attemptId},
+          ${`${fixture.hashPrefix}${hashSuffix}`.padEnd(64, fixture.hashPrefix)},
+          ${fixture.userId}, ${serverId}, 'per_user', ${fixture.userId}, 1, 1,
+          ${fixture.hashPrefix.repeat(64)}, 1, true, 'pending',
+          ${`sealed-test-flow-${serverId}`}, ${now.toISOString()}, ${now.toISOString()},
+          ${new Date(now.getTime() + 60_000).toISOString()}
+        )`
+      );
     }
   });
 }

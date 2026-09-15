@@ -1956,6 +1956,8 @@ export const userMcpOauthTokens = sqliteTable(
     credential_origin: text('credential_origin').notNull().default('direct'),
     managed_metadata: t.json<MCPManagedOAuthGrantMetadata>('managed_metadata'),
     managed_operation_id: text('managed_operation_id'),
+    // Broker-certified retry floor, checked using DB time after the token row lock.
+    managed_refresh_not_before: t.timestamp('managed_refresh_not_before'),
     oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: integer('grant_generation').notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),

@@ -6,6 +6,7 @@ import type { KeyObject } from 'node:crypto';
 import {
   type Database,
   getCurrentTenantId,
+  getManagedOAuthDeferredClaim,
   isPostgresDatabaseHandle,
   type MCPOAuthRefreshVersion,
   MCPServerRepository,
@@ -57,6 +58,30 @@ import { resolveTokenExpiry } from './oauth-token-expiry';
 export const REFRESH_BUFFER_MS = 60_000;
 const REFRESH_OBSERVE_TIMEOUT_MS = ROTATING_GRANT_OBSERVE_TIMEOUT_MS;
 const REFRESH_OBSERVE_INTERVAL_MS = ROTATING_GRANT_OBSERVE_INTERVAL_MS;
+
+// Process-local proof issued only after this refresh owner's exact DB CAS has
+// certified no token consumption. Error names or wire-shaped caller objects are
+// not proof. The acquisition boundary must still reread and validate the grant.
+const deferredManagedRefreshes = new WeakMap<object, Readonly<MCPOAuthRefreshVersion>>();
+export function getManagedOAuthDeferredRefresh(
+  error: unknown
+): Readonly<MCPOAuthRefreshVersion> | undefined {
+  return error !== null && typeof error === 'object'
+    ? deferredManagedRefreshes.get(error)
+    : undefined;
+}
+function certifyDeferredManagedRefresh(error: unknown, fence: MCPOAuthRefreshVersion): Error {
+  const failure = error instanceof Error ? error : new Error('Managed OAuth refresh deferred');
+  deferredManagedRefreshes.set(
+    failure,
+    Object.freeze({
+      grantGeneration: fence.grantGeneration,
+      grantBindingFingerprint: fence.grantBindingFingerprint,
+      refreshGeneration: fence.refreshGeneration,
+    })
+  );
+  return failure;
+}
 
 export class InvalidGrantError extends Error {
   readonly code = 'invalid_grant';
@@ -600,8 +625,8 @@ async function refreshManagedPostgres(
   } catch (error) {
     // Only this process's new claim is known not to have dispatched. Recovery
     // cannot make that assertion about the original owner's network activity.
-    if (!recoveryOnly)
-      await tenantWork(deps, (db) =>
+    if (!recoveryOnly) {
+      const released = await tenantWork(deps, (db) =>
         new UserMCPOAuthTokenRepository(db).releaseUnstartedManagedRefreshClaim(
           deps.userId!,
           deps.mcpServerId,
@@ -610,6 +635,8 @@ async function refreshManagedPostgres(
           request.sequence
         )
       );
+      if (released) throw certifyDeferredManagedRefresh(error, fence);
+    }
     throw error;
   }
   let commit: MCPManagedOAuthTokenCommit;
@@ -617,7 +644,7 @@ async function refreshManagedPostgres(
     commit = await adapter.execute({ request, metadata, recoveryOnly, assertCurrent });
   } catch (error) {
     if (!recoveryOnly && isLocalUndispatched(error, request)) {
-      await tenantWork(deps, (db) =>
+      const released = await tenantWork(deps, (db) =>
         new UserMCPOAuthTokenRepository(db).releaseUnstartedManagedRefreshClaim(
           deps.userId!,
           deps.mcpServerId,
@@ -626,6 +653,7 @@ async function refreshManagedPostgres(
           request.sequence
         )
       );
+      if (released) throw certifyDeferredManagedRefresh(error, fence);
       throw error;
     }
     // Independently bundled entry points can carry distinct class constructors.
@@ -652,6 +680,12 @@ async function refreshManagedPostgres(
         notifyInvalidGrant(deps);
         throw new InvalidGrantError();
       }
+      if (
+        outcome.status === 'not_dispatched' ||
+        outcome.status === 'client_configuration_failed' ||
+        outcome.status === 'rejected_non_consuming'
+      )
+        throw certifyDeferredManagedRefresh(error, fence);
       // App-client pause/rejection remains distinct from user grant invalidation.
       throw error;
     }
@@ -724,6 +758,12 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
     }
     return repo.claimRefresh(deps.userId, deps.mcpServerId, expected);
   });
+  const deferred = getManagedOAuthDeferredClaim(claim);
+  if (deferred)
+    throw certifyDeferredManagedRefresh(
+      new Error('Managed OAuth refresh retry deferred'),
+      deferred
+    );
   if (claim.outcome === 'observed') {
     if (
       claim.token?.credential_origin === 'cloud_managed_v1' &&

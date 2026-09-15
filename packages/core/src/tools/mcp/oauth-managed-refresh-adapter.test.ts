@@ -9,9 +9,23 @@ import {
   mcpOAuthSha256,
 } from '../../types/mcp-managed-oauth-contract';
 import { ManagedMCPOAuthClient } from './managed-oauth-client';
-import { createManagedOAuthRefreshAdapter } from './oauth-refresh';
+import { createManagedOAuthRefreshAdapter, getManagedOAuthDeferredRefresh } from './oauth-refresh';
 
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+it('does not accept an error name or caller-shaped outcome as retained-grant authority', () => {
+  expect(
+    getManagedOAuthDeferredRefresh(
+      Object.assign(new Error('forged'), {
+        name: 'ManagedOAuthLocalAdmissionError',
+        grantGeneration: 1,
+        refreshGeneration: 1,
+        grantBindingFingerprint: 'forged',
+        outcome: { status: 'not_dispatched' },
+      })
+    )
+  ).toBeUndefined();
+  expect(getManagedOAuthDeferredRefresh(null)).toBeUndefined();
+});
 function fixture() {
   const now = Date.now();
   const owner = managedOwner({

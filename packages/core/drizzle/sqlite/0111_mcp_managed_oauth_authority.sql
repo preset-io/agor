@@ -10,6 +10,8 @@ ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_metadata text;
 --> statement-breakpoint
 ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_operation_id text;
 --> statement-breakpoint
+ALTER TABLE user_mcp_oauth_tokens ADD COLUMN managed_refresh_not_before integer;
+--> statement-breakpoint
 ALTER TABLE mcp_oauth_pending_flows ADD COLUMN managed_transaction_id text;
 --> statement-breakpoint
 ALTER TABLE user_mcp_oauth_tokens ADD COLUMN oauth_token_endpoint_auth_method text;

@@ -40,6 +40,8 @@ export interface OwnedPostgres {
   peer: Database;
   sql: postgres.Sql;
   dispose(): Promise<void>;
+  /** Negative admission fixture: privileged LOGIN masks itself with SET ROLE. */
+  withPrivilegedSessionRole(reader: (db: Database) => Promise<void>): Promise<void>;
   /** Fixture-only setup by the owned cluster bootstrap, reader still runs as non-owner. */
   withMigrationLedgerDrift(
     kind: 'hash' | 'missing' | 'extra',
@@ -138,22 +140,23 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
     await bootstrap.unsafe(`GRANT USAGE ON SCHEMA drizzle TO ${role}`);
     await bootstrap.unsafe(`GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO ${role}`);
     // The routing definer also runs as NOSUPERUSER/NOBYPASSRLS with only
-    // routing-column SELECT grants. It cannot read credentials even as definer.
+    // routing/owner-metadata SELECT grants (cell predicate only). It cannot read
+    // token or sealed-material columns even as definer; only IDs leave its function.
     const routingRole = `routing_${run}`;
     await bootstrap.unsafe(`CREATE ROLE ${routingRole} NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT`);
     await bootstrap.unsafe(`GRANT ${routingRole} TO bootstrap`);
     await bootstrap.unsafe(`GRANT USAGE, CREATE ON SCHEMA public TO ${routingRole}`);
     await bootstrap.unsafe(
-      `GRANT SELECT(tenant_id,credential_origin,status) ON public.mcp_oauth_pending_flows TO ${routingRole}`
+      `GRANT SELECT(tenant_id,credential_origin,status,managed_metadata) ON public.mcp_oauth_pending_flows TO ${routingRole}`
     );
     await bootstrap.unsafe(
-      `GRANT SELECT(tenant_id,credential_origin) ON public.user_mcp_oauth_tokens TO ${routingRole}`
+      `GRANT SELECT(tenant_id,credential_origin,managed_metadata) ON public.user_mcp_oauth_tokens TO ${routingRole}`
     );
     await bootstrap.unsafe(
-      `GRANT SELECT(tenant_id,completed_at) ON public.mcp_managed_oauth_outbox TO ${routingRole}`
+      `GRANT SELECT(tenant_id,completed_at,managed_metadata) ON public.mcp_managed_oauth_outbox TO ${routingRole}`
     );
     await bootstrap.unsafe(
-      `ALTER FUNCTION public.agor_mcp_managed_oauth_maintenance_tenants(text,integer) OWNER TO ${routingRole}`
+      `ALTER FUNCTION public.agor_mcp_managed_oauth_maintenance_tenants(text,integer,text) OWNER TO ${routingRole}`
     );
     await bootstrap.unsafe(
       `GRANT SELECT(cell_id) ON public.mcp_managed_oauth_cell_retirements TO ${routingRole}`
@@ -178,6 +181,20 @@ export async function createOwnedPostgres(): Promise<OwnedPostgres> {
       peer,
       sql,
       dispose: close,
+      async withPrivilegedSessionRole(reader) {
+        const masked: Database = createDatabase({
+          dialect: 'postgresql',
+          url: ownerUrl,
+          pool: { max: 1 },
+        });
+        const client = (masked as Database & { $client: postgres.Sql }).$client;
+        try {
+          await client.unsafe(`SET ROLE ${role}`);
+          await reader(masked);
+        } finally {
+          await client.end({ timeout: 2 });
+        }
+      },
       async withMigrationLedgerDrift(kind, reader) {
         const [last] =
           await bootstrap!`SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC,id DESC LIMIT 1`;
