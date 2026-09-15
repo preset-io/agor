@@ -274,7 +274,8 @@ export class MCPOAuthPendingFlowRepository {
           this.db,
           input.tenantId,
           input.userId,
-          input.managedMetadata.owner.cloud_user_subject
+          input.managedMetadata.owner.cloud_user_subject,
+          input.managedMetadata.owner.cell_id
         );
       const newer = rawRows(
         await executeRaw(
@@ -364,7 +365,8 @@ export class MCPOAuthPendingFlowRepository {
       this.db,
       expected.tenantId,
       expected.userId,
-      expected.managedMetadata!.owner.cloud_user_subject
+      expected.managedMetadata!.owner.cloud_user_subject,
+      expected.managedMetadata!.owner.cell_id
     );
     const hash = createHash('sha256')
       .update(`agor-mcp-managed-v1\0${expected.managedTransactionId}`)
@@ -445,7 +447,8 @@ export class MCPOAuthPendingFlowRepository {
       this.db,
       expected.tenantId,
       expected.userId,
-      expected.managedMetadata!.owner.cloud_user_subject
+      expected.managedMetadata!.owner.cloud_user_subject,
+      expected.managedMetadata!.owner.cell_id
     );
     const hash = createHash('sha256').update(`agor-mcp-managed-v1\0${transactionId}`).digest('hex');
     const metadata = MCPManagedOAuthPendingMetadataSchema.parse({

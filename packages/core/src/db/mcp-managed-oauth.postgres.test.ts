@@ -617,7 +617,13 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         release = r;
       });
       const writer = runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
-        await lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject);
+        await lockMCPManagedSubject(
+          db,
+          f.tenant,
+          f.user,
+          f.owner.cloud_user_subject,
+          f.owner.cell_id
+        );
         admitted();
         await barrier;
       });
@@ -643,7 +649,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(acquired.generation).toBeTruthy();
       await expect(
         runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
-          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject)
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
         )
       ).rejects.toThrow();
     });
@@ -653,7 +659,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const gate = await acquireTenantWriteGate(owned.db, f.tenant);
       await expect(
         runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
-          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject)
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
         )
       ).rejects.toThrow('write');
       const within = <T>(fn: (repo: MCPManagedOAuthOutboxRepository) => Promise<T>) =>
@@ -709,7 +715,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           WHERE tenant_id=${f.tenant} AND namespace=${TENANT_WRITE_GATE_NAMESPACE} AND key=${TENANT_WRITE_GATE_KEY}`
         );
         await expect(
-          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject)
+          lockMCPManagedSubject(db, f.tenant, f.user, f.owner.cloud_user_subject, f.owner.cell_id)
         ).rejects.toThrow('write');
       });
     });
