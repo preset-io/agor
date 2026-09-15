@@ -7,6 +7,7 @@ import type {
   MCPTransport,
   UserID,
 } from '@agor/core/types';
+import { assertMCPManagedOAuthProfileReference, resolveMCPOAuthClientMode } from '@agor/core/types';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { MCP_HEADER_REDACTED_SENTINEL } from '../../tools/mcp/http-headers';
 import type { Database } from '../client';
@@ -34,6 +35,10 @@ type CandidateRow = {
   tool_permissions: unknown;
   auth_type: unknown;
   oauth_mode: unknown;
+  oauth_client_mode: unknown;
+  has_oauth_client_mode: unknown;
+  oauth_managed_profile: unknown;
+  has_oauth_managed_profile: unknown;
   oauth_scope: unknown;
   oauth_client_id: unknown;
   oauth_dcr_mode: unknown;
@@ -77,8 +82,21 @@ function authFrom(row: CandidateRow): MCPAuth | undefined {
     };
   }
   if (type !== 'oauth') return undefined;
+  // Preserve the authority discriminator in this deliberately secret-free
+  // projection. Missing historical modes are direct; explicit null/unknown
+  // modes and orphan/malformed profiles must never become direct candidates.
+  const mode = resolveMCPOAuthClientMode({
+    ...(row.has_oauth_client_mode ? { oauth_client_mode: row.oauth_client_mode } : {}),
+    ...(row.has_oauth_managed_profile ? { oauth_managed_profile: row.oauth_managed_profile } : {}),
+  });
+  const profile = parseJson<unknown>(row.oauth_managed_profile);
+  if (mode === 'cloud_managed_v1') assertMCPManagedOAuthProfileReference(profile);
   return {
     type: 'oauth',
+    ...(row.has_oauth_client_mode ? { oauth_client_mode: mode } : {}),
+    ...(mode === 'cloud_managed_v1'
+      ? { oauth_managed_profile: profile as MCPAuth['oauth_managed_profile'] }
+      : {}),
     ...(stringValue(row.oauth_mode)
       ? { oauth_mode: stringValue(row.oauth_mode) as 'per_user' | 'shared' }
       : {}),
@@ -123,6 +141,10 @@ export class MCPCatalogCandidateRepository {
   async listForUser(userId: UserID): Promise<MCPCatalogServerCandidate[]> {
     try {
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
+      const authHas = (key: string) =>
+        isPostgresDatabase(this.db)
+          ? sql<boolean>`coalesce((${mcpServers.data}->'auth') ? ${key}, false)`
+          : sql<boolean>`json_type(${mcpServers.data}, ${`$.auth.${key}`}) is not null`;
       const headerJson = jsonExtract(this.db, mcpServers.data, 'headers');
       const hasHeaders = isPostgresDatabase(this.db)
         ? sql<boolean>`coalesce(${mcpServers.data}->'headers', '{}'::jsonb) <> '{}'::jsonb`
@@ -155,6 +177,10 @@ export class MCPCatalogCandidateRepository {
         tool_permissions: jsonExtract(this.db, mcpServers.data, 'tool_permissions'),
         auth_type: authType,
         oauth_mode: jsonExtract(this.db, mcpServers.data, 'auth.oauth_mode'),
+        oauth_client_mode: jsonExtract(this.db, mcpServers.data, 'auth.oauth_client_mode'),
+        has_oauth_client_mode: authHas('oauth_client_mode'),
+        oauth_managed_profile: jsonExtract(this.db, mcpServers.data, 'auth.oauth_managed_profile'),
+        has_oauth_managed_profile: authHas('oauth_managed_profile'),
         oauth_scope: jsonExtract(this.db, mcpServers.data, 'auth.oauth_scope'),
         oauth_client_id: jsonExtract(this.db, mcpServers.data, 'auth.oauth_client_id'),
         oauth_dcr_mode: jsonExtract(this.db, mcpServers.data, 'auth.oauth_dcr_mode'),
@@ -193,6 +219,7 @@ export class MCPCatalogCandidateRepository {
         .all()) as CandidateRow[];
 
       return rows.map((row) => {
+        const auth = authFrom(row);
         const server: MCPServer = {
           mcp_server_id: row.mcp_server_id as MCPServerID,
           name: row.name,
@@ -206,7 +233,7 @@ export class MCPCatalogCandidateRepository {
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
           ...(stringValue(row.url) ? { url: stringValue(row.url) } : {}),
           headers: row.has_headers ? { __configured__: MCP_HEADER_REDACTED_SENTINEL } : {},
-          ...(authFrom(row) ? { auth: authFrom(row) } : {}),
+          ...(auth ? { auth } : {}),
           ...(parseJson<MCPServer['tools']>(row.tools) ? { tools: parseJson(row.tools) } : {}),
           ...(parseJson<MCPServer['resources']>(row.resources)
             ? { resources: parseJson(row.resources) }
@@ -228,9 +255,11 @@ export class MCPCatalogCandidateRepository {
         // does not verify or select client-secret material: readiness is
         // advisory and Connect recomputes the full binding before reuse.
         const bindingReady =
-          bindingVersion === undefined
-            ? !isPostgresDatabase(this.db)
-            : [1, 2, 3, 4].includes(bindingVersion) && Boolean(row.has_grant_binding_fingerprint);
+          auth?.oauth_client_mode === 'cloud_managed_v1'
+            ? bindingVersion === 5 && Boolean(row.has_grant_binding_fingerprint)
+            : bindingVersion === undefined
+              ? !isPostgresDatabase(this.db)
+              : [1, 2, 3, 4].includes(bindingVersion) && Boolean(row.has_grant_binding_fingerprint);
         return {
           server,
           has_row_secret: Boolean(row.has_row_secret),

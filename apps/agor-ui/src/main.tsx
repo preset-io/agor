@@ -1,6 +1,10 @@
 import type { AgorClient } from '@agor-live/client';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { captureManagedOAuthReturn } from './components/Marketplace/managedOAuthReturn';
+
+captureManagedOAuthReturn();
+
 import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
 

@@ -98,11 +98,19 @@ function rewrittenRowJsonb(elem: SQL, destinationTenantId: string, tableName: st
     '{source}'::pg_catalog.text[],
     '"imported"'::pg_catalog.jsonb
   )`;
+  // Imported managed definitions are inert, including same-tenant restores.
+  // Preserve the managed marker so loss of provenance can never turn this into
+  // a direct/public OAuth client. Only a fresh Catalog connection establishes trust.
+  const inactive = sql`CASE
+    WHEN ${elem} #>> '{data,auth,oauth_client_mode}'::pg_catalog.text[] = 'cloud_managed_v1'
+    THEN pg_catalog.jsonb_set(${imported}, '{enabled}'::pg_catalog.text[], 'false'::pg_catalog.jsonb)
+    ELSE ${imported}
+  END`;
   // Archive revisions are evidence about the source daemon, not authority in
   // the destination. Validation rejects malformed/exhausted values before any
   // write; every accepted row starts a fresh bounded editor-CAS sequence.
   return sql`pg_catalog.jsonb_set(
-    ${imported},
+    ${inactive},
     '{data,config_version}'::pg_catalog.text[],
     '1'::pg_catalog.jsonb,
     true

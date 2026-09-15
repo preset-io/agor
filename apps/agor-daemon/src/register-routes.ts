@@ -1,5 +1,6 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { isPostgresDatabaseHandle } from '@agor/core/db';
+import type { ManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -73,6 +74,7 @@ import {
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
   MCPServerNotUsableError,
   mcpRuntimeProviderCapability,
+  resolveEffectiveSessionMcpServers,
 } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
@@ -477,6 +479,7 @@ export function requireStreamingPublisherCapability(
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
+  mcpManagedOAuthServices?: ManagedOAuthServices;
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
@@ -718,6 +721,51 @@ export async function authorizeBoardCommentReposition(input: {
   }
 }
 
+/** Same policy owner for production registration and registered browser integration. */
+export function createRegisteredMCPMemberPolicyService(
+  app: Application,
+  db: TenantScopeAwareDatabase
+) {
+  return {
+    async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
+      const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
+      // The policy alone does not answer "may I add one?" — the role floor
+      // beneath it does too. Answering here keeps a client from rebuilding
+      // the rule out of `isAdmin` and a policy value, which is the shape that
+      // loses the floor. Advisory: the write path still decides.
+      return {
+        policy,
+        can_configure: canConfigureMcpServers(params.user?.role, policy),
+      };
+    },
+    async patch(
+      _id: unknown,
+      data: { policy: MCPMemberPolicy },
+      params: RouteParams
+    ): Promise<MCPMemberPolicySetting> {
+      if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
+        throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
+      }
+      await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+      // Do not publish the caller-shaped endpoint response: `can_configure`
+      // differs by role. An empty tenant-scoped invalidation makes every
+      // connected browser refetch its own authoritative answer. The event is
+      // queued until the tenant DB unit of work commits by emitServiceEvent.
+      emitServiceEvent(app, {
+        path: 'mcp-servers',
+        event: MCP_MEMBER_POLICY_CHANGED_EVENT,
+        data: {},
+        params,
+        method: 'patch',
+      });
+      return {
+        policy: data.policy,
+        can_configure: canConfigureMcpServers(params.user?.role, data.policy),
+      };
+    },
+  };
+}
+
 /**
  * Build the catalog-connect service exactly as the production route registers it.
  * Kept as a named boundary so PostgreSQL integration coverage can exercise the
@@ -726,13 +774,15 @@ export async function authorizeBoardCommentReposition(input: {
  */
 export function createRegisteredMCPCatalogConnectService(
   app: Application,
-  db: TenantScopeAwareDatabase
+  db: TenantScopeAwareDatabase,
+  managed?: ManagedOAuthServices
 ) {
   const runInTenantDatabaseScope = <T>(params: AuthenticatedParams, work: () => Promise<T>) => {
     const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
     return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
   };
   return createMCPCatalogConnectService(app, {
+    resolveManagedInstall: managed?.resolveManagedInstall,
     runInTenantDatabaseScope,
     async listCandidates(userId, params) {
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
@@ -752,7 +802,12 @@ export function createRegisteredMCPCatalogConnectService(
         );
         return Boolean(
           grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+            (await isMCPOAuthGrantAuthorizedForServer(
+              db,
+              candidate.server,
+              grant,
+              managed?.managedValidator
+            ))
         );
       };
       return runInTenantDatabaseScope(params, read);
@@ -921,6 +976,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     app,
     jwtSecret,
+    resolveManagedAuthorization: ctx.mcpManagedOAuthServices?.grantAccess.acquireAuthorization,
+    assertManagedUse: ctx.mcpManagedOAuthServices?.grantAccess.assertManagedUse,
   });
   // Internal composition seam used by MCP mutation hooks. It is never exposed
   // as a Feathers service and carries no serializable credential material.
@@ -5153,26 +5210,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           usableByUserId: credentialUserId,
           $limit: 1000,
         };
-        const globalResult = includeGlobal
-          ? await mcpService.find({
-              ...params,
-              provider: undefined,
-              query: globalQuery,
-            })
-          : [];
-        const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = (
-          includeGlobal
-            ? [
-                ...new Map(
-                  [...globalServers, ...sessionServers].map((server) => [
-                    server.mcp_server_id,
-                    server,
-                  ])
-                ).values(),
-              ]
-            : sessionServers
-        ).filter((server) => isMCPServerUsableBy(server, credentialUserId));
+        const servers = await resolveEffectiveSessionMcpServers(
+          session,
+          sessionServers,
+          async () => {
+            const globalResult = includeGlobal
+              ? await mcpService.find({
+                  ...params,
+                  provider: undefined,
+                  query: globalQuery,
+                })
+              : [];
+            return Array.isArray(globalResult) ? globalResult : globalResult.data;
+          },
+          credentialUserId
+        );
         return !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
           ._forceMcpRuntimeRedaction &&
           shouldExposeMCPServerSecrets(params, {
@@ -5902,45 +5954,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     '/mcp-member-policy',
-    {
-      async find(params: RouteParams): Promise<MCPMemberPolicySetting> {
-        const policy = await resolveMcpMemberPolicy(db, params.user?.user_id, getCurrentTenantId());
-        // The policy alone does not answer "may I add one?" — the role floor
-        // beneath it does too. Answering here keeps a client from rebuilding
-        // the rule out of `isAdmin` and a policy value, which is the shape that
-        // loses the floor. Advisory: the write path still decides.
-        return {
-          policy,
-          can_configure: canConfigureMcpServers(params.user?.role, policy),
-        };
-      },
-      async patch(
-        _id: unknown,
-        data: { policy: MCPMemberPolicy },
-        params: RouteParams
-      ): Promise<MCPMemberPolicySetting> {
-        if (!MCP_MEMBER_POLICIES.includes(data?.policy)) {
-          throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
-        }
-        await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
-        // Do not publish the caller-shaped endpoint response: `can_configure`
-        // differs by role. An empty tenant-scoped invalidation makes every
-        // connected browser refetch its own authoritative answer. The event is
-        // queued until the tenant DB unit of work commits by emitServiceEvent.
-        emitServiceEvent(app, {
-          path: 'mcp-servers',
-          event: MCP_MEMBER_POLICY_CHANGED_EVENT,
-          data: {},
-          params,
-          method: 'patch',
-        });
-        return {
-          policy: data.policy,
-          can_configure: canConfigureMcpServers(params.user?.role, data.policy),
-        };
-      },
-      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-    } as any,
+    createRegisteredMCPMemberPolicyService(app, db),
     {
       // Readable by any authenticated caller, because what it answers is
       // partly about the caller: `can_configure` is their own capability, and
@@ -6112,7 +6126,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerLongAuthenticatedRoute(
     app,
     '/mcp-catalog/connect',
-    createRegisteredMCPCatalogConnectService(app, db),
+    createRegisteredMCPCatalogConnectService(app, db, ctx.mcpManagedOAuthServices),
     { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );

@@ -66,8 +66,94 @@ export interface MCPOAuthRefreshResult {
   error?: string;
 }
 
+/** Managed start never returns provider state, code, verifier or credentials. */
+export interface MCPManagedOAuthStartResult {
+  success: true;
+  oauth_client_mode: 'cloud_managed_v1';
+  authorizationUrl: string;
+  attempt_id: MCPOAuthAttemptID;
+  transaction_id: string;
+}
+
+export interface MCPManagedOAuthReturnRequest {
+  transaction_id: string;
+  ticket: string;
+  client_nonce: string;
+}
+
+/** Acceptance is only navigation correlation. Durable local CAS determines success. */
+export interface MCPManagedOAuthReturnResult {
+  accepted: true;
+  attempt_id: MCPOAuthAttemptID;
+}
+
 /** Credential subject selected for the resulting MCP OAuth grant. */
 export type MCPOAuthMode = 'per_user' | 'shared';
+
+/** Absent on historical/direct rows. Unknown modes are never direct. */
+export const MCP_OAUTH_CLIENT_MODES = ['direct', 'cloud_managed_v1'] as const;
+export type MCPOAuthClientMode = (typeof MCP_OAUTH_CLIENT_MODES)[number];
+
+export function resolveMCPOAuthClientMode(auth: unknown): MCPOAuthClientMode {
+  if (auth === undefined || auth === null) return 'direct';
+  if (typeof auth !== 'object' || Array.isArray(auth)) {
+    throw new Error('Invalid MCP authentication configuration');
+  }
+  const row = auth as Record<string, unknown>;
+  const mode = row.oauth_client_mode;
+  if (mode === 'cloud_managed_v1') return mode;
+  if (mode === undefined || mode === 'direct') {
+    if (row.oauth_managed_profile !== undefined) {
+      throw new Error('Managed OAuth profile requires managed client mode');
+    }
+    return 'direct';
+  }
+  throw new Error('Unsupported MCP OAuth client mode');
+}
+
+/** Direct helpers call this before discovery, DCR, or secret validation. */
+export function assertDirectMCPOAuthClient(auth: unknown): void {
+  if (resolveMCPOAuthClientMode(auth) !== 'direct') {
+    throw new Error('Cloud-managed OAuth requires the managed authority adapter');
+  }
+}
+
+/** Nonsecret immutable registry identity, not caller-provided OAuth endpoints. */
+export interface MCPManagedOAuthProfileReference {
+  profile_id: string;
+  semantic_version: string;
+  environment: 'staging' | 'production';
+  region: 'us-west-2';
+  registry_digest: string;
+}
+
+export function assertMCPManagedOAuthProfileReference(
+  value: unknown
+): asserts value is MCPManagedOAuthProfileReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Managed OAuth requires a registry profile reference');
+  }
+  const row = value as Record<string, unknown>;
+  const fields = ['profile_id', 'semantic_version', 'environment', 'region', 'registry_digest'];
+  if (
+    Object.keys(row).length !== fields.length ||
+    Object.keys(row).some((key) => !fields.includes(key)) ||
+    typeof row.profile_id !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(row.profile_id) ||
+    typeof row.semantic_version !== 'string' ||
+    !/^[1-9][0-9]{0,18}$/.test(row.semantic_version) ||
+    BigInt(row.semantic_version) > 9_223_372_036_854_775_807n ||
+    !['staging', 'production'].includes(String(row.environment)) ||
+    row.region !== 'us-west-2' ||
+    typeof row.registry_digest !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(row.registry_digest)
+  ) {
+    throw new Error('Invalid managed OAuth registry profile reference');
+  }
+}
+
+/** Canonical negotiated direct-client presentation (not a retry policy). */
+export type MCPOAuthTokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post';
 
 /**
  * Dynamic Client Registration policy.
@@ -203,7 +289,7 @@ export interface MCPAuthRecovery {
   oauth_policy?: MCPOAuthEffectivePolicy;
 }
 
-export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4] as const;
+export const MCP_OAUTH_GRANT_BINDING_VERSIONS = [1, 2, 3, 4, 5] as const;
 export type MCPOAuthGrantBindingVersion = (typeof MCP_OAUTH_GRANT_BINDING_VERSIONS)[number];
 
 export function isMCPOAuthGrantBindingVersion(
@@ -243,6 +329,12 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   clientSecret?: string;
   /** Exact durable DCR UUID epoch used by this attempt. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Token-endpoint client-authentication method negotiated at flow start.
+   * Optional: envelopes sealed before this field existed default to
+   * `client_secret_basic` on the exchange path.
+   */
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
@@ -440,6 +532,8 @@ export interface MCPAuth {
   oauth_token_url?: string;
   oauth_client_id?: string;
   oauth_client_secret?: string;
+  oauth_client_mode?: MCPOAuthClientMode;
+  oauth_managed_profile?: MCPManagedOAuthProfileReference;
   oauth_scope?: string;
   oauth_grant_type?: string;
   /** Strict current MCP Authorization behavior is the default. */

@@ -66,6 +66,7 @@
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@modelcontextprotocol/server": "2.0.0",
+    "@noble/hashes": "2.4.0",
     "@oclif/core": "^4.13.3",
     "@oclif/plugin-help": "^6.2.56",
     "@slack/socket-mode": "^2.0.7",

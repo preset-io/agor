@@ -133,6 +133,58 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0114_mcp_managed_oauth_cell_retirement',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds immutable deployment cell stop barriers shared by every managed vending transaction before retirement enumeration.',
+      }),
+    },
+  ],
+  [
+    '0113_mcp_managed_oauth_cleanup_delivery',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Pins nonportable managed close authorization and immutable cleanup delivery before provider cleanup.',
+      }),
+    },
+  ],
+  [
+    '0112_mcp_managed_oauth_maintenance_routing',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds capability-gated tenant-ID-only managed maintenance discovery; direct credentials remain outside that capability.',
+      }),
+    },
+  ],
+  [
+    '0111_mcp_managed_oauth_authority',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds deployment-bound managed OAuth authority, hard claim fences and cleanup triggers. Stop all old writers; managed flags remain off and no grant is converted.',
+      }),
+    },
+  ],
+  [
     '0107_branch_permanent_deletion',
     {
       requiresOfflineCutover: true,
@@ -722,6 +774,195 @@ export async function seedInitialData(db: Database, createdBy: string): Promise<
     throw new MigrationError(
       `Failed to seed initial data: ${error instanceof Error ? error.message : String(error)}`,
       error
+    );
+  }
+}
+
+/**
+ * Fresh, nonsecret schema evidence for managed cohort admission. Never accepts
+ * an attestation-supplied digest and never uses Drizzle's MAX watermark as proof.
+ * Requires only catalog visibility and SELECT on drizzle.__drizzle_migrations.
+ * The attested cohort must match this live digest; changing catalog definitions
+ * changes it even if somebody left the migration receipt unchanged.
+ */
+export async function readManagedOAuthSchemaDigest(db: Database): Promise<string> {
+  if (!isPostgresDatabase(db))
+    throw new MigrationError('Managed OAuth schema evidence requires PostgreSQL');
+  return runDatabaseTransaction(
+    db,
+    async (tx) => {
+      const { executeRaw } = await import('./database-wrapper');
+      await executeRaw(tx, sql`SET TRANSACTION READ ONLY`);
+      return readManagedOAuthSchemaDigestSnapshot(tx);
+    },
+    { postgresIsolationLevel: 'repeatable read' }
+  );
+}
+
+async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<string> {
+  if (!isPostgresDatabase(db))
+    throw new MigrationError('Managed OAuth schema evidence requires PostgreSQL');
+  const { createHash } = await import('node:crypto');
+  const { readFile } = await import('node:fs/promises');
+  const { executeRaw, rawRows } = await import('./database-wrapper');
+  try {
+    const [role] = rawRows(
+      await executeRaw(
+        db,
+        sql`SELECT session_user=current_user AS same_session_role,
+      r.rolsuper,r.rolbypassrls,r.rolcreaterole,r.rolcreatedb,
+      EXISTS(SELECT 1 FROM pg_catalog.pg_roles privileged
+        WHERE (privileged.rolsuper OR privileged.rolbypassrls OR privileged.rolcreaterole)
+          AND pg_catalog.pg_has_role(current_user,privileged.oid,'MEMBER')) AS privileged_membership,
+      EXISTS(SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname IN ('public','drizzle') AND c.relkind IN ('r','p','S') AND pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER'))
+      OR EXISTS(SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='public' AND pg_catalog.pg_has_role(current_user,p.proowner,'MEMBER')) AS owns_or_inherits
+      FROM pg_catalog.pg_roles r WHERE r.rolname=current_user`
+      )
+    );
+    if (
+      role?.same_session_role !== true ||
+      role.rolsuper !== false ||
+      role.rolbypassrls !== false ||
+      role.rolcreaterole !== false ||
+      role.rolcreatedb !== false ||
+      role.privileged_membership !== false ||
+      role.owns_or_inherits !== false
+    )
+      throw new Error();
+    const folder = getMigrationsFolder(db);
+    const journal = JSON.parse(await readFile(join(folder, 'meta', '_journal.json'), 'utf8')) as {
+      entries: Array<{ tag: string; when: number }>;
+    };
+    if (!Array.isArray(journal.entries) || journal.entries.length === 0) throw new Error();
+    const expected = await Promise.all(
+      journal.entries.map(async (entry) => {
+        if (
+          !/^[0-9]{4}_[a-z0-9_]+$/.test(entry.tag) ||
+          !Number.isSafeInteger(entry.when) ||
+          entry.when <= 0
+        )
+          throw new Error();
+        return {
+          tag: entry.tag,
+          when: String(entry.when),
+          hash: createHash('sha256')
+            .update(await readFile(join(folder, `${entry.tag}.sql`), 'utf8'))
+            .digest('hex'),
+        };
+      })
+    );
+    if (new Set(expected.map((e) => e.tag)).size !== expected.length) throw new Error();
+    const actual = rawRows(
+      await executeRaw(
+        db,
+        sql`SELECT hash,created_at::text AS created_at FROM drizzle.__drizzle_migrations`
+      )
+    );
+    const receiptKey = (when: unknown, hash: unknown) => JSON.stringify([when, hash]);
+    const counts = new Map<string, number>();
+    for (const row of actual) {
+      const key = receiptKey(row.created_at, row.hash);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const row of expected) {
+      const key = receiptKey(row.when, row.hash);
+      const count = counts.get(key) ?? 0;
+      if (count !== 1) throw new Error();
+      counts.delete(key);
+    }
+    if (counts.size !== 0 || actual.length !== expected.length) throw new Error();
+    const guards = rawRows(
+      await executeRaw(
+        db,
+        sql`SELECT c.relname,c.relrowsecurity,c.relforcerowsecurity
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relname IN ('mcp_oauth_pending_flows','user_mcp_oauth_tokens','mcp_managed_oauth_outbox','mcp_managed_oauth_invalidations','mcp_managed_oauth_cell_retirements')`
+      )
+    );
+    if (
+      guards.length !== 5 ||
+      guards.some((row) => row.relrowsecurity !== true || row.relforcerowsecurity !== true)
+    )
+      throw new Error();
+    const triggers = rawRows(
+      await executeRaw(
+        db,
+        sql`SELECT t.tgname,t.tgenabled,t.tgdeferrable,t.tginitdeferred,p.prosecdef
+      FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public' AND t.tgname IN ('mcp_managed_oauth_pending_retirement','mcp_managed_oauth_grant_retirement','mcp_managed_oauth_user_change','mcp_managed_oauth_identity_retirement','mcp_managed_oauth_completion_deadline')`
+      )
+    );
+    if (
+      triggers.length !== 5 ||
+      triggers.some(
+        (row) =>
+          row.tgenabled !== 'O' ||
+          row.prosecdef !== false ||
+          (row.tgname === 'mcp_managed_oauth_completion_deadline' &&
+            (row.tgdeferrable !== true || row.tginitdeferred !== true))
+      )
+    )
+      throw new Error();
+    // No table contents, owners, ACL principals, OIDs or sequence *values* enter
+    // the fingerprint. Catalog deparsers use one explicit local search path.
+    await executeRaw(
+      db,
+      sql`SELECT pg_catalog.set_config('search_path','pg_catalog, public, pg_temp',true)`
+    );
+    const catalog = rawRows(
+      await executeRaw(
+        db,
+        sql`SELECT evidence::text AS evidence FROM (
+      SELECT jsonb_build_array('relation',c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity) AS evidence
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S')
+      UNION ALL SELECT jsonb_build_array('column',c.relname,a.attnum,a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,a.attidentity,a.attgenerated,pg_catalog.pg_get_expr(d.adbin,d.adrelid))
+      FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+      WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') AND a.attnum>0 AND NOT a.attisdropped
+      UNION ALL SELECT jsonb_build_array('constraint',c.relname,k.conname,k.convalidated,pg_catalog.pg_get_constraintdef(k.oid,true))
+      FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_class c ON c.oid=k.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+      UNION ALL SELECT jsonb_build_array('index',c.relname,i.indisvalid,i.indisready,pg_catalog.pg_get_indexdef(i.indexrelid))
+      FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+      UNION ALL SELECT jsonb_build_array('policy',c.relname,p.polname,p.polcmd,p.polpermissive,ARRAY(SELECT CASE WHEN role=0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(role)::text END FROM unnest(p.polroles) role ORDER BY 1),pg_catalog.pg_get_expr(p.polqual,p.polrelid),pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid))
+      FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid=p.polrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+      UNION ALL SELECT jsonb_build_array('trigger',c.relname,t.tgname,t.tgenabled,pg_catalog.pg_get_triggerdef(t.oid,true))
+      FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND NOT t.tgisinternal
+      UNION ALL SELECT jsonb_build_array('function',p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),pg_catalog.pg_get_functiondef(p.oid))
+      FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind IN ('f','p')
+      UNION ALL SELECT jsonb_build_array('view',c.relname,pg_catalog.pg_get_viewdef(c.oid,true))
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('v','m')
+      UNION ALL SELECT jsonb_build_array('sequence',c.relname,s.seqstart,s.seqincrement,s.seqmax,s.seqmin,s.seqcache,s.seqcycle)
+      FROM pg_catalog.pg_sequence s JOIN pg_catalog.pg_class c ON c.oid=s.seqrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'
+      UNION ALL SELECT jsonb_build_array('enum',t.typname,e.enumsortorder,e.enumlabel)
+      FROM pg_catalog.pg_enum e JOIN pg_catalog.pg_type t ON t.oid=e.enumtypid JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'
+      UNION ALL SELECT jsonb_build_array('extension',extname,extversion) FROM pg_catalog.pg_extension
+    ) catalog ORDER BY evidence::text COLLATE "C"`
+      )
+    );
+    const hash = createHash('sha256');
+    const add = (value: string) => {
+      const bytes = Buffer.from(value, 'utf8');
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(bytes.length);
+      hash.update(length);
+      hash.update(bytes);
+    };
+    add('agor-managed-oauth-schema-v1');
+    add('postgresql');
+    for (const entry of expected) {
+      add(entry.tag);
+      add(entry.when);
+      add(entry.hash);
+    }
+    for (const row of catalog) {
+      if (typeof row.evidence !== 'string') throw new Error();
+      add(row.evidence);
+    }
+    return hash.digest('hex');
+  } catch {
+    throw new MigrationError(
+      'Managed OAuth schema evidence is unavailable or differs from this binary'
     );
   }
 }

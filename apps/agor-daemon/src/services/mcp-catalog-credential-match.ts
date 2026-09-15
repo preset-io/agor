@@ -1,4 +1,9 @@
-import type { MCPAuth, MCPCatalogEntry, MCPCatalogServerCandidate } from '@agor/core/types';
+import {
+  type MCPAuth,
+  type MCPCatalogEntry,
+  type MCPCatalogServerCandidate,
+  resolveMCPOAuthClientMode,
+} from '@agor/core/types';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -11,6 +16,14 @@ const CREDENTIAL_ROUTING_OVERRIDES = [
   'oauth_token_url',
   'oauth_client_secret',
 ] as const satisfies readonly (keyof MCPAuth)[];
+
+function isDirectCandidate(candidate: MCPCatalogServerCandidate): boolean {
+  try {
+    return resolveMCPOAuthClientMode(candidate.server.auth) === 'direct';
+  } catch {
+    return false;
+  }
+}
 
 export interface CatalogCredentialMatcherDeps {
   /** Authoritative binding/mode check; returns only a decision, never material. */
@@ -35,6 +48,7 @@ export function isCatalogCredentialPeer(
 ): boolean {
   const server = candidate.server;
   const auth = server.auth;
+  if (!isDirectCandidate(candidate)) return false;
   if (auth?.type !== 'oauth' || prescribed.type !== 'oauth') return false;
   if ((auth.oauth_mode ?? 'per_user') !== 'per_user') return false;
   if (CREDENTIAL_ROUTING_OVERRIDES.some((field) => auth[field])) return false;
@@ -104,6 +118,9 @@ export async function selectCatalogCandidate(
   now: number,
   deps: CatalogCredentialMatcherDeps
 ): Promise<CatalogCandidateSelection> {
+  // A caller-owned managed row never occupies the direct/BYO reconciliation
+  // slot. Otherwise a direct reconnect could silently convert its authority.
+  candidates = candidates.filter(isDirectCandidate);
   const catalogRows = candidates.filter(
     ({ server }) => server.source === 'catalog' && server.catalog_entry_name === entry.name
   );

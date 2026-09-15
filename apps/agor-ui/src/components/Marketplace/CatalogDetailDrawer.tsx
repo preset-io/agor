@@ -13,6 +13,7 @@ import type {
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogReadiness,
+  MCPOAuthClientMode,
 } from '@agor/core/types';
 import { getTeammateConfig } from '@agor-live/client';
 import {
@@ -117,6 +118,7 @@ export interface CatalogDetailDrawerProps {
     starterPrompt?: string;
     authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
     reusedExistingServer: boolean;
+    managedOAuth?: boolean;
   } | null;
   onKeepBrowsing?: () => void;
   onBeginSessionSetup?: () => void;
@@ -136,6 +138,8 @@ export interface CatalogDetailDrawerProps {
     acknowledgedDisclosure: string;
     bearerToken?: string;
     oauthPopup?: MarketplaceOAuthPopup;
+    oauthClientMode?: MCPOAuthClientMode;
+    acknowledgedManagedDisclosure?: string;
   }) => void;
 }
 
@@ -179,6 +183,28 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   const [showSessionSetup, setShowSessionSetup] = useState(false);
 
   const entryId = entry?.name;
+  const [managedChoice, setManagedChoice] = useState<{
+    entryId: string;
+    disclosure: string;
+  } | null>(null);
+  const managedOffer = readiness?.managed_oauth;
+  const managedAvailable =
+    !readinessLoading &&
+    !readinessError &&
+    managedOffer?.available === true &&
+    managedOffer.whole_cell_eligible === true &&
+    readiness?.catalog_key === entryId &&
+    Boolean(managedOffer.disclosure?.trim());
+  const managedSelected = managedChoice?.entryId === entryId && managedChoice !== null;
+  const managedChoiceCurrent =
+    managedAvailable &&
+    managedOffer?.available === true &&
+    managedChoice?.disclosure === managedOffer.disclosure;
+  // A withdrawn/stale offer never silently changes an opted-in request to BYO.
+  const managedBlocked = managedSelected && !managedChoiceCurrent;
+  useEffect(() => {
+    if (!open) setManagedChoice(null);
+  }, [open]);
 
   const teammateOptions = useMemo(
     () =>
@@ -316,7 +342,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // server asked for at that moment, and that is the thing to build the form
   // from. Absent — the ordinary case, including every first attempt — the entry
   // decides as before.
-  const needsApiKey = runtimeStatus?.readiness === 'api-key';
+  const needsApiKey = !managedSelected && runtimeStatus?.readiness === 'api-key';
   const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
   const bearerToken = keyField.trim();
 
@@ -352,15 +378,22 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       ? undefined
       : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !blockedReason && !policyRefusal && acknowledged && !connecting && (!needsApiKey || bearerToken)
+    !blockedReason &&
+      !policyRefusal &&
+      !managedBlocked &&
+      acknowledged &&
+      !connecting &&
+      (!needsApiKey || bearerToken)
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
-    : !acknowledged
-      ? 'Review the access disclosure and acknowledge it to continue.'
-      : needsApiKey && !bearerToken
-        ? `Enter your ${title} bearer access token to continue.`
-        : undefined;
+    : managedBlocked
+      ? 'Agor-managed sign-in availability changed. Review the current choice before connecting.'
+      : !acknowledged
+        ? 'Review the access disclosure and acknowledge it to continue.'
+        : needsApiKey && !bearerToken
+          ? `Enter your ${title} bearer access token to continue.`
+          : undefined;
 
   return (
     <CatalogDrawer
@@ -447,7 +480,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 textAlign: 'center',
               }}
             >
-              {onboarding && success.authentication !== 'ready' ? (
+              {(onboarding || success.managedOAuth) && success.authentication !== 'ready' ? (
                 <ClockCircleOutlined
                   aria-hidden
                   style={{ color: token.colorWarning, fontSize: token.fontSizeHeading2 }}
@@ -492,6 +525,15 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                             : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
                 </Paragraph>
               </div>
+
+              {success.managedOAuth && (
+                <Text type="secondary">
+                  Existing connections and session attachments are unchanged. After sign-in is
+                  confirmed, choose this server in each session's MCP menu and remove the old
+                  attachment only where you want to switch. Disconnecting an old personal grant is a
+                  separate action.
+                </Text>
+              )}
 
               {success.authentication === 'action_required' && (
                 <Button
@@ -585,6 +627,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   <Button
                     ref={successActionRef}
                     type="primary"
+                    disabled={success.managedOAuth && success.authentication !== 'ready'}
                     onClick={() => {
                       onBeginSessionSetup?.();
                       setShowSessionSetup(true);
@@ -625,6 +668,32 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           )}
 
           <Flex vertical gap={token.marginXS}>
+            {!success && (managedAvailable || managedSelected) && (
+              <Flex vertical gap={token.marginXS}>
+                <Checkbox
+                  checked={managedSelected}
+                  disabled={connecting}
+                  onChange={(event) => {
+                    setConsent(null);
+                    setManagedChoice(
+                      event.target.checked && entryId && managedOffer?.available === true
+                        ? { entryId, disclosure: managedOffer.disclosure }
+                        : null
+                    );
+                  }}
+                >
+                  Use Agor-managed sign-in
+                </Checkbox>
+                <Text type="secondary">
+                  Optional. Leave unchecked to keep the existing direct sign-in or use your own
+                  OAuth app. Managed sign-in creates your own separate connection; it does not
+                  convert an existing server or share your account.
+                </Text>
+                {managedBlocked && (
+                  <Alert type="warning" showIcon title="Agor-managed sign-in is unavailable" />
+                )}
+              </Flex>
+            )}
             <CatalogDetailSection
               key={`${entryId}:access`}
               defaultOpen
@@ -637,6 +706,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             >
               <Flex vertical gap={token.marginSM}>
                 <Text>{disclosure}</Text>
+                {managedSelected && <Text>{managedChoice.disclosure}</Text>}
                 {!blockedReason && !success && (
                   <Checkbox
                     checked={acknowledged}
@@ -755,6 +825,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   let oauthPopup: MarketplaceOAuthPopup | undefined;
                   const hasLiveCredentialRequirement = credentialRequirement != null;
                   const needsOAuthWindow =
+                    managedSelected ||
                     credentialRequirement === 'oauth' ||
                     (!hasLiveCredentialRequirement &&
                       (readinessLoading ||
@@ -774,6 +845,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   setPopupBlocked(false);
                   onConnect({
                     acknowledgedDisclosure: disclosure,
+                    ...(managedSelected
+                      ? {
+                          oauthClientMode: 'cloud_managed_v1' as const,
+                          acknowledgedManagedDisclosure: managedChoice.disclosure,
+                        }
+                      : {}),
                     // Only for an entry that asks. Sending a key to an endpoint
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.

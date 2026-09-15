@@ -78,17 +78,17 @@ export async function refetchMCPOAuthDurableState(
   client: AgorClient,
   mcpServerId: string,
   shouldApply: () => boolean
-): Promise<void> {
+): Promise<boolean> {
   // Avoid starting caller-private reads when the initiating authority already
   // disappeared. The second check is still the security boundary: identity,
   // role, connection, or auth generation can change while either request is in
   // flight.
-  if (!shouldApply()) return;
+  if (!shouldApply()) return false;
   const [status, fresh] = await Promise.all([
     client.service('mcp-servers/oauth-status').find(),
     client.service('mcp-servers').get(mcpServerId),
   ]);
-  if (!shouldApply()) return;
+  if (!shouldApply()) return false;
   const ids = (status as Partial<MCPOAuthStatusResult>)?.authenticated_server_ids ?? [];
   const server = fresh as MCPServer;
   agorStore.getState().applyMaps((prev) => {
@@ -100,6 +100,7 @@ export async function refetchMCPOAuthDurableState(
       mcpServerById,
     };
   });
+  return ids.some((id) => id === mcpServerId) && server.enabled === true;
 }
 
 /**

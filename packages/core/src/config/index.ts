@@ -23,6 +23,7 @@ export * from './external-launch';
 export * from './identity-authority';
 export * from './initial-deployment-config';
 export * from './key-resolver';
+export * from './managed-mcp-oauth';
 export * from './multitenancy';
 export * from './password-policy';
 export * from './repo-list';

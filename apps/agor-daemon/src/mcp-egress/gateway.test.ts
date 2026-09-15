@@ -108,6 +108,10 @@ interface HarnessOptions {
   capabilityServerTransform?: (server: MCPServer) => MCPServer;
   initialMcpRecovery?: boolean;
   separateOAuthConsenter?: boolean;
+  assertManagedUse?: ConstructorParameters<typeof MCPEgressGateway>[0]['assertManagedUse'];
+  resolveManagedAuthorization?: ConstructorParameters<
+    typeof MCPEgressGateway
+  >[0]['resolveManagedAuthorization'];
 }
 
 async function harness(options: HarnessOptions) {
@@ -139,7 +143,7 @@ async function harness(options: HarnessOptions) {
     default_branch: 'main',
   });
   const branch = await new BranchRepository(rawDb).create({
-    branch_id: randomUUID(),
+    branch_id: randomUUID() as UUID,
     repo_id: repo.repo_id,
     name: 'gateway-test',
     ref: 'main',
@@ -171,7 +175,7 @@ async function harness(options: HarnessOptions) {
     await policies.setWorkspacePreferences({ session_sharing_enabled: true }, user.user_id);
   }
   const session = await new SessionRepository(rawDb).create({
-    session_id: randomUUID(),
+    session_id: randomUUID() as UUID,
     branch_id: branch.branch_id,
     agentic_tool: 'codex',
     created_by: user.user_id as UserID,
@@ -290,6 +294,8 @@ async function harness(options: HarnessOptions) {
     allowLocalhostHttp: true,
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
+    assertManagedUse: options.assertManagedUse,
+    resolveManagedAuthorization: options.resolveManagedAuthorization,
   });
   const materialHash = mcpEgressMaterialHash(
     options.capabilityServerTransform?.(server) ?? server,
@@ -393,6 +399,87 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('requires a managed verifier and binds each physical send to the exact outbound bearer', async () => {
+    let sends = 0;
+    const url = await listen((_request, response) => {
+      sends++;
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const server = {
+      transport: 'http' as const,
+      url,
+      auth: {
+        type: 'oauth' as const,
+        oauth_mode: 'per_user' as const,
+        oauth_client_mode: 'cloud_managed_v1' as const,
+        oauth_managed_profile: {
+          profile_id: 'fake_alpha',
+          semantic_version: '1',
+          environment: 'staging' as const,
+          region: 'us-west-2' as const,
+          registry_digest: '0'.repeat(64),
+        },
+      },
+    };
+    const unsupported = await harness({ server });
+    await expect(unsupported.request('POST', initialize)).rejects.toMatchObject({
+      code: 'managed_authority_unavailable',
+    });
+    expect(sends).toBe(0);
+    let allowed = true;
+    const assertManagedUse = vi.fn<NonNullable<HarnessOptions['assertManagedUse']>>(
+      async (input) => {
+        expect(input.authorization).toBe('Bearer oauth-access-token-initial');
+        expect(input.tenantId).toBe('default');
+        expect(input.userId).toBe(input.server.owner_user_id);
+        if (!allowed)
+          throw Object.assign(new Error('expired'), { code: 'managed_authority_expired' });
+      }
+    );
+    const h = await harness({
+      server,
+      assertManagedUse,
+      resolveManagedAuthorization: async () => 'Bearer oauth-access-token-initial',
+      oauthAuthHeadersCreate: async () => {
+        throw new Error('Managed must never project raw headers');
+      },
+    });
+    await h.request('POST', initialize);
+    expect(sends).toBe(1);
+    allowed = false;
+    await expect(h.request('POST', initialize)).rejects.toMatchObject({
+      code: 'managed_authority_expired',
+      dispatch: 'not_started',
+    });
+    expect(sends).toBe(1);
+    expect(assertManagedUse).toHaveBeenCalledTimes(2);
+    await setMCPEgressGatewayMode(h.rawDb, 'observe', h.user.user_id);
+    await expect(h.request('POST', initialize)).rejects.toMatchObject({ code: 'rollout_changed' });
+    expect(sends).toBe(1);
+  });
+
+  it('rejects an old global-server capability after explicit empty selection, before outbound access', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        scope: 'global',
+        url: 'https://mcp.example.test/mcp',
+        auth: { type: 'none' },
+      },
+    });
+    await new SessionMCPServerRepository(h.rawDb).setServers(h.session.session_id, []);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
+    try {
+      await expect(h.request('POST', initialize)).rejects.toMatchObject({
+        code: 'server_detached',
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it('rejects a new hop after the shared consenter is deleted while the task caller remains active', async () => {
     let providerRequests = 0;
     const provider = await listen((_request, response) => {
@@ -847,7 +934,7 @@ describe('authoritative MCP gateway real transport', () => {
         transport: 'http',
         url: 'https://provider.example/mcp',
         tool_permissions: { destructive: 'ask' },
-      } as MCPServer)
+      } as unknown as MCPServer)
     ).toEqual({ eligible: false, reason: 'approval_not_mediated' });
 
     const ready = {
@@ -856,7 +943,7 @@ describe('authoritative MCP gateway real transport', () => {
       transport: 'http',
       url: 'http://daemon/mcp-egress/ready-id',
       headers: { 'X-Agor-Mcp-Capability': 'opaque' },
-    } as MCPServer;
+    } as unknown as MCPServer;
     const local = {
       mcp_server_id: 'local-id',
       name: 'Local tools',
@@ -901,7 +988,7 @@ describe('authoritative MCP gateway real transport', () => {
         env: { PROVIDER_KEY: 'never-export' },
         headers: { 'X-Provider-Key': 'never-export' },
         auth: { type: 'bearer', token: 'never-export' },
-      } as MCPServer,
+      } as unknown as MCPServer,
       'https://daemon.example/mcp-egress/server-safe-shape',
       'opaque-capability'
     );
@@ -1214,7 +1301,7 @@ describe('authoritative MCP gateway real transport', () => {
         });
       } else if (mutation === 'session detach') {
         await coordinateSessionMCPRevocation({
-          db: h.rawDb,
+          db: h.rawDb as unknown as TenantScopeAwareDatabase,
           gateway: h.gateway,
           tenantId: 'default',
           sessionId: h.session.session_id,

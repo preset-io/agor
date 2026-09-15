@@ -76,3 +76,6 @@ export const kbGraphEdges = schema.kbGraphEdges;
 
 // Re-export all types
 export type * from './schema.sqlite';
+
+export const mcpManagedOauthOutbox = schema.mcpManagedOauthOutbox;
+export const mcpManagedOauthInvalidations = schema.mcpManagedOauthInvalidations;

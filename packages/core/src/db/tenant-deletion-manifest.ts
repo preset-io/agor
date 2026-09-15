@@ -44,12 +44,9 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * Tables that legitimately hold no tenant-scoped data and must therefore be
  * left untouched by tenant deletion.
  *
- * Currently empty: every application table carries tenant data. The machinery
- * is kept rather than deleted with its last member, because it is what a future
- * global table has to be declared through. Removing it would leave the next one
- * to be classified by whichever guard noticed first — and the exhaustiveness
- * test would then fail with "unclassified table" and no explanation of what the
- * author is being asked to decide.
+ * Most application tables carry tenant data. A deployment-only stop barrier is
+ * the explicit exception below; it must survive tenant erasure and never travel
+ * in tenant exports. No tenant-derived field may be added to that exception.
  *
  * The list is deliberately explicit: the exhaustiveness test fails if a schema
  * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
@@ -60,7 +57,7 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  *
  * **The invariant is per column, not per table.** A table qualifies only while
  * every one of its columns is sourced from outside every tenant — a public
- * service, or a file in this repository. A column derived from tenant activity
+ * service, a file in this repository, or the trusted deployment control plane. A column derived from tenant activity
  * (a connect counter, a rating, a last-used timestamp) silently breaks the
  * justification even though the table stays in this set: the value aggregates
  * across tenants on read, and its only writer would be a tenant request path.
@@ -70,7 +67,16 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
-export const GLOBAL_TABLE_NAMES = [] as const satisfies readonly string[];
+/**
+ * The cell stop barrier originates exclusively in a trusted deployment retirement
+ * command, not tenant requests or aggregated tenant activity. cell_id identifies
+ * the control-plane deployment; operation_id/generation identify that stop and
+ * created_at records its insertion. It contains no tenant IDs, counters, profile
+ * selections or cleanup results. Tenant deletion/export cannot reopen a cell.
+ */
+export const GLOBAL_TABLE_NAMES = [
+  'mcp_managed_oauth_cell_retirements',
+] as const satisfies readonly string[];
 
 export type GlobalTableName = (typeof GLOBAL_TABLE_NAMES)[number];
 
@@ -91,6 +97,8 @@ export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(GLOBAL_TABLE_N
  * - `computed-from-public-service` — Agor computed it, from such a mirror alone.
  * - `computed-from-repo` — Agor computed it, from repository data alone.
  * - `row-identity` — this row's own identity and write timestamps.
+ * - `deployment-control-plane` — a deployment identifier supplied exclusively
+ *   by the trusted infrastructure lifecycle command; never tenant activity.
  * - `probe` — discovered by contacting a public endpoint.
  * - `composite` — a JSON column whose keys have different sources, classified
  *   one level down in {@link GLOBAL_BLOB_KEY_SOURCES}. Not a licence to skip
@@ -105,6 +113,7 @@ export type GlobalColumnSource =
   | 'computed-from-public-service'
   | 'computed-from-repo'
   | 'row-identity'
+  | 'deployment-control-plane'
   | 'probe'
   | 'composite';
 
@@ -133,7 +142,14 @@ type ColumnsOf<N extends keyof SchemaTablesByName> = SchemaTablesByName[N] exten
  * the guard going quiet: the moment a name is added above, this stops
  * compiling until every one of that table's columns is accounted for.
  */
-export const GLOBAL_TABLE_COLUMN_SOURCES = {} satisfies {
+export const GLOBAL_TABLE_COLUMN_SOURCES = {
+  mcp_managed_oauth_cell_retirements: {
+    cell_id: 'deployment-control-plane',
+    operation_id: 'row-identity',
+    generation: 'row-identity',
+    created_at: 'row-identity',
+  },
+} satisfies {
   [N in GlobalTableName]: Record<ColumnsOf<N>, GlobalColumnSource>;
 };
 
@@ -153,7 +169,7 @@ export const GLOBAL_TABLE_COLUMN_SOURCES = {} satisfies {
  * its own entry, which is what makes an unclassified key a compile error. The
  * companion test fails if a `composite` column has no entry here at all.
  */
-export const GLOBAL_BLOB_KEY_SOURCES = {} satisfies {
+export const GLOBAL_BLOB_KEY_SOURCES = { mcp_managed_oauth_cell_retirements: {} } satisfies {
   [N in GlobalTableName]: Record<string, Record<string, GlobalColumnSource>>;
 };
 

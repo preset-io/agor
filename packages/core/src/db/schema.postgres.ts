@@ -1,3 +1,8 @@
+import type {
+  MCPManagedOAuthGrantMetadata,
+  MCPManagedOAuthInvalidation,
+  MCPManagedOAuthPendingMetadata,
+} from '../types/mcp-managed-oauth';
 /**
  * PostgreSQL Schema Definition
  *
@@ -158,6 +163,7 @@ export const sessions = pgTable(
         agentic_tool_version?: string;
         sdk_session_id?: string; // SDK session ID for conversation continuity (Claude Agent SDK, Codex SDK, etc.)
         mcp_token?: string; // MCP authentication token for Agor self-access
+        mcp_selection_explicit?: boolean;
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
 
@@ -1857,7 +1863,12 @@ export const mcpServers = pgTable(
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
     catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
-      .on(table.tenant_id, sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
+      .on(
+        table.tenant_id,
+        sql`coalesce(${table.owner_user_id}, '')`,
+        table.catalog_entry_name,
+        sql`coalesce(${table.data}->'auth'->>'oauth_client_mode', 'direct')`
+      )
       .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
@@ -2123,6 +2134,12 @@ export const userMcpOauthTokens = pgTable(
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
     // Durable grant/config identity and database-coordinated refresh fencing.
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthGrantMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    // Broker-certified retry floor, checked using DB time after the token row lock.
+    managed_refresh_not_before: t.timestamp('managed_refresh_not_before'),
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),
     grant_binding_fingerprint: varchar('grant_binding_fingerprint', { length: 64 }),
@@ -2145,6 +2162,15 @@ export const userMcpOauthTokens = pgTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    managedOriginCheck: check(
+      'mcp_grant_managed_origin',
+      sql`(
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_operation_id IS NULL AND managed_refresh_not_before IS NULL AND grant_binding_version IS DISTINCT FROM 5)
+ OR (credential_origin='cloud_managed_v1' AND user_id IS NOT NULL AND grant_binding_version=5 AND managed_metadata IS NOT NULL AND oauth_client_secret IS NULL
+ AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
+ AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text
+ AND managed_metadata->'owner'->>'config_fingerprint'=grant_binding_fingerprint)) IS TRUE`
+    ),
     tenantUserFk: foreignKey({
       name: 'user_mcp_oauth_tokens_tenant_user_fk',
       columns: [table.tenant_id, table.user_id],
@@ -2193,6 +2219,10 @@ export const mcpOauthPendingFlows = pgTable(
     oauth_mode: text('oauth_mode', { enum: ['per_user', 'shared'] }).notNull(),
     // NULL for a shared grant; equal to user_id for a per-user grant.
     subject_user_id: varchar('subject_user_id', { length: 36 }),
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthPendingMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    managed_transaction_id: text('managed_transaction_id'),
     grant_generation: bigint('grant_generation', { mode: 'number' }).notNull(),
     config_fingerprint_version: integer('config_fingerprint_version').notNull(),
     config_fingerprint: varchar('config_fingerprint', { length: 64 }).notNull(),
@@ -2214,6 +2244,16 @@ export const mcpOauthPendingFlows = pgTable(
     finished_at: t.timestamp('finished_at'),
   },
   (table) => ({
+    managedOriginCheck: check(
+      'mcp_pending_managed_origin',
+      sql`(
+ (credential_origin='direct' AND managed_metadata IS NULL AND managed_transaction_id IS NULL AND managed_operation_id IS NULL AND config_fingerprint_version<>5)
+ OR (credential_origin='cloud_managed_v1' AND oauth_mode='per_user' AND subject_user_id=user_id AND config_fingerprint_version=5 AND managed_metadata IS NOT NULL
+ AND managed_metadata->'owner'->>'workspace_id'=tenant_id AND managed_metadata->'owner'->>'cell_local_user_id'=user_id
+ AND managed_metadata->'owner'->>'server_id'=mcp_server_id AND managed_metadata->'owner'->>'attempt_id'=attempt_id
+ AND managed_metadata->'owner'->>'grant_generation'=grant_generation::text AND managed_metadata->'owner'->>'config_fingerprint'=config_fingerprint
+ AND managed_metadata->'owner'=managed_metadata->'prepare_request'->'owner')) IS TRUE`
+    ),
     tenantUserFk: foreignKey({
       name: 'mcp_oauth_pending_flows_tenant_user_fk',
       columns: [table.tenant_id, table.user_id],
@@ -3601,3 +3641,66 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Deployment-bound non-vending cleanup; survives user/server cascades. */
+export const mcpManagedOauthOutbox = pgTable(
+  'mcp_managed_oauth_outbox',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    outbox_id: text('outbox_id').primaryKey(),
+    outbox_key: text('outbox_key').notNull(),
+    operation_id: text('operation_id').notNull(),
+    kind: text('kind').notNull(),
+    attempt_id: text('attempt_id').notNull(),
+    user_id: text('user_id').notNull(),
+    mcp_server_id: text('mcp_server_id').notNull(),
+    grant_generation: text('grant_generation').notNull(),
+    managed_metadata: t
+      .json<MCPManagedOAuthGrantMetadata | MCPManagedOAuthPendingMetadata>('managed_metadata')
+      .notNull(),
+    cleanup_authorization_id: text('cleanup_authorization_id'),
+    cleanup_operation_id: text('cleanup_operation_id'),
+    transaction_id: text('transaction_id'),
+    sealed_material: text('sealed_material'),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    keyUnique: uniqueIndex('mcp_managed_oauth_outbox_key_uq').on(table.tenant_id, table.outbox_key),
+    cleanupDeliveryPair: check(
+      'mcp_managed_cleanup_delivery_pair',
+      sql`
+      (${table.cleanup_authorization_id} IS NULL AND ${table.cleanup_operation_id} IS NULL) OR
+      (${table.kind}='close' AND ${table.cleanup_authorization_id} IS NOT NULL
+       AND ${table.cleanup_operation_id} IS NOT NULL
+       AND ${table.cleanup_authorization_id} ~ '^[A-Za-z0-9_-]{1,128}$'
+       AND ${table.cleanup_operation_id} ~ '^[A-Za-z0-9_-]{1,128}$'
+       AND ${table.cleanup_operation_id}<>${table.operation_id})`
+    ),
+  })
+);
+
+/** Each tenant projects every authenticated page of its cell's source stream. */
+export const mcpManagedOauthInvalidations = pgTable('mcp_managed_oauth_invalidations', {
+  tenant_id: text('tenant_id').notNull().default('default'),
+  scope_key: text('scope_key').primaryKey(),
+  cell_id: text('cell_id').notNull(),
+  environment: text('environment').notNull(),
+  residency_region: text('residency_region').notNull(),
+  recovery_incarnation: text('recovery_incarnation').notNull(),
+  status: text('status').notNull(),
+  cursor: text('cursor'),
+  page_digest: text('page_digest'),
+  items: t.json<MCPManagedOAuthInvalidation[]>('items').notNull(),
+  staged_items: t.json<MCPManagedOAuthInvalidation[]>('staged_items').notNull(),
+  updated_at: t.timestamp('updated_at').notNull(),
+});
+
+/** Deployment stop authority only. No tenant-derived columns, FK, portability or release. */
+export const mcpManagedOauthCellRetirements = pgTable('mcp_managed_oauth_cell_retirements', {
+  cell_id: text('cell_id').primaryKey(),
+  operation_id: text('operation_id').notNull(),
+  generation: text('generation').notNull(),
+  created_at: t.timestamp('created_at').notNull(),
+});

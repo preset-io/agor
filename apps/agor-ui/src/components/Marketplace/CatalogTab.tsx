@@ -14,6 +14,8 @@ import type {
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPMarketplaceOverview,
+  MCPOAuthAttemptResult,
+  MCPOAuthClientMode,
   SessionID,
 } from '@agor/core/types';
 import { readCredentialRequirement } from '@agor/core/types';
@@ -160,6 +162,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     starterPrompt?: string;
     authentication: 'ready' | 'action_required' | 'pending' | 'failed' | 'unknown';
     reusedExistingServer: boolean;
+    managedOAuth?: boolean;
     oauthAttemptId?: string;
   } | null>(null);
   const interactionEpoch = useRef(0);
@@ -279,6 +282,17 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       };
       if (!client || !operation.isCurrent()) return false;
       try {
+        // Socket events and an older usable credential are not completion of
+        // this attempt. Read the exact durable attempt before marking ready.
+        const attempt = (await client
+          .service('mcp-servers/oauth-attempt-status')
+          .get(attemptId)) as MCPOAuthAttemptResult;
+        if (
+          !operation.isCurrent() ||
+          attempt.status !== 'succeeded' ||
+          String(attempt.mcp_server_id) !== serverId
+        )
+          return false;
         const refreshed = await refreshMarketplaceOverview?.();
         const fresh: MCPMarketplaceOverview =
           refreshed && typeof refreshed === 'object' && 'credentials' in refreshed
@@ -505,10 +519,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       acknowledgedDisclosure,
       bearerToken,
       oauthPopup,
+      oauthClientMode,
+      acknowledgedManagedDisclosure,
     }: {
       acknowledgedDisclosure: string;
       bearerToken?: string;
       oauthPopup?: MarketplaceOAuthPopup;
+      oauthClientMode?: MCPOAuthClientMode;
+      acknowledgedManagedDisclosure?: string;
     }) => {
       const authority = operationGuard.begin();
       const epoch = interactionEpoch.current;
@@ -527,6 +545,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           catalog_key: selected.name,
           acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
+          ...(oauthClientMode ? { oauth_client_mode: oauthClientMode } : {}),
+          ...(acknowledgedManagedDisclosure
+            ? { acknowledged_managed_disclosure: acknowledgedManagedDisclosure }
+            : {}),
         });
         if (!operation.isCurrent()) {
           oauthPopup?.close();
@@ -541,6 +563,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           if (oauthPopup && result.mcp_server.auth?.type === 'oauth') {
             try {
               const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
+                userId: currentUser?.user_id,
                 isCurrent: operation.isCurrent,
               });
               if (!launched && operation.isCurrent()) {
@@ -585,6 +608,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           ...(result.starter_prompt ? { starterPrompt: result.starter_prompt } : {}),
           authentication,
           reusedExistingServer: result.reused_existing_server,
+          managedOAuth: result.mcp_server.auth?.oauth_client_mode === 'cloud_managed_v1',
           ...(oauthAttemptId ? { oauthAttemptId } : {}),
         });
       } catch (err: unknown) {
@@ -603,7 +627,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding]
+    [client, operationGuard, selected, onboarding, currentUser?.user_id]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -630,6 +654,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       setConnecting(true);
       try {
         const launched = await launchMarketplaceOAuth(client, result, oauthPopup, {
+          userId: currentUser?.user_id,
           isCurrent: operation.isCurrent,
         });
         if (!operation.isCurrent()) {
@@ -670,7 +695,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, onboarding]
+    [client, operationGuard, onboarding, currentUser?.user_id]
   );
 
   const handleStartSession = useCallback(

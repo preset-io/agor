@@ -46,6 +46,8 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'claude_oauth_attempts',
   'user_provider_oauth_grants',
   'user_mcp_oauth_tokens',
+  'mcp_managed_oauth_outbox',
+  'mcp_managed_oauth_invalidations',
   'github_install_states',
 ]);
 

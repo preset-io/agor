@@ -9,12 +9,21 @@ import {
 import { canonicalMCPCustomHeaderEntries } from '@agor/core/tools/mcp/http-headers';
 import type {
   MCPAuth,
+  MCPManagedOAuthResolvedProfile,
   MCPOAuthGrantBindingVersion,
   MCPOAuthRuntimeCompatibilityMode,
   MCPServer,
   MCPServerID,
 } from '@agor/core/types';
-import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
+import {
+  assertDirectMCPOAuthClient,
+  assertMCPManagedOAuthProfileReference,
+  isMCPOAuthGrantBindingVersion,
+  McpOAuthEpochSchema,
+  McpOAuthIdSchema,
+  mcpOAuthLengthPrefix,
+  resolveMCPOAuthClientMode,
+} from '@agor/core/types';
 
 /** Latest format; v4 binds the complete saved remote-server authority. */
 export const MCP_OAUTH_GRANT_BINDING_VERSION = 4 as const;
@@ -126,6 +135,8 @@ export function fingerprintMCPOAuthGrantConfiguration(
     resolved.compatibilityMode
   )
 ): string {
+  assertDirectMCPOAuthClient(server.auth);
+  if (version > 4) throw new Error('Managed binding cannot be verified by the direct adapter');
   if (!masterSecret) throw new Error('MCP OAuth grant binding requires AGOR_MASTER_SECRET');
   const { compatibilityMode, ...historicalResolved } = resolved;
   const canonical = JSON.stringify({
@@ -164,6 +175,8 @@ function relevantServerConfiguration(server: Partial<MCPServer> | null | undefin
     // is independently re-resolved at start, callback, and grant-use time.
     auth: authBinding(server, 4, server.auth?.oauth_compatibility_mode ?? 'strict'),
     configuredCompatibility: server.auth?.oauth_compatibility_mode ?? null,
+    clientMode: server.auth?.oauth_client_mode ?? 'direct',
+    managedProfile: server.auth?.oauth_managed_profile ?? null,
   });
 }
 
@@ -195,6 +208,15 @@ export function isMCPOAuthGrantBoundToServer(
   grant: MCPOAuthGrantAuthorityRecord,
   effectiveMode: MCPOAuthRuntimeCompatibilityMode
 ): boolean {
+  try {
+    if (
+      resolveMCPOAuthClientMode(server.auth) !== 'direct' ||
+      (grant.grant_binding_version ?? 0) > 4
+    )
+      return false;
+  } catch {
+    return false;
+  }
   if (
     !isMCPOAuthGrantBindingVersion(grant.grant_binding_version) ||
     !grant.grant_binding_fingerprint ||
@@ -230,4 +252,83 @@ export function isMCPOAuthGrantBoundToServer(
   } catch {
     return false;
   }
+}
+
+/** V5 deliberately excludes operational secret versions and forbids secret-bearing config. */
+export function fingerprintManagedMCPOAuthGrantConfiguration(
+  masterSecret: string,
+  server: Pick<
+    MCPServer,
+    | 'mcp_server_id'
+    | 'transport'
+    | 'url'
+    | 'enabled'
+    | 'source'
+    | 'catalog_entry_name'
+    | 'headers'
+    | 'auth'
+  >,
+  profile: MCPManagedOAuthResolvedProfile,
+  subject: { tenantId: string; userId: string; cloudSubject: string; grantGeneration: string }
+): string {
+  if (!masterSecret || resolveMCPOAuthClientMode(server.auth) !== 'cloud_managed_v1')
+    throw new Error('Managed grant configuration is unavailable');
+  assertMCPManagedOAuthProfileReference(profile.reference);
+  const auth = server.auth!;
+  if (
+    Object.keys(auth).sort().join(',') !==
+      'oauth_client_mode,oauth_managed_profile,oauth_mode,type' ||
+    auth.type !== 'oauth' ||
+    auth.oauth_mode !== 'per_user' ||
+    !server.enabled ||
+    server.source !== 'catalog' ||
+    server.transport !== 'http' ||
+    server.url !== profile.mcpUrl ||
+    server.catalog_entry_name !== profile.catalogEntryName ||
+    Object.keys(server.headers ?? {}).length ||
+    Object.keys(profile.reference).some(
+      (key) =>
+        profile.reference[key as keyof typeof profile.reference] !==
+        auth.oauth_managed_profile?.[key as keyof typeof profile.reference]
+    )
+  ) {
+    throw new Error('Managed grant configuration is unavailable');
+  }
+  for (const id of [subject.tenantId, subject.userId, subject.cloudSubject, server.mcp_server_id])
+    McpOAuthIdSchema.parse(id);
+  McpOAuthEpochSchema.parse(subject.grantGeneration);
+  const ref = profile.reference;
+  const parts = [
+    'agor:mcp-oauth:grant-configuration:v5',
+    'cloud_managed_v1',
+    'catalog',
+    server.catalog_entry_name!,
+    server.url!,
+    server.transport,
+    JSON.stringify(profile.metadataEndpoints),
+    profile.metadataUri,
+    profile.resourceUri,
+    profile.issuer,
+    profile.authorizationEndpoint,
+    profile.tokenEndpoint,
+    profile.redirectUri,
+    profile.clientId,
+    profile.scope,
+    profile.tokenEndpointAuthMethod,
+    profile.clientKind,
+    profile.registrationProvenanceDigest,
+    ref.profile_id,
+    ref.semantic_version,
+    ref.environment,
+    ref.region,
+    ref.registry_digest,
+    subject.tenantId,
+    server.mcp_server_id,
+    subject.userId,
+    subject.cloudSubject,
+    subject.grantGeneration,
+  ];
+  if (parts.some((value) => typeof value !== 'string'))
+    throw new Error('Managed grant configuration is incomplete');
+  return createHmac('sha256', masterSecret).update(mcpOAuthLengthPrefix(parts)).digest('hex');
 }

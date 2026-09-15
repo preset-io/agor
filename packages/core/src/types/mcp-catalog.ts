@@ -233,8 +233,8 @@ export interface MCPCatalogEntryCredentials {
  *
  * - **No client secret.** `curated.yaml` is checked into a public repository
  *   and is byte-identical for every tenant, so a secret in it is a published
- *   secret shared by everyone. A server that cannot work without a confidential
- *   client cannot be a catalog entry.
+ *   secret shared by everyone. `configured_client` instead uses the existing
+ *   saved server's access-controlled OAuth client fields, never this file.
  * - **No `authorization_url` / `token_url`.** These are where an authorization
  *   code and a client credential are sent, so a stale one does not fail closed
  *   — it delivers a live grant to whatever now answers at that hostname. They
@@ -252,6 +252,8 @@ export interface MCPCatalogEntryOAuth {
   scope?: string;
   /** A pre-registered *public* client id. Never a confidential one. */
   client_id?: string;
+  /** Reviewed pre-registered app route; client credentials live only on the saved server. */
+  configured_client?: true;
   /** Dynamic Client Registration policy; defaults to `advertised`. */
   dcr_mode?: MCPOAuthDCRMode;
   /** Explicit authorization-metadata policy; omission uses marketplace interoperability. */
@@ -379,6 +381,10 @@ export interface MCPCatalogFilters {
  * client cannot name the destination its own credential is sent to.
  */
 export interface MCPCatalogConnectData {
+  /** Explicit opt-in only; omitted remains the existing direct/BYO path. */
+  oauth_client_mode?: 'direct' | 'cloud_managed_v1';
+  /** Exact additional managed disclosure; never inferred from the ordinary disclosure. */
+  acknowledged_managed_disclosure?: string;
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   /**
@@ -469,6 +475,10 @@ export interface MCPCatalogReadiness {
   /** Echo of the catalog identity that was evaluated. */
   catalog_key: string;
   state: MCPCatalogReadinessState;
+  /** Presentation only. Connect independently rechecks live whole-cell admission. */
+  managed_oauth?:
+    | { available: true; whole_cell_eligible: true; disclosure: string }
+    | { available: false };
 }
 
 /**

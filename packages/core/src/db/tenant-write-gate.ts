@@ -53,6 +53,7 @@ import { sql } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
+import { getCurrentTenantDatabaseScope } from './tenant-context';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Reserved `app_variables` coordinates for the write-gate record. */
@@ -195,8 +196,9 @@ function appVariablesTable() {
  * atomic against a concurrent acquire/release on the same tenant. It is held
  * until the surrounding transaction commits (`_xact_` variant).
  *
- * Only the mutation paths ({@link acquireTenantWriteGate} /
- * {@link releaseTenantWriteGate}) take it; the read-only enforcement path
+ * Mutation paths and managed vending ({@link assertTenantWritableUnderLock})
+ * share this fence with {@link acquireTenantWriteGate} and
+ * {@link releaseTenantWriteGate}; the read-only enforcement path
  * ({@link assertTenantWritable}) stays lock-free so reads never block. The
  * destructive generation assertion ({@link assertTenantWriteGateGeneration}) does
  * not take the advisory lock: it always finds an existing gate row and locks it
@@ -327,6 +329,40 @@ export async function assertTenantWritable(db: Database, tenantId: string): Prom
   if (state.active) {
     throw new TenantWriteGateActiveError(tenantId, state.generation);
   }
+}
+
+/**
+ * Managed vending's short transaction fence. Serialize even an absent gate with
+ * acquire/release, then read it AFTER the lock. No network while this is held.
+ * Direct OAuth and ordinary read-only enforcement retain their existing behavior.
+ */
+export async function assertTenantWritableUnderLock(db: Database, tenantId: string): Promise<void> {
+  const scope = getCurrentTenantDatabaseScope();
+  if (
+    scope?.kind !== 'tenant' ||
+    !scope.transactionActive ||
+    scope.db !== db ||
+    scope.tenantId !== tenantId
+  )
+    throw new Error('Write gate fence requires its active tenant transaction');
+  assertPostgres(db, 'fence');
+  await lockTenantGateMutation(db, tenantId);
+  // Any reserved gate row blocks managed authority, including malformed payloads.
+  // Preserve the ordinary read-only gate parser's legacy behavior elsewhere.
+  const rows = rowsOf(
+    await executeRaw(
+      db,
+      sql`
+    SELECT value_text FROM ${appVariablesTable()}
+    WHERE tenant_id=${tenantId} AND namespace=${TENANT_WRITE_GATE_NAMESPACE}
+      AND key=${TENANT_WRITE_GATE_KEY} LIMIT 1`
+    )
+  );
+  if (rows.length)
+    throw new TenantWriteGateActiveError(
+      tenantId,
+      parseGatePayload(rows[0].value_text)?.generation
+    );
 }
 
 export interface AcquireTenantWriteGateOptions {

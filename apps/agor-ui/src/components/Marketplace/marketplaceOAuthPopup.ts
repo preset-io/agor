@@ -1,6 +1,8 @@
+import { MANAGED_POPUP_FLOW_KEY, type ManagedPopupFlow } from './managedOAuthReturn';
 export interface MarketplaceOAuthPopup {
   readonly operationId: string;
   close(): void;
+  bindManagedFlow?(flow: ManagedPopupFlow): boolean;
   navigate(url: string, isCurrent: () => boolean): boolean;
 }
 
@@ -39,6 +41,15 @@ export function openMarketplaceOAuthPopup(): MarketplaceOAuthPopup | null {
   return {
     operationId: id,
     close: () => popup.close(),
+    bindManagedFlow: (flow) => {
+      try {
+        if (popup.closed || flow.nonce !== id) return false;
+        popup.sessionStorage.setItem(MANAGED_POPUP_FLOW_KEY, JSON.stringify(flow));
+        return true;
+      } catch {
+        return false;
+      }
+    },
     navigate: (url, isCurrent) => {
       if (!isCurrent() || popup.closed) {
         popup.close();
