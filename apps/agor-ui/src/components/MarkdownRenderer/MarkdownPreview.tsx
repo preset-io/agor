@@ -11,6 +11,8 @@ interface MarkdownPreviewProps {
   /** Rendered pixels, not source characters/lines (which can split Markdown syntax). */
   collapsedHeight?: number;
   expandedHeight?: number;
+  /** Let an enclosing bounded surface own expanded scrolling. */
+  boundExpandedHeight?: boolean;
   moreLabel?: string;
   lessLabel?: string;
 }
@@ -23,6 +25,7 @@ export const MarkdownPreview = React.memo(function MarkdownPreview({
   content,
   collapsedHeight = 54,
   expandedHeight = 240,
+  boundExpandedHeight = true,
   moreLabel = 'more',
   lessLabel = 'less',
 }: MarkdownPreviewProps) {
@@ -72,8 +75,13 @@ export const MarkdownPreview = React.memo(function MarkdownPreview({
         ref={viewportRef}
         className={expanded ? REACT_FLOW_NO_WHEEL_CLASS : undefined}
         style={{
-          maxHeight: expanded ? expandedHeight : collapsedHeight,
-          overflow: expanded ? 'auto' : 'hidden',
+          maxHeight:
+            expanded && !boundExpandedHeight
+              ? undefined
+              : expanded
+                ? expandedHeight
+                : collapsedHeight,
+          overflow: expanded ? (boundExpandedHeight ? 'auto' : 'visible') : 'hidden',
         }}
         onFocusCapture={(event) => {
           if (expanded) return;
