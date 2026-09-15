@@ -280,12 +280,13 @@ function DeviceRouter() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    if (!routeUsesDeviceRouter(location.pathname)) return;
-
-    const checkAndRoute = () => {
+  // Reads the pathname explicitly so the resize subscription below can stay
+  // mounted across navigations instead of re-subscribing on every route change.
+  const checkAndRoute = useCallback(
+    (pathname: string) => {
+      if (!routeUsesDeviceRouter(pathname)) return;
       const isMobile = isMobileViewport();
-      const isOnMobilePath = location.pathname.startsWith('/m');
+      const isOnMobilePath = pathname.startsWith('/m');
 
       const state = agorStore.getState();
       const routeEntities = {
@@ -293,38 +294,33 @@ function DeviceRouter() {
         sessions: state.sessionById.values(),
       };
 
-      // Redirect mobile devices to mobile site
       if (isMobile && !isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'mobile', routeEntities), {
-          replace: true,
-        });
+        navigate(responsiveRoutePath(pathname, 'mobile', routeEntities), { replace: true });
+      } else if (!isMobile && isOnMobilePath) {
+        navigate(responsiveRoutePath(pathname, 'desktop', routeEntities), { replace: true });
       }
-      // Redirect desktop devices away from mobile site
-      else if (!isMobile && isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'desktop', routeEntities), {
-          replace: true,
-        });
-      }
-    };
+    },
+    [navigate]
+  );
 
-    // Check on mount and route change
-    checkAndRoute();
+  // Route change / mount.
+  useEffect(() => {
+    checkAndRoute(location.pathname);
+  }, [location.pathname, checkAndRoute]);
 
-    // Debounced resize handler to avoid excessive redirects
-    let resizeTimeout: NodeJS.Timeout;
+  // Resize subscription — mounted once, not re-created on navigation.
+  useEffect(() => {
+    let resizeTimeout: ReturnType<typeof setTimeout>;
     const handleResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(checkAndRoute, 200);
+      resizeTimeout = setTimeout(() => checkAndRoute(window.location.pathname), 200);
     };
-
-    // Listen for window resize events for responsive switching
     window.addEventListener('resize', handleResize);
-
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimeout);
     };
-  }, [location.pathname, navigate]);
+  }, [checkAndRoute]);
 
   return null;
 }

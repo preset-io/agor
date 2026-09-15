@@ -2,6 +2,7 @@ import type { Board, BoardComment, Branch, Session, User } from '@agor-live/clie
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
@@ -37,6 +38,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
+  const reduced = usePrefersReducedMotion();
 
   return (
     <Drawer
@@ -45,6 +47,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
       placement="bottom"
       height="80%"
       title="More"
+      {...reducedMotionSurface(reduced)}
       styles={{
         content: glassSurfaceStyle(token, 0.85),
         body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },

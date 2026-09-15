@@ -1,4 +1,3 @@
-import { ResponsiveTable } from './ResponsiveTable';
 // Import the manifest helpers from the connector-free subpath so the browser
 // bundle never pulls in @slack/web-api / @slack/socket-mode (node-only) via the
 // gateway barrel.
@@ -116,6 +115,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
 

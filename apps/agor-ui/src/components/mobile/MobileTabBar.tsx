@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Button, Flex, Typography, theme } from 'antd';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { MOBILE_TOUCH_TARGET as TOUCH_TARGET } from './constants';
 
 export type MobileTab = 'home' | 'board' | 'ask' | 'comments' | 'more';
 
@@ -27,8 +28,6 @@ interface TabDef {
   icon: React.ReactNode;
   badge?: number;
 }
-
-const TOUCH_TARGET = 44;
 
 /**
  * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]

@@ -1,7 +1,9 @@
 import { ArrowLeftOutlined, CheckOutlined, DownOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { BrandMark } from '../BrandMark';
+import { MOBILE_TOUCH_TARGET } from './constants';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -40,7 +42,9 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   boardSwitcher,
 }) => {
   const { token } = theme.useToken();
+  const reduced = usePrefersReducedMotion();
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const iconButtonStyle = { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET };
 
   return (
     <Header
@@ -62,7 +66,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             aria-label="Back"
             icon={<ArrowLeftOutlined />}
             onClick={onBack}
-            style={{ marginInlineStart: -token.marginXS }}
+            style={{ ...iconButtonStyle, marginInlineStart: -token.marginXS }}
           />
         )}
         {showLogo && <BrandMark size={32} />}
@@ -71,7 +75,12 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             type="text"
             onClick={() => setSwitcherOpen(true)}
             aria-label={`Switch board (current: ${title ?? 'board'})`}
-            style={{ paddingInline: 0, minWidth: 0, maxWidth: '100%' }}
+            style={{
+              paddingInline: 0,
+              minWidth: 0,
+              maxWidth: '100%',
+              minHeight: MOBILE_TOUCH_TARGET,
+            }}
           >
             <Space size={token.marginXXS} align="center" style={{ maxWidth: '100%' }}>
               <Title
@@ -103,7 +112,13 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       </Space>
 
       {onSearch && (
-        <Button type="text" aria-label="Search" icon={<SearchOutlined />} onClick={onSearch} />
+        <Button
+          type="text"
+          aria-label="Search"
+          icon={<SearchOutlined />}
+          onClick={onSearch}
+          style={iconButtonStyle}
+        />
       )}
 
       {boardSwitcher && (
@@ -113,19 +128,34 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           placement="bottom"
           height="auto"
           title="Switch board"
+          {...reducedMotionSurface(reduced)}
           styles={{ body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' } }}
         >
           <List
             dataSource={boardSwitcher.boards}
             renderItem={(board) => {
               const active = board.board_id === boardSwitcher.currentBoardId;
+              const select = () => {
+                setSwitcherOpen(false);
+                boardSwitcher.onSelect(board.board_id);
+              };
               return (
                 <List.Item
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    boardSwitcher.onSelect(board.board_id);
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Switch to ${board.name}`}
+                  onClick={select}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      select();
+                    }
                   }}
-                  style={{ cursor: 'pointer', paddingInline: token.padding, minHeight: 44 }}
+                  style={{
+                    cursor: 'pointer',
+                    paddingInline: token.padding,
+                    minHeight: MOBILE_TOUCH_TARGET,
+                  }}
                 >
                   <Flex align="center" gap={token.marginSM} style={{ width: '100%', minWidth: 0 }}>
                     {board.emoji && <span aria-hidden>{board.emoji}</span>}

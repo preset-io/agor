@@ -83,6 +83,7 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
+import { MOBILE_TOUCH_TARGET } from '../mobile/constants';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
@@ -361,6 +362,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const isMobileShell = useIsMobileViewport();
+  // 44px touch targets for the header controls on the mobile full-screen shell.
+  const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
+    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+    : undefined;
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -1649,7 +1654,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
-                <Button type="text" aria-label="More actions" icon={<EllipsisOutlined />} />
+                <Button
+                  type="text"
+                  aria-label="More actions"
+                  icon={<EllipsisOutlined />}
+                  style={mobileHeaderButtonStyle}
+                />
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">
@@ -1658,6 +1668,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 aria-label="Search session"
                 icon={<SearchOutlined />}
                 onClick={openSearch}
+                style={mobileHeaderButtonStyle}
               />
             </Tooltip>
             <Tooltip title={isMobileShell ? 'Back' : 'Close Panel'}>
@@ -1666,7 +1677,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 aria-label={isMobileShell ? 'Back' : 'Close panel'}
                 icon={isMobileShell ? <ArrowLeftOutlined /> : <CloseOutlined />}
                 onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
+                style={{ ...mobileHeaderButtonStyle, marginLeft: token.sizeUnit }}
               />
             </Tooltip>
           </Space>
