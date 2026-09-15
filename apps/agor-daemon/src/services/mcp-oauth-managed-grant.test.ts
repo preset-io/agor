@@ -142,7 +142,7 @@ beforeEach(() => {
     oauth_authorization_endpoint: profile.authorizationEndpoint,
     oauth_token_endpoint: profile.tokenEndpoint,
     oauth_redirect_uri: profile.redirectUri,
-    oauth_token_endpoint_auth_method: 'none',
+    oauth_token_endpoint_auth_method: undefined,
   };
   projection = {
     ...grant,
@@ -228,6 +228,33 @@ const admit = (authorization = `Bearer ${valid.succeeded.tokens.access_token}`) 
   });
 
 describe('private managed grant adapter', () => {
+  it('checks nonsecret status with expired original permit without reading credentials', async () => {
+    now = claims.expires_at + 1;
+    expect(await factory().isServerGrantAuthorized(db, server, userId)).toBe(true);
+    expect(tokenRead).not.toHaveBeenCalled();
+    expect(acquireMCPOAuthGrant).not.toHaveBeenCalled();
+    projection.refresh_status = 'ambiguous';
+    expect(await factory().isServerGrantAuthorized(db, server, userId)).toBe(false);
+  });
+
+  it('denies foreign callers and tenant context in nonsecret status', async () => {
+    expect(await factory().isServerGrantAuthorized(db, server, 'foreign' as UserID)).toBe(false);
+    vi.mocked(getCurrentTenantId).mockReturnValue('foreign');
+    expect(await factory().isServerGrantAuthorized(db, server, userId)).toBe(false);
+    expect(tokenRead).not.toHaveBeenCalled();
+  });
+
+  it('normalizes public client absence but never private authentication methods', async () => {
+    expect(await factory().isGrantAuthorized(db, server, grant)).toBe(true);
+    await expect(admit()).resolves.toBeUndefined();
+    profile.tokenEndpointAuthMethod = 'client_secret_basic';
+    expect(await factory().isGrantAuthorized(db, server, grant)).toBe(false);
+    await expect(admit()).rejects.toThrow();
+    projection.oauth_token_endpoint_auth_method = 'client_secret_basic';
+    grant.oauth_token_endpoint_auth_method = 'client_secret_post';
+    expect(await factory().isGrantAuthorized(db, server, grant)).toBe(false);
+  });
+
   it('keeps live permit acquisition available when refresh issuance alone is paused', async () => {
     vi.mocked(runtime.current).mockImplementation(async (_owner, operation) => {
       if (operation === 'refresh') throw new Error('Refresh issuance paused');
