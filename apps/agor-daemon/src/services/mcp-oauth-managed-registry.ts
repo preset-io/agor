@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgorManagedMCPOAuthSettings } from '@agor/core/config';
 import { findCatalogEntry } from '@agor/core/mcp-catalog';
+import { ManagedMCPOAuthProtocolError } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
   type MCPCatalogEntry,
   type MCPManagedOAuthResolvedProfile,
@@ -85,6 +86,13 @@ export class ManagedOAuthRegistry {
     this.refreshInFlight = work();
     try {
       await this.refreshInFlight;
+    } catch (error) {
+      if (
+        error instanceof ManagedMCPOAuthProtocolError &&
+        (error.category === 'remote_rejection' || error.category === 'invalid_response')
+      )
+        this.snapshot = undefined;
+      throw error;
     } finally {
       this.refreshInFlight = undefined;
     }

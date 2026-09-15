@@ -409,6 +409,8 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
 
 const CANONICAL_TENANT_POLICY_EXPRESSION =
   "tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default')";
+const MANAGED_GRANT_TENANT_POLICY_EXPRESSION =
+  "((credential_origin='direct')or(coalesce(current_setting('agor.system_scope',true),'')=''))and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
 const STRICT_TENANT_POLICY_EXPRESSION =
   "tenant_id=nullif(current_setting('agor.tenant_id',true),'')";
 // The pending OAuth table also exposes two narrow transaction-local system
@@ -475,7 +477,9 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
         ? CLAUDE_OAUTH_ATTEMPT_TENANT_POLICY_EXPRESSION
         : relation.tableName === 'github_install_states'
           ? STRICT_TENANT_POLICY_EXPRESSION
-          : CANONICAL_TENANT_POLICY_EXPRESSION;
+          : relation.tableName === 'user_mcp_oauth_tokens'
+            ? MANAGED_GRANT_TENANT_POLICY_EXPRESSION
+            : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {

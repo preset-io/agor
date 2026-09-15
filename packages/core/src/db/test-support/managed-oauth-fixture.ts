@@ -103,7 +103,8 @@ export function managedCommit(
 /** Real tenant transaction fixture for the existing refresh owner integration. */
 export async function seedManagedRefreshGrant(
   db: import('../client').Database,
-  masterSecret: string
+  masterSecret: string,
+  tenantOverride?: string
 ) {
   const { runWithTenantDatabaseScope } = await import('../tenant-scope');
   const { executeRaw } = await import('../database-wrapper');
@@ -113,7 +114,7 @@ export async function seedManagedRefreshGrant(
   const { MCPOAuthPendingFlowRepository } = await import('../repositories/mcp-oauth-pending-flows');
   const { UserMCPOAuthTokenRepository } = await import('../repositories/user-mcp-oauth-tokens');
   const { createHash } = await import('node:crypto');
-  const tenant = `refresh-${randomUUID()}`;
+  const tenant = tenantOverride ?? `refresh-${randomUUID()}`;
   return runWithTenantDatabaseScope(db, tenant, async (db) => {
     const user = await new UsersRepository(db).create({
       email: `${randomUUID()}@example.test`,

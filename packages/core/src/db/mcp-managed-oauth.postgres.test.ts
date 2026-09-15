@@ -626,6 +626,91 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         );
       });
     });
+    it('refuses refresh completion when its original deadline passes behind a real token row lock', async () => {
+      const f = await seed();
+      const e = await exchange(f);
+      await e.save();
+      const c = await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const repo = new UserMCPOAuthTokenRepository(db, MASTER);
+        const t = (await repo.getToken(f.user, f.server))!;
+        return repo.claimRefresh(f.user, f.server, {
+          grantGeneration: t.grant_generation,
+          refreshGeneration: t.refresh_generation,
+          grantBindingFingerprint: t.grant_binding_fingerprint,
+        });
+      });
+      if (c.outcome !== 'claimed') throw new Error('fixture claim');
+      const start = Date.now() - 119500;
+      await runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+        executeRaw(
+          db,
+          sql`UPDATE public.user_mcp_oauth_tokens SET refresh_claimed_at=to_timestamp(${start}/1000.0) WHERE user_id=${f.user} AND mcp_server_id=${f.server}`
+        )
+      );
+      const commit = managedCommit(
+        f.owner,
+        {
+          kind: 'refresh',
+          claim_id: c.claimId,
+          claimed_at: start,
+          deadline_at: start + 120000,
+          refresh_generation: String(c.refreshGeneration),
+          refresh_success_generation: '0',
+        },
+        '1'
+      );
+      commit.metadata.transaction_id = e.commit.metadata.transaction_id;
+      let release!: () => void;
+      let ready!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const locked = new Promise<void>((r) => {
+        ready = r;
+      });
+      const holder = runWithTenantDatabaseScope(owned.peer, f.tenant, async (db) => {
+        await executeRaw(
+          db,
+          sql`SELECT user_id FROM public.user_mcp_oauth_tokens WHERE user_id=${f.user} AND mcp_server_id=${f.server} FOR UPDATE`
+        );
+        ready();
+        await gate;
+      });
+      await locked;
+      const completing = runWithTenantDatabaseScope(owned.db, f.tenant, (db) =>
+        new UserMCPOAuthTokenRepository(db, MASTER).completeClaimedRefresh(f.user, f.server, c, {
+          accessToken: commit.tokens.access_token,
+          refreshToken: commit.tokens.refresh_token,
+          expiresAt: new Date(commit.tokens.expires_at),
+          managed: commit,
+        })
+      );
+      try {
+        let blocked = false;
+        for (let i = 0; i < 100; i++) {
+          if (
+            (
+              await owned.sql`SELECT 1 FROM pg_stat_activity WHERE usename=current_user AND cardinality(pg_blocking_pids(pid))>0`
+            ).length
+          ) {
+            blocked = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(blocked).toBe(true);
+        await new Promise((r) => setTimeout(r, 600));
+      } finally {
+        release();
+        await holder;
+      }
+      expect(await completing).toBe(false);
+      await runWithTenantDatabaseScope(owned.db, f.tenant, async (db) => {
+        const token = await new UserMCPOAuthTokenRepository(db, MASTER).getToken(f.user, f.server);
+        expect(token?.oauth_access_token).toBe(e.commit.tokens.access_token);
+        expect(token?.managed_metadata).toEqual(e.commit.metadata);
+      });
+    });
     it('serializes a concurrent demotion behind the managed writer user-row lock, then retires its grant', async () => {
       const f = await seed();
       const e = await exchange(f);
