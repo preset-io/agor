@@ -1,13 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { type AgorConfig, MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256 } from '@agor/core/config';
-import { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import {
-  loadManagedOAuthCleanupDeployment,
-  loadManagedOAuthDeployment,
-} from './managed-deployment.js';
+import { loadManagedOAuthDeployment } from './managed-deployment.js';
 import { readManagedDeploymentFile } from './managed-deployment-files.js';
 
 vi.mock('./managed-deployment-files.js', async (importOriginal) => {
@@ -203,110 +198,5 @@ describe('managed production deployment loader', () => {
   ])('rejects issuer, private-key inventory or duplicate key IDs', async (change) => {
     keyring = { ...keyring, ...change };
     await expect(loadManagedOAuthDeployment(config, options)).rejects.toThrow();
-  });
-});
-
-describe('cleanup-only deployment loader', () => {
-  const cleanupConfig = () => ({
-    ...config,
-    managed_mcp_oauth: { ...config.managed_mcp_oauth, enabled: false, revocation: true },
-  });
-  it('does no IO when cleanup is off, regardless of vending flag', async () => {
-    expect(await loadManagedOAuthCleanupDeployment({}, options)).toBeNull();
-    expect(await loadManagedOAuthCleanupDeployment(config, options)).toBeNull();
-    expect(readManagedDeploymentFile).not.toHaveBeenCalled();
-  });
-  it('loads shutdown cleanup without public keys or mixed/absent cohort admission', async () => {
-    evidence = {};
-    keyring = {};
-    const loaded = await loadManagedOAuthCleanupDeployment(cleanupConfig(), options);
-    expect(loaded).not.toBeNull();
-    expect(loaded).not.toHaveProperty('keys');
-    expect(loaded).not.toHaveProperty('getEvidence');
-    expect(loaded?.sender).not.toHaveProperty('execute');
-    expect(loaded?.identity).toEqual({ provider: 'cloud', issuer: 'https://identity.example/' });
-    expect(
-      vi
-        .mocked(readManagedDeploymentFile)
-        .mock.calls.every(([path]) => ['/owned/clock.json', '/owned/sender.pem'].includes(path))
-    ).toBe(true);
-    expect(await loadManagedOAuthDeployment(cleanupConfig(), options)).toBeNull();
-  });
-  it.each(['prepare', 'activate', 'exchange', 'refresh', 'authority', 'receipt'] as const)(
-    'refuses %s before dispatch',
-    async (operation) => {
-      const loaded = await loadManagedOAuthCleanupDeployment(cleanupConfig(), options);
-      const dispatch = vi
-        .spyOn(ManagedMCPOAuthClient.prototype, 'request')
-        .mockRejectedValue(new Error('must not dispatch'));
-      try {
-        await expect(
-          loaded!.sender.request({
-            operation,
-            body: { operation_id: 'fake' },
-            schema: z.unknown(),
-            assertCurrent: () => {},
-          })
-        ).rejects.toThrow('Managed');
-        expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        dispatch.mockRestore();
-      }
-    }
-  );
-  it.each(['cancel', 'close', 'cleanup', 'ack', 'capabilities'] as const)(
-    'retains caller authority fence for %s',
-    async (operation) => {
-      const loaded = await loadManagedOAuthCleanupDeployment(cleanupConfig(), options);
-      const fence = vi.fn(() => {
-        throw new Error('quarantined recovery');
-      });
-      const request = {
-        operation,
-        body: { operation_id: 'fake' },
-        schema: z.unknown(),
-        assertCurrent: fence,
-      };
-      const dispatch = vi
-        .spyOn(ManagedMCPOAuthClient.prototype, 'request')
-        .mockImplementation(async (input) => {
-          await input.assertCurrent();
-          throw new Error('unreachable');
-        });
-      try {
-        await expect(loaded!.sender.request(request)).rejects.toThrow('quarantined recovery');
-        expect(dispatch).toHaveBeenCalledWith(request);
-        expect(fence).toHaveBeenCalledOnce();
-      } finally {
-        dispatch.mockRestore();
-      }
-    }
-  );
-  it('requires complete cleanup wiring and trusted clock even with master off', async () => {
-    const missing = cleanupConfig();
-    missing.managed_mcp_oauth.worker_issuer = undefined;
-    await expect(loadManagedOAuthCleanupDeployment(missing, options)).rejects.toThrow();
-    health.synchronized = false;
-    await expect(loadManagedOAuthCleanupDeployment(cleanupConfig(), options)).rejects.toThrow();
-  });
-  it('does not waive PostgreSQL, source pin or configured identity', async () => {
-    for (const input of [
-      { ...cleanupConfig(), database: { dialect: 'sqlite' } },
-      {
-        ...cleanupConfig(),
-        managed_mcp_oauth: {
-          ...cleanupConfig().managed_mcp_oauth,
-          contract_sha256: 'a'.repeat(64),
-        },
-      },
-    ])
-      await expect(
-        loadManagedOAuthCleanupDeployment(input as AgorConfig, options)
-      ).rejects.toThrow();
-    await expect(
-      loadManagedOAuthCleanupDeployment(cleanupConfig(), {
-        externalLaunchProvider: { enabled: false },
-      })
-    ).rejects.toThrow();
   });
 });

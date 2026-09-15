@@ -367,23 +367,3 @@ relax the reader or expose the source volume to executors to make a projected
 symlink work. A monitor publishing from a different host or time namespace must
 not be connected as if its monotonic clock were the daemon's. The file paths
 and public evidence alone do not authorize activation or certify a provider.
-
-### Cleanup during a managed OAuth shutdown
-
-`revocation` is independent of the master `enabled` flag. Keeping
-`revocation: true` with `enabled: false` permits the separate cleanup-only
-runtime adapter to load; it does not enable connection, exchange, refresh,
-permit issuance or credential use. All deployment configuration fields remain
-required. The cleanup loader still requires PostgreSQL, the supported region,
-the exact contract pin, the configured sender identity and healthy independent
-clock evidence. When both flags are false, neither loader reads deployment
-material.
-
-Cleanup does not require a fresh vending cohort and does not read or expose
-the worker public keyring or cohort attestation. Its restricted sender allows
-only cancellation, closure, cleanup, acknowledgement and authenticated
-capabilities requests. The cleanup coordinator must compare fresh authenticated
-recovery capabilities against the exact durable historical owner before each
-operation; a restored/mismatched recovery incarnation remains quarantined.
-This path cannot retry preparation to recover an unknown transaction, and
-cannot be supplied as the credential-vending or grant-admission adapter.

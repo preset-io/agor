@@ -18,6 +18,7 @@ import {
   type UserID,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import projectionFixtures from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
 import valid from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/valid.json';
 import { ManagedAuthorityClock } from '../mcp-egress/managed-clock.js';
 import type { ManagedOAuthDeployment } from '../mcp-egress/managed-deployment.js';
@@ -198,6 +199,7 @@ beforeEach(() => {
     recovery_incarnation: owner.recovery_incarnation,
     profile_versions: [
       {
+        ...projectionFixtures.valid.profile,
         profile_id: owner.profile_id,
         profile_version: owner.profile_version,
         catalog_digest: owner.catalog_digest,

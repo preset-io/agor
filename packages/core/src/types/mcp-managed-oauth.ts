@@ -98,6 +98,9 @@ export interface MCPManagedOAuthResolvedProfile {
   catalogEntryName: string;
   mcpUrl: string;
   transport: 'http';
+  /** Every reviewed endpoint, in registry order; no inferred first endpoint. */
+  metadataEndpoints: readonly string[];
+  /** Legacy storage projection only: sole endpoint, or empty when zero/multiple. */
   metadataUri: string;
   resourceUri: string;
   issuer: string;

@@ -1,6 +1,7 @@
 import { createPublicKey } from 'node:crypto';
 import { MCP_OAUTH_OWNER_FIELDS, McpOAuthUseClaimsSchema } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import projectionFixtures from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
 import signatures from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/signature-vectors.json';
 import valid from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/valid.json';
 import { verifyManagedUseAuthorization } from './managed-authorization.js';
@@ -39,6 +40,7 @@ function fixture() {
       recovery_incarnation: claims.owner.recovery_incarnation,
       profile_versions: [
         {
+          ...projectionFixtures.valid.profile,
           profile_id: claims.owner.profile_id,
           profile_version: claims.owner.profile_version,
           catalog_digest: claims.owner.catalog_digest,

@@ -1,3 +1,4 @@
+import type { ManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
 /**
  * Authentication & Custom REST Routes Registration
  *
@@ -476,6 +477,7 @@ export function requireStreamingPublisherCapability(
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
+  mcpManagedOAuthServices?: ManagedOAuthServices;
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
@@ -725,13 +727,15 @@ export async function authorizeBoardCommentReposition(input: {
  */
 export function createRegisteredMCPCatalogConnectService(
   app: Application,
-  db: TenantScopeAwareDatabase
+  db: TenantScopeAwareDatabase,
+  managed?: ManagedOAuthServices
 ) {
   const runInTenantDatabaseScope = <T>(params: AuthenticatedParams, work: () => Promise<T>) => {
     const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
     return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
   };
   return createMCPCatalogConnectService(app, {
+    resolveManagedInstall: managed?.resolveManagedInstall,
     runInTenantDatabaseScope,
     async listCandidates(userId, params) {
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
@@ -751,7 +755,12 @@ export function createRegisteredMCPCatalogConnectService(
         );
         return Boolean(
           grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+            (await isMCPOAuthGrantAuthorizedForServer(
+              db,
+              candidate.server,
+              grant,
+              managed?.managedValidator
+            ))
         );
       };
       return runInTenantDatabaseScope(params, read);
@@ -920,6 +929,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     app,
     jwtSecret,
+    resolveManagedAuthorization: ctx.mcpManagedOAuthServices?.grantAccess.acquireAuthorization,
+    assertManagedUse: ctx.mcpManagedOAuthServices?.grantAccess.assertManagedUse,
   });
   // Internal composition seam used by MCP mutation hooks. It is never exposed
   // as a Feathers service and carries no serializable credential material.
@@ -6106,7 +6117,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerLongAuthenticatedRoute(
     app,
     '/mcp-catalog/connect',
-    createRegisteredMCPCatalogConnectService(app, db),
+    createRegisteredMCPCatalogConnectService(app, db, ctx.mcpManagedOAuthServices),
     { create: { role: ROLES.MEMBER, action: 'connect MCP catalog entries' } },
     requireAuth
   );
