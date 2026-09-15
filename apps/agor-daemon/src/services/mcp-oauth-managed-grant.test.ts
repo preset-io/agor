@@ -91,6 +91,7 @@ beforeEach(() => {
     mcpUrl: 'https://fake.example/mcp',
     transport: 'http',
     metadataUri: 'https://fake.example/metadata',
+    metadataEndpoints: ['https://fake.example/metadata'],
     resourceUri: 'https://fake.example/mcp',
     issuer: 'https://fake.example/',
     authorizationEndpoint: 'https://fake.example/auth',
@@ -101,7 +102,7 @@ beforeEach(() => {
     tokenEndpointAuthMethod: 'none',
     clientKind: 'public',
     registrationProvenanceDigest: 'a'.repeat(64),
-  };
+  } as MCPManagedOAuthResolvedProfile;
   server = {
     mcp_server_id: owner.server_id,
     owner_user_id: userId,
@@ -227,6 +228,31 @@ const admit = (authorization = `Bearer ${valid.succeeded.tokens.access_token}`) 
   });
 
 describe('private managed grant adapter', () => {
+  it('keeps live permit acquisition available when refresh issuance alone is paused', async () => {
+    vi.mocked(runtime.current).mockImplementation(async (_owner, operation) => {
+      if (operation === 'refresh') throw new Error('Refresh issuance paused');
+      return profile;
+    });
+    expect(await factory().isGrantAuthorized(db, server, grant)).toBe(true);
+    await expect(
+      factory().acquireAuthorization({
+        tenantId: owner.workspace_id,
+        userId,
+        server,
+        assertCurrent: async () => {},
+      })
+    ).resolves.toBe(`Bearer ${grant.oauth_access_token}`);
+    expect(runtime.current).not.toHaveBeenCalledWith(owner, 'refresh');
+  });
+
+  it('normalizes the empty legacy metadata slot without selecting an arbitrary endpoint', async () => {
+    profile.metadataUri = '';
+    grant.oauth_metadata_uri = undefined;
+    projection.oauth_metadata_uri = undefined;
+    expect(await factory().isGrantAuthorized(db, server, grant)).toBe(true);
+    await expect(admit()).resolves.toBeUndefined();
+  });
+
   it('admits the exact signed bearer with same-snapshot nonsecret authority and no decryption/network', async () => {
     await expect(admit()).resolves.toBeUndefined();
     expect(tokenRead).not.toHaveBeenCalled();
@@ -244,7 +270,7 @@ describe('private managed grant adapter', () => {
   it('allows expired old permits for refresh eligibility, but never for use', async () => {
     now = claims.expires_at + 1;
     expect(await factory().isGrantAuthorized(db, server, grant)).toBe(true);
-    expect(runtime.current).toHaveBeenCalledWith(owner, 'refresh');
+    expect(runtime.current).toHaveBeenCalledWith(owner, 'use');
     await expect(admit()).rejects.toMatchObject({ code: 'managed_authority_expired' });
     expect(tokenRead).not.toHaveBeenCalled();
   });
