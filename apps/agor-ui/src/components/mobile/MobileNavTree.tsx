@@ -107,10 +107,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   // Get session title with mobile-friendly 50-char limit
   const getSessionTitle = (session: Session): string => {
-    return getSessionDisplayTitle(session, {
-      fallbackChars: 50,
-      includeIdFallback: true,
-    });
+    return getSessionDisplayTitle(session, { fallbackChars: 50 });
   };
 
   // Get session status icon
