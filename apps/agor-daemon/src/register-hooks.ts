@@ -3096,8 +3096,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           };
           if (!params[CODEX_AUTH_DEFER_USER_REALTIME]) return context;
 
-          // Codex HA completion/import/logout runs the users patch inside the
-          // same generation-fenced transaction as its credential mutation.
+          // Codex PostgreSQL completion/import/logout runs the users patch
+          // inside the same route-authority transaction as its credential mutation.
           // Suppress Feathers' pre-commit automatic event and enqueue one
           // redacted event that can be observed only after commit.
           context.event = null;

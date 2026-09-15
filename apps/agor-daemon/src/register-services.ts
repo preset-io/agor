@@ -927,10 +927,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   registerOpenCodeServices(ctx);
 
-  // Claude's standalone store also supplies the process-global credential
-  // route queue used by standalone Codex finalization and users route changes.
-  // In HA, each provider uses its durable authority over the same advisory
-  // tenant/user lock instead.
+  // Claude's store also supplies standalone Codex's credential route authority:
+  // a process-global queue on SQLite, short tenant transactions on PostgreSQL.
+  // In HA, Codex uses its own durable attempt authority over the same advisory
+  // tenant/user lock. Standalone provider polling must remain outside that lock.
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
@@ -1173,8 +1173,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  // Standalone users mutations share the in-process store's credential queue;
-  // HA mutations share the durable tenant/user authority whenever either
+  // SQLite users mutations share the in-process store's credential queue;
+  // PostgreSQL mutations share the durable tenant/user authority whenever either
   // provider admits a credential-file writer. A delegated Codex-only profile
   // still needs unix_username lifecycle coordination, but must not gain Claude
   // path deletion when exact-home Claude auth is capability-gated.

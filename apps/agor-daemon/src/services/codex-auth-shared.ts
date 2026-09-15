@@ -23,6 +23,7 @@ import {
   hasTenantSafeExecutorCredentialHome,
 } from '@agor/core/config';
 import {
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -258,6 +259,7 @@ export async function persistVerifiedCodexAuth(options: {
     );
   }
 
+  const scope = getCurrentTenantDatabaseScope();
   const usersService = app.service('users') as UsersServiceLike;
   await usersService.patch(
     userId,
@@ -265,7 +267,9 @@ export async function persistVerifiedCodexAuth(options: {
     {
       user: authUser,
       authenticated: true,
-      ...(authorityGeneration === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+      ...(authorityGeneration !== undefined || (scope?.kind === 'tenant' && scope.transactionActive)
+        ? { [CODEX_AUTH_DEFER_USER_REALTIME]: true }
+        : {}),
     }
   );
 

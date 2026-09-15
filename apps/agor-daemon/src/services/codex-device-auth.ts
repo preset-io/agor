@@ -63,6 +63,7 @@ import {
 export { buildDeviceAuthJson } from './codex-device-auth-provider.js';
 
 import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
+import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
@@ -70,9 +71,7 @@ import {
   sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
-interface StandaloneCredentialRouteAuthority {
-  lockExternalUserMutation(tenantId: string, userId: UserID): Promise<(() => Promise<void>) | void>;
-}
+type StandaloneCredentialRouteAuthority = Pick<ClaudeOAuthAttemptStore, 'runCredentialResolution'>;
 
 const UNAVAILABLE_HINT =
   'Your ChatGPT account does not allow device-code sign-in. Personal accounts can turn it on under ChatGPT Settings → Security → "Device code authorization for Codex"; workspace accounts need an admin to enable it. You can also paste an auth.json or use an API key instead.';
@@ -122,6 +121,16 @@ export function createCodexDeviceAuthService(
   invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   const attempts = new Map<string, DeviceAuthAttempt>();
+
+  // Identity-only HTTP hooks deliberately do not retain a transaction. Let
+  // the authority own the bounded lock lifetime: a process queue on SQLite,
+  // a tenant transaction/advisory lock on PostgreSQL. Provider I/O must stay
+  // outside this callback; route reads and credential mutations stay inside.
+  function withRouteAuthority<T>(tenantId: string, userId: UserID, work: () => Promise<T>) {
+    return routeAuthority
+      ? routeAuthority.runCredentialResolution({ tenantId, userId }, work)
+      : work();
+  }
 
   function cancelAttempt(key: string): void {
     const existing = attempts.get(key);
@@ -197,61 +206,63 @@ export function createCodexDeviceAuthService(
         return;
       }
       const { tokens } = exchanged;
-      const releaseRouteAuthority = await routeAuthority?.lockExternalUserMutation(
+      const summary = await withRouteAuthority(
         String(attempt.tenantId),
-        attempt.userId
-      );
-      try {
-        // Ownership check in addition to the cancelled flag: replacement and
-        // users-service route/removal mutations take this same process queue,
-        // then cancel the attempt before a retired route can be written.
-        if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
-        const currentRoute = await resolveCodexCredentialRoute(
-          attempt.userId,
-          <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
-            runWithTenantDatabaseScope(db, attempt.tenantId, work),
-          app.get('config')
-        );
-        if (
-          !currentRoute.ok ||
-          !sameCodexCredentialRoute(currentRoute, {
-            delegatedHomeKey: attempt.delegatedHomeKey,
-            codexHome: attempt.codexHome,
-          })
-        ) {
-          finish(
-            attempt,
-            'error',
-            'The execution home changed while you were signing in. Start over to save the login in the right home.'
+        attempt.userId,
+        async () => {
+          // Ownership check in addition to the cancelled flag: replacement and
+          // users-service route/removal mutations take this same route authority,
+          // then cancel the attempt before a retired route can be written.
+          if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
+          const currentRoute = await resolveCodexCredentialRoute(
+            attempt.userId,
+            <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
+              runWithTenantDatabaseScope(db, attempt.tenantId, work),
+            app.get('config')
           );
-          return;
+          if (
+            !currentRoute.ok ||
+            !sameCodexCredentialRoute(currentRoute, {
+              delegatedHomeKey: attempt.delegatedHomeKey,
+              codexHome: attempt.codexHome,
+            })
+          ) {
+            finish(
+              attempt,
+              'error',
+              'The execution home changed while you were signing in. Start over to save the login in the right home.'
+            );
+            return;
+          }
+          return runWithTenantDatabaseScope(db, attempt.tenantId, () =>
+            persistVerifiedCodexAuth({
+              app,
+              normalized: buildDeviceAuthJson(tokens),
+              delegatedHomeKey: attempt.delegatedHomeKey,
+              userId: attempt.userId,
+              authUser: attempt.authUser,
+              codexHome: attempt.codexHome,
+            })
+          );
         }
-        const summary = await runWithTenantDatabaseScope(db, attempt.tenantId, () =>
-          persistVerifiedCodexAuth({
-            app,
-            normalized: buildDeviceAuthJson(tokens),
-            delegatedHomeKey: attempt.delegatedHomeKey,
-            userId: attempt.userId,
-            authUser: attempt.authUser,
-            codexHome: attempt.codexHome,
-          })
-        );
-        await invalidateCredentialBinds({
-          tenantId: String(attempt.tenantId),
-          userId: attempt.userId,
-          reason: 'credentials_imported',
-        });
-        attempt.planType = summary.planType;
-        finish(
-          attempt,
-          'success',
-          summary.planType
-            ? `Signed in with ChatGPT (${summary.planType} plan).`
-            : 'Signed in with ChatGPT.'
-        );
-      } finally {
-        await releaseRouteAuthority?.();
-      }
+      );
+      if (!summary) return;
+      // Notify only after the authority's transaction commits. A logout/route
+      // mutation winning immediately afterward must not be revived as success.
+      await invalidateCredentialBinds({
+        tenantId: String(attempt.tenantId),
+        userId: attempt.userId,
+        reason: 'credentials_imported',
+      });
+      if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
+      attempt.planType = summary.planType;
+      finish(
+        attempt,
+        'success',
+        summary.planType
+          ? `Signed in with ChatGPT (${summary.planType} plan).`
+          : 'Signed in with ChatGPT.'
+      );
     } catch (err) {
       // Messages reaching this catch are already sanitized: the raw-token
       // write path rethrows as BadRequest with operator-safe text inside
@@ -303,8 +314,7 @@ export function createCodexDeviceAuthService(
       work: (authorityGeneration?: number) => Promise<T>,
       preflight?: () => Promise<void>
     ): Promise<T> {
-      const release = await routeAuthority?.lockExternalUserMutation(tenantId, userId);
-      try {
+      return withRouteAuthority(tenantId, userId, async () => {
         await preflight?.();
         const key = `${tenantId}:${userId}`;
         const attempt = attempts.get(key);
@@ -319,9 +329,7 @@ export function createCodexDeviceAuthService(
           );
         }
         return await work(undefined);
-      } finally {
-        await release?.();
-      }
+      });
     },
 
     async completeExternalUserRouteMutation(
@@ -331,7 +339,7 @@ export function createCodexDeviceAuthService(
       _reason: 'execution_home_changed' | 'user_removed',
       sharedGeneration?: number
     ): Promise<void> {
-      // The caller retains routeAuthority's process-global queue. Cancel while
+      // The caller retains the shared route authority. Cancel while
       // holding it, then clean the old Codex route before the users row changes.
       const key = `${tenantId}:${userId}`;
       const attempt = attempts.get(key);
@@ -359,15 +367,10 @@ export function createCodexDeviceAuthService(
         throw new BadRequest('Codex is disabled for this workspace.');
       }
 
-      // Resolve and reserve while holding the same process-global route queue
+      // Resolve and reserve while holding the same route authority
       // as users.patch/remove. A route mutation that wins first cannot be
       // followed by a freshly reserved attempt carrying its retired route.
-      const releaseRouteAuthority = await routeAuthority?.lockExternalUserMutation(
-        String(tenantId),
-        userId
-      );
-      let attempt: DeviceAuthAttempt;
-      try {
+      const attempt = await withRouteAuthority(String(tenantId), userId, async () => {
         const identity = await resolveCodexCredentialRoute(
           userId,
           withTenantDatabase,
@@ -381,7 +384,7 @@ export function createCodexDeviceAuthService(
 
         cancelAttempt(key);
         pruneFinishedAttempts();
-        attempt = {
+        const reserved: DeviceAuthAttempt = {
           attemptId: generateId() as CodexDeviceAuthAttemptID,
           key,
           userId,
@@ -396,10 +399,9 @@ export function createCodexDeviceAuthService(
           expiresAtMs: Date.now() + DEVICE_CODE_LIFETIME_MS,
           cancelled: false,
         };
-        attempts.set(key, attempt);
-      } finally {
-        await releaseRouteAuthority?.();
-      }
+        attempts.set(key, reserved);
+        return reserved;
+      });
 
       let grant: UserCodeGrant | 'unavailable';
       try {
