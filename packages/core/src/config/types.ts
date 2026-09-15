@@ -9,6 +9,26 @@ import type { AgorPasswordPolicyProfile } from './password-policy';
 export type { ManagedEnvExecutionMode };
 export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
 
+/** Deployment-owned managed OAuth wiring. No provider client secret belongs here. */
+export interface AgorManagedMCPOAuthSettings {
+  enabled?: boolean;
+  new_starts?: boolean;
+  exchange?: boolean;
+  refresh?: boolean;
+  use_authorization_issuance?: boolean;
+  revocation?: boolean;
+  broker_origin?: string;
+  environment?: 'staging' | 'production';
+  region?: 'us-west-2';
+  cell_id?: string;
+  credential_id?: string;
+  sender_key_id?: string;
+  /** Deployment-mounted cell RS256 key; never a provider credential. */
+  sender_private_key_path?: string;
+  /** Exact reviewed companion contract artifact, not main/latest. */
+  contract_sha256?: string;
+}
+
 /** Deployment-owned agentic-tool package selection. */
 export interface AgorAgenticToolsSettings {
   /** Integrations that must match the running Agor version exactly. */
@@ -1499,6 +1519,7 @@ export interface AgorConfig {
 
   /** Deployment-owned agentic-tool package selection. */
   agentic_tools?: AgorAgenticToolsSettings;
+  managed_mcp_oauth?: AgorManagedMCPOAuthSettings;
 
   /** Explicit standalone or multi-daemon topology. */
   deployment?: AgorDeploymentSettings;
@@ -1550,6 +1571,7 @@ export interface AgorConfig {
  * Valid config keys (includes nested keys with dot notation)
  */
 export type ConfigKey =
+  | `managed_mcp_oauth.${keyof AgorManagedMCPOAuthSettings}`
   | `agentic_tools.${keyof AgorAgenticToolsSettings}`
   | `deployment.${keyof AgorDeploymentSettings}`
   | `daemon.${keyof AgorDaemonSettings}`
