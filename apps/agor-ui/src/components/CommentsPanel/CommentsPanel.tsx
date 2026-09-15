@@ -54,6 +54,8 @@ export interface CommentsPanelProps {
   loading?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  /** Hide the internal "Comments" header (mobile already shows a board header). */
+  hideHeader?: boolean;
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -569,6 +571,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   loading = false,
   collapsed = false,
   onToggleCollapse,
+  hideHeader = false,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -761,41 +764,43 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         flexDirection: 'column',
       }}
     >
-      {/* Header */}
-      <div
-        style={{
-          padding: 12,
-          borderBottom: `1px solid ${token.colorBorder}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Space>
-          <CommentOutlined />
-          <Title level={5} style={{ margin: 0 }}>
-            Comments
-          </Title>
-          <Badge
-            count={filteredThreads.length}
-            showZero={false}
-            style={{
-              backgroundColor: filteredThreads.some(threadMentionsUser)
-                ? token.colorError
-                : token.colorPrimaryBgHover,
-            }}
-          />
-        </Space>
-        {onToggleCollapse && (
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            onClick={onToggleCollapse}
-            danger
-          />
-        )}
-      </div>
+      {/* Header — hidden on mobile, where the board header already titles the view */}
+      {!hideHeader && (
+        <div
+          style={{
+            padding: 12,
+            borderBottom: `1px solid ${token.colorBorder}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Space>
+            <CommentOutlined />
+            <Title level={5} style={{ margin: 0 }}>
+              Comments
+            </Title>
+            <Badge
+              count={filteredThreads.length}
+              showZero={false}
+              style={{
+                backgroundColor: filteredThreads.some(threadMentionsUser)
+                  ? token.colorError
+                  : token.colorPrimaryBgHover,
+              }}
+            />
+          </Space>
+          {onToggleCollapse && (
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined />}
+              onClick={onToggleCollapse}
+              danger
+            />
+          )}
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div
