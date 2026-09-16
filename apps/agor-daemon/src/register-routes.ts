@@ -193,6 +193,7 @@ import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
+import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -3629,14 +3630,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
   const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
-  const widgetResolutionStore = new WidgetResolutionStore(widgetResolutionMessages, (message) =>
+  const widgetResolutionStore = new WidgetResolutionStore(widgetResolutionMessages, (message) => {
     emitServiceEvent(app, {
       path: 'messages',
       event: 'patched',
       data: message,
       id: message.message_id,
-    })
-  );
+    });
+    // A widget that also has a Slack card must retire, redraw, or complete it
+    // in the same breath. This is the one writer of widget lifecycle state, so
+    // hooking it here means no transition — resolve, fail, supersede — can
+    // leave a live Connect button in a thread behind a settled row.
+    notifyMcpSlackConnectCard(app, message);
+  });
   // Every writer of widget lifecycle state goes through this one store, so it
   // is published where an in-process caller that is not a route can reach it —
   // notably the MCP tool that supersedes a replaced Connect button. The

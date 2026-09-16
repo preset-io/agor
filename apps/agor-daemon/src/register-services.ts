@@ -119,6 +119,7 @@ import type {
   MCPSlackOAuthRecoveryContext,
   MCPSlackRecoveryNotice,
   MCPSlackRecoveryTokenClaims,
+  MessageID,
   MessageSource,
   Params,
   PromptOrigin,
@@ -3665,7 +3666,7 @@ export async function registerMCPServices(
     const connect = pendingFlow.slackConnect;
     if (!connect || !pendingFlow.tenantId) return;
     const stampedAt = new Date().toISOString();
-    await runWithTenantContext(pendingFlow.tenantId, () =>
+    const stamped = await runWithTenantContext(pendingFlow.tenantId, () =>
       runInOAuthTenantScope(db, pendingFlow.tenantId!, () =>
         mutateSlackConnectDelivery(new MessagesRepository(db), connect.widget_id, (current) =>
           current?.delivery_id === connect.delivery_id &&
@@ -3682,6 +3683,18 @@ export async function registerMCPServices(
         )
       )
     );
+    // The provider round-trip is the one transition the widget row does not
+    // record, so the card is told about it explicitly. `mutateSlackConnectDelivery`
+    // deliberately emits no service event — the projection's own writes must
+    // not wake the projection — which is why this is not covered by the
+    // widget-store hook.
+    if (!stamped.changed) return;
+    await runWithTenantContext(pendingFlow.tenantId, async () => {
+      const gateway = app.service('gateway') as unknown as {
+        syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
+      };
+      await gateway.syncMcpSlackConnectCard(connect.widget_id).catch(() => undefined);
+    });
   };
 
   const pendingFromDurableClaim = (
