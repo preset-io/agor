@@ -3,6 +3,7 @@
  * installed Chromium, and AGOR_PAIRED_CLOUD_SOURCE pointing at the reviewed Cloud checkout.
  * From apps/agor-daemon (with AGOR_DB_DIALECT=postgresql and PLAYWRIGHT_BROWSERS_PATH):
  * pnpm exec vitest run --config vitest.managed-paired.config.ts
+ * Set AGOR_PAIRED_CYCLE0_ONLY=1 for first-connect/task-hop coverage without reconnect.
  * The test registers its worker-local source loader for native dynamic imports; it changes no runtime admission behavior.
  * Transport seam: exact fixture HTTPS origins route through Cloud's generated-CA TLS RPC.
  * Sender raw bytes/JWT, worker validation, provider consent/token HTTP, runtime DB commit,
@@ -25,6 +26,7 @@ import {
   chromium,
 } from '../../agor-ui/src/test/managed-runtime-acceptance/browser';
 import { serveBundledManagedAcceptanceUI } from '../../agor-ui/src/test/managed-runtime-acceptance/serve-bundled-ui';
+import { createPairedTaskGateway } from '../src/services/test-support/managed-paired-gateway';
 import {
   PAIRED_RUNTIME_ORIGIN,
   startManagedPairedRuntime,
@@ -233,7 +235,7 @@ describe('actual paired provider browser and registered runtime', () => {
           (item) => item.name === `test.paired.${providerName}/mcp`
         )) {
           let originalServerId: string | undefined;
-          for (const cycle of [0, 1]) {
+          for (const cycle of process.env.AGOR_PAIRED_CYCLE0_ONLY === '1' ? [0] : [0, 1]) {
             await page
               .getByText(entry.title!, { exact: true })
               .first()
@@ -397,9 +399,45 @@ describe('actual paired provider browser and registered runtime', () => {
             expect(((await cloud.call('counters')) as typeof afterRefresh)[provider].token).toBe(
               afterRefresh[provider].token
             );
+            // Real task/session attachment + local capability, with unmodified production
+            // managed acquisition and per-hop authority. The existing exact-host TLS seam
+            // remains the only transport substitution; no executor process is claimed.
+            const taskGateway = await createPairedTaskGateway(runtime, server);
+            const beforeTask = (await cloud.call('counters')) as typeof afterRefresh;
+            expect(await taskGateway.forward('tools/list')).toMatchObject({
+              result: {
+                tools: expect.arrayContaining([expect.objectContaining({ name: 'fake_read' })]),
+              },
+            });
+            expect(await taskGateway.forward('tools/call')).toMatchObject({
+              result: {
+                isError: false,
+                content: [{ type: 'text', text: `Synthetic ${entry.name} accepted` }],
+              },
+            });
+            const afterTask = (await cloud.call('counters')) as typeof afterRefresh;
+            expect(afterTask[provider].mcp).toBe(beforeTask[provider].mcp + 2);
+            expect(afterTask[provider].token).toBe(beforeTask[provider].token);
+            await expect(
+              taskGateway.forward('tools/call', taskGateway.foreignCaller)
+            ).rejects.toMatchObject({ code: 'principal_revoked' });
+            await expect(
+              taskGateway.forward('tools/call', taskGateway.foreignTask)
+            ).rejects.toMatchObject({ code: 'principal_revoked' });
+            const retiredGateway = await createPairedTaskGateway(runtime, server);
+            await retiredGateway.retireTask();
+            await expect(retiredGateway.forward('tools/call')).rejects.toMatchObject({
+              code: 'principal_revoked',
+            });
+            expect(((await cloud.call('counters')) as typeof afterRefresh)[provider].mcp).toBe(
+              afterTask[provider].mcp
+            );
             await runtime.call('mcp-servers/oauth-disconnect', request);
             await runtime.maintenance!.runOnce();
             const beforeDeniedUse = (await cloud.call('counters')) as typeof afterRefresh;
+            await expect(taskGateway.forward('tools/call')).rejects.toMatchObject({
+              code: 'grant_changed',
+            });
             expect((await runtime.call('mcp-servers/discover', request)).success).toBe(false);
             expect(((await cloud.call('counters')) as typeof afterRefresh)[provider].mcp).toBe(
               beforeDeniedUse[provider].mcp
