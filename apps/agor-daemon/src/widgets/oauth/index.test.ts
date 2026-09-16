@@ -115,8 +115,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
 }
 
 function resolve(ctx: ReturnType<typeof makeCtx>['ctx'], params = defaultParams) {
-  if (oauthWidget.resolution !== 'oauth_callback') throw new Error('wrong resolution kind');
-  return oauthWidget.resolveFromOAuthCallback(ctx, { attempt_id: 'att-1' }, params);
+  if (oauthWidget.resolution !== 'daemon_verified') throw new Error('wrong resolution kind');
+  return oauthWidget.resolveFromDaemonVerification(ctx, { attempt_id: 'att-1' }, params);
 }
 
 beforeEach(() => {
@@ -132,7 +132,7 @@ describe('oauth widget — registry registration', () => {
     const entry = getWidget('oauth');
     expect(entry?.type).toBe('oauth');
     expect(entry?.schemaVersion).toBe(1);
-    expect(entry?.resolution).toBe('oauth_callback');
+    expect(entry?.resolution).toBe('daemon_verified');
   });
 
   it('exposes no submit path — a form body can never resolve it', () => {
@@ -197,7 +197,7 @@ describe('oauth widget — role floor', () => {
   });
 });
 
-describe('oauth widget — resolveFromOAuthCallback', () => {
+describe('oauth widget — resolveFromDaemonVerification', () => {
   it('refuses, and does NOT attach, when no live grant exists', async () => {
     livenessStub.mockResolvedValue({ live: false });
     const { ctx, attachSpy } = makeCtx();

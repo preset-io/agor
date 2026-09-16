@@ -93,13 +93,20 @@ Three properties carry the design:
 ```ts
 type WidgetRegistryEntry<TParams, TSubmit, TResultMeta> =
   | SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta> // resolution?: 'submit'
-  | OAuthCallbackWidgetRegistryEntry<TParams, TResultMeta>; // resolution: 'oauth_callback'
+  | DaemonVerifiedWidgetRegistryEntry<TParams, TResultMeta>; // resolution: 'daemon_verified'
 ```
+
+The discriminant is kind-neutral on purpose. Nothing about the machinery is
+OAuth-specific — a GitHub App install or a device-code flow is the same shape —
+so the next bodiless, daemon-verified widget should not have to register itself
+as an OAuth callback to get it. The resolution ACTION is still `'oauth_callback'`:
+that names the endpoint the request arrived at and is persisted in
+`resolution_claim.action`.
 
 The discriminant is optional on the submit variant, so `env_vars` and
 `gateway_token` registered unchanged.
 
-The OAuth variant carries `resolveFromOAuthCallback(ctx, evidence, params)` and
+The daemon-verified variant carries `resolveFromDaemonVerification(ctx, evidence, params)` and
 **no** `submitSchema`, `buildResultMeta`, or `applySubmit`. Two consequences fall
 out of that rather than being enforced separately:
 
@@ -124,7 +131,7 @@ so a recovery reader can tell which lane owned an abandoned claim.
 
 ### 3.2 The resolution handler
 
-`resolveFromOAuthCallback` performs, in order:
+`resolveFromDaemonVerification` performs, in order:
 
 1. **Role floor.** Shared-mode grants are workspace-wide credentials, so
    `ROLES.ADMIN` — the same floor `oauth-start` applies. Per-user needs only the

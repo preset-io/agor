@@ -12,7 +12,7 @@
  *   3. Idempotency: status MUST be 'pending'.
  *   4. Durably claim `pending -> resolving` with an opaque token.
  *   5. The sole claimant dispatches to the registry — `applySubmit` for a
- *      submit-resolved widget, `resolveFromOAuthCallback` for an
+ *      submit-resolved widget, `resolveFromDaemonVerification` for an
  *      OAuth-resolved one, no external side-effect for dismiss.
  *   6. Queue a system-authored auto-resume task via the existing
  *      `/sessions/:id/prompt` route (the "Never lose a prompt" #1068 path),
@@ -26,7 +26,7 @@
  * design doc for the path-by-path enumeration.
  *
  * The OAuth lane strengthens that rather than widening it: it has no submit
- * body at all. `resolveFromOAuthCallback` receives only an advisory attempt
+ * body at all. `resolveFromDaemonVerification` receives only an advisory attempt
  * id and re-derives the outcome from durable daemon state, so the
  * `result_meta` it returns is composed from rows the daemon read, never from
  * the request. Steps 1-3 and 5-8 are byte-identical for all three actions;
@@ -48,7 +48,7 @@ import type {
 import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
-import { getWidget, type WidgetOAuthCallbackEvidence, type WidgetSubmitCtx } from './registry.js';
+import { getWidget, type WidgetDaemonVerifiedEvidence, type WidgetSubmitCtx } from './registry.js';
 import type { WidgetResolutionStore } from './resolution-store.js';
 
 /**
@@ -92,9 +92,9 @@ export type WidgetResolutionAction =
   /**
    * The browser finished the MCP OAuth flow and is asking the daemon to check.
    * `evidence` is correlation material only — see
-   * {@link WidgetOAuthCallbackEvidence}.
+   * {@link WidgetDaemonVerifiedEvidence}.
    */
-  | { kind: 'oauth_callback'; evidence: WidgetOAuthCallbackEvidence };
+  | { kind: 'oauth_callback'; evidence: WidgetDaemonVerifiedEvidence };
 
 export interface WidgetResolutionResult {
   widget_id: MessageID;
@@ -213,7 +213,7 @@ async function doResolveWidget(
   let resultMeta: unknown | undefined;
   let autoResumePrompt: string | undefined;
   let parsedSubmit: unknown;
-  let oauthEvidence: WidgetOAuthCallbackEvidence | undefined;
+  let oauthEvidence: WidgetDaemonVerifiedEvidence | undefined;
 
   // Context for the registry hooks, built for BOTH paths so a widget can gate
   // who may dismiss it (authorizeDismiss), not just who may submit.
@@ -240,7 +240,7 @@ async function doResolveWidget(
     // `/submit` would be resolved on a client's say-so, with no grant check.
     // Both are refusals, not fallbacks.
     const registeredKind = entry.resolution ?? 'submit';
-    const requestedKind = action.kind === 'oauth_callback' ? 'oauth_callback' : 'submit';
+    const requestedKind = action.kind === 'oauth_callback' ? 'daemon_verified' : 'submit';
     if (registeredKind !== requestedKind) {
       throw new Forbidden(
         `Widget type '${widget.widget_type}' is resolved by '${registeredKind}', ` +
@@ -251,7 +251,7 @@ async function doResolveWidget(
       // No payload to validate: there is nothing in the request this path
       // trusts. The handler reads durable state instead.
       oauthEvidence = action.evidence;
-    } else if (entry.resolution !== 'oauth_callback') {
+    } else if (entry.resolution !== 'daemon_verified') {
       const parsed = entry.submitSchema.safeParse(action.body);
       if (!parsed.success) {
         throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
@@ -299,10 +299,10 @@ async function doResolveWidget(
     // widget: no later admission/completion failure may replay this effect.
     const resolved = entry!;
     try {
-      if (resolved.resolution === 'oauth_callback') {
+      if (resolved.resolution === 'daemon_verified') {
         // Returns its own sanitized result_meta — see the registry docs for
         // why an OAuth resolution cannot derive one from the request.
-        resultMeta = await resolved.resolveFromOAuthCallback(
+        resultMeta = await resolved.resolveFromDaemonVerification(
           ctx,
           oauthEvidence ?? {},
           widget.params
@@ -324,7 +324,7 @@ async function doResolveWidget(
     // throwing builder must not be able to invite a replay of that
     // (`resolution-store.ts`). Unreachable with today's pure builders; the
     // ordering is the guarantee, not their purity.
-    if (resolved.resolution !== 'oauth_callback') {
+    if (resolved.resolution !== 'daemon_verified') {
       resultMeta = resolved.buildResultMeta(parsedSubmit);
     }
     autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
