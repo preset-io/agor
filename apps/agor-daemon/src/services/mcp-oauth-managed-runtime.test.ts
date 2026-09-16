@@ -5,6 +5,7 @@ import type {
   MCPOAuthAttemptID,
   MCPServer,
   MCPServerID,
+  McpOAuthOwner,
   UserID,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +15,10 @@ import {
   type ManagedOAuthRuntimeDependencies,
 } from './mcp-oauth-managed-runtime.js';
 
-const state = vi.hoisted(() => ({ server: null as unknown }));
+const state = vi.hoisted(() => ({
+  server: null as unknown,
+  retired: vi.fn(async (..._args: unknown[]) => null as unknown),
+}));
 vi.mock('@agor/core/db', () => ({
   generateId: () => 'attempt_alpha',
   getMCPEgressGatewayMode: async () => 'enforced',
@@ -38,6 +42,15 @@ vi.mock('@agor/core/db', () => ({
       return undefined;
     }
   },
+  MCPManagedOAuthOutboxRepository: class {
+    getRetiredGrantForReplacement(...args: unknown[]) {
+      return state.retired(...args);
+    }
+  },
+}));
+vi.mock('./mcp-oauth-grant-binding.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./mcp-oauth-grant-binding.js')>()),
+  lockMCPOAuthGrantConfiguration: async () => undefined,
 }));
 vi.mock('./mcp-oauth-managed-identity.js', () => ({
   resolveManagedOAuthLocalSubject: async () => 'cloud_alpha',
@@ -192,8 +205,56 @@ function setup() {
   };
   return { runtime, flows, request, input, order, readRecord: () => record };
 }
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.retired.mockReset().mockResolvedValue(null);
+});
 describe('managed start cell choreography', () => {
+  it('persists the exact retired nonsecret handle only for fresh higher-generation consent', async () => {
+    const f = setup();
+    state.retired.mockImplementation(async (...args) => {
+      const owner = args[0] as McpOAuthOwner;
+      const fingerprint = args[2] as (generation: string) => string;
+      return {
+        owner: {
+          ...owner,
+          attempt_id: 'retired_attempt',
+          grant_generation: '6',
+          config_fingerprint: fingerprint('6'),
+        },
+        handle: 'H'.repeat(43),
+      };
+    });
+    await f.runtime.start(f.input);
+    expect(f.readRecord().managedMetadata?.prepare_request.replacement_handle).toBe('H'.repeat(43));
+    expect(f.order.filter((operation) => operation === 'prepare')).toHaveLength(1);
+  });
+  it.each(['foreign-owner', 'foreign-binding', 'not-older'])(
+    'rejects retired continuity %s before prepare',
+    async (mismatch) => {
+      const f = setup();
+      state.retired.mockImplementation(async (...args) => {
+        const owner = args[0] as McpOAuthOwner;
+        const fingerprint = args[2] as (generation: string) => string;
+        const old = {
+          ...owner,
+          attempt_id: 'retired_attempt',
+          grant_generation: '6',
+          config_fingerprint: fingerprint('6'),
+        };
+        if (mismatch === 'foreign-owner') old.cloud_user_subject = 'other_subject';
+        if (mismatch === 'foreign-binding') old.config_fingerprint = 'a'.repeat(64);
+        if (mismatch === 'not-older') {
+          old.grant_generation = '7';
+          old.config_fingerprint = fingerprint('7');
+        }
+        return { owner: old, handle: 'H'.repeat(43) };
+      });
+      await expect(f.runtime.start(f.input)).rejects.toThrow();
+      expect(f.order).not.toContain('prepare');
+      expect(f.flows.reserveManaged).not.toHaveBeenCalled();
+    }
+  );
   it('reserves generation and sealed material before prepare, commits transaction before activation', async () => {
     const f = setup();
     const result = await f.runtime.start(f.input);

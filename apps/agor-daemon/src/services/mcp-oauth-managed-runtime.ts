@@ -3,6 +3,7 @@ import { createHash, type KeyObject, randomBytes, randomUUID, timingSafeEqual } 
 import {
   generateId,
   getMCPEgressGatewayMode,
+  MCPManagedOAuthOutboxRepository,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   runWithTenantDatabaseScope,
@@ -244,9 +245,52 @@ export class ManagedMCPOAuthRuntime {
       if (owner[key] !== selectors[key]) throw new ManagedOAuthUnavailableError();
     }
     const verifier = randomBytes(32).toString('base64url');
-    const replacement = await runWithTenantDatabaseScope(d.db, input.tenantId, (db) =>
-      new UserMCPOAuthTokenRepository(db).getManagedMetadata(input.userId, input.serverId)
-    );
+    const replacement = await runWithTenantDatabaseScope(d.db, input.tenantId, async (db) => {
+      await lockMCPOAuthGrantConfiguration(db, input.tenantId, input.serverId);
+      const fresh = await new MCPServerRepository(db).findById(input.serverId);
+      if (!fresh || fresh.owner_user_id !== input.userId) throw new ManagedOAuthUnavailableError();
+      await assertManagedOAuthLocalOwner(db, input.tenantId, input.userId, d.identity, owner);
+      const fingerprintForGeneration = (grantGeneration: string) =>
+        fingerprintManagedMCPOAuthGrantConfiguration(d.masterSecret, fresh, profile, {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          cloudSubject: subject,
+          grantGeneration,
+        });
+      if (!sameDigest(fingerprintForGeneration(owner.grant_generation), owner.config_fingerprint))
+        throw new ManagedOAuthUnavailableError();
+      const prior =
+        (await new UserMCPOAuthTokenRepository(db).getManagedMetadata(
+          input.userId,
+          input.serverId
+        )) ??
+        (await new MCPManagedOAuthOutboxRepository(db).getRetiredGrantForReplacement(
+          owner,
+          d.identity,
+          fingerprintForGeneration
+        ));
+      if (!prior) return null;
+      // This is only a nonsecret account-continuity selector, not authority to
+      // reopen the old grant. The broker still admits explicit fresh consent.
+      if (
+        BigInt(prior.owner.grant_generation) >= BigInt(owner.grant_generation) ||
+        !sameDigest(
+          fingerprintForGeneration(prior.owner.grant_generation),
+          prior.owner.config_fingerprint
+        ) ||
+        !equalOwner(
+          {
+            ...prior.owner,
+            attempt_id: owner.attempt_id,
+            grant_generation: owner.grant_generation,
+            config_fingerprint: owner.config_fingerprint,
+          },
+          owner
+        )
+      )
+        throw new ManagedOAuthUnavailableError();
+      return prior.handle;
+    });
     const prepare = {
       protocol_version: 1 as const,
       operation_id: randomUUID(),
@@ -255,7 +299,7 @@ export class ManagedMCPOAuthRuntime {
       pkce_challenge: createHash('sha256').update(verifier).digest('base64url'),
       method: 'S256' as const,
       client_nonce_hash: mcpOAuthSha256(input.clientNonce),
-      replacement_handle: replacement?.handle ?? null,
+      replacement_handle: replacement,
     };
     await this.current(owner, 'new_starts');
     const record = await d.flows.reserveManaged({
