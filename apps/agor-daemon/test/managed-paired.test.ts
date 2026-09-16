@@ -19,7 +19,11 @@ import {
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import { register } from 'tsx/esm/api';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { type Browser, chromium } from '../../agor-ui/src/test/managed-runtime-acceptance/browser';
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+} from '../../agor-ui/src/test/managed-runtime-acceptance/browser';
 import { serveBundledManagedAcceptanceUI } from '../../agor-ui/src/test/managed-runtime-acceptance/serve-bundled-ui';
 import {
   PAIRED_RUNTIME_ORIGIN,
@@ -90,6 +94,7 @@ describe('actual paired provider browser and registered runtime', () => {
   let runtime: Awaited<ReturnType<typeof startManagedPairedRuntime>>;
   let ui: Awaited<ReturnType<typeof serveBundledManagedAcceptanceUI>>;
   let browser: Browser;
+  let authenticatedState: Awaited<ReturnType<BrowserContext['storageState']>> | undefined;
   let unregisterSourceLoader: (() => void) | undefined;
   beforeAll(async () => {
     unregisterSourceLoader = register();
@@ -207,7 +212,7 @@ describe('actual paired provider browser and registered runtime', () => {
         const readiness = await runtime.read('mcp-catalog/readiness', entry.name);
         expect(readiness.managed_oauth?.available).toBe(true);
       }
-      const context = await browser.newContext();
+      const context = await browser.newContext({ storageState: authenticatedState });
       context.setDefaultTimeout(20000);
       try {
         const page = await context.newPage();
@@ -218,8 +223,11 @@ describe('actual paired provider browser and registered runtime', () => {
             `request failed: ${new URL(request.url()).pathname} (${request.failure()?.errorText})`
           )
         );
-        await page.goto(runtime.seed.loginUrl);
-        await page.getByText('Test Cloud session ready', { exact: true }).waitFor();
+        if (!authenticatedState) {
+          await page.goto(runtime.seed.loginUrl);
+          await page.getByText('Test Cloud session ready', { exact: true }).waitFor();
+          authenticatedState = await context.storageState();
+        }
         await page.goto(PAIRED_RUNTIME_ORIGIN);
         for (const entry of catalog.filter(
           (item) => item.name === `test.paired.${providerName}/mcp`
