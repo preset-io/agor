@@ -9,12 +9,18 @@ import {
   type MCPManagedOAuthRetirementStatus,
   managedOAuthLocalGeneration,
 } from '../../types/mcp-managed-oauth';
-import { McpOAuthEpochSchema, McpOAuthIdSchema } from '../../types/mcp-managed-oauth-contract';
+import {
+  McpOAuthEpochSchema,
+  McpOAuthIdSchema,
+  McpOAuthOpaqueSchema,
+  type McpOAuthOwner,
+  McpOAuthOwnerSchema,
+} from '../../types/mcp-managed-oauth-contract';
 import type { Database } from '../client';
 import { executeRaw, rawRows } from '../database-wrapper';
 import { openBoundSecretAsync } from '../oauth-secret-envelope';
 import { assertTenantWriteGateGeneration } from '../tenant-write-gate';
-import { lockTenantAuthoritySubject } from './authority-primitives';
+import { lockMCPManagedSubject, lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 import { grantSecretBinding } from './user-mcp-oauth-tokens';
 
@@ -37,6 +43,97 @@ export class MCPManagedOAuthOutboxRepository {
   private async lock(tenantId: string): Promise<void> {
     await lockTenantAuthoritySubject(this.db, tenantId, `mcp-managed-cleanup:${tenantId}`);
   }
+  /**
+   * Nonsecret continuity selector, NOT proof of provider revocation or authority
+   * to reconnect. Caller holds its configuration lock and supplies the trusted
+   * deployment identity policy and current configuration HMAC at the OLD generation.
+   * Cloud must still admit fresh higher-generation consent under current authority.
+   * Never fall back behind a newer mismatching or unfinished retired generation.
+   */
+  async getRetiredGrantForReplacement(
+    currentOwner: McpOAuthOwner,
+    identity: { provider: string; issuer: string },
+    configurationFingerprintForGeneration: (generation: string) => string
+  ): Promise<Pick<MCPManagedOAuthGrantMetadata, 'owner' | 'handle'> | null> {
+    const current = McpOAuthOwnerSchema.parse(currentOwner);
+    if (!identity.provider || !identity.issuer)
+      throw new RepositoryError('Managed replacement requires deployment identity policy');
+    await lockMCPManagedSubject(
+      this.db,
+      current.workspace_id,
+      current.cell_local_user_id,
+      current.cloud_user_subject,
+      current.cell_id
+    );
+    const identities = rawRows(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT subject FROM public.user_external_identities
+      WHERE tenant_id=${current.workspace_id} AND user_id=${current.cell_local_user_id}
+        AND provider=${identity.provider} AND issuer=${identity.issuer} FOR SHARE`
+      )
+    );
+    if (identities.length !== 1 || identities[0].subject !== current.cloud_user_subject)
+      return null;
+    await this.lock(current.workspace_id);
+    // Projection intentionally never selects ciphertext, tokens, signed receipts,
+    // permits, or the metadata blob. Completion also includes terminal uncertainty
+    // or expired cleanup material: only the broker can decide re-consent safety.
+    const rows = rawRows(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT o.managed_metadata->'owner' AS owner,o.managed_metadata->>'handle' AS handle,
+        o.grant_generation,o.attempt_id,o.completed_at,
+        o.cleanup_authorization_id IS NOT NULL AND o.cleanup_operation_id IS NOT NULL AS delivered,
+        o.sealed_material IS NULL AS erased
+      FROM public.mcp_managed_oauth_outbox o
+      WHERE o.tenant_id=${current.workspace_id} AND o.user_id=${current.cell_local_user_id}
+        AND o.mcp_server_id=${current.server_id} AND o.kind='close'
+        AND EXISTS (SELECT 1 FROM public.mcp_servers s
+          WHERE s.tenant_id=o.tenant_id AND s.mcp_server_id=o.mcp_server_id AND s.owner_user_id=o.user_id
+            AND s.data->'auth'->>'oauth_client_mode'='cloud_managed_v1' AND s.data->'auth'->>'oauth_mode'='per_user'
+            AND s.data->'auth'->'oauth_managed_profile' @> ${JSON.stringify({
+              profile_id: current.profile_id,
+              semantic_version: current.profile_version,
+              environment: current.environment,
+              region: current.residency_region,
+              registry_digest: current.catalog_digest,
+            })}::jsonb)
+        AND NOT EXISTS (SELECT 1 FROM public.user_mcp_oauth_tokens t
+          WHERE t.tenant_id=o.tenant_id AND t.user_id=o.user_id AND t.mcp_server_id=o.mcp_server_id)
+        AND NOT EXISTS (SELECT 1 FROM public.mcp_managed_oauth_outbox pending
+          WHERE pending.tenant_id=o.tenant_id AND pending.user_id=o.user_id
+            AND pending.mcp_server_id=o.mcp_server_id AND pending.completed_at IS NULL)
+      ORDER BY length(o.grant_generation) DESC,o.grant_generation COLLATE "C" DESC,o.outbox_id DESC LIMIT 2`
+      )
+    );
+    const row = rows[0];
+    if (!row?.completed_at || row.delivered !== true || row.erased !== true) return null;
+    const old = McpOAuthOwnerSchema.parse(row.owner);
+    if (
+      old.grant_generation !== row.grant_generation ||
+      old.attempt_id !== row.attempt_id ||
+      rows[1]?.grant_generation === row.grant_generation ||
+      BigInt(old.grant_generation) >= BigInt(current.grant_generation)
+    )
+      return null;
+    // All remaining owner selectors/epochs (not a reduced owner tuple) must match.
+    for (const field of Object.keys(current) as (keyof McpOAuthOwner)[]) {
+      if (
+        field !== 'attempt_id' &&
+        field !== 'grant_generation' &&
+        field !== 'config_fingerprint' &&
+        old[field] !== current[field]
+      )
+        return null;
+    }
+    if (configurationFingerprintForGeneration(old.grant_generation) !== old.config_fingerprint)
+      return null;
+    return { owner: old, handle: McpOAuthOpaqueSchema.parse(row.handle) };
+  }
+
   async listPending(
     tenantId: string,
     limit = 100,
