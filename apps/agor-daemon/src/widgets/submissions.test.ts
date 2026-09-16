@@ -9,6 +9,9 @@
  *   - `auto_resume: false` skips the task creation
  *   - Dismissal path uses `buildDismissedPrompt`
  *   - WebSocket broadcast: `widget:resolved` fires
+ *   - OAuth lane: `/oauth-resolve` dispatches to `resolveFromOAuthCallback`,
+ *     reuses the SAME claim / auto-resume / broadcast machinery, and the two
+ *     resolution kinds cannot be reached through each other's endpoint
  *
  * No FeathersJS bootstrap — the resolver is pure-ish over a `deps.app`
  * mock, so we exercise the full state machine with a hand-rolled stub.
@@ -890,5 +893,184 @@ describe('widget registry', () => {
         buildDismissedPrompt: () => '',
       })
     ).toThrow(/already registered/);
+  });
+});
+
+/**
+ * A widget type resolved by an OAuth callback rather than a submit body.
+ *
+ * Registered under `env_vars` so it can reuse `makeFixtures()`; the type name
+ * is irrelevant to what these tests check, which is the dispatch.
+ */
+function registerOAuthTestWidget(
+  resolveFromOAuthCallback = vi.fn(async (_ctx: unknown, _evidence: unknown, _params: unknown) => ({
+    mcp_server_id: 'srv-1',
+    name: 'Notion',
+    oauth_mode: 'per_user' as const,
+    attached: true,
+  }))
+) {
+  const entry: WidgetRegistryEntry<
+    { names: string[]; reason: string },
+    never,
+    { mcp_server_id: string; name: string; oauth_mode: 'per_user'; attached: boolean }
+  > = {
+    type: 'env_vars',
+    resolution: 'oauth_callback',
+    schemaVersion: 1,
+    paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
+    resolveFromOAuthCallback,
+    buildAutoResumePrompt: (rm) => `[Agor] User connected "${rm.name}" (attached: ${rm.attached}).`,
+    buildDismissedPrompt: () => `[Agor] User declined to connect.`,
+  };
+  registerWidget(entry);
+  return { entry, resolveFromOAuthCallback };
+}
+
+describe('resolveWidget — OAuth resolution lane', () => {
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+  });
+
+  const deps = (app: unknown, resolutionStore: unknown) => ({
+    app: app as never,
+    resolutionStore: resolutionStore as never,
+    runInTenantDatabaseScope,
+    resolveSessionPromptAuthority: allowPrompt,
+  });
+
+  it('dispatches to resolveFromOAuthCallback and reuses the shared post-resolution machinery', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, events, resolutionStore } = harness;
+    const { resolveFromOAuthCallback } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: { attempt_id: 'att-9' } },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    // The advisory attempt id reaches the handler; the widget params do too.
+    expect(resolveFromOAuthCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ submitterUserId: 'creator-user-id' }),
+      { attempt_id: 'att-9' },
+      { names: ['HUBSPOT_API_KEY'], reason: 'call Hubspot' }
+    );
+
+    // Same terminal status, same durable result_meta, same auto-resume task,
+    // same broadcast — none of it duplicated for this lane.
+    expect(result).toMatchObject({ status: 'submitted', auto_resume_queued: true });
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('submitted');
+    expect(harness.currentMessage.metadata?.widget?.result_meta).toMatchObject({ attached: true });
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    const promptData = prompt?.data as { prompt: string; idempotencyTaskId: string } | undefined;
+    expect(promptData?.prompt).toContain('Notion');
+    expect(promptData?.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
+    expect(events.map((e) => e.event)).toContain('widget:resolved');
+  });
+
+  it('records the claim as an oauth_callback so a recovery reader knows which lane was in flight', async () => {
+    const fixtures = makeFixtures();
+    const claimed: string[] = [];
+    const { app, resolutionStore } = makeApp(fixtures);
+    const originalClaim = resolutionStore.claim.bind(resolutionStore);
+    resolutionStore.claim = (async (id: never, input: { action: string }) => {
+      claimed.push(input.action);
+      return originalClaim(id, input as never);
+    }) as typeof resolutionStore.claim;
+    registerOAuthTestWidget();
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+    expect(claimed).toEqual(['oauth_callback']);
+  });
+
+  it('refuses a submit-resolved widget reached through the OAuth endpoint', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { applySubmit } = registerTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+      // Otherwise the submit payload validation would be skipped entirely.
+    ).rejects.toThrow(/resolved by 'submit'/);
+    expect(applySubmit).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+  });
+
+  it('refuses an OAuth-resolved widget reached through the submit endpoint', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromOAuthCallback } = registerOAuthTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { connected: true } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+      // Otherwise a client could resolve an OAuth widget by asserting success.
+    ).rejects.toThrow(/resolved by 'oauth_callback'/);
+    expect(resolveFromOAuthCallback).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+  });
+
+  it('reopens the widget for a retry when the grant check refuses', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    registerOAuthTestWidget(
+      vi.fn(async () => {
+        throw new BadRequest('Sign-in has not completed');
+      }) as never
+    );
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/has not completed/);
+
+    // Back to pending with a secret-free diagnosis, and nothing queued.
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+    expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeDefined();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('still dismisses through the shared dismiss path', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'dismiss' },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+    expect(result.status).toBe('dismissed');
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('dismissed');
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    expect((prompt?.data as { prompt?: string } | undefined)?.prompt).toContain(
+      'declined to connect'
+    );
   });
 });

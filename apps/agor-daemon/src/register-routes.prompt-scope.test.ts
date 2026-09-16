@@ -93,7 +93,11 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('does not keep a route-wide tenant transaction over widget external work', () => {
-    for (const path of ["'/widgets/:id/submit'", "'/widgets/:id/dismiss'"]) {
+    for (const path of [
+      "'/widgets/:id/submit'",
+      "'/widgets/:id/dismiss'",
+      "'/widgets/:id/oauth-resolve'",
+    ]) {
       const start = source.indexOf(path);
       const route = source.slice(start - 100, start + 900);
       expect(start).toBeGreaterThan(0);

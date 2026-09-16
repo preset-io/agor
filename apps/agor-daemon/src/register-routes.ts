@@ -3735,6 +3735,36 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // The OAuth lane. The browser has finished the provider flow and is asking
+  // the daemon to check; it supplies no server id and no payload worth
+  // trusting, so everything that decides the outcome is read server-side from
+  // the pinned widget params and the persisted grant. See
+  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  registerLongAuthenticatedRoute(
+    app,
+    '/widgets/:id/oauth-resolve',
+    {
+      async create(data: { attempt_id?: unknown } | undefined, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to resolve a widget');
+        }
+        const attemptId = typeof data?.attempt_id === 'string' ? data.attempt_id : undefined;
+        return resolveWidget(
+          widgetId,
+          { kind: 'oauth_callback', evidence: { attempt_id: attemptId } },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'resolve OAuth widgets' },
+    },
+    requireAuth
+  );
+
   registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/dismiss',
