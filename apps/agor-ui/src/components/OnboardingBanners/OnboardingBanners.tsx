@@ -12,9 +12,10 @@
 
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
-import { Alert, Button, Space } from 'antd';
+import { Alert, Button, Flex, Space, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -64,6 +65,7 @@ function AmberBanner({
   docsHref,
   onDismiss,
   dismissLabel,
+  stacked,
 }: {
   message: string;
   buttonLabel?: string;
@@ -71,38 +73,47 @@ function AmberBanner({
   docsHref?: string;
   onDismiss: () => void;
   dismissLabel: string;
+  /** Mobile: stack the message above a wrapping actions row instead of a squished side column. */
+  stacked?: boolean;
 }) {
+  const { token } = theme.useToken();
   const hasAction = !!docsHref || (!!buttonLabel && !!onClick);
+  const actions = hasAction ? (
+    <Space size="small" wrap={stacked}>
+      {docsHref && (
+        <Button type="link" size="small" href={docsHref} target="_blank" rel="noopener noreferrer">
+          Documentation
+        </Button>
+      )}
+      {buttonLabel && onClick && (
+        <Button type="primary" size="small" onClick={onClick}>
+          {buttonLabel}
+        </Button>
+      )}
+    </Space>
+  ) : undefined;
+  const closable = { closeIcon: true, onClose: onDismiss, 'aria-label': dismissLabel } as const;
+
+  // On a phone the horizontal message|action|close row squishes the message to
+  // a per-word tower, so fold the message and actions into one full-width column.
+  if (stacked) {
+    return (
+      <Alert
+        banner
+        showIcon
+        type="warning"
+        closable={closable}
+        title={
+          <Flex vertical gap={token.marginXS}>
+            <span>{message}</span>
+            {actions}
+          </Flex>
+        }
+      />
+    );
+  }
   return (
-    <Alert
-      banner
-      showIcon
-      type="warning"
-      title={message}
-      closable={{ closeIcon: true, onClose: onDismiss, 'aria-label': dismissLabel }}
-      action={
-        hasAction ? (
-          <Space size="small">
-            {docsHref && (
-              <Button
-                type="link"
-                size="small"
-                href={docsHref}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Documentation
-              </Button>
-            )}
-            {buttonLabel && onClick && (
-              <Button type="primary" size="small" onClick={onClick}>
-                {buttonLabel}
-              </Button>
-            )}
-          </Space>
-        ) : undefined
-      }
-    />
+    <Alert banner showIcon type="warning" title={message} closable={closable} action={actions} />
   );
 }
 
@@ -120,6 +131,7 @@ export function OnboardingBanners({
   connectionReady,
 }: OnboardingBannersProps) {
   const catalog = useMCPCatalogModal();
+  const isMobile = useIsMobileViewport();
   const [probeResult, setProbeResult] = useState<{ owner: string; state: ProbeState }>({
     owner: '',
     state: ProbeState.Unknown,
@@ -351,6 +363,7 @@ export function OnboardingBanners({
           docsHref="https://agor.live/guide"
           onDismiss={dismissCredentialWarning}
           dismissLabel={`Snooze ${displayName} warning for 24 hours`}
+          stacked={isMobile}
         />
       );
     case BannerDecision.KeyInvalid:
@@ -373,31 +386,48 @@ export function OnboardingBanners({
           onClick={openCredentialSettings}
           onDismiss={dismissCredentialWarning}
           dismissLabel={`Snooze ${displayName} warning for 24 hours`}
+          stacked={isMobile}
         />
       );
-    case BannerDecision.Integrations:
-      return (
+    case BannerDecision.Integrations: {
+      const integrationsMessage =
+        'Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.';
+      const integrationsActions = (
+        <Space size="small" wrap={isMobile}>
+          <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
+            Maybe later
+          </Button>
+          <Button
+            type="primary"
+            size="small"
+            onClick={onOpenCatalog ?? (() => catalog?.openCatalog())}
+          >
+            Browse the catalog
+          </Button>
+        </Space>
+      );
+      return isMobile ? (
         <Alert
           banner
           showIcon
           type="info"
-          title="Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues."
-          action={
-            <Space size="small">
-              <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
-                Maybe later
-              </Button>
-              <Button
-                type="primary"
-                size="small"
-                onClick={onOpenCatalog ?? (() => catalog?.openCatalog())}
-              >
-                Browse the catalog
-              </Button>
+          title={
+            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+              <span>{integrationsMessage}</span>
+              {integrationsActions}
             </Space>
           }
         />
+      ) : (
+        <Alert
+          banner
+          showIcon
+          type="info"
+          title={integrationsMessage}
+          action={integrationsActions}
+        />
       );
+    }
     default: {
       const exhaustive: never = decision;
       return exhaustive;

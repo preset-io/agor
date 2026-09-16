@@ -23,6 +23,16 @@ describe('MobileTabBar', () => {
     expect(screen.getByRole('button', { name: 'Board' })).not.toHaveAttribute('aria-current');
   });
 
+  it('is icon-only: destination names exist as aria-labels, not visible text', () => {
+    render(<MobileTabBar activeTab="comments" onSelect={vi.fn()} />);
+    // The active tab is indicated by the highlight + colour, never a text label,
+    // so even the active destination renders no visible label text.
+    for (const name of ['Home', 'Board', 'Comments', 'More']) {
+      expect(screen.queryByText(name)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
+  });
+
   it('shows the primary assistant emoji when provided', () => {
     render(<MobileTabBar activeTab={null} onSelect={vi.fn()} askEmoji="🦊" />);
     expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toHaveTextContent(

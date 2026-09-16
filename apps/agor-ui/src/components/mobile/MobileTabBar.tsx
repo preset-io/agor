@@ -5,7 +5,7 @@ import {
   MenuOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Flex, Typography, theme } from 'antd';
+import { Badge, Button, Flex, theme } from 'antd';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MOBILE_TOUCH_TARGET as TOUCH_TARGET } from './constants';
 
@@ -31,9 +31,10 @@ interface TabDef {
 
 /**
  * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]
- * . Comments . More. The active destination expands into an icon+label pill;
- * the others stay icon-only. Ask is the raised center action. Safe-area aware;
- * active state is marked by the pill + colour + aria-current (not colour alone).
+ * . Comments . More. Icon-only: the active destination is marked by a rounded
+ * highlight behind its icon plus colorPrimary (not text), so no label can wrap.
+ * Ask is the raised center action. Safe-area aware; every tab keeps an
+ * aria-label and the active one aria-current so names are still announced.
  */
 export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
@@ -65,41 +66,42 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
         aria-current={active ? 'page' : undefined}
         onClick={() => onSelect(tab.key)}
         style={{
-          // Active pill sizes to its icon+label content; inactive tabs stay at
-          // their icon width so the long 'Comments' label never wraps or clips.
-          flex: active ? '1 1 auto' : '0 0 auto',
+          // Icon-only: every slot is an equal-width tap target (>=44px), so no
+          // label can wrap or unbalance the row. Screen readers still get the
+          // name via aria-label + aria-current.
+          flex: 1,
           minWidth: TOUCH_TARGET,
           minHeight: TOUCH_TARGET,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: token.marginXXS,
-          paddingInline: token.paddingXS,
+          padding: 0,
           border: 'none',
-          background: active ? token.colorPrimaryBg : 'transparent',
-          borderRadius: token.borderRadiusLG,
+          background: 'transparent',
           cursor: 'pointer',
-          color: active ? token.colorPrimary : token.colorTextSecondary,
         }}
       >
-        {/* Badge rides the icon corner (not the label) so it never overlaps text. */}
+        {/* Badge rides the icon corner. */}
         <Badge count={tab.badge ?? 0} size="small" offset={[2, -2]}>
-          <span style={{ fontSize: token.fontSizeHeading5, color: 'inherit', lineHeight: 1 }}>
+          {/* Fixed rounded-square highlight behind the active icon (icon-sized,
+              not label-width) so the active state reads without any text. */}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: token.controlHeightLG,
+              height: token.controlHeightLG,
+              borderRadius: token.borderRadius,
+              background: active ? token.colorPrimaryBg : 'transparent',
+              color: active ? token.colorPrimary : token.colorTextSecondary,
+              fontSize: token.fontSizeHeading5,
+              lineHeight: 1,
+            }}
+          >
             {tab.icon}
           </span>
         </Badge>
-        {active && (
-          <Typography.Text
-            style={{
-              fontSize: token.fontSizeSM,
-              color: 'inherit',
-              fontWeight: 600,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {tab.label}
-          </Typography.Text>
-        )}
       </button>
     );
   };
