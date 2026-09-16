@@ -3,10 +3,12 @@ import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
   eq,
   GatewayChannelRepository,
   generateId,
   MCPServerRepository,
+  MessagesRepository,
   mcpServers,
   RepoRepository,
   runMigrations,
@@ -54,6 +56,7 @@ import {
 import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import { issueMCPOAuthConnectLink } from './services/mcp-oauth-connect-delivery.js';
 import * as oauthUse from './services/mcp-oauth-use.js';
 import { createSocketIOConfig } from './setup/socketio.js';
 import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
@@ -458,11 +461,27 @@ async function createHarness(
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
     deployment?: RegisterServicesContext['deployment'];
+    /**
+     * Arm the daemon's tenant database scope guard for this harness.
+     *
+     * Off by default because most of this file's fixtures predate the guard
+     * and reach the database through paths that do not yet open a scope. A
+     * suite that opts in gets the production guard: any repository read its
+     * service performs outside a tenant scope throws instead of silently
+     * succeeding, which is what a `:memory:` SQLite database would otherwise
+     * let through.
+     */
+    requireTenantScope?: boolean;
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
-  const db = rawDb as unknown as TenantScopeAwareDatabase;
+  const db = (options.requireTenantScope
+    ? createTenantScopedDatabaseProxy(rawDb, {
+        requireScope: true,
+        label: 'sqlite oauth harness',
+      })
+    : rawDb) as unknown as TenantScopeAwareDatabase;
   const user = await new UsersRepository(rawDb).create({
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
@@ -1331,6 +1350,220 @@ describe('Slack MCP recovery authenticated route', () => {
       attemptId: started.attempt_id,
       success: true,
     });
+  });
+});
+/**
+ * The connect lane's browser preflight, with the daemon's tenant database
+ * scope guard armed.
+ *
+ * `/mcp-oauth-connect` is registered outside `TENANT_OWNED_SERVICE_PATHS`, so
+ * nothing upstream opens a tenant database scope for it: the service has to
+ * open its own. A harness without the guard cannot see that — a `:memory:`
+ * SQLite database answers an unscoped read happily — which is exactly how the
+ * missing scope reached a running daemon, where every valid link came back as
+ * the lane's generic `Forbidden`.
+ */
+describe('Slack MCP connect authenticated route', () => {
+  async function seedConnect(harness: SQLiteHarness, options: { ageMs?: number } = {}) {
+    const repo = await new RepoRepository(harness.rawDb).create({
+      slug: `slack-connect-${generateId()}`,
+      name: 'Slack connect repo',
+      repo_type: 'local',
+      local_path: `/tmp/slack-connect-${generateId()}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(harness.rawDb).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `slack-connect-${generateId()}`,
+      ref: 'main',
+      branch_unique_id: 100_000 + Math.floor(Math.random() * 1_000_000_000),
+      path: `/tmp/slack-connect-${generateId()}/branch`,
+      created_by: harness.user.user_id,
+    });
+    const session = await new SessionRepository(harness.rawDb).create({
+      session_id: generateId(),
+      branch_id: branch.branch_id,
+      agentic_tool: 'claude-code',
+      created_by: harness.user.user_id,
+    });
+    const channel = await new GatewayChannelRepository(harness.rawDb).create({
+      name: 'Slack connect',
+      channel_type: 'slack',
+      enabled: true,
+      created_by: harness.user.user_id,
+      agor_user_id: harness.user.user_id,
+      target_branch_id: branch.branch_id,
+      // Alignment on: without it the lane refuses at issue, so a test that
+      // left it off would prove nothing about the scope.
+      config: { align_slack_users: true, bot_token: 'xoxb-test-only', app_token: 'xapp-test-only' },
+    });
+    const threadId = 'C2515-1756200000.000002';
+    await new ThreadSessionMapRepository(harness.rawDb).create({
+      channel_id: channel.id,
+      thread_id: threadId,
+      session_id: session.session_id,
+      branch_id: branch.branch_id,
+    });
+    const taskId = generateId();
+    await new TaskRepository(harness.rawDb).create({
+      task_id: taskId,
+      session_id: session.session_id,
+      created_by: harness.user.user_id,
+      full_prompt: 'connect me to this MCP server',
+      status: TaskStatus.COMPLETED,
+      message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+      git_state: { ref_at_start: 'main', sha_at_start: 'slack-connect' },
+      tool_use_count: 0,
+      metadata: {
+        gateway_task_source: {
+          gateway_channel_id: channel.id,
+          channel_type: 'slack',
+          thread_id: threadId,
+          provider_user_id: 'U2515',
+          slack_team_id: 'T2515',
+          slack_channel_id: 'C2515',
+        },
+      },
+    });
+    const widgetId = generateId();
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.create({
+      message_id: widgetId,
+      session_id: session.session_id,
+      task_id: taskId,
+      type: 'widget_request',
+      role: 'system',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content: 'Connect this server',
+      content_preview: 'Widget: oauth',
+      metadata: {
+        widget: {
+          widget_type: 'oauth',
+          widget_id: widgetId,
+          schema_version: 1,
+          status: 'pending',
+          requested_at: new Date().toISOString(),
+          auto_resume: true,
+          params: {
+            mcpServerId: harness.server.mcp_server_id,
+            serverName: 'Saved OAuth server',
+            oauthMode: 'per_user',
+            reason: 'Read the roadmap page.',
+            permissionDisclosure: 'Agor will read the pages you share with it.',
+          },
+        },
+      },
+    });
+    const issued = await issueMCPOAuthConnectLink(
+      {
+        repositories: {
+          sessions: new SessionRepository(harness.rawDb),
+          users: new UsersRepository(harness.rawDb),
+          channels: new GatewayChannelRepository(harness.rawDb),
+          servers: new MCPServerRepository(harness.rawDb),
+          threadMap: new ThreadSessionMapRepository(harness.rawDb),
+        },
+        messages,
+        tasks: new TaskRepository(harness.rawDb),
+        masterSecret: process.env.AGOR_MASTER_SECRET!,
+        baseUrl: 'https://agor.example.test',
+      },
+      {
+        tenantId: 'default',
+        widgetId,
+        now: new Date(Date.now() - (options.ageMs ?? 0)),
+      }
+    );
+    if (!issued) throw new Error('Expected a connect link');
+    return {
+      widgetId,
+      token: decodeURIComponent(issued.url.split('#token=')[1]),
+      widgetStatus: async () =>
+        (await messages.findById(widgetId))?.metadata?.widget?.status ?? 'missing',
+      delivery: async () => (await messages.findById(widgetId))?.metadata?.widget?.slack_connect,
+    };
+  }
+
+  it('preflights a live link for the user it was issued to', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const preflight = await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness));
+
+    expect(preflight).toMatchObject({
+      state: 'connect_required',
+      widget_id: seeded.widgetId,
+      server_name: 'Saved OAuth server',
+      oauth_mode: 'per_user',
+      reason: 'Read the roadmap page.',
+      permission_disclosure: 'Agor will read the pages you share with it.',
+    });
+    expect(preflight.return_to_slack_url).toContain('team=T2515');
+    // A preflight reads; it never consumes.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'a signed-in user who is not the claims subject',
+      async (harness: SQLiteHarness, token: string) => {
+        const other = await new UsersRepository(harness.rawDb).create({
+          email: `slack-connect-other-${generateId()}@example.test`,
+          role: 'admin',
+        });
+        return {
+          token,
+          params: { ...paramsFor(harness), user: other } as AuthenticatedParams,
+        };
+      },
+    ],
+    [
+      'a tampered token',
+      async (harness: SQLiteHarness, token: string) => ({
+        token: `${token.slice(0, -5)}AAAAA`,
+        params: paramsFor(harness),
+      }),
+    ],
+  ])('refuses %s and leaves the widget pending', async (_name, mutate) => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const attempt = await mutate(harness, seeded.token);
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: attempt.token }, attempt.params)
+    ).rejects.toMatchObject({
+      code: 403,
+      message: 'This MCP connect action is invalid, expired, or superseded.',
+    });
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it('refuses an expired link and leaves the widget pending', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    // Minted a minute past its own maximum lifetime: the sealed claims and the
+    // stored delivery still agree, so expiry is the only thing left to refuse.
+    const seeded = await seedConnect(harness, { ageMs: 11 * 60_000 });
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).rejects.toMatchObject({ code: 403 });
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
   });
 });
 

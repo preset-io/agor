@@ -5124,92 +5124,104 @@ export async function registerMCPServices(
       if (!tenantId || !callerId || !mcpOAuthConnectClaimsMatchCaller(claims, tenantId, callerId)) {
         throw new Error(genericFailure);
       }
-      const messagesRepository = new MessagesRepository(db);
-      const message = await messagesRepository.findById(claims.widget_id);
-      const pending = readPendingOAuthConnectWidget(message);
-      if (
-        !message ||
-        !pending ||
-        message.session_id !== claims.session_id ||
-        message.task_id !== claims.task_id ||
-        pending.params.mcpServerId !== claims.mcp_server_id ||
-        pending.params.oauthMode !== claims.oauth_mode ||
-        !mcpOAuthConnectClaimsMatchDelivery(claims, pending.widget.slack_connect, tenantId)
-      ) {
-        throw new Error(genericFailure);
-      }
-      const delivery = pending.widget.slack_connect as MCPSlackConnectDelivery;
+      // Every read and the consume CAS below run inside one tenant database
+      // scope, opened here at the call site. `/mcp-oauth-connect` and
+      // `/mcp-servers/oauth-start` are registered outside the
+      // `TENANT_OWNED_SERVICE_PATHS` inventory — deliberately, because they
+      // cross the provider boundary and must not hold an HTTP-long
+      // transaction — so nothing upstream arms the scope for them. Without
+      // this, the scope guard refuses the very first repository read and the
+      // lane answers a valid link with its generic `Forbidden`. Entering a
+      // scope that is already open is a no-op, so the `oauth-start` call site
+      // (which opens its own) is unaffected. Found by driving the real lane.
+      return await runInOAuthTenantScope(db, tenantId, async () => {
+        const messagesRepository = new MessagesRepository(db);
+        const message = await messagesRepository.findById(claims.widget_id);
+        const pending = readPendingOAuthConnectWidget(message);
+        if (
+          !message ||
+          !pending ||
+          message.session_id !== claims.session_id ||
+          message.task_id !== claims.task_id ||
+          pending.params.mcpServerId !== claims.mcp_server_id ||
+          pending.params.oauthMode !== claims.oauth_mode ||
+          !mcpOAuthConnectClaimsMatchDelivery(claims, pending.widget.slack_connect, tenantId)
+        ) {
+          throw new Error(genericFailure);
+        }
+        const delivery = pending.widget.slack_connect as MCPSlackConnectDelivery;
 
-      const task = await new TaskRepository(db).findById(claims.task_id);
-      if (!gatewaySourceMatchesConnectClaims(task, claims)) throw new Error(genericFailure);
+        const task = await new TaskRepository(db).findById(claims.task_id);
+        if (!gatewaySourceMatchesConnectClaims(task, claims)) throw new Error(genericFailure);
 
-      const authority = await readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
-        principalUserId: claims.sub,
-        credentialUserId: claims.credential_user_id,
-        sessionId: claims.session_id,
-        gatewayChannelId: claims.gateway_channel_id,
-        gatewayConfigGeneration: claims.gateway_config_generation,
-        slackChannelId: claims.slack_channel_id,
-        slackThreadId: claims.slack_thread_id,
-        mcpServerId: claims.mcp_server_id,
-        mcpServerConfigVersion: claims.mcp_server_config_version,
-      });
-      if (
-        !authority ||
-        authority.session.created_by !== claims.session_owner_user_id ||
-        (authority.server.auth?.oauth_mode ?? 'per_user') !== claims.oauth_mode ||
-        !isMCPServerUsableBy(authority.server, claims.credential_user_id)
-      ) {
-        throw new Error(genericFailure);
-      }
+        const authority = await readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+          principalUserId: claims.sub,
+          credentialUserId: claims.credential_user_id,
+          sessionId: claims.session_id,
+          gatewayChannelId: claims.gateway_channel_id,
+          gatewayConfigGeneration: claims.gateway_config_generation,
+          slackChannelId: claims.slack_channel_id,
+          slackThreadId: claims.slack_thread_id,
+          mcpServerId: claims.mcp_server_id,
+          mcpServerConfigVersion: claims.mcp_server_config_version,
+        });
+        if (
+          !authority ||
+          authority.session.created_by !== claims.session_owner_user_id ||
+          (authority.server.auth?.oauth_mode ?? 'per_user') !== claims.oauth_mode ||
+          !isMCPServerUsableBy(authority.server, claims.credential_user_id)
+        ) {
+          throw new Error(genericFailure);
+        }
 
-      if (consume) {
-        const consumedAt = new Date();
-        const consumed = await mutateSlackConnectDelivery(
-          messagesRepository,
-          claims.widget_id,
-          (current, widget) => {
-            if (
-              !current ||
-              widget.status !== 'pending' ||
-              !mcpOAuthConnectClaimsMatchDelivery(claims, current, tenantId) ||
-              current.token_consumed_at ||
-              new Date(current.expires_at).getTime() <= consumedAt.getTime()
-            ) {
-              return null;
+        if (consume) {
+          const consumedAt = new Date();
+          const consumed = await mutateSlackConnectDelivery(
+            messagesRepository,
+            claims.widget_id,
+            (current, widget) => {
+              if (
+                !current ||
+                widget.status !== 'pending' ||
+                !mcpOAuthConnectClaimsMatchDelivery(claims, current, tenantId) ||
+                current.token_consumed_at ||
+                new Date(current.expires_at).getTime() <= consumedAt.getTime()
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                token_consumed_at: consumedAt.toISOString(),
+                ...(attemptId
+                  ? {
+                      oauth_attempt_id: attemptId,
+                      oauth_start_claimed_at: consumedAt.toISOString(),
+                      oauth_start_claim_expires_at: new Date(
+                        consumedAt.getTime() + 30_000
+                      ).toISOString(),
+                    }
+                  : {}),
+              };
             }
-            return {
-              ...current,
-              token_consumed_at: consumedAt.toISOString(),
-              ...(attemptId
-                ? {
-                    oauth_attempt_id: attemptId,
-                    oauth_start_claimed_at: consumedAt.toISOString(),
-                    oauth_start_claim_expires_at: new Date(
-                      consumedAt.getTime() + 30_000
-                    ).toISOString(),
-                  }
-                : {}),
-            };
-          }
-        );
-        if (!consumed.changed) throw new Error(genericFailure);
-      }
+          );
+          if (!consumed.changed) throw new Error(genericFailure);
+        }
 
-      return {
-        claims,
-        delivery,
-        params: pending.params,
-        authority,
-        oauthContext: {
-          delivery_id: delivery.delivery_id,
-          delivery_generation: delivery.delivery_generation,
-          widget_id: claims.widget_id,
-          session_id: claims.session_id,
-          mcp_server_id: claims.mcp_server_id,
-          gateway_channel_id: claims.gateway_channel_id,
-        },
-      };
+        return {
+          claims,
+          delivery,
+          params: pending.params,
+          authority,
+          oauthContext: {
+            delivery_id: delivery.delivery_id,
+            delivery_generation: delivery.delivery_generation,
+            widget_id: claims.widget_id,
+            session_id: claims.session_id,
+            mcp_server_id: claims.mcp_server_id,
+            gateway_channel_id: claims.gateway_channel_id,
+          },
+        };
+      });
       // Deliberately silent, exactly as `loadSlackRecoveryBinding` is. Which
       // of the dozen bindings moved is the oracle this lane's single generic
       // message exists to withhold, and a `debug` line still writes it to
