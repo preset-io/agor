@@ -35,14 +35,21 @@
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
 import { isMCPServerUsableBy } from '@agor/core/mcp';
-import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
+import type { GatewayChannel, MCPServer, MCPServerID, Session, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { z } from 'zod';
 import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import { checkSessionOwnerOrAdmin } from '../../utils/branch-authorization.js';
+import {
+  gatewayIdentityRefusalMessage,
+  resolveGatewayPromptIdentity,
+} from '../../utils/gateway-prompt-identity.js';
 import {
   registerWidget,
+  type WidgetMintCtx,
   type WidgetOAuthCallbackEvidence,
   type WidgetRegistryEntry,
   type WidgetSubmitCtx,
@@ -158,46 +165,111 @@ export function assertOAuthWidgetRoleFloor(
   }
 }
 
+/** Shape of the two reads both gates need, as far as they need them. */
+interface WidgetGateGetService<T> {
+  get(id: string, params?: unknown): Promise<T>;
+}
+
+/**
+ * Fail closed when the Session's prompts do not carry their real sender.
+ *
+ * An unaligned gateway channel resolves every inbound message to the channel's
+ * "Post messages as" account, so a grant minted from such a prompt belongs to
+ * that one identity and everyone in the channel can then drive it. This is the
+ * only precondition of this widget that is a property of the SESSION rather
+ * than of the destination, which is why both the mint gate and the resolve gate
+ * call it: the flag can be switched off while a card sits pending, and a card
+ * whose Connect button still works would mint exactly the credential the mint
+ * gate refused.
+ */
+async function assertGatewayPromptIdentityAligned(
+  app: Application,
+  sessionId: string,
+  serviceParams: unknown
+): Promise<void> {
+  const session = await (app.service('sessions') as unknown as WidgetGateGetService<Session>).get(
+    sessionId,
+    serviceParams
+  );
+  const channels = app.service('gateway-channels') as unknown as WidgetGateGetService<
+    GatewayChannel | undefined
+  >;
+  const verdict = await resolveGatewayPromptIdentity(session, async (channelId) => {
+    const channel = await channels.get(channelId, serviceParams);
+    return channel ? { channel_type: channel.channel_type, config: channel.config } : undefined;
+  });
+  if (!verdict.aligned) throw new Forbidden(gatewayIdentityRefusalMessage(verdict));
+}
+
+/**
+ * May this caller change the host session's MCP server set?
+ *
+ * Asked BEFORE the attach rather than inferred from its failure. The attach
+ * route answers this with `authorizeMcpSessionConfigAccess`, which for a
+ * provider-less call carrying no executor scope reduces to exactly
+ * `checkSessionOwnerOrAdmin` — so this reproduces the one refusal D6 reasons
+ * about, and nothing else.
+ *
+ * The old shape caught every `Forbidden` the attach could raise, which also
+ * swallowed "that MCP server is private to another user", tenant write-gate
+ * refusals, and member-policy refusals — and then told the user and the agent
+ * that the session owner could fix it. For a server private to a third user
+ * the session owner cannot attach it either, so the agent was sent to loop on
+ * something structurally impossible.
+ */
+async function canConfigureSessionMcpServers(ctx: WidgetSubmitCtx): Promise<boolean> {
+  const session = await (
+    ctx.app.service('sessions') as unknown as WidgetGateGetService<Session>
+  ).get(ctx.sessionId, { provider: undefined });
+  try {
+    checkSessionOwnerOrAdmin(
+      { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+      session as Pick<Session, 'created_by'>
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof Forbidden) return false;
+    throw error;
+  }
+}
+
 /**
  * Attach the now-authorized server to the host session.
  *
- * Tolerates exactly one failure — the caller not being allowed to configure
- * this session's MCP set — and reports it as `attached: false` rather than
- * failing the whole resolution. Failing would reopen the widget and invite the
- * user to repeat a browser flow that already succeeded, which would not fix
- * anything: the missing thing is someone else's permission, not their grant.
- * Every other error propagates and reopens the widget for a real retry.
+ * Degrades to `attached: false` for exactly one cause — the resolver not being
+ * allowed to configure this session's MCP set — because that is the one where
+ * the grant is real, the failure is someone else's permission, and reopening
+ * the widget would invite the user to repeat a browser flow that already
+ * worked. It is decided by asking, not by classifying an exception, so no other
+ * refusal can be mistaken for it. Every other error propagates and reopens the
+ * widget for a real retry.
  */
 async function attachToSession(
   ctx: WidgetSubmitCtx,
   mcpServerId: string
 ): Promise<{ attached: boolean }> {
+  if (!(await canConfigureSessionMcpServers(ctx))) {
+    console.warn(
+      `[widgets] oauth widget: grant landed but ${ctx.submitterUserId} may not configure ` +
+        `MCP servers on session ${ctx.sessionId}; recording attached=false`
+    );
+    return { attached: false };
+  }
   const service = ctx.app.service(
     '/sessions/:id/mcp-servers'
   ) as unknown as SessionMcpServersService;
-  try {
-    // Provider-less (internal) so the route's own role hook does not re-gate a
-    // daemon-initiated call, but carrying the resolver's real identity so
-    // `checkSessionOwnerOrAdmin` still decides. Attach is idempotent at the
-    // repository (unique index + onConflictDoNothing), so a retry is safe.
-    await service.create(
-      { mcpServerId },
-      {
-        user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-        route: { id: ctx.sessionId },
-      }
-    );
-    return { attached: true };
-  } catch (error) {
-    if (error instanceof Forbidden) {
-      console.warn(
-        `[widgets] oauth widget: grant landed but attach was refused for session ${ctx.sessionId}: ` +
-          (error instanceof Error ? error.message : String(error))
-      );
-      return { attached: false };
+  // Provider-less (internal) so the route's own role hook does not re-gate a
+  // daemon-initiated call, but carrying the resolver's real identity so
+  // `checkSessionOwnerOrAdmin` still decides. Attach is idempotent at the
+  // repository (unique index + onConflictDoNothing), so a retry is safe.
+  await service.create(
+    { mcpServerId },
+    {
+      user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+      route: { id: ctx.sessionId },
     }
-    throw error;
-  }
+  );
+  return { attached: true };
 }
 
 /**
@@ -211,6 +283,10 @@ async function resolveOAuthWidgetFromCallback(
   evidence: WidgetOAuthCallbackEvidence,
   params: OAuthWidgetParams
 ): Promise<OAuthWidgetResultMeta> {
+  // The role floor and the gateway identity question are both re-asked by
+  // `authorizeOAuthWidgetResolve`, which `submissions.ts` runs before the
+  // claim. Repeating the role floor here keeps this function safe to call
+  // directly (tests do) and costs nothing.
   assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
 
   // a. The pinned server must still exist, still be usable by this caller, and
@@ -277,11 +353,53 @@ async function resolveOAuthWidgetFromCallback(
   };
 }
 
+/**
+ * Mint gate — may this widget be created at all?
+ *
+ * Both checks belong to the widget type rather than to whichever caller is
+ * minting, which is the point: stage 3's Slack projection will mint through the
+ * same `mintWidgetMessage` seam and inherits them without deciding to.
+ *
+ * `params` is absent when a caller runs this early, before it has resolved a
+ * destination — the identity question needs no params and is worth answering
+ * before installing anything, while the role floor waits for the `oauthMode`
+ * the destination turns out to have.
+ */
+export async function authorizeOAuthWidgetMint(
+  ctx: WidgetMintCtx,
+  params?: OAuthWidgetParams
+): Promise<void> {
+  await assertGatewayPromptIdentityAligned(ctx.app, ctx.sessionId, ctx.serviceParams);
+  if (params) assertOAuthWidgetRoleFloor(ctx.role, params.oauthMode);
+}
+
+/**
+ * Resolve gate — is the mint-time answer still true?
+ *
+ * A pending card is a standing invitation with no expiry, so the window here is
+ * long: an admin can switch `align_slack_users` off, or demote the resolver,
+ * between the button being rendered and being pressed. §5.2 already required
+ * the role floor to hold at both ends; the identity question has the same shape
+ * and a longer window, and a widget minted while aligned must not still mint a
+ * shared-account credential afterwards.
+ */
+export async function authorizeOAuthWidgetResolve(
+  ctx: WidgetSubmitCtx,
+  params: OAuthWidgetParams
+): Promise<void> {
+  assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
+  await assertGatewayPromptIdentityAligned(ctx.app, ctx.sessionId, {
+    user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+  });
+}
+
 export const oauthWidget: WidgetRegistryEntry<OAuthWidgetParams, never, OAuthWidgetResultMeta> = {
   type: 'oauth',
   resolution: 'oauth_callback',
   schemaVersion: 1,
   paramsSchema: oauthParamsSchema,
+  authorizeMint: authorizeOAuthWidgetMint,
+  authorizeResolve: authorizeOAuthWidgetResolve,
   resolveFromOAuthCallback: resolveOAuthWidgetFromCallback,
   buildAutoResumePrompt: (rm, params) => {
     const name = rm.name || params.serverName;
