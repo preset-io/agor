@@ -1,4 +1,4 @@
-import type { AgorClient, Repo } from '@agor-live/client';
+import type { AgorClient, EffectiveBranchAccess, Repo } from '@agor-live/client';
 import { DEFAULT_REPO_CLEANUP_POLICY } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
@@ -24,7 +24,14 @@ function fixture(enabled = false) {
   };
   const branches = { get: vi.fn(async () => branch), on: vi.fn(), removeListener: vi.fn() };
   const access = {
-    find: vi.fn(async () => ({ can: 'all', fs_access: 'write', is_owner: true, source: 'owner' })),
+    find: vi.fn(
+      async (): Promise<EffectiveBranchAccess> => ({
+        can: 'all',
+        fs_access: 'write',
+        is_owner: true,
+        source: 'owner',
+      })
+    ),
   };
   const services = { repos, branches, 'branches/:id/effective-access': access };
   const client = {
@@ -227,4 +234,151 @@ it('does not promise to preserve files when archive explicitly removes the works
   fireEvent.click(screen.getByRole('radio', { name: /Delete completely/ }));
   expect(screen.queryByText(/Archiving will keep workspace files/)).not.toBeInTheDocument();
   expect(screen.getAllByText('Cleanup is disabled for this repository.').length).toBeGreaterThan(0);
+});
+
+// Match the effective-access service wire contract, not locally inferred ownership.
+it.each([
+  [
+    'primary owner without ACLs',
+    'member',
+    { can: 'all', is_owner: true, source: 'owner', fs_access: 'write' },
+    true,
+  ],
+  [
+    'configured superadmin projection',
+    'superadmin',
+    { can: 'all', is_owner: false, source: 'superadmin', fs_access: 'write' },
+    true,
+  ],
+  [
+    'direct Manager',
+    'member',
+    { can: 'all', is_owner: false, source: 'others', fs_access: 'write' },
+    true,
+  ],
+  [
+    'group Manager',
+    'member',
+    { can: 'all', is_owner: false, source: 'group', fs_access: 'write' },
+    true,
+  ],
+  [
+    'Collaborator with write',
+    'member',
+    { can: 'prompt', is_owner: false, source: 'others', fs_access: 'write' },
+    false,
+  ],
+  [
+    'Viewer',
+    'member',
+    { can: 'view', is_owner: false, source: 'others', fs_access: 'read' },
+    false,
+  ],
+  [
+    'former owner/creator',
+    'member',
+    { can: 'none', is_owner: false, source: 'others', fs_access: 'none' },
+    false,
+  ],
+  [
+    'missing filesystem projection',
+    'superadmin',
+    { can: 'all', is_owner: false, source: 'superadmin' },
+    false,
+  ],
+  [
+    'admin without branch authority',
+    'admin',
+    { can: 'view', is_owner: false, source: 'others', fs_access: 'write' },
+    false,
+  ],
+] as const)('uses authenticated access for %s', async (_label, role, effective, eligible) => {
+  const { client, branch, access } = fixture(true);
+  access.find.mockResolvedValue(effective);
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser({ role })}
+      branch={branch}
+      open
+      onConfirm={vi.fn()}
+      onCancel={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled();
+  await waitFor(() =>
+    expect(screen.queryByText('Loading cleanup policy and permissions…')).not.toBeInTheDocument()
+  );
+  const clean = screen.getByRole('radio', { name: /Clean —/ });
+  if (eligible) expect(clean).toBeEnabled();
+  else expect(clean).toBeDisabled();
+  if (effective.can !== 'all')
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+});
+
+it.each(['none', 'read'] as const)(
+  'Manager with %s files may Preserve but cannot Clean or Delete',
+  async (fs_access) => {
+    const { client, branch, access } = fixture(true);
+    access.find.mockResolvedValue({ can: 'all', is_owner: false, source: 'group', fs_access });
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser({ role: 'member' })}
+        branch={branch}
+        open
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled()
+    );
+    expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Delete completely/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Delete permanently/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+    expect(confirm).toHaveBeenCalledWith({
+      metadataAction: 'archive',
+      filesystemAction: 'preserved',
+    });
+  }
+);
+
+it('after refreshing eligibility, revoked or failed permissions disable all submissions, not just Clean', async () => {
+  const { client, branch, access, repos } = fixture(true);
+  const confirm = vi.fn();
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser({ role: 'member' })}
+      branch={branch}
+      open
+      onConfirm={confirm}
+      onCancel={vi.fn()}
+    />
+  );
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('radio', { name: /Delete permanently/ }));
+  access.find.mockResolvedValue({
+    can: 'view',
+    is_owner: false,
+    source: 'others',
+    fs_access: 'read',
+  });
+  await act(async () => {
+    await repos.patch('unused', {});
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled()
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+  expect(confirm).not.toHaveBeenCalled();
+  access.find.mockRejectedValue(new Error('Forbidden'));
+  await act(async () => {
+    await repos.patch('unused', {});
+  });
+  await screen.findByText('Branch permissions could not be loaded.');
+  expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled();
 });

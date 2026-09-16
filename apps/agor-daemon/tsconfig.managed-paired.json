@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "rootDir": "../..",
+    "customConditions": ["source"]
+  },
+  "include": ["test/managed-paired.test.ts", "vitest.managed-paired.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

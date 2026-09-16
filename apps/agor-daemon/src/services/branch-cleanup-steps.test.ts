@@ -5,22 +5,38 @@ import {
   generateId,
   RepoRepository,
   runWithTenantContext,
+  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { type AuthenticatedParams, branchCleanupCommandId, type TenantID } from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
-import { ownedDbTest as test } from '../../../../packages/core/src/db/test-helpers';
+import {
+  setTestBranchUserRole,
+  ownedDbTest as test,
+} from '../../../../packages/core/src/db/test-helpers';
 import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
 } from '../auth/executor-session-token';
 import { BranchCleanupStepsService } from './branch-cleanup-steps';
 
-test('cleanup callbacks require exact tenant, actor, invocation and a single durable winner', async ({
+test('cleanup callbacks recheck authority and require exact tenant, actor, invocation and a single durable winner', async ({
   db,
 }) => {
-  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch, user: owner } = await seedEnvironmentCommandBranch(db);
+  const user = await new UsersRepository(db).create({
+    email: 'cleanup-worker@example.test',
+    role: 'member',
+  });
+  await setTestBranchUserRole(
+    db,
+    branch.branch_id,
+    user.user_id,
+    'manager',
+    'write',
+    owner.user_id
+  );
   const policy = { enabled: true, command: 'git clean -fdX', allow_branch_protection: true };
   const repo = await new RepoRepository(db).update(branch.repo_id, { cleanup_policy: policy });
   const maintenance = new BranchMaintenanceRepository(db);
@@ -83,6 +99,33 @@ test('cleanup callbacks require exact tenant, actor, invocation and a single dur
     ).rejects.toThrow('tenant');
     await expect(service.create({ ...input, command: 'arbitrary' }, params)).rejects.toThrow(
       'Invalid'
+    );
+    // Accepted dispatch/preview cannot authorize a worker after write access is revoked.
+    await setTestBranchUserRole(
+      db,
+      branch.branch_id,
+      user.user_id,
+      'manager',
+      'read',
+      owner.user_id
+    );
+    await expect(service.create(input, params)).rejects.toThrow('filesystem write');
+    await setTestBranchUserRole(
+      db,
+      branch.branch_id,
+      user.user_id,
+      'viewer',
+      'read',
+      owner.user_id
+    );
+    await expect(service.create(input, params)).rejects.toThrow('Forbidden');
+    await setTestBranchUserRole(
+      db,
+      branch.branch_id,
+      user.user_id,
+      'manager',
+      'write',
+      owner.user_id
     );
     await service.create(input, params);
     await expect(service.create(input, params)).rejects.toThrow('already claimed');

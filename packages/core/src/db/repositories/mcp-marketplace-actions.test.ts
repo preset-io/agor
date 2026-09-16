@@ -13,6 +13,34 @@ const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-000000000b0b' as UserID;
 
 describe('Marketplace MCP atomic repository actions', () => {
+  dbTest(
+    'preserves nonsecret managed client mode and profile in SQLite candidate inventory',
+    async ({ db }) => {
+      const auth = {
+        type: 'oauth' as const,
+        oauth_mode: 'per_user' as const,
+        oauth_client_mode: 'cloud_managed_v1' as const,
+        oauth_managed_profile: {
+          profile_id: 'fake',
+          semantic_version: '1',
+          environment: 'staging' as const,
+          region: 'us-west-2' as const,
+          registry_digest: 'a'.repeat(64),
+        },
+      };
+      await new MCPServerRepository(db).create({
+        name: 'managed-candidate',
+        transport: 'http',
+        url: 'https://fake.example.test/mcp',
+        scope: 'session',
+        source: 'user',
+        owner_user_id: ALICE,
+        auth,
+      });
+      const [candidate] = await new MCPCatalogCandidateRepository(db).listForUser(ALICE);
+      expect(candidate.server.auth).toEqual(auth);
+    }
+  );
   it('keeps schema and writes on the same literal :memory: SQLite connection', async () => {
     const db = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
     await runMigrations(db);

@@ -1,6 +1,7 @@
 import { runWithTenantContext } from '@agor/core/db';
-import type { Application } from '@agor/core/types';
+import type { Application, Branch } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BranchesService, type BranchParams } from './branches';
 import { ReposService } from './repos';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -758,4 +759,95 @@ describe('ReposService.remove branch inventory', () => {
     expect(branchService.removeMetadataWithRealtime).not.toHaveBeenCalled();
     expect(repositoryMocks.deleteRepo).not.toHaveBeenCalled();
   });
+});
+
+it('routes a server-marked home to the tenant/caller executor without a base-cache dependency', async () => {
+  const repoId = '550e8400-e29b-41d4-a716-446655440001';
+  const branchId = '550e8400-e29b-41d4-a716-446655440002';
+  const userId = '550e8400-e29b-41d4-a716-446655440004';
+  const context = { teammate: { kind: 'teammate', displayName: 'Builder' } };
+  // Exercise the real branch defaults rather than fabricating the server marker.
+  const create = vi.fn(async (data: Partial<Branch>, params?: BranchParams) => ({
+    ...(await branchDefaults.applyBranchCreateDefaults(data, params)),
+    branch_id: branchId,
+  }));
+  const boardGet = vi.fn(async () => ({ objects: {} }));
+  const app = {
+    get: () => ({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_storage: {
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+      },
+    }),
+    settings: { authentication: { secret: 'test-secret' } },
+    sessionTokenService: { generateCommandToken: vi.fn(async () => 'tenant-caller-token') },
+    service: (name: string) => {
+      if (name === 'branches') return { create, find: vi.fn(async () => []) };
+      if (name === 'repos') return service;
+      if (name === 'boards') return { get: boardGet };
+      if (name === 'board-objects') return { create: vi.fn() };
+      throw new Error(`Unexpected service: ${name}`);
+    },
+  } as unknown as Application;
+  const service = new ReposService({} as never, app);
+  const branchDefaults = new BranchesService({} as never, app) as unknown as {
+    applyBranchCreateDefaults: (
+      data: Partial<Branch>,
+      params?: BranchParams
+    ) => Promise<Partial<Branch>>;
+  };
+  const repoGet = vi.spyOn(service, 'get').mockResolvedValue({
+    repo_id: repoId,
+    slug: 'preset-io/agor-teammate',
+    remote_url: 'https://github.com/preset-io/agor-teammate.git',
+    local_path: '/unmounted/cache',
+  } as never);
+  delegatedHomeMocks.resolve.mockResolvedValueOnce('caller-home' as never);
+  const params = {
+    tenant: { tenant_id: 'tenant-a', source: 'jwt' },
+    user: { user_id: userId },
+  } as never;
+  const data = {
+    name: 'local-builder',
+    ref: 'local-builder',
+    createBranch: true,
+    sourceBranch: 'template/builder',
+    custom_context: context,
+    boardId: '550e8400-e29b-41d4-a716-446655440003',
+    position: { x: 0, y: 0 },
+    storage_mode: 'worktree' as const,
+    clone_depth: 1,
+  };
+  const result = await service.createBranch(repoId, data, params);
+  expect(result).toMatchObject({
+    filesystem_status: 'creating',
+    custom_context: { teammate: { localHome: true } },
+  });
+  expect(result.path).not.toBe('/unmounted/cache');
+  expect(repoGet).toHaveBeenCalledWith(repoId, params);
+  expect(boardGet).toHaveBeenCalledWith(data.boardId, params);
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({ storage_mode: 'clone', base_ref: 'template/builder' }),
+    expect.objectContaining(params)
+  );
+  expect(create.mock.calls[0][0].clone_depth).toBeUndefined();
+  expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+    expect.objectContaining({
+      params: expect.objectContaining({ branchId, repoId, userId, useReference: false }),
+    }),
+    expect.objectContaining({
+      delegatedHomeKey: 'caller-home',
+      templateVariables: expect.objectContaining({ branch_id: branchId, user_id: userId }),
+    })
+  );
+  // An authorized repo does not authorize a foreign board. No filesystem dispatch.
+  create.mockClear();
+  executorMocks.spawnExecutorFireAndForget.mockClear();
+  boardGet.mockRejectedValueOnce(new Error('Foreign board not found'));
+  await expect(service.createBranch(repoId, data, params)).rejects.toThrow('not found');
+  expect(create).not.toHaveBeenCalled();
+  expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
 });

@@ -7,6 +7,11 @@
  * original connection fixes that, but is safe only when every use of the
  * client is serialized behind the same ownership boundary.
  *
+ * This relies on @libsql/client 0.17.x connection ownership. In 0.18, each
+ * client call returns its connection to a pool and rolls back a bare BEGIN.
+ * Do not bump that dependency without migrating this coordinator to native
+ * transaction leases and reviewing per-connection PRAGMAs and terminal cleanup.
+ *
  * This module decorates the client itself, below Drizzle. Consequently direct
  * Drizzle builders (`run`, `get`, `all`, `execute` and promise execution),
  * repository helpers, batches, migrations, and interactive transactions all

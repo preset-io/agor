@@ -28,6 +28,7 @@ on:
       - 'scripts/run-postgres-integration-tests.mjs'
       - 'scripts/test-postgres-docker.sh'
       - 'scripts/test-managed-oauth-downgrade*.mjs'
+      - 'scripts/managed-oauth-old-image-proof.mjs'
       - 'turbo.json'
   pull_request:
     branches: [main]
@@ -49,6 +50,7 @@ on:
       - 'scripts/run-postgres-integration-tests.mjs'
       - 'scripts/test-postgres-docker.sh'
       - 'scripts/test-managed-oauth-downgrade*.mjs'
+      - 'scripts/managed-oauth-old-image-proof.mjs'
       - 'turbo.json'
   workflow_dispatch:
 
@@ -74,7 +76,8 @@ jobs:
   postgres-integration:
     name: PostgreSQL integration (non-superuser RLS)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # Full isolated schema/RLS matrix plus the immutable old-image startup proof.
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -144,12 +147,15 @@ jobs:
           echo 'Verified test role: agor_app (NOSUPERUSER, NOBYPASSRLS).'
 
       - name: Run PostgreSQL-gated suites
-        timeout-minutes: 6
+        # 93+ independently migrated suites exceed six minutes on hosted runners;
+        # individual test/hook/process deadlines remain enforced by the runner.
+        timeout-minutes: 10
         run: pnpm test:postgres:integration
 
-      - name: Prove the unmodified old startup refuses the managed schema
+      - name: Prove compiled and published old daemons refuse the managed schema
         env:
           SCHEMA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           node --test scripts/test-managed-oauth-downgrade.test.mjs
-          node scripts/test-managed-oauth-downgrade.mjs --schema-sha "$SCHEMA_SHA"
+          node scripts/test-managed-oauth-downgrade.mjs --schema-sha "$SCHEMA_SHA" \
+            --old-image docker.io/preset/agor@sha256:18dcf91c084499ce0862ac608b72ce27d6e8f9fc76796c041ef678a848f98403

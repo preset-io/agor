@@ -49,7 +49,10 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  getTeammateConfig,
   hasMinimumRole,
+  isCanonicalTeammateFrameworkRepo,
+  isTeammate,
   ROLES,
   TEAMMATE_FRAMEWORK_REPO_URL,
   validateRepoCleanupPolicy,
@@ -68,6 +71,7 @@ import {
   startContainedExecutorCommand,
 } from '../utils/spawn-executor.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import { BRANCH_MATERIALIZATION_INTENT, type BranchParams } from './branches.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
 /**
@@ -729,7 +733,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // rule: "daemon/client = database, executor = filesystem").
     const config = this.app.get('config');
     const { defaultMode } = resolveBranchStorageConfig(config);
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
+    const localHome = isTeammate(data) && isCanonicalTeammateFrameworkRepo(repo);
+    const storageMode: 'worktree' | 'clone' = localHome
+      ? 'clone'
+      : (data.storage_mode ?? defaultMode);
     ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
@@ -739,7 +746,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
       );
     }
-    const cloneDepth = data.clone_depth;
+    const cloneDepth = localHome ? undefined : data.clone_depth;
     if (cloneDepth !== undefined) {
       if (storageMode !== 'clone') {
         throw new Error(
@@ -841,6 +848,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
+    const branchCreateParams: BranchParams | undefined = localHome
+      ? { ...params, [BRANCH_MATERIALIZATION_INTENT]: true }
+      : params;
     let branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
@@ -869,7 +879,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         board_id: data.boardId,
         created_by: userId,
       },
-      params
+      branchCreateParams
     )) as Branch;
 
     if (data.boardId) {
@@ -995,6 +1005,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             principalBranchAccess: 'write',
             useReference:
               storageMode === 'clone' &&
+              !getTeammateConfig(branch)?.localHome &&
               !!repo.local_path &&
               shouldUseCloneReferencePath(this.app.get('config')),
           },

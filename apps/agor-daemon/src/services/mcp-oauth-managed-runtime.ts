@@ -6,6 +6,7 @@ import {
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
 } from '@agor/core/db';
@@ -355,18 +356,35 @@ export class ManagedMCPOAuthRuntime {
     const owner = record.managedMetadata.owner;
     const assertCurrent = async () => {
       await input.assertCurrent();
-      await this.current(owner, 'exchange');
-      const current = await d.flows.getManagedForTransaction(
+      await runWithTenantDatabaseTransaction(
+        d.db,
         input.tenantId,
-        input.userId,
-        input.transactionId
+        async () => {
+          // Join one local snapshot: the repository permits succeeded routing only
+          // with the exact still-current original grant. No credential is decrypted.
+          const current = await d.flows.getManagedForTransaction(
+            input.tenantId,
+            input.userId,
+            input.transactionId
+          );
+          if (
+            !current?.isCurrent ||
+            !current.managedMetadata ||
+            !equalOwner(current.managedMetadata.owner, owner) ||
+            current.attemptId !== record.attemptId ||
+            current.managedTransactionId !== input.transactionId ||
+            !sameDigest(
+              current.managedMetadata.prepare_request.client_nonce_hash,
+              mcpOAuthSha256(input.clientNonce)
+            ) ||
+            current.expiresAt.getTime() <= d.now()
+          )
+            throw new ManagedOAuthUnavailableError();
+          await this.current(owner, current.status === 'succeeded' ? 'use' : 'exchange');
+        },
+        { postgresIsolationLevel: 'repeatable read' }
       );
-      if (
-        !current?.managedMetadata ||
-        !equalOwner(current.managedMetadata.owner, owner) ||
-        current.expiresAt.getTime() <= d.now()
-      )
-        throw new ManagedOAuthUnavailableError();
+      await input.assertCurrent();
     };
     const request = McpOAuthReturnTicketRequestSchema.parse({
       protocol_version: 1,
@@ -405,14 +423,15 @@ export class ManagedMCPOAuthRuntime {
       (!Number.isFinite(execution.timeoutMs) || execution.timeoutMs <= 0)
     )
       throw new ManagedOAuthUnavailableError();
-    const deadline =
-      execution.timeoutMs === undefined ? undefined : performance.now() + execution.timeoutMs;
-    const remaining = () =>
-      deadline === undefined ? undefined : Math.max(0, Math.floor(deadline - performance.now()));
+    // Public attempt-status callers omit a budget. Bound their actual broker
+    // transport work, not merely the HTTP response: a timed-out dispatch keeps
+    // its original durable claim and subsequent polls recover that receipt.
+    // Maintenance supplies its own enclosing pass budget explicitly.
+    const deadline = performance.now() + (execution.timeoutMs ?? 5_000);
+    const remaining = () => Math.max(0, Math.floor(deadline - performance.now()));
     const assertBudget = async () => {
       await execution.assertCurrent?.();
-      if (deadline !== undefined && performance.now() >= deadline)
-        throw new ManagedOAuthUnavailableError();
+      if (performance.now() >= deadline) throw new ManagedOAuthUnavailableError();
     };
     await assertBudget();
     if (

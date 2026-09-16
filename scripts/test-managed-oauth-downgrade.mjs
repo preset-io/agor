@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Actual old compiled daemon startup module against an owned newer PostgreSQL schema.
- * Not a full daemon entrypoint, frozen old dependency install, or published-image test.
+ * With --old-image, also runs the unmodified published agor-daemon executable/dependencies.
+ * Without that option the compiled module proof does not establish full entrypoint behavior.
  * No caller database URL is accepted. Run: node scripts/test-managed-oauth-downgrade.mjs
  * Requires Docker and installed workspace dependencies; missing prerequisites FAIL.
  */
@@ -13,6 +14,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { provePublishedOldDaemon, validateOldImage } from './managed-oauth-old-image-proof.mjs';
 
 export const BASELINE_SHA = 'c675abdd306d866860483b6d7289078951f71f37';
 export const SCHEMA_SHA = '34676f927ad09f46ad6f1bd7f392a2589d6bdfed';
@@ -23,9 +25,13 @@ const REFUSAL =
 export function parseOptions(args) {
   const options = { baseline: BASELINE_SHA, schema: SCHEMA_SHA };
   for (let i = 0; i < args.length; i += 2) {
+    if (args[i] === '--old-image') {
+      options.oldImage = validateOldImage(args[i + 1]);
+      continue;
+    }
     const key = { '--baseline-sha': 'baseline', '--schema-sha': 'schema' }[args[i]];
     if (!key || !/^[a-f0-9]{40}$/.test(args[i + 1] ?? ''))
-      throw new Error('Only exact --baseline-sha and --schema-sha inputs are accepted');
+      throw new Error('Only exact source SHAs and an immutable --old-image digest are accepted');
     options[key] = args[i + 1];
   }
   return options;
@@ -177,6 +183,15 @@ async function worker(source, directory, options) {
     assert.match(result.stdout, /EXPECTED_OLD_STARTUP_REFUSAL/);
     assert.doesNotMatch(result.stdout, /Database ready|Seeding initial data/);
     assert.equal(result.stderr, '');
+    const publishedImage = options.oldImage
+      ? await provePublishedOldDaemon({
+          image: options.oldImage,
+          baseline: options.baseline,
+          owned,
+          directory,
+          environment,
+        })
+      : undefined;
     const after = await owned.sql`SELECT (SELECT count(*)::text FROM users) AS users,
       (SELECT count(*)::text FROM user_mcp_oauth_tokens) AS grants,
       (SELECT count(*)::text FROM mcp_oauth_pending_flows) AS attempts`;
@@ -210,6 +225,7 @@ async function worker(source, directory, options) {
             'installed npm/compiler and unused workspace dependency packages reused read-only',
           rows_unchanged: true,
           http_requests: 0,
+          ...(publishedImage ? { published_image_proof: publishedImage } : {}),
         },
         null,
         2

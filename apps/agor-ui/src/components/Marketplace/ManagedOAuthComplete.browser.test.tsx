@@ -25,6 +25,7 @@ afterEach(() => {
   cleanup();
   sessionStorage.clear();
   window.history.replaceState(null, '', originalPath);
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 function returned(
@@ -131,8 +132,28 @@ describe('managed provider return in real browser UI', () => {
     returned();
     const api = fakeClient();
     api.status.mockResolvedValue({ authenticated_server_ids: [] });
+    let now = performance.now();
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
     render(page(api.client));
-    expect(await screen.findByText('Sign-in could not be verified')).toBeVisible();
+    await waitFor(() => expect(api.status).toHaveBeenCalledOnce());
+    expect(screen.getByText('Verifying saved connection…')).toBeVisible();
     expect(screen.queryByText('Connected')).toBeNull();
+    now += 45_001;
+    expect(
+      await screen.findByText('Sign-in could not be verified', {}, { timeout: 2000 })
+    ).toBeVisible();
+    expect(api.accept).toHaveBeenCalledOnce();
+  });
+  it('waits for durable invalidation projection after success without replaying the ticket', async () => {
+    returned();
+    const api = fakeClient();
+    api.status.mockResolvedValueOnce({ authenticated_server_ids: [] });
+    render(page(api.client));
+    await waitFor(() => expect(api.status).toHaveBeenCalledOnce());
+    expect(screen.getByText('Verifying saved connection…')).toBeVisible();
+    expect(screen.queryByText('Sign-in could not be verified')).toBeNull();
+    expect(await screen.findByText('Connected', {}, { timeout: 3000 })).toBeVisible();
+    expect(api.accept).toHaveBeenCalledOnce();
+    expect(api.status).toHaveBeenCalledTimes(2);
   });
 });

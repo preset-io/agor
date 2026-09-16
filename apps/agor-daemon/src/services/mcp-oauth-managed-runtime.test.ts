@@ -23,6 +23,11 @@ vi.mock('@agor/core/db', () => ({
     _tenant: unknown,
     work: (db: unknown) => unknown
   ) => work({}),
+  runWithTenantDatabaseTransaction: async (
+    _db: unknown,
+    _tenant: unknown,
+    work: (db: unknown) => unknown
+  ) => work({}),
   MCPServerRepository: class {
     async findById() {
       return state.server;
@@ -280,6 +285,23 @@ describe('managed browser return is correlation, never credential authority', ()
     };
     return { ...f, returnInput: input };
   }
+  it('bounds default public status reconciliation at the broker transport boundary', async () => {
+    const f = await flow();
+    f.request.mockImplementation(async (options) => {
+      expect(options.operation).toBe('status');
+      expect(options.timeoutMs).toBeGreaterThan(0);
+      expect(options.timeoutMs).toBeLessThanOrEqual(5000);
+      await options.assertCurrent();
+      return {
+        protocol_version: 1,
+        owner: f.readRecord().managedMetadata!.owner,
+        status: 'pending',
+      };
+    });
+    await f.runtime.reconcile(f.readRecord());
+    expect(f.request).toHaveBeenCalledOnce();
+    expect(f.runtime.dependencies.persist).not.toHaveBeenCalled();
+  });
   it('accepts only the original local nonce and exact worker owner, without minting success', async () => {
     const f = await flow();
     await expect(f.runtime.acceptReturn(f.returnInput)).resolves.toEqual({
@@ -310,6 +332,49 @@ describe('managed browser return is correlation, never credential authority', ()
     });
     await expect(f.runtime.acceptReturn(f.returnInput)).rejects.toThrow();
   });
+  it.each(['before', 'after'] as const)(
+    'preserves exact completed return context when commit occurs %s worker consumption',
+    async (when) => {
+      const f = await flow();
+      if (when === 'before') f.readRecord().status = 'succeeded';
+      else {
+        const original = f.request.getMockImplementation()!;
+        f.request.mockImplementation(async (options) => {
+          const result = await original(options);
+          f.readRecord().status = 'succeeded';
+          return result;
+        });
+      }
+      // The repository's completed-grant equality predicates have real RLS coverage.
+      await expect(f.runtime.acceptReturn(f.returnInput)).resolves.toEqual({
+        accepted: true,
+        attempt_id: 'attempt_alpha',
+      });
+      expect(f.request.mock.calls.map((call) => call[0].operation)).toEqual(['return_ticket']);
+      expect(f.runtime.dependencies.persist).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['before', 'after'] as const)(
+    'denies retired caller/session authority %s ticket consumption',
+    async (when) => {
+      const f = await flow();
+      const deny = () => {
+        throw new Error('Fixture authority retired');
+      };
+      if (when === 'before') f.returnInput.assertCurrent.mockImplementation(deny);
+      else {
+        const original = f.request.getMockImplementation()!;
+        f.request.mockImplementation(async (options) => {
+          const result = await original(options);
+          f.returnInput.assertCurrent.mockImplementation(deny);
+          return result;
+        });
+      }
+      await expect(f.runtime.acceptReturn(f.returnInput)).rejects.toThrow(
+        'Fixture authority retired'
+      );
+    }
+  );
   it('rechecks current local authority after ticket consumption', async () => {
     const f = await flow();
     const original = f.request.getMockImplementation()!;

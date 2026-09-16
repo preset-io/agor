@@ -421,6 +421,17 @@ replica failover: its external recovery incarnation must remain quarantined
 until the separately approved recovery process admits a new cohort. Restoring
 database rows or copying attestation files does not establish that authority.
 
+The PostgreSQL compatibility lane exercises both the prior compiled startup
+module and a pinned prior published `agor-daemon` executable against a newly
+migrated, run-owned database. The published-image check uses the actual old
+dependencies and an isolated internal network, not mocked migration status.
+It verifies refusal before serving or creating users/grants. The image's
+SQLite initialization wrapper is not the PostgreSQL daemon entrypoint.
+This is **startup downgrade refusal**, not containment of an already running
+old daemon or executor: terminate old processes/connections and verify the
+complete cohort before admitting managed OAuth. Do not treat a successful
+compatibility test as permission to perform a rolling migration.
+
 ### Source lifecycle commands
 
 Cloud lifecycle automation invokes these **local runtime** commands under its

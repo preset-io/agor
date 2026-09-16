@@ -28,6 +28,7 @@ import type {
   Params,
   User,
   UserID,
+  UserRole,
 } from '@agor/core/types';
 import {
   BOARD_POLICY_CAPABILITIES,
@@ -36,6 +37,7 @@ import {
   ROLES,
 } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
+import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import {
   lockTenantAuthorizationFence,
   resolveCurrentTenantAuthorityActor,
@@ -259,7 +261,18 @@ export function setupBranchEffectiveAccessService(
         if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
 
         if (isSuperAdmin(user.role, options.allowSuperadmin ?? true)) {
-          return { can: 'all', is_owner: false, source: 'superadmin' };
+          // Project the same configured filesystem authority used by cleanup and
+          // deletion. Omitting fs_access makes their UI fail closed even for an owner.
+          const fs_access = await ensureBranchWorkspaceAccess(
+            branchRepo,
+            branch,
+            user.user_id,
+            user.role as UserRole,
+            'all',
+            'write',
+            options.allowSuperadmin ?? true
+          );
+          return { can: 'all', fs_access, is_owner: false, source: 'superadmin' };
         }
 
         const userId = user.user_id as UserID;

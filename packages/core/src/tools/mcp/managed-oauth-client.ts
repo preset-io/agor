@@ -425,6 +425,9 @@ export async function recoverManagedOAuthOperation(options: {
     throw new ManagedMCPOAuthProtocolError('unavailable');
   const recoveryDeadline = Math.min(expected.claim.deadline_at, options.now() + budget);
   const monotonicDeadline = performance.now() + Math.max(0, recoveryDeadline - options.now());
+  // Receipt-only recovery is bounded work, not a tight signed-request loop.
+  // Keep the first observation immediate, then back off to one per second.
+  let pollDelayMs = 250;
   const assertLive = async () => {
     await options.assertCurrent();
     if (!mcpOAuthClaimIsLive(expected.claim, options.now()))
@@ -462,6 +465,12 @@ export async function recoverManagedOAuthOperation(options: {
         now: options.now(),
       });
     if (outcome.status !== 'in_progress') throw new ManagedMCPOAuthOperationError(outcome);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+    const waitRemaining = Math.min(
+      recoveryDeadline - options.now(),
+      monotonicDeadline - performance.now()
+    );
+    if (waitRemaining <= 0) throw new ManagedMCPOAuthProtocolError('unavailable');
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollDelayMs, waitRemaining)));
+    pollDelayMs = Math.min(pollDelayMs * 2, 1000);
   }
 }

@@ -1496,6 +1496,8 @@ export interface CreateBranchAsCloneOptions {
    * Use when the base ref is hosted by a separate template repository.
    */
   originRemoteUrl?: string;
+  /** New local teammate home: independent full history and no publishing remote. */
+  localHome?: boolean;
   /** Absolute path where the new clone should land. Must not already exist by default. */
   targetPath: string;
   /**
@@ -1693,6 +1695,11 @@ export async function createBranchAsClone(
     ? assertSafeGitRemoteUrl(stripGitUrlCredentials(options.originRemoteUrl))
     : undefined;
   const singleBranch = options.singleBranch ?? true;
+  if (options.localHome && (depth !== undefined || referencePath || originRemoteUrl)) {
+    throw new Error(
+      'Local teammate homes require full history, no reference, and no origin override.'
+    );
+  }
 
   if (!remoteUrl) {
     throw new Error('remoteUrl is required');
@@ -1765,6 +1772,7 @@ export async function createBranchAsClone(
   // clone via alternates; deliberately NOT paired with `--dissociate`
   // (see option doc above + design doc §5).
   const cloneArgs: string[] = ['--branch', ref];
+  if (options.localHome) cloneArgs.push('--no-local');
   if (singleBranch) cloneArgs.push('--single-branch');
   if (depth !== undefined) cloneArgs.push('--depth', String(depth));
   if (useReference && referencePath) cloneArgs.push('--reference', referencePath);
@@ -1829,6 +1837,13 @@ export async function createBranchAsClone(
     if (newBranchName && localBranches.all.includes(ref)) {
       await cloneGit.deleteLocalBranch(ref, true);
     }
+  }
+
+  if (options.localHome) {
+    const { git: cloneGit } = createGit(targetPath);
+    // This is a newly-created independent clone, never the registered source
+    // or a linked worktree. Git removes origin's tracking configuration too.
+    await cloneGit.removeRemote('origin');
   }
 
   await addSafeDirectoryBestEffort(targetPath, '[createBranchAsClone]');

@@ -111,10 +111,58 @@ export async function completeManagedOAuthReturn(
     String(attempt.mcp_server_id) !== flow.serverId
   )
     throw invalid();
-  if (
-    !(await refetchMCPOAuthDurableState(client, flow.serverId, isCurrent)) ||
-    !isCurrent() ||
-    signal.aborted
-  )
-    throw invalid();
+  // A durable commit may precede the next authenticated invalidation scan.
+  // Keep verifying the same caller/server, without redeeming the ticket again.
+  // The 45s UI bound covers the normal 30s + <=5s maintenance cadence; it is
+  // never additional permit lifetime or credential authority.
+  const deadline = performance.now() + 45_000;
+  const canApply = () => isCurrent() && !signal.aborted && performance.now() < deadline;
+  const readWithinDeadline = () =>
+    new Promise<boolean>((resolve, reject) => {
+      let settled = false;
+      const finish = (value: boolean, failed = false) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        signal.removeEventListener('abort', aborted);
+        if (failed) reject(invalid());
+        else resolve(value);
+      };
+      const aborted = () => finish(false, true);
+      const timer = window.setTimeout(
+        () => finish(false),
+        Math.max(0, deadline - performance.now())
+      );
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) aborted();
+      else
+        void refetchMCPOAuthDurableState(client, flow.serverId, canApply).then(
+          (ready) => finish(ready),
+          () => finish(false, true)
+        );
+    });
+  while (isCurrent() && !signal.aborted && performance.now() < deadline) {
+    if (await readWithinDeadline()) {
+      if (!canApply()) throw invalid();
+      return;
+    }
+    if (!isCurrent() || signal.aborted) throw invalid();
+    await new Promise<void>((resolve, reject) => {
+      const aborted = () => {
+        window.clearTimeout(timer);
+        signal.removeEventListener('abort', aborted);
+        reject(invalid());
+      };
+      const timer = window.setTimeout(
+        () => {
+          signal.removeEventListener('abort', aborted);
+          resolve();
+        },
+        Math.min(750, Math.max(0, deadline - performance.now()))
+      );
+      signal.addEventListener('abort', aborted, { once: true });
+      if (signal.aborted) aborted();
+    });
+  }
+  throw invalid();
 }

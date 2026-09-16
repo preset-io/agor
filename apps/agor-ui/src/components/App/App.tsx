@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, PermissionScope } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole, PermissionScope } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -37,7 +37,6 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
-import { findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
@@ -77,7 +76,6 @@ import {
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import { getTemplateForFrameworkSource } from '../../utils/teammateTemplates';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -1048,6 +1046,7 @@ export const App: React.FC<AppProps> = ({
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
+        sourceRemoteUrl: result.sourceRemoteUrl,
       },
       { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
     );
@@ -1057,12 +1056,6 @@ export const App: React.FC<AppProps> = ({
         'AI teammate branch could not be created. Please check the branch details and try again.'
       );
     }
-
-    const template = getTemplateForFrameworkSource({
-      sourceBranch: result.sourceBranch,
-      selectedRepoId: result.repoId,
-      frameworkRepoId: findFrameworkRepo(agorStore.getState().repoById)?.[0],
-    });
 
     const sessionConfig: NewSessionConfig = {
       branch_id: branch.branch_id,
@@ -1075,9 +1068,8 @@ export const App: React.FC<AppProps> = ({
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
-        // This path carries no explicit template id, so recover the persona
-        // only when the source belongs to the detected framework repository.
-        templateId: template?.id,
+        templateId: result.templateId,
+        localHome: getTeammateConfig(branch)?.localHome,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,
