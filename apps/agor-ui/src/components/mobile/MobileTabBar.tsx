@@ -1,9 +1,9 @@
 import {
   AppstoreOutlined,
   CommentOutlined,
+  EditOutlined,
   HomeOutlined,
   MenuOutlined,
-  RobotOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Flex, theme } from 'antd';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
@@ -14,8 +14,6 @@ export type MobileTab = 'home' | 'board' | 'ask' | 'comments' | 'more';
 export interface MobileTabBarProps {
   activeTab: MobileTab | null;
   onSelect: (tab: MobileTab) => void;
-  /** Emoji for the primary assistant shown on the center Ask action. */
-  askEmoji?: string;
   /** Count of sessions awaiting the user / running (0 hides the badge). */
   sessionsBadge?: number;
   /** Count of unresolved comments (0 hides the badge). */
@@ -33,19 +31,18 @@ interface TabDef {
  * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]
  * . Comments . More. Icon-only: the active destination is marked by a rounded
  * highlight behind its icon plus colorPrimary (not text), so no label can wrap.
- * Ask is the raised center action. Safe-area aware; every tab keeps an
+ * Ask is the flat solid-teal center action. Safe-area aware; every tab keeps an
  * aria-label and the active one aria-current so names are still announced.
  */
 export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
   onSelect,
-  askEmoji,
   sessionsBadge,
   commentsBadge,
 }) => {
   const { token } = theme.useToken();
   const askActive = activeTab === 'ask';
-  const askSize = token.controlHeightLG + token.padding;
+  const askSize = TOUCH_TARGET;
 
   const leftTabs: TabDef[] = [
     { key: 'home', label: 'Home', icon: <HomeOutlined />, badge: sessionsBadge },
@@ -138,31 +135,24 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
             alignItems: 'center',
           }}
         >
+          {/* Variant B: a flat solid-teal compose button that sits flush in the
+              bar (no lift, no shadow). The fill marks it as the primary action. */}
           <Button
             type="primary"
             shape="circle"
             aria-label="Ask your primary assistant"
             aria-current={askActive ? 'page' : undefined}
             onClick={() => onSelect('ask')}
+            icon={<EditOutlined style={{ color: token.colorTextLightSolid }} />}
             style={{
               width: askSize,
               height: askSize,
-              // Lift so ~half the circle clears the bar.
-              marginTop: -askSize / 2,
-              // Ring separates the FAB from the bar (reads even in dark) + shadow.
-              boxShadow: `0 0 0 ${token.lineWidthBold * 2}px ${token.colorBgElevated}, ${token.boxShadow}`,
-              fontSize: token.fontSizeHeading3,
+              boxShadow: 'none',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
-          >
-            {askEmoji ? (
-              <span style={{ lineHeight: 1 }}>{askEmoji}</span>
-            ) : (
-              <RobotOutlined style={{ color: token.colorTextLightSolid }} />
-            )}
-          </Button>
+          />
         </div>
 
         {rightTabs.map(renderTab)}

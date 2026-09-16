@@ -33,10 +33,11 @@ describe('MobileTabBar', () => {
     }
   });
 
-  it('shows the primary assistant emoji when provided', () => {
-    render(<MobileTabBar activeTab={null} onSelect={vi.fn()} askEmoji="🦊" />);
-    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toHaveTextContent(
-      '🦊'
-    );
+  it('renders the center Ask as a flat compose button (no emoji)', () => {
+    render(<MobileTabBar activeTab={null} onSelect={vi.fn()} />);
+    const ask = screen.getByRole('button', { name: 'Ask your primary assistant' });
+    // Variant B: a clean compose icon, not an emoji, and flush (no lift shadow).
+    expect(ask.querySelector('.anticon-edit')).toBeTruthy();
+    expect(ask).toHaveTextContent('');
   });
 });

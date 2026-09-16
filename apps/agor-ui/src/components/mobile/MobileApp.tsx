@@ -456,7 +456,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <MobileTabBar
           activeTab={activeTab}
           onSelect={handleTabSelect}
-          askEmoji={primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined}
           sessionsBadge={sessionsBadge}
           commentsBadge={commentsBadge}
         />
