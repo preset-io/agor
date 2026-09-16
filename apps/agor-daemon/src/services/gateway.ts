@@ -129,6 +129,7 @@ import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
+import { resolveMCPOAuthGrantLiveness } from './mcp-oauth-grant-liveness.js';
 import type { SessionParams } from './sessions.js';
 
 /**
@@ -3889,34 +3890,32 @@ export class GatewayService {
           'gateway'
         );
 
-        // Check which MCP servers are not authenticated for this user
+        // Check which MCP servers are not authenticated for this user.
+        //
+        // This is the ONE surface that deliberately answers looser than
+        // `resolveMCPOAuthGrantLiveness`'s `live`, and it gets that widening
+        // from the same read rather than from a second copy of the rule. It
+        // suppresses the warning for `refreshable` too — a grant whose access
+        // token has expired but whose refresh token the inject hook will spend
+        // JIT, before the executor ever sees it.
+        //
+        // The asymmetry is deliberate and belongs to this surface only: the
+        // cost of a wrong warning here is telling a Slack thread a connection
+        // is broken when the next turn will use it fine, whereas the cost of a
+        // wrong `live` anywhere that grants something is resolving a widget
+        // against a credential nobody re-obtained. Warnings may be optimistic;
+        // grants may not. Nothing here attaches, mints, or resolves.
         const unauthedMcpNames: string[] = [];
         for (const serverId of gatewayMcpServerIds) {
           try {
             const server = await this.mcpServerRepo.findById(serverId);
             if (server?.auth?.type === 'oauth') {
-              const oauthMode = server.auth.oauth_mode || 'per_user';
-              // Unified token store — shared rows key on user_id=NULL, per_user on the caller's id.
-              const tokenUserId = oauthMode === 'shared' ? null : (user.user_id as UserID);
-              // Count a row with a valid refresh_token as "authed" even if the
-              // access_token is expired — the inject hook will JIT-refresh it
-              // before handing it to the executor. This avoids spurious
-              // "not authenticated" warnings for users who are one refresh away.
-              const row = await this.userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
-              const bindingValid =
-                !!row && (await isMCPOAuthGrantAuthorizedForServer(this.db, server, row));
-              const accessValid = !!(
-                bindingValid &&
-                row?.refresh_status === 'idle' &&
-                row.oauth_access_token &&
-                (!row.oauth_token_expires_at || row.oauth_token_expires_at > new Date())
+              const liveness = await resolveMCPOAuthGrantLiveness(
+                this.db,
+                serverId as MCPServerID,
+                user.user_id as UserID
               );
-              const refreshable = !!(
-                bindingValid &&
-                row?.refresh_status !== 'ambiguous' &&
-                row?.oauth_refresh_token
-              );
-              if (!accessValid && !refreshable) {
+              if (!liveness.live && !liveness.refreshable) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }
             }
