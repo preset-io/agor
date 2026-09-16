@@ -13,6 +13,7 @@
  */
 
 import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { InboundFile } from '@agor/core/gateway';
 import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
 import type {
@@ -40,6 +41,8 @@ export interface AttachmentIngestResult {
 
 const MAX_REDIRECT_HOPS = 3;
 const DISCORD_IMAGE_MIMES = new Set(['image/png', 'image/jpeg']);
+export const DISCORD_ATTACHMENT_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * Whether a Slack file URL may be downloaded with the channel's bot token.
@@ -72,6 +75,77 @@ function isAllowedIngestMime(rawMime: string): boolean {
   return mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/json';
 }
 
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Discord attachment download timed out');
+}
+
+/**
+ * Cancel a response whose body will not be consumed. Fetch implementations
+ * differ in whether cancellation rejects for an already-locked body, so this
+ * is deliberately best-effort and never masks the original download error.
+ */
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (!response.body) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // The Node readable created from the body owns cancellation after handoff.
+  }
+}
+
+/** Race a provider fetch against the per-attachment deadline. */
+function withAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  onLateResolve?: (value: T) => void
+): Promise<T> {
+  if (signal.aborted) {
+    void operation.then(
+      (value) => onLateResolve?.(value),
+      () => undefined
+    );
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    function cleanup(): void {
+      signal.removeEventListener('abort', onAbort);
+    }
+    function onAbort(): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(abortReason(signal));
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        if (settled) {
+          onLateResolve?.(value);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+    );
+  });
+}
+
+function discordDownloadTimeoutError(): Error {
+  return Object.assign(new Error('Discord attachment download timed out'), {
+    code: 'ETIMEDOUT' as const,
+  });
+}
+
 /** Image and text-like attachments the ingestion pipeline accepts. */
 export function isIngestableFile(file: InboundFile): boolean {
   return isAllowedIngestMime(file.mimetype);
@@ -95,19 +169,30 @@ async function fetchFromAllowedHosts(
   initialUrl: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
-  isAllowedUrl: (rawUrl: string) => boolean = isAllowedSlackFileUrl
+  isAllowedUrl: (rawUrl: string) => boolean = isAllowedSlackFileUrl,
+  signal?: AbortSignal
 ): Promise<Response> {
   let url = initialUrl;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
     if (!isAllowedUrl(url)) {
       throw new Error('download URL host not allowed');
     }
-    const response = await fetchImpl(url, { headers, redirect: 'manual' });
+    if (signal?.aborted) throw abortReason(signal);
+    const request = { headers, redirect: 'manual' as const };
+    const response = signal
+      ? await withAbort(
+          Promise.resolve().then(() => fetchImpl(url, { ...request, signal })),
+          signal,
+          (lateResponse) => void cancelResponseBody(lateResponse)
+        )
+      : await fetchImpl(url, request);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
       if (!location) {
+        await cancelResponseBody(response);
         throw new Error(`redirect (HTTP ${response.status}) without Location header`);
       }
+      await cancelResponseBody(response);
       url = new URL(location, url).toString();
       continue;
     }
@@ -134,9 +219,19 @@ export async function ingestDiscordInboundImages(args: {
   branchId: BranchID;
   createdBy: UserID;
   store?: UploadStagingStore;
+  /** Test seam; production uses the fixed bounded deadline below. */
+  downloadTimeoutMs?: number;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const store = args.store ?? getUploadStagingStore();
+  const downloadTimeoutMs = args.downloadTimeoutMs ?? DISCORD_ATTACHMENT_DOWNLOAD_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(downloadTimeoutMs) ||
+    downloadTimeoutMs <= 0 ||
+    downloadTimeoutMs > MAX_TIMER_MS
+  ) {
+    throw new Error('Invalid Discord attachment download timeout');
+  }
   const limits = getUploadLimits();
   const uploads: UploadMetadata[] = [];
   let failed = 0;
@@ -173,12 +268,20 @@ export async function ingestDiscordInboundImages(args: {
     }
     declaredTotalBytes += file.size;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(discordDownloadTimeoutError()),
+      downloadTimeoutMs
+    );
+    timeout.unref?.();
+    let response: Response | undefined;
     try {
-      const response = await fetchFromAllowedHosts(
+      response = await fetchFromAllowedHosts(
         file.url_private_download,
         {},
         fetchImpl,
-        isAllowedDiscordAttachmentUrl
+        isAllowedDiscordAttachmentUrl,
+        controller.signal
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const contentType = discordImageMime(response.headers.get('content-type') ?? '');
@@ -212,30 +315,42 @@ export async function ingestDiscordInboundImages(args: {
           callback(null, chunk);
         },
       });
-      source.pipe(aggregateLimiter);
+      const onAbort = () => {
+        const reason = abortReason(controller.signal);
+        source.destroy(reason);
+        aggregateLimiter.destroy(reason);
+      };
+      controller.signal.addEventListener('abort', onAbort, { once: true });
       try {
-        const staged = await store.stage({
-          owner: {
-            tenantId: args.tenantId,
-            sessionId: args.sessionId,
-            branchId: args.branchId,
-            createdBy: args.createdBy,
-          },
-          name: `${file.id}_${file.name}`,
-          mimeType: contentType,
-          provenance: 'gateway-discord',
-          body: aggregateLimiter,
-          sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
-        });
+        const [staged] = await Promise.all([
+          store.stage({
+            owner: {
+              tenantId: args.tenantId,
+              sessionId: args.sessionId,
+              branchId: args.branchId,
+              createdBy: args.createdBy,
+            },
+            name: `${file.id}_${file.name}`,
+            mimeType: contentType,
+            provenance: 'gateway-discord',
+            body: aggregateLimiter,
+            sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
+          }),
+          pipeline(source, aggregateLimiter),
+        ]);
         actualTotalBytes += staged.size;
         uploads.push(staged);
       } finally {
+        controller.signal.removeEventListener('abort', onAbort);
         source.destroy();
         aggregateLimiter.destroy();
       }
     } catch (error) {
       failed++;
       console.warn('[gateway] Failed to ingest Discord attachment:', error);
+    } finally {
+      clearTimeout(timeout);
+      if (response) await cancelResponseBody(response);
     }
   }
 
