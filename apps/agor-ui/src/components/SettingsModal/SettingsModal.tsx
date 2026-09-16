@@ -19,6 +19,7 @@ import { hasMinimumRole, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   AppstoreOutlined,
+  ArrowLeftOutlined,
   BranchesOutlined,
   CloseOutlined,
   ControlOutlined,
@@ -27,12 +28,14 @@ import {
   FolderOutlined,
   InfoCircleOutlined,
   MessageOutlined,
+  RightOutlined,
   RobotOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
+import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -414,28 +417,167 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [canSeeSection, isAdmin, token]
   );
 
-  const mobileSectionOptions = useMemo(
-    () => [
-      { label: 'Workspace · Boards', value: 'boards' },
-      { label: 'Workspace · Repositories', value: 'repos' },
-      { label: 'Workspace · Branches', value: 'branches' },
-      { label: 'Workspace · Teammates', value: 'teammates' },
-      { label: 'Workspace · Cards (Beta)', value: 'cards' },
-      { label: 'Workspace · Artifacts', value: 'artifacts' },
-      ...(isAdmin ? [{ label: 'Workspace · Preferences', value: 'workspace-preferences' }] : []),
-      { label: 'Integrations · MCP Servers', value: 'mcp' },
-      ...(canSeeSection('agentic-tools')
-        ? [{ label: 'Integrations · Agentic Tools', value: 'agentic-tools' }]
-        : []),
-      ...(canSeeSection('gateway')
-        ? [{ label: 'Integrations · Gateway Channels', value: 'gateway' }]
-        : []),
-      ...(canSeeSection('groups') ? [{ label: 'Admin · Groups', value: 'groups' }] : []),
-      ...(canSeeSection('users') ? [{ label: 'Admin · Users', value: 'users' }] : []),
-      { label: 'System · About', value: 'about' },
-    ],
-    [canSeeSection, isAdmin]
+  // Human labels for the mobile drill-in header. Mirrors the desktop menu.
+  const sectionLabels: Record<SettingsSection, string> = useMemo(
+    () => ({
+      boards: 'Boards',
+      repos: 'Repositories',
+      branches: 'Branches',
+      teammates: 'Teammates',
+      cards: 'Cards',
+      artifacts: 'Artifacts',
+      'workspace-preferences': 'Preferences',
+      mcp: 'MCP servers',
+      'agentic-tools': 'Agentic tools',
+      gateway: 'Gateway channels',
+      groups: 'Groups',
+      users: 'Users',
+      about: 'About Agor',
+    }),
+    []
   );
+
+  // iOS-style grouped index for the mobile shell. Rows reuse the same sections
+  // the desktop menu exposes (and the same canSeeSection gate); tapping one
+  // drills into the reused section content. Only the nav layer is new.
+  const mobileIndexGroups = useMemo(() => {
+    type Row = { section: SettingsSection; label: string; icon: React.ReactNode; count?: number };
+    const groups: { key: string; title: string; rows: Row[] }[] = [
+      {
+        key: 'workspace',
+        title: 'Workspace',
+        rows: [
+          { section: 'boards', label: 'Boards', icon: <AppstoreOutlined />, count: boardById.size },
+          {
+            section: 'repos',
+            label: 'Repositories',
+            icon: <FolderOutlined />,
+            count: repoById.size,
+          },
+          {
+            section: 'branches',
+            label: 'Branches',
+            icon: <BranchesOutlined />,
+            count: branchById.size,
+          },
+          { section: 'teammates', label: 'Teammates', icon: <RobotOutlined /> },
+          { section: 'cards', label: 'Cards', icon: <CreditCardOutlined />, count: cardById.size },
+          {
+            section: 'artifacts',
+            label: 'Artifacts',
+            icon: <ExperimentOutlined />,
+            count: artifactById.size,
+          },
+          ...(isAdmin
+            ? [
+                {
+                  section: 'workspace-preferences' as const,
+                  label: 'Preferences',
+                  icon: <ControlOutlined />,
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        key: 'integrations',
+        title: 'Integrations',
+        rows: [
+          ...(canSeeSection('agentic-tools')
+            ? [
+                {
+                  section: 'agentic-tools' as const,
+                  label: 'Agentic tools',
+                  icon: <ThunderboltOutlined />,
+                },
+              ]
+            : []),
+          {
+            section: 'mcp',
+            label: 'MCP servers',
+            icon: <ApiOutlined />,
+            count: mcpServerById.size,
+          },
+          ...(canSeeSection('gateway')
+            ? [
+                {
+                  section: 'gateway' as const,
+                  label: 'Gateway channels',
+                  icon: <MessageOutlined />,
+                  count: gatewayChannelById.size,
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        key: 'admin',
+        title: 'Members & groups',
+        rows: [
+          ...(canSeeSection('groups')
+            ? [{ section: 'groups' as const, label: 'Groups', icon: <TeamOutlined /> }]
+            : []),
+          ...(canSeeSection('users')
+            ? [
+                {
+                  section: 'users' as const,
+                  label: 'Users',
+                  icon: <TeamOutlined />,
+                  count: userById.size,
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        key: 'about',
+        title: 'About',
+        rows: [{ section: 'about', label: 'About Agor', icon: <InfoCircleOutlined /> }],
+      },
+    ];
+    return groups
+      .map((group) => ({ ...group, rows: group.rows.filter((row) => canSeeSection(row.section)) }))
+      .filter((group) => group.rows.length > 0);
+  }, [
+    canSeeSection,
+    isAdmin,
+    boardById.size,
+    repoById.size,
+    branchById.size,
+    cardById.size,
+    artifactById.size,
+    mcpServerById.size,
+    gatewayChannelById.size,
+    userById.size,
+  ]);
+
+  // Mobile drill state: null = the grouped index. A deep-link opener (e.g. the
+  // "Create teammate" flow) seeds straight into its section; the generic entry
+  // (default 'boards') opens on the index. The desktop Modal path ignores this.
+  const [mobileSection, setMobileSection] = useState<SettingsSection | null>(() =>
+    activeTab &&
+    activeTab !== 'boards' &&
+    (SETTINGS_SECTIONS as readonly string[]).includes(activeTab)
+      ? (activeTab as SettingsSection)
+      : null
+  );
+
+  const drillIntoSection = useCallback(
+    (section: SettingsSection) => {
+      setMobileSection(section);
+      onTabChange?.(section);
+    },
+    [onTabChange]
+  );
+
+  // Shared iOS-style grouped-list card wrapper for the mobile index.
+  const settingsGroupCardStyle: React.CSSProperties = {
+    marginTop: token.marginXS,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadiusLG,
+    background: token.colorBgContainer,
+    overflow: 'hidden',
+  };
 
   // Render content based on active section
   const renderContent = () => {
@@ -608,38 +750,46 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       >
         <Layout style={{ height: '100%', background: token.colorBgContainer }}>
           <Flex
-            vertical
-            gap={token.marginSM}
+            align="center"
+            gap={token.marginXS}
             style={{
-              padding: `${token.paddingSM}px ${token.paddingMD}px`,
+              padding: `${token.paddingSM}px ${token.paddingSM}px`,
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
               background: token.colorBgElevated,
               flex: '0 0 auto',
             }}
           >
-            <Flex align="center" justify="space-between" gap={token.marginSM}>
-              <Typography.Title level={5} style={{ margin: 0, minWidth: 0 }}>
-                Workspace settings
-              </Typography.Title>
+            {mobileSection ? (
               <Button
                 type="text"
-                icon={<CloseOutlined />}
-                aria-label="Close workspace settings"
-                onClick={onClose}
+                icon={<ArrowLeftOutlined />}
+                aria-label="Back"
+                onClick={() => setMobileSection(null)}
+                style={{ minWidth: 44, minHeight: 44 }}
               />
-            </Flex>
-            <Select
-              aria-label="Settings section"
-              value={activeTab}
-              options={mobileSectionOptions}
-              onChange={(key) => onTabChange?.(key as SettingsSection)}
-              style={{ width: '100%' }}
-              size="large"
+            ) : (
+              <div style={{ width: 44 }} />
+            )}
+            <Typography.Title
+              level={5}
+              ellipsis
+              style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
+            >
+              {mobileSection ? sectionLabels[mobileSection] : 'Settings'}
+            </Typography.Title>
+            <Button
+              type="text"
+              icon={<CloseOutlined />}
+              aria-label="Close settings"
+              onClick={onClose}
+              style={{ minWidth: 44, minHeight: 44 }}
             />
           </Flex>
           <Content
             style={{
-              padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+              padding: mobileSection
+                ? `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`
+                : 0,
               overflowY: 'auto',
               overflowX: 'hidden',
               minWidth: 0,
@@ -648,7 +798,116 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               boxSizing: 'border-box',
             }}
           >
-            <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
+            {mobileSection ? (
+              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
+            ) : (
+              <Flex
+                vertical
+                gap={token.marginLG}
+                style={{
+                  padding: `${token.paddingMD}px ${token.padding}px ${token.paddingXL}px`,
+                }}
+              >
+                {/* Account identity summary (read-only). */}
+                {currentUser && (
+                  <div>
+                    <Typography.Text
+                      type="secondary"
+                      style={{
+                        fontSize: token.fontSizeSM,
+                        paddingInlineStart: token.paddingXS,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      Account
+                    </Typography.Text>
+                    <div style={settingsGroupCardStyle}>
+                      <Flex align="center" gap={token.margin} style={{ padding: token.padding }}>
+                        <UserOutlined
+                          style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
+                        />
+                        <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+                          <Typography.Text strong ellipsis>
+                            {currentUser.name || currentUser.email || 'You'}
+                          </Typography.Text>
+                          <Typography.Text
+                            type="secondary"
+                            ellipsis
+                            style={{ fontSize: token.fontSizeSM }}
+                          >
+                            {[currentUser.email, currentUser.role].filter(Boolean).join(' · ')}
+                          </Typography.Text>
+                        </Flex>
+                      </Flex>
+                    </div>
+                  </div>
+                )}
+
+                {mobileIndexGroups.map((group) => (
+                  <div key={group.key}>
+                    <Typography.Text
+                      type="secondary"
+                      style={{
+                        fontSize: token.fontSizeSM,
+                        paddingInlineStart: token.paddingXS,
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      {group.title}
+                    </Typography.Text>
+                    <div style={settingsGroupCardStyle}>
+                      {group.rows.map((row, index) => (
+                        <button
+                          key={row.section}
+                          type="button"
+                          aria-label={row.label}
+                          onClick={() => drillIntoSection(row.section)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: token.margin,
+                            width: '100%',
+                            minHeight: 44,
+                            padding: `${token.paddingXS}px ${token.padding}px`,
+                            cursor: 'pointer',
+                            background: 'none',
+                            border: 'none',
+                            borderTop:
+                              index === 0 ? undefined : `1px solid ${token.colorBorderSecondary}`,
+                            font: 'inherit',
+                            color: 'inherit',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <span
+                            style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
+                          >
+                            {row.icon}
+                          </span>
+                          <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                            {row.label}
+                          </Typography.Text>
+                          {row.count !== undefined && (
+                            <Typography.Text
+                              type="secondary"
+                              style={{ fontSize: token.fontSizeSM }}
+                            >
+                              {row.count}
+                            </Typography.Text>
+                          )}
+                          <RightOutlined
+                            aria-hidden
+                            style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </Flex>
+            )}
           </Content>
         </Layout>
         <BranchModal
