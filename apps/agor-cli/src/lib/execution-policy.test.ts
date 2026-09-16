@@ -10,6 +10,7 @@ describe('executionPolicyFor', () => {
     ['login', 'bootstrap'],
     ['daemon:start', 'local'],
     ['db:migrate', 'local'],
+    ['managed-oauth:observe-database', 'local'],
     ['local:add-repo', 'local'],
     ['local:create-admin', 'local'],
     ['open', 'connection'],

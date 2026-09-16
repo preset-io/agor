@@ -24,14 +24,17 @@ describe('CLI context prerun hook', () => {
     vi.mocked(loadConfig).mockResolvedValue(config);
   });
 
-  it('guards local commands before their implementation runs', async () => {
-    vi.mocked(assertLocalContextUnlocked).mockRejectedValue(
-      new Error('Local administration is locked')
-    );
+  it.each(['doctor', 'managed-oauth:observe-database'])(
+    'guards %s before implementation runs',
+    async (command) => {
+      vi.mocked(assertLocalContextUnlocked).mockRejectedValue(
+        new Error('Local administration is locked')
+      );
 
-    await expect(runHook('doctor')).rejects.toThrow('Local administration is locked');
-    expect(assertLocalContextUnlocked).toHaveBeenCalledWith(config);
-  });
+      await expect(runHook(command)).rejects.toThrow('Local administration is locked');
+      expect(assertLocalContextUnlocked).toHaveBeenCalledWith(config);
+    }
+  );
 
   it('does not apply the local guard to connected commands', async () => {
     await runHook('user:list');
