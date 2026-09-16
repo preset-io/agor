@@ -32,7 +32,12 @@ import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
-import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
+import {
+  type DaemonMetrics,
+  getDaemonMetrics,
+  getDaemonOperationalMetrics,
+  NOOP_METRICS,
+} from './metrics/index.js';
 import { BranchDeletionReconciler } from './services/branch-deletion-reconciler.js';
 import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
@@ -998,6 +1003,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       console.error('❌ Error during shutdown:', error);
       exitCode = 1;
     } finally {
+      getDaemonOperationalMetrics(app).stop();
       try {
         // A DogStatsD gauge is last-value, so explicitly overwrite this
         // instance's process-local executor count before closing the socket.
@@ -1018,4 +1024,5 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  getDaemonOperationalMetrics(app).start();
 }

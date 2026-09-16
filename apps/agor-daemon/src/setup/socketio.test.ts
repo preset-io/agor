@@ -42,6 +42,7 @@ import {
   attachExecutorConnectionCandidate,
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-admission.js';
+import type { DaemonOperationalMetrics } from '../metrics/operational';
 import {
   boardPresenceAssociationRoomName,
   boardPresenceRoomName,
@@ -259,7 +260,10 @@ function makeIO(): FakeIO {
   return io;
 }
 
-function makeApp(multiTenancy?: ResolvedMultiTenancyConfig) {
+function makeApp(
+  multiTenancy?: ResolvedMultiTenancyConfig,
+  operationalMetrics?: DaemonOperationalMetrics
+) {
   // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
   // app.on('login'), and app.emit for the terminal:ready/error relay.
   const eventHandlers = new Map<string, (...args: any[]) => void>();
@@ -289,6 +293,7 @@ function makeApp(multiTenancy?: ResolvedMultiTenancyConfig) {
             : { get: async (userId: string) => ({ user_id: userId }) },
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
+    get: (name: string) => (name === 'daemonOperationalMetrics' ? operationalMetrics : undefined),
     eventHandlers,
     matchesOwnedAttachment,
   };
@@ -310,9 +315,10 @@ function makeApp(multiTenancy?: ResolvedMultiTenancyConfig) {
 
 function buildHarness(
   opts: Partial<SocketIOOptions> = {},
-  authenticationMultiTenancy: ResolvedMultiTenancyConfig | null = opts.multiTenancy ?? null
+  authenticationMultiTenancy: ResolvedMultiTenancyConfig | null = opts.multiTenancy ?? null,
+  operationalMetrics?: DaemonOperationalMetrics
 ) {
-  const app = makeApp(authenticationMultiTenancy ?? undefined);
+  const app = makeApp(authenticationMultiTenancy ?? undefined, operationalMetrics);
   const io = makeIO();
   const config = createSocketIOConfig(
     app as unknown as Application,
@@ -839,6 +845,37 @@ describe('Socket.IO lifecycle logging', () => {
     const logCountAfterClose = logSpy.mock.calls.length;
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
+  });
+
+  it('tracks authenticated user clients separately from executor/service transports', async () => {
+    const disconnect = vi.fn();
+    const operationalMetrics: DaemonOperationalMetrics = {
+      enabled: true,
+      start: vi.fn(),
+      stop: vi.fn(),
+      beginExternalRequest: vi.fn(() => vi.fn()),
+      recordSocketClientConnection: vi.fn(() => disconnect),
+      recordSocketAuthenticationFailure: vi.fn(),
+    };
+    const { io } = buildHarness({}, null, operationalMetrics);
+    const user = makeSocket('interactive-user');
+    const service = makeSocket('service-transport');
+    asUser(user, ALICE);
+    asServicePostConnect(service);
+
+    connect(io, user);
+    connect(io, service);
+    expect(operationalMetrics.recordSocketClientConnection).toHaveBeenCalledOnce();
+
+    user.handlers.get('disconnect')?.('transport error');
+    service.handlers.get('disconnect')?.('transport close');
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(disconnect).toHaveBeenCalledWith('transport error');
+
+    await new Promise<void>((resolve) =>
+      io.middlewares[0]?.(makeSocket('failed-handshake'), () => resolve())
+    );
+    expect(operationalMetrics.recordSocketAuthenticationFailure).toHaveBeenCalledOnce();
   });
 });
 

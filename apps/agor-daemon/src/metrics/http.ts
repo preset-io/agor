@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import type express from 'express';
 import type { Application } from '../declarations.js';
+import { getDaemonOperationalMetrics } from './operational.js';
 import type { DaemonMetrics } from './types.js';
 
 const SAFE_ROUTE_SEGMENT = /^[a-zA-Z0-9_.-]+$/;
@@ -110,10 +111,14 @@ export function createHttpMetricsMiddleware(
       return;
     }
     const startedAt = performance.now();
+    const finishInFlight = getDaemonOperationalMetrics(app).beginExternalRequest('http');
     let recorded = false;
     const record = (aborted: boolean) => {
       if (recorded) return;
       recorded = true;
+      finishInFlight();
+      response.removeListener('finish', onFinish);
+      response.removeListener('close', onClose);
       const statusCode = response.statusCode;
       const tags = {
         method: normalizeHttpMethod(request.method),
@@ -128,8 +133,15 @@ export function createHttpMetricsMiddleware(
         tags
       );
     };
-    response.once('finish', () => record(false));
-    response.once('close', () => record(!response.writableFinished));
-    next();
+    const onFinish = () => record(false);
+    const onClose = () => record(!response.writableFinished);
+    response.once('finish', onFinish);
+    response.once('close', onClose);
+    try {
+      next();
+    } catch (error) {
+      record(true);
+      throw error;
+    }
   };
 }

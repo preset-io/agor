@@ -148,5 +148,17 @@ export function getDaemonMetrics(owner: object | null | undefined): DaemonMetric
 }
 
 export { NOOP_METRICS } from './noop.js';
+export type {
+  DaemonOperationalMetrics,
+  DaemonOperationalMetricsOptions,
+  ExternalRequestTransport,
+} from './operational.js';
+export {
+  ActiveDaemonOperationalMetrics,
+  createDaemonOperationalMetrics,
+  DAEMON_OPERATIONAL_METRICS_INTERVAL_MS,
+  getDaemonOperationalMetrics,
+  NOOP_DAEMON_OPERATIONAL_METRICS,
+} from './operational.js';
 export { StatsDDaemonMetrics, sanitizeMetricTags } from './statsd.js';
 export type { DaemonMetrics, MetricTags, MetricTimer } from './types.js';

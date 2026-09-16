@@ -113,12 +113,19 @@ describe('StatsD daemon metrics', () => {
       sanitizeMetricTags({
         method: 'GET',
         outcome: 'success',
+        disconnect_reason: 'transport_error',
+        reason: 'caller-controlled',
         session_id: 'forbidden',
         tenant: 'forbidden',
         service: 'sessions',
         route: '/sessions/0198d20e-7182-7000-8000-000000000000',
       })
-    ).toEqual({ method: 'GET', outcome: 'success', service: 'sessions' });
+    ).toEqual({
+      method: 'GET',
+      outcome: 'success',
+      disconnect_reason: 'transport_error',
+      service: 'sessions',
+    });
   });
 
   it('builds per-instance HA gauge dimensions without a boot-id series', () => {

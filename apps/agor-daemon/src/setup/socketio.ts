@@ -48,6 +48,7 @@ import {
 } from '../auth/authenticated-connection-authority.js';
 import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
 import type { ExecutorSessionTokenRevocation } from '../auth/executor-session-token.js';
+import { getDaemonOperationalMetrics } from '../metrics/operational.js';
 import {
   boardPresenceAssociationRoomName,
   boardPresenceRoomName,
@@ -504,6 +505,7 @@ export function createSocketIOConfig(
     // Store Socket.io server instance for shutdown
     socketServer = io;
     options.onServerCreated?.(io);
+    const operationalMetrics = getDaemonOperationalMetrics(app);
 
     // Track active connections for periodic operational metrics.
     let activeConnections = 0;
@@ -786,6 +788,7 @@ export function createSocketIOConfig(
           console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
         }
         authenticationFailures = Math.min(authenticationFailures + 1, Number.MAX_SAFE_INTEGER);
+        operationalMetrics.recordSocketAuthenticationFailure();
         retireSocketConnectionAuthority(app, fs.feathers);
         const publicError = new Error('Invalid or expired authentication token') as Error & {
           data: { code: number; className: string };
@@ -932,6 +935,10 @@ export function createSocketIOConfig(
         return;
       }
       activeConnections++;
+      const recordClientDisconnect =
+        authority?.principal.kind === 'user'
+          ? operationalMetrics.recordSocketClientConnection()
+          : undefined;
       // Bind revocation to the exact Feathers acknowledgement whose service
       // call caused it. A next-turn/idle-transport heuristic is insufficient:
       // Feathers invokes this callback only after the service promise returns,
@@ -1915,6 +1922,7 @@ export function createSocketIOConfig(
         // Server-internal lifecycle signal for socket-bound one-shot state.
         app.emit(AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT, socket.id);
         activeConnections--;
+        recordClientDisconnect?.(reason);
         clearAuthorityExpiry(socket);
         clearPublishedPresence();
         if (presenceSocket.feathers && typeof presenceSocket.feathers === 'object') {

@@ -182,7 +182,7 @@ import {
 import { createMCPEgressHttpHandler } from './mcp-egress/http-handler.js';
 import { validateMCPEgressRolloutChange } from './mcp-egress/rollout.js';
 import { createFeathersMetricsHook } from './metrics/feathers.js';
-import { getDaemonMetrics } from './metrics/index.js';
+import { getDaemonMetrics, getDaemonOperationalMetrics } from './metrics/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -6644,6 +6644,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const feathersInstrumentationOptions = {
     excludedServicePaths: ['health'],
     isInternalCall: (context: HookContext) => isAuthenticationUserLookup(context.params),
+    operationalMetrics: getDaemonOperationalMetrics(app),
   };
 
   // Outermost: open the APM span first so it encloses the metrics timing and
