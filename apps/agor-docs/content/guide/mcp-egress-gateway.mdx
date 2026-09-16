@@ -490,3 +490,32 @@ Omitting the triple deliberately retains full-tenant retirement semantics for
 workspace lifecycle operations. Historical cleanup targets belonging to another
 current cell are cleanup-only: do not erase their tenant or shared database,
 and release their temporary tenant gate once the exact old-cell cleanup drains.
+
+### Read-only database observation
+
+A trusted deployment observer can measure the running replica's configured
+PostgreSQL connection without reading tenant records or credentials:
+
+```sh
+agor managed-oauth observe-database --cell-id CELL
+```
+
+`CELL` must equal local `managed_mcp_oauth.cell_id`. There are no database URL,
+role, or expected-digest override flags. The command checks the complete binary
+migration ledger and live catalog in a repeatable-read, read-only transaction,
+using the same guard as daemon cohort admission. It refuses privileged logins,
+including privileged sessions masked with `SET ROLE`, inherited ownership,
+schema drift, and non-PostgreSQL databases. It never runs migrations.
+
+Successful JSON contains `version:1`, `cell_id`, `schema_digest`, and
+`database_role`: actual `session_user` and `current_user`,
+`same_session_role:true`, and false `superuser`, `bypass_rls`, `create_role`,
+`create_database`, `privileged_membership`, and `owns_or_inherits` fields.
+Failure returns no observation and a sanitized error.
+
+This is a measurement, **not a signed cohort or eligibility assertion**. The
+external observer must authenticate the exact pod/process and immutable image,
+bound measurement freshness, independently establish complete replica and
+historical executor inventory, and enforce its rollout/admission fence. The
+command does not assert gateway enforcement, release identity, clock health, or
+old-executor termination, and cannot replace those independent observations.

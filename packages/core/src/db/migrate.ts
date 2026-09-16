@@ -25,6 +25,10 @@ import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
+import {
+  type MCPManagedOAuthDatabaseObservation,
+  MCPManagedOAuthDatabaseObservationSchema,
+} from '../types/mcp-managed-oauth';
 import type { Database } from './client';
 import {
   getDatabaseInstanceDialect,
@@ -786,6 +790,16 @@ export async function seedInitialData(db: Database, createdBy: string): Promise<
  * changes it even if somebody left the migration receipt unchanged.
  */
 export async function readManagedOAuthSchemaDigest(db: Database): Promise<string> {
+  return (await readManagedOAuthDatabaseObservation(db)).schema_digest;
+}
+
+/** Catalog/role measurement under the same admission guard used by the daemon.
+ * No migrations, tenant rows, credentials or provider operations are performed.
+ * The external observer must authenticate the process/image and fence inventory.
+ */
+export async function readManagedOAuthDatabaseObservation(
+  db: Database
+): Promise<MCPManagedOAuthDatabaseObservation> {
   if (!isPostgresDatabase(db))
     throw new MigrationError('Managed OAuth schema evidence requires PostgreSQL');
   return runDatabaseTransaction(
@@ -793,13 +807,15 @@ export async function readManagedOAuthSchemaDigest(db: Database): Promise<string
     async (tx) => {
       const { executeRaw } = await import('./database-wrapper');
       await executeRaw(tx, sql`SET TRANSACTION READ ONLY`);
-      return readManagedOAuthSchemaDigestSnapshot(tx);
+      return readManagedOAuthDatabaseObservationSnapshot(tx);
     },
     { postgresIsolationLevel: 'repeatable read' }
   );
 }
 
-async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<string> {
+async function readManagedOAuthDatabaseObservationSnapshot(
+  db: Database
+): Promise<MCPManagedOAuthDatabaseObservation> {
   if (!isPostgresDatabase(db))
     throw new MigrationError('Managed OAuth schema evidence requires PostgreSQL');
   const { createHash } = await import('node:crypto');
@@ -809,7 +825,8 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
     const [role] = rawRows(
       await executeRaw(
         db,
-        sql`SELECT session_user=current_user AS same_session_role,
+        sql`SELECT session_user::text AS session_user,current_user::text AS current_user,
+      session_user=current_user AS same_session_role,
       r.rolsuper,r.rolbypassrls,r.rolcreaterole,r.rolcreatedb,
       EXISTS(SELECT 1 FROM pg_catalog.pg_roles privileged
         WHERE (privileged.rolsuper OR privileged.rolbypassrls OR privileged.rolcreaterole)
@@ -959,7 +976,21 @@ async function readManagedOAuthSchemaDigestSnapshot(db: Database): Promise<strin
       if (typeof row.evidence !== 'string') throw new Error();
       add(row.evidence);
     }
-    return hash.digest('hex');
+    return MCPManagedOAuthDatabaseObservationSchema.parse({
+      version: 1,
+      schema_digest: hash.digest('hex'),
+      database_role: {
+        session_user: role.session_user,
+        current_user: role.current_user,
+        same_session_role: role.same_session_role,
+        superuser: role.rolsuper,
+        bypass_rls: role.rolbypassrls,
+        create_role: role.rolcreaterole,
+        create_database: role.rolcreatedb,
+        privileged_membership: role.privileged_membership,
+        owns_or_inherits: role.owns_or_inherits,
+      },
+    });
   } catch {
     throw new MigrationError(
       'Managed OAuth schema evidence is unavailable or differs from this binary'

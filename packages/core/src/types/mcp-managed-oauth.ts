@@ -17,6 +17,33 @@ import {
   McpOAuthUseClaimsSchema,
 } from './mcp-managed-oauth-contract';
 
+/** Read-only operator measurement, not a signed cohort or tenant inventory. */
+export const MCPManagedOAuthDatabaseObservationSchema = z.strictObject({
+  version: z.literal(1),
+  schema_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  database_role: z.strictObject({
+    session_user: z.string().min(1).max(63),
+    current_user: z.string().min(1).max(63),
+    same_session_role: z.literal(true),
+    superuser: z.literal(false),
+    bypass_rls: z.literal(false),
+    create_role: z.literal(false),
+    create_database: z.literal(false),
+    privileged_membership: z.literal(false),
+    owns_or_inherits: z.literal(false),
+  }),
+});
+export type MCPManagedOAuthDatabaseObservation = z.infer<
+  typeof MCPManagedOAuthDatabaseObservationSchema
+>;
+export const MCPManagedOAuthDatabaseObservationReportSchema = z.strictObject({
+  ...MCPManagedOAuthDatabaseObservationSchema.shape,
+  cell_id: McpOAuthIdSchema,
+});
+export type MCPManagedOAuthDatabaseObservationReport = z.infer<
+  typeof MCPManagedOAuthDatabaseObservationReportSchema
+>;
+
 export const MCPManagedOAuthPendingMetadataSchema = z.strictObject({
   owner: McpOAuthOwnerSchema,
   prepare_request: McpOAuthPrepareRequestSchema,
