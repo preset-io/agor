@@ -5,6 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import postgres from 'postgres';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,7 +48,9 @@ const child = spawn(process.execPath, ['scripts/run-postgres-integration-tests.m
 
 function capture(chunk) {
   output += chunk.toString();
-  if (!signaled && output.includes('RUN  v')) {
+  // Vitest 5 emits separate ANSI spans for the RUN badge and version even on
+  // captured pipes. Match the visible banner, not incidental terminal encoding.
+  if (!signaled && stripVTControlCharacters(output).includes('RUN  v')) {
     signaled = true;
     triggerSignal();
   }
