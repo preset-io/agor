@@ -65,8 +65,9 @@ function byIdentifier(a: MCPCatalogEntry, b: MCPCatalogEntry): number {
  *
  * Sorting by `name` instead puts `ai.exa/exa` before `com.airtable/mcp` — Exa
  * ahead of Airtable — because the leading label is a TLD. The user is reading
- * display names, so ordering by anything else reads as broken, and no entry in
- * the file states a `title`, which means every visible name is derived.
+ * display names, so ordering by anything else reads as broken, and most of them
+ * are derived: 17 of the 62 shipped entries state a `title` and the rest fall
+ * back to the capitalized publisher segment of `name`.
  *
  * `catalogDisplayName` is the same function the card and the drawer call, so
  * the order and the labels cannot disagree. Display names are not guaranteed

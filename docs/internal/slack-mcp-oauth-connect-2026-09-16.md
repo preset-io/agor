@@ -1,6 +1,17 @@
 # Agent-initiated MCP OAuth — "connect me to Notion"
 
-Status: **stage 1 implemented.** Stages 2 and 3 are designed here and not built.
+Status, as of this branch:
+
+| Section               | State                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                      |
+| §7 — Slack projection | **Partly built**: the sealed connect token, the redemption authority, and the landing page are in. The Block Kit post/update projection is not. |
+
+Numbering warning for anyone reading commit messages against this file: the
+branch's `stage2` commits built §7's token + landing page, not §6. §6 has never
+been started.
+
 Companion: `docs/internal/in-conversation-widgets-design-2026-05-19.md` (§6.2 anticipated this widget).
 
 ---
@@ -71,7 +82,7 @@ Three properties carry the design:
 
 ---
 
-## 3. What stage 1 shipped
+## 3. What the widget lane shipped
 
 | Piece                                                         | Where                                                        |
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -179,7 +190,7 @@ Mint-time and resolve-time preconditions are `authorizeMint` / `authorizeResolve
 hooks on the **registry entry**, not free functions a caller remembers to call.
 `mintWidgetMessage` runs the mint gate for every widget the MCP tools create and
 refuses a widget type this daemon has not registered; `submissions.ts` runs the
-resolve gate before the durable claim. Stage 3's Slack projection inherits both
+resolve gate before the durable claim. §7's Slack projection inherits both
 by minting through the same seam rather than by deciding to.
 
 `agor_widgets_request_oauth` also calls the mint gate EARLY, with no params,
@@ -267,13 +278,41 @@ carries no server id, no URL, and no payload the handler trusts. The destination
 is pinned in widget params at mint; the outcome is re-read from
 `user_mcp_oauth_tokens` through `isMCPOAuthGrantAuthorizedForServer`.
 
-**D4 — Liveness is one function, not three.** `resolveMCPOAuthGrantLiveness`
-backs the agent-facing status read, the mint short-circuit, and the resolution
-gate. The third is a security boundary, so it must not be a looser
-reimplementation of the first two. "Live" is stricter than "a row exists": a
-grant mid-refresh (`refreshing`), of unknown outcome (`ambiguous`), expired, or
-no longer bound to the server's current OAuth configuration does not count,
-because none of those is something the next turn can spend.
+**D4 — Liveness is one function.** `resolveMCPOAuthGrantLiveness` backs the
+agent-facing status read (`getOAuthStatus`, `mcp/tools/mcp-servers.ts`), the
+mint short-circuit, the resolution gate, and the gateway's pre-prompt "not
+authenticated" warning (`services/gateway.ts`). The third is a security
+boundary, so it must not be a looser reimplementation of the others. "Live" is
+stricter than "a row exists": a grant mid-refresh (`refreshing`), of unknown
+outcome (`ambiguous`), expired, or no longer bound to the server's current
+OAuth configuration does not count, because none of those is something the next
+turn can spend.
+
+This was written before it was true. The agent-facing read carried its own
+inline copy of the whole rule — server re-read, lookup-key derivation, binding
+check, `refresh_status`, expiry — and the gateway carried a looser one, so a
+user one refresh away from usable read _connected_ from the warning surface and
+_not connected_ from the mint short-circuit, and the agent offered a Connect
+button for a server that already worked. Both now call the shared function.
+
+**Exactly one surface answers looser, and it does so from the same read.** The
+gateway's warning also suppresses itself for `refreshable` — a grant whose
+access token has expired but whose refresh token the inject hook will spend
+JIT, before the executor ever sees it. That widening is a named field on the one
+answer, not a second rule, and the asymmetry is deliberate: a wrong warning
+tells a Slack thread a connection is broken when the next turn will use it
+fine, while a wrong `live` resolves a widget against a credential nobody
+re-obtained. Warnings may be optimistic; grants may not. `refreshable` is
+documented as readable only by a surface that grants nothing.
+
+A fourth shape exists and is intentionally not folded in:
+`hasLiveCallerOAuthGrant` (`services/mcp-catalog-credential-match.ts`) applies
+the same predicate — idle, unexpired, authorized — over a
+`MCPCatalogServerCandidate` projection the caller already holds, not over a
+`(db, serverId, userId)` read. It answers a different question (is this
+candidate row a reusable credential peer) from a different input, so
+converging it would mean giving the shared function a second signature rather
+than removing a copy of the rule.
 
 **D5 — The tool calls `mcp-catalog/connect` with `provider` intact.** Found by
 running the real stack, not by a unit test: passing `{ ...baseServiceParams,
@@ -307,6 +346,46 @@ surfaced as "ask the session owner to attach it" — advice that is false for
 each, and for the first one impossible, since the session owner cannot attach a
 server private to a third user either.
 
+**D7 — A pending widget does not expire, and that is an accepted gap, not an
+oversight.** A `pending` oauth widget lives until it is resolved, dismissed, or
+superseded. Nothing ages it out.
+
+What that is _not_ is a way in. Every question the mint asked is re-asked at
+resolve, against state read then: the role floor, the gateway identity
+alignment, the pinned server's existence / usability / enabled-ness / OAuth mode,
+and — the one that decides — a live grant for the caller. A card rendered a
+month ago and clicked today grants exactly what it would grant if minted today,
+by exactly the person clicking it. The residue is a stale button in a
+scrolled-back transcript, and the common way a card goes stale is already
+handled: a second request for the same (session, server) supersedes the first
+(§3.4.7), as does either short-circuit.
+
+What building it would cost, weighed against that:
+
+- A TTL needs a terminal `expired` status on `WidgetStatus`, which every widget
+  type's UI, the resolution store, and the auto-resume admission have to
+  understand — `env_vars` and `gateway_token` included, or the lifecycle
+  becomes per-type.
+- It needs a sweeper: a periodic, tenant-iterating job that finds overdue
+  `pending` rows, patches them through `WidgetResolutionStore`, and broadcasts —
+  with the HA ownership discipline every other durable daemon job carries. That
+  is the real cost, and it is a new background job, not a field.
+- **And §7 already puts a second clock on the same card.** The sealed
+  Slack connect token carries its own `expires_at` (§7), tighter than any card
+  TTL would be, with a one-use consume CAS. Inventing a widget-level TTL now
+  means there are two expiry clocks on one object and a reconciliation
+  nobody has designed: which one a Block Kit card reflects, what a resolve does
+  when the token is live and the widget expired, whether an expired card can be
+  re-offered. Designing the widget clock _with_ the token clock is strictly
+  cheaper than designing it twice.
+
+So: deferred deliberately, to be designed alongside the connect token's expiry
+rather than apart from it. Two things would change the answer and should reopen it —
+a pending widget gaining any authority that is NOT re-derived at resolve (which
+would make the card itself a credential), or transcripts accumulating enough
+abandoned cards to be a usability problem in their own right. Neither is true
+today.
+
 ---
 
 ## 5. Security requirements
@@ -321,18 +400,48 @@ which exchanges the code and persists the grant.
 
 `account_label` is in the shape and is **never populated today**. Agor persists
 no provider-side account identity for an MCP grant (`UserMCPOAuthToken` carries
-none), so there is nothing truthful to put in it. Stage 3 may fill it if the
+none), so there is nothing truthful to put in it. §7 may fill it if the
 landing page learns one. It is not derived from anything.
 
-`oauthParamsSchema` is `.strict()`, so no extra field can be smuggled onto the
-widget row by a caller of the tool.
+`oauthParamsSchema` is `.strict()`, and the pending path runs
+`oauthParamsSchema.parse` on the params it mints, so no extra field reaches the
+widget row through it. The claim is path-specific: the `already_present`
+short-circuit builds its params with `satisfies OAuthWidgetParams`, which is a
+compile-time check and strips nothing at runtime. Nothing is smuggled there
+either — every field is a literal or a daemon-read value, and the tool's own
+input schema is a `z.strictObject` — but the guarantee on that path comes from
+the daemon constructing the object, not from the schema.
 
 ### 5.2 Role floors
 
-Shared-mode → `ROLES.ADMIN`, at mint _and_ at resolve. Per-user → `ROLES.MEMBER`,
-which `/widgets/:id/oauth-resolve` enforces at the route. Same rule the recovery
-lane applies, and the same rule `oauth-start` applies internally
-("Shared MCP OAuth grants can only be started by an admin").
+Shared-mode → `ROLES.ADMIN`, at mint _and_ at resolve, in
+`assertOAuthWidgetRoleFloor`. That is the same rule the recovery lane applies
+and the same rule `oauth-start` applies internally ("Shared MCP OAuth grants can
+only be started by an admin").
+
+Per-user → `ROLES.MEMBER`, which `/widgets/:id/oauth-resolve` enforces at the
+route with the generic `requireMinimumRole(ROLES.MEMBER)` hook rather than with
+`assertMcpCapabilityRole`, the MCP-specific floor. Saying they apply "the same
+rule" needs a footnote, because the reason the second one exists is that they
+once differed.
+
+They no longer do, on any input. `assertMcpCapabilityRole`'s own comment still
+says the generic hook "normalizes through `normalizeRole`, which answers MEMBER
+for an absent or empty role, so it admits precisely the caller carrying no role
+at all" — that was true when it was written (#2373, 2026-08-18) and stopped
+being true the next day, when #2496 added `if (!userRole) return false` ahead of
+the normalization in `hasMinimumRole`. Both now refuse an absent role, an empty
+role, and any role outside the authority ranking, and both bypass identically
+for a provider-less internal call and for an explicit service account. The
+remaining difference is defensive typing: `isAtLeastMemberRole` also requires
+the role to be a non-empty string before ranking it. That comment is corrected
+in place; the two floors are kept separate anyway, so the MCP floor cannot be
+loosened by a change made for some unrelated route.
+
+The route is left as it is. It matches `/submit` and `/dismiss`, and the floor
+is not what this lane rests on in any case: the resolve gate re-asks the role
+floor and the gateway identity question before the durable claim, the pinned
+destination is revalidated, and nothing resolves without a live grant.
 
 ### 5.3 Fail closed on gateway identity
 
@@ -366,7 +475,7 @@ Known gap in the safe direction: `gateway.ts` also honours a per-message
 channel aligned only that way reads as unaligned. That costs a spurious refusal
 and grants nothing.
 
-The Slack _binding_ is stage 3. The guard is here because the exposure exists
+The Slack _binding_ is §7. The guard is here because the exposure exists
 the moment an agent in a gateway session can mint this widget, which is now.
 
 ### 5.4 The disclosure, and the one place this design bends a rule
@@ -427,10 +536,15 @@ broadcast and row patch every other widget uses.
 
 ---
 
-## 6. Stage 2 — what is next
+## 6. Canvas polish — not built
 
-Stage 2 finishes the canvas experience and hardens the edges stage 1 left
-deliberately simple.
+These finish the canvas experience and harden edges the widget lane left
+deliberately simple. **None of them is built.** Item 3 is the only one that has
+been decided rather than merely deferred: it is an accepted gap, with its
+reasoning in **D7**.
+
+(This section was once called "stage 2". The branch's `stage2` commits built §7,
+not this — see the status table at the top.)
 
 1. **Reauth reuse.** `agor_widgets_request_oauth` currently short-circuits on a
    live grant. It should also recognise an _expired or revoked_ grant and say so
@@ -440,19 +554,27 @@ deliberately simple.
 2. **Attach-authority preflight.** Today a collaborator learns the attach was
    refused only after signing in (D6). Mint could resolve
    `checkSessionOwnerOrAdmin` up front and render the caveat in the card.
-3. **Expiry.** A pending oauth widget lives forever. It should age out, matching
-   the recovery notice's `expires_at` discipline, so an abandoned card does not
-   sit in a transcript indefinitely.
+3. **Expiry.** A pending oauth widget lives forever. **Accepted gap — D7.**
 4. **Popup-blocked recovery path.** The card currently tells the user to allow
    pop-ups. A same-tab fallback (navigate, return via the callback page) would be
-   better, and stage 3 needs one anyway for Slack's in-app browser.
+   better, and §7 needs one anyway for Slack's in-app browser.
 5. **Onboarding integration.** The Catalog drawer's "Start new session" flow and
    this widget now both install-then-connect. They should share one helper.
 
-## 7. Stage 3 — Slack projection
+## 7. The Slack projection — token and page built, Block Kit not
 
-Stage 3 gives the widget a Slack face. Explicitly **not built** in stage 1: the
-sealed connect token, the landing page, and the gateway projection.
+This gives the widget a Slack face. Three pieces; two are in.
+
+**Built on this branch:** the sealed connect token
+(`utils/mcp-oauth-connect-token.ts`), its redemption authority
+(`services/mcp-slack-oauth-authority.ts`), the durable delivery record on the
+widget row (`services/mcp-oauth-connect-delivery.ts`,
+`WidgetMessageMetadata.slack_connect`), and the landing page
+(`apps/agor-ui/src/pages/MCPOAuthConnectPage.tsx`).
+
+**Not built:** the Block Kit post/update projection in `services/gateway.ts`.
+Until it exists, nothing posts the card into a Slack thread, so the token and
+page have no caller from Slack.
 
 The reactive lane is the template, and most of it is reusable:
 
@@ -477,12 +599,12 @@ The reactive lane is the template, and most of it is reusable:
   redemption, exactly as the recovery token does — alignment at mint does not
   prove the person who tapped the button is the person who asked.
 
-Stage 3 must not introduce a headless start. Sealing a token does not create a
+This lane must not introduce a headless start. Sealing a token does not create a
 grant; the browser-bound flow remains the only path.
 
 ---
 
-## 8. How stage 1 was verified
+## 8. How the widget lane was verified
 
 Unit and integration suites (`widgets/oauth/index.test.ts`,
 `widgets/submissions.test.ts`, `mcp/tools/widgets.oauth.test.ts`,
@@ -491,6 +613,23 @@ Unit and integration suites (`widgets/oauth/index.test.ts`,
 plus a real-Chromium suite (`OAuthConnectWidget.browser.test.tsx`, run under
 `vitest.browser.config.ts` across four viewports) for the parts jsdom cannot
 model — user activation around `window.open`, and layout.
+
+**The grant check is tested directly, against real rows.** The two suites above
+that reach `resolveMCPOAuthGrantLiveness` both `vi.mock` the module away, so
+their strongest-looking assertion — `toHaveBeenCalledWith(..., 'srv-notion',
+'user-actor')` — pins the argument handed to a stub and says nothing about
+which row is read or what the rule decides. That is the same failure shape as
+D5 and the tenant-scope bug, both of which only a real-stack run caught. So
+`services/mcp-oauth-grant-liveness.test.ts` drives the function over a migrated
+database and real `mcp_servers` / `user_mcp_oauth_tokens` rows: the
+shared→`NULL` / per_user→user lookup split, the `refresh_status` rule, expiry,
+the binding re-check (by moving the server's endpoint under a bound grant), and
+the server re-read. `mcp-servers.auth-status.test.ts` and the gateway warning
+test were converted off their storage stubs for the same reason — the former
+stubbed `getToken` to always return `null`, so its authenticated branch never
+ran — and the former now also asserts that the agent-facing verdict equals the
+widget's gate state by state, which is the assertion that would have caught the
+disagreement D4 describes.
 
 The whole lane was then driven against the branch's managed environment (a real
 daemon + UI on :9099/:11099) over HTTP and the MCP endpoint:
@@ -516,15 +655,27 @@ Step 2 is where D5 was found.
 ## 9. Adjacent things deliberately not fixed
 
 - **Catalog search does not match `benefit`.** `filterCatalog` searches
-  `name | title | description`. No entry in the shipped `curated.yaml` states
-  `title` or `description` — all 62 use `benefit` — so catalog search is
-  effectively a search over the reverse-DNS `name`. That covers the product-name
-  lookup this feature needs ("notion" → `com.notion/mcp`) but not prose
-  ("track bugs"). Widening it is a one-line change in `query.ts` that would also
-  change Catalog UI results, so it is out of scope here. The tool's description
-  says what `search` actually matches and points at `category`/`capability` for
-  browsing, and `mcp-catalog-list.test.ts` pins the current behaviour so the gap
-  is visible rather than surprising.
+  `name | title | description`. Of the 62 entries in the shipped
+  `curated.yaml`, all 62 state `benefit`, **17 state `title`**, and none states
+  `description` — so catalog search is a search over the reverse-DNS `name`
+  plus those 17 titles. That covers the product-name lookup this feature needs
+  ("notion" → `com.notion/mcp`) but not prose ("track bugs"). Widening it is a
+  one-line change in `query.ts` that would also change Catalog UI results, so it
+  is out of scope here. The tool's description says what `search` actually
+  matches and points at `category`/`capability` for browsing, and
+  `mcp-catalog-list.test.ts` pins the current behaviour so the gap is visible
+  rather than surprising.
+
+  The practical severity is low, which is why the miscount above (an earlier
+  draft of this section, and `query.ts`'s own sort comment, said no entry states
+  a `title`) changed nothing in the code. `catalogDisplayName` is
+  title-or-capitalized-publisher-segment, and the publisher segment is by
+  construction a substring of `name`, so every display name is reachable by a
+  search over `name` whether the entry states a title or not. The 17 titles only
+  add reach where the title is not a substring of the name — `AWS Knowledge`
+  against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment is
+  corrected.
+
 - **`gateway_token`'s `buildResultMeta` `WeakMap`.** The submit-resolved variant
   still cannot return its own `result_meta`, so `gateway-token/index.ts` carries
   its computed outcome across the two calls in a module-level `WeakMap`. The

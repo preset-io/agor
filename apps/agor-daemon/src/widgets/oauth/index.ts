@@ -407,12 +407,17 @@ export async function authorizeOAuthWidgetMint(
 /**
  * Resolve gate — is the mint-time answer still true?
  *
- * A pending card is a standing invitation with no expiry, so the window here is
- * long: an admin can switch `align_slack_users` off, or demote the resolver,
- * between the button being rendered and being pressed. §5.2 already required
- * the role floor to hold at both ends; the identity question has the same shape
- * and a longer window, and a widget minted while aligned must not still mint a
- * shared-account credential afterwards.
+ * A pending card is a standing invitation with no expiry (deliberately — see
+ * D7 in the design doc), so the window here is long: an admin can switch
+ * `align_slack_users` off, or demote the resolver, between the button being
+ * rendered and being pressed. §5.2 already required the role floor to hold at
+ * both ends; the identity question has the same shape and a longer window, and
+ * a widget minted while aligned must not still mint a shared-account credential
+ * afterwards.
+ *
+ * This gate, and the pinned-destination and grant checks in the handler, are
+ * WHY the absent expiry is only a stale-card problem: nothing a pending card
+ * carries is authority, so age adds none.
  */
 export async function authorizeOAuthWidgetResolve(
   ctx: WidgetSubmitCtx,
