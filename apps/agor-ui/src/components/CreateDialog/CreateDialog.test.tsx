@@ -19,7 +19,7 @@
  */
 
 import type { Repo } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -39,14 +39,14 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
 }
 
 const frameworkRepo = makeRepo({
-  repo_id: 'framework-repo',
+  repo_id: 'framework-repo' as Repo['repo_id'],
   slug: 'preset-io/agor-teammate',
   name: 'agor-teammate',
   remote_url: 'https://github.com/preset-io/agor-teammate.git',
 });
 
 const userRepo = makeRepo({
-  repo_id: 'user-repo',
+  repo_id: 'user-repo' as Repo['repo_id'],
   slug: 'org/user-repo',
   name: 'user-repo',
 });
@@ -86,6 +86,17 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 // whole-test timeout.
 const ASYNC = { timeout: 10_000 };
 
+// Like TeammateGallery/OnboardingWizard tests, anchor button queries by text.
+// A document-wide button-role query computes styles for the persona cards too:
+// cssstyle 5.3.2 crashes on AntD's CSS-variable border + inline borderWidth.
+// Keep real AntD components and scope the role/name query to the button's footer;
+// CreateDialog.browser.test.tsx covers document-wide role queries in Chromium.
+function createButton(name: string): HTMLElement {
+  const button = screen.getByText(name).closest('button');
+  if (!button?.parentElement) throw new Error(`No create button found for "${name}"`);
+  return within(button.parentElement).getByRole('button', { name });
+}
+
 describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
   it('defaults to Teammate as the primary create path', async () => {
     renderDialog();
@@ -94,7 +105,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
       'aria-selected',
       'true'
     );
-    expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
+    expect(createButton('Create AI teammate')).toBeDisabled();
   });
 
   it('enables Create AI teammate once Name is typed', async () => {
@@ -107,7 +118,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Teammate' } });
 
-    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    const button = createButton('Create AI teammate');
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -134,7 +145,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     // isValid to false and TeammateTab's useEffect didn't re-fire (its
     // isFormValid hadn't changed), so the button stayed stuck disabled.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
+      expect(createButton('Create AI teammate')).not.toBeDisabled();
     }, ASYNC);
   });
 
@@ -149,7 +160,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'Bootstrap Bot' } });
 
-    const button = screen.getByRole('button', { name: /Create AI teammate/i });
+    const button = createButton('Create AI teammate');
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -179,14 +190,14 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'My Teammate' } });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
+      expect(createButton('Create AI teammate')).not.toBeDisabled();
     }, ASYNC);
 
     // Switch to Board (its form is empty). The footer's submit must reflect
     // Board's validity, not leak Teammate's "true" into Create Board.
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create Board/i })).toBeDisabled();
+      expect(createButton('Create Board')).toBeDisabled();
     }, ASYNC);
   });
 
@@ -197,7 +208,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     fireEvent.change(await screen.findByPlaceholderText('My Board', undefined, ASYNC), {
       target: { value: 'Launch Board' },
     });
-    const button = screen.getByRole('button', { name: /Create Board/i });
+    const button = createButton('Create Board');
     await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
     fireEvent.click(button);
 

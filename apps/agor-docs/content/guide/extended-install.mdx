@@ -21,6 +21,20 @@ Agor supports Node releases that are Current, Active LTS, or Maintenance LTS ups
 the Node ≥ 22.12 minimum. The packaged release gate currently runs Node 22, 24, and 26 end to end.
 Upstream EOL releases such as Node 25 are not supported production runtimes.
 
+### Platform support
+
+| Platform                | Running Agor locally                                                          |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| Linux                   | Supported; sandbox mode requires bubblewrap and user namespaces.              |
+| macOS                   | Supported in trusted `simple` mode; no local sandbox mode.                    |
+| Native Windows          | Unsupported. The `agor-live` npm package blocks installation.                 |
+| WSL2 / Linux containers | Not independently validated. Use Linux Node and meet the Linux prerequisites. |
+
+**Windows users can access an existing Agor server in a browser** without installing
+anything locally. The separate `@agor-live/client` package provides remote API access,
+but native Windows use has not been validated. Other operating systems are untested.
+See [execution modes](/guide/multiplayer-unix-isolation) for isolation requirements.
+
 ### Diagnosing repository clone failures
 
 Remote repository creation is asynchronous. Poll `agor_repos_get` with the returned
@@ -219,9 +233,8 @@ Agor's CLI, daemon, sessions, boards, and agentic tools do not require a pseudo-
 The npm package declares the prebuilt `@lydell/node-pty` runtime as optional so an unsupported
 platform artifact cannot block first run. `agor doctor` reports whether the capability is ready.
 
-The prebuilt runtime supports macOS, Linux, and Windows on x64 and arm64. If it is unavailable,
-opening the web terminal shows this documentation link rather than failing Agor startup. First retry
-the normal install without omitting optional dependencies:
+If the PTY runtime is unavailable, the web terminal links here instead of failing Agor startup.
+Retry the install without omitting optional dependencies:
 
 ```bash
 npm install -g agor-live@latest

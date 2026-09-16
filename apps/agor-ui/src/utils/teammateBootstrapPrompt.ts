@@ -8,6 +8,7 @@ import { BLANK_TEMPLATE_ID, getTeammateTemplate } from './teammateTemplates';
 
 export interface TeammateBootstrapPromptInput {
   slackGatewayIntent?: OnboardingSlackGatewayIntent;
+  localHome?: boolean;
   displayName: string;
   emoji?: string | null;
   description?: string | null;
@@ -31,6 +32,7 @@ export interface TeammateBootstrapPromptInput {
 
 export interface TeammateBootstrapPromptContext {
   slackGatewayIntent?: OnboardingSlackGatewayIntent;
+  localHome?: boolean;
   teammate: {
     displayName: string;
     emoji: string;
@@ -99,6 +101,14 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     'Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user using the supplied context and live Agor state.'
   );
   lines.push('');
+  lines.push(
+    'Useful work comes first; do not start a repository, token, or backup setup interview. Keep memory, decisions, and docs in Agor Knowledge. Never publicly push, fork, or PR personal teammate state.'
+  );
+  if (context.localHome) {
+    lines.push(
+      'This is an independent local home without origin, not privately backed up. Commit locally; private backup is optional later, only with explicit user authorization for an additional private remote. Do not change the registered framework repository.'
+    );
+  }
   lines.push('Open the first session well:');
   lines.push(
     'Your first message sets the working relationship. Make it personal and easy to scan: a short intro, then the value, then one real step. No wall of text, and no generic "what do you want to do?" interview.'
@@ -193,6 +203,7 @@ export function buildTeammateBootstrapPromptContext({
   templateId,
   suggestedIntegrations,
   slackGatewayIntent,
+  localHome,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
@@ -228,6 +239,7 @@ export function buildTeammateBootstrapPromptContext({
     ...(templateTitle ? { templateTitle } : {}),
     ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     ...(slackGatewayIntent ? { slackGatewayIntent } : {}),
+    ...(localHome ? { localHome: true } : {}),
     firstSession: true,
   };
 }

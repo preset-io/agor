@@ -1,5 +1,6 @@
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OPENCODE_VERSION } from '../shared/known-models.js';
 
 const runtime = vi.hoisted(() => ({
   clients: [] as Array<Record<string, unknown>>,
@@ -226,7 +227,7 @@ describe('opencode.auth executor command', () => {
       success: true,
       data: {
         runtime: 'available',
-        runtimeVersion: '1.14.33',
+        runtimeVersion: OPENCODE_VERSION,
         projectConfigured: { providerId: 'openai', modelId: 'gpt-next' },
         suggestedSelection: { providerId: 'openai', modelId: 'gpt-next' },
         providers: [

@@ -198,3 +198,15 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(nonOnboarding).not.toMatch(/Open as yourself: one warm line/);
   });
 });
+
+it('keeps useful work and Knowledge first, with backup deferred only for marked local homes', () => {
+  const input = { displayName: 'Ada', templateId: 'builder' };
+  const local = buildTeammateBootstrapPrompt({ ...input, localHome: true });
+  expect(local).toContain('Builder template');
+  expect(local).toContain('Useful work comes first');
+  expect(local).toContain('Agor Knowledge');
+  expect(local).toContain('without origin, not privately backed up');
+  expect(local).toContain('explicit user authorization');
+  expect(local).toContain('Never publicly push, fork, or PR');
+  expect(buildTeammateBootstrapPrompt(input)).not.toContain('not privately backed up');
+});

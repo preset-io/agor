@@ -12,7 +12,7 @@ import { Alert, Button, Modal, Radio, Space, Typography } from 'antd';
 import { useEffect, useId, useState } from 'react';
 import { BranchCleanupWarning } from '../BranchCleanupWarning';
 import { RepoCleanupSettingsModal } from './RepoCleanupSettingsModal';
-import { useCleanupPolicy } from './useCleanupPolicy';
+import { useArchiveDeleteEligibility } from './useArchiveDeleteEligibility';
 
 const { Text } = Typography;
 
@@ -46,7 +46,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const [selectionTouched, setSelectionTouched] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRepo, setSettingsRepo] = useState<Repo | null>(null);
-  const cleanup = useCleanupPolicy(client, currentUser, branch, open);
+  const eligibility = useArchiveDeleteEligibility(client, currentUser, branch, open);
   const canConfigure = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const [metadataAction, setMetadataAction] = useState<BranchMetadataAction>(initialMetadataAction);
 
@@ -63,22 +63,27 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   useEffect(() => {
     if (!open) return;
-    if (selectionTouched && cleanup.reason)
+    if (selectionTouched && eligibility.cleanupReason)
       setFilesystemAction((previous) => (previous === 'cleaned' ? 'preserved' : previous));
-  }, [open, cleanup.reason, selectionTouched]);
+  }, [open, eligibility.cleanupReason, selectionTouched]);
 
   // Derive the untouched default from current eligibility, rather than racing
   // asynchronous policy refreshes against another state update.
   const selectedFilesystemAction =
-    !selectionTouched || (filesystemAction === 'cleaned' && cleanup.reason)
-      ? cleanup.reason
+    !selectionTouched || (filesystemAction === 'cleaned' && eligibility.cleanupReason)
+      ? eligibility.cleanupReason
         ? 'preserved'
         : 'cleaned'
       : filesystemAction;
 
+  const actionReason =
+    metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
+      ? eligibility.workspaceReason
+      : selectedFilesystemAction === 'cleaned'
+        ? eligibility.cleanupReason
+        : eligibility.managementReason;
   const handleOk = () => {
-    if (metadataAction === 'archive' && selectedFilesystemAction === 'cleaned' && cleanup.reason)
-      return;
+    if (actionReason) return;
     onConfirm(
       metadataAction === 'delete'
         ? { metadataAction: 'delete', filesystemAction: 'deleted' }
@@ -88,7 +93,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   // Determine button text and style based on metadata action
   const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
-  const okButtonProps = metadataAction === 'delete' ? { danger: true } : {};
+  const okButtonProps = { danger: metadataAction === 'delete', disabled: !!actionReason };
 
   return (
     <Modal
@@ -125,6 +130,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             }
           />
         )}
+        {metadataAction === 'delete' && actionReason && (
+          <Alert type="warning" showIcon title={actionReason} />
+        )}
         {/* Environment Warning */}
         {environmentRunning && (
           <Alert
@@ -151,7 +159,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-filesystem`}
             value={metadataAction === 'delete' ? 'deleted' : selectedFilesystemAction}
-            disabled={metadataAction === 'delete'}
+            disabled={metadataAction === 'delete' || !!eligibility.managementReason}
             onChange={(e) => {
               setSelectionTouched(true);
               setFilesystemAction(e.target.value);
@@ -166,16 +174,16 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="cleaned" disabled={!!cleanup.reason}>
+              <Radio value="cleaned" disabled={!!eligibility.cleanupReason}>
                 <div>
-                  <div>Clean — {cleanup.policy?.command || 'repository cleanup command'}</div>
+                  <div>Clean — {eligibility.policy?.command || 'repository cleanup command'}</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {cleanup.reason ||
+                    {eligibility.cleanupReason ||
                       'Runs the configured command. Files may be deleted; there is no undo.'}
                   </Text>
                 </div>
               </Radio>
-              <Radio value="deleted">
+              <Radio value="deleted" disabled={!!eligibility.workspaceReason}>
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -187,24 +195,28 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           </Radio.Group>
         </div>
 
-        {metadataAction === 'archive' && cleanup.reason && (
+        {metadataAction === 'archive' && eligibility.cleanupReason && (
           <Alert
             type="warning"
             showIcon
             title={
-              cleanup.policy?.enabled === false && selectedFilesystemAction === 'preserved'
+              !eligibility.workspaceReason &&
+              eligibility.policy?.enabled === false &&
+              selectedFilesystemAction === 'preserved'
                 ? 'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.'
-                : cleanup.reason
+                : eligibility.cleanupReason
             }
             description={
-              canConfigure ? undefined : 'A repository administrator can configure branch cleanup.'
+              canConfigure || eligibility.workspaceReason
+                ? undefined
+                : 'A repository administrator can configure branch cleanup.'
             }
             action={
               canConfigure &&
-              cleanup.repo && (
+              eligibility.repo && (
                 <Button
                   onClick={() => {
-                    setSettingsRepo(cleanup.repo ?? null);
+                    setSettingsRepo(eligibility.repo ?? null);
                     setSettingsOpen(true);
                   }}
                 >
@@ -223,6 +235,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Radio.Group
             name={`${radioGroupId}-metadata`}
             value={metadataAction}
+            disabled={!!eligibility.managementReason}
             onChange={(e) => setMetadataAction(e.target.value)}
           >
             <Space orientation="vertical">
@@ -234,7 +247,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="delete">
+              <Radio value="delete" disabled={!!eligibility.workspaceReason}>
                 <div>
                   <div>Delete permanently</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -290,7 +303,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           onCancel={() => setSettingsOpen(false)}
           onSaved={() => {
             setSettingsOpen(false);
-            cleanup.refresh();
+            eligibility.refresh();
           }}
         />
       )}

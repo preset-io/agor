@@ -2,6 +2,12 @@ import type { Repo } from '@agor-live/client';
 import { Form } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
+import {
+  getTeammateTemplate,
+  resolveTemplateSourceBranch,
+  resolveTemplateSourceRemoteUrl,
+  type TeammateGalleryCardId,
+} from '@/utils/teammateTemplates';
 
 /**
  * Shared teammate form logic used by CreateDialog's Teammate tab.
@@ -47,6 +53,20 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     [form, validateForm]
   );
 
+  const handleTemplateChange = useCallback(
+    (templateId: TeammateGalleryCardId | null) => {
+      const template = getTeammateTemplate(templateId);
+      form.setFieldsValue({
+        templateId,
+        sourceBranch: resolveTemplateSourceBranch(templateId),
+        sourceRemoteUrl: resolveTemplateSourceRemoteUrl(templateId),
+        ...(template?.emoji ? { emoji: template.emoji } : {}),
+      });
+      validateForm();
+    },
+    [form, validateForm]
+  );
+
   const resetForm = useCallback(() => {
     form.resetFields();
     setIsFormValid(false);
@@ -62,6 +82,7 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     setCustomRepoSelected,
     validateForm,
     handleDisplayNameChange,
+    handleTemplateChange,
     resetForm,
   };
 }

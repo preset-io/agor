@@ -2,7 +2,7 @@
 import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
-import type { BranchName } from './repo';
+import type { BranchName, Repo } from './repo';
 
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
 export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
@@ -835,6 +835,18 @@ export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 export const TEAMMATE_FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
 export const TEAMMATE_FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
 
+/** Exact public template identity, never a name/slug substring match. */
+export function isCanonicalTeammateFrameworkRepo(repo: Pick<Repo, 'remote_url'>): boolean {
+  return [
+    TEAMMATE_FRAMEWORK_REPO_URL,
+    `https://github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+    `git@github.com:${TEAMMATE_FRAMEWORK_REPO_SLUG}.git`,
+    `git@github.com:${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+    `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}.git`,
+    `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+  ].includes(repo.remote_url ?? '');
+}
+
 export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';
 export interface TeammateKnowledgeGrant {
   namespace_id: KnowledgeNamespaceID;
@@ -876,6 +888,8 @@ export interface TeammateConfig {
   frameworkVersion?: string;
   /** Whether this was created via the onboarding wizard */
   createdViaOnboarding?: boolean;
+  /** Server-derived immutable creation marker; not a current backup-status assertion. */
+  localHome?: true;
   /** Knowledge Base namespace and grant config for teammate memory/context. */
   kb?: TeammateKnowledgeConfig;
 }
