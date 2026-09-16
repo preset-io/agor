@@ -45,6 +45,7 @@ import {
   type MarketplaceOAuthPopup,
   openMarketplaceOAuthPopup,
 } from '@/components/Marketplace/marketplaceOAuthPopup';
+import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
@@ -244,12 +245,34 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   }
 
   const busy = state === 'starting' || state === 'pending';
+  // What a screen reader is told, separately from what the card shows.
+  //
+  // Nothing about this flow is synchronous: the user clicks, a popup opens, a
+  // provider round-trip happens, and the card rewrites itself. The alerts that
+  // render at each of those moments are conditional, and a live region created
+  // in the same commit as its content is the classic case assistive technology
+  // misses — so the regions are PERSISTENT and empty rather than appearing with
+  // their text. Polite for progress so it waits its turn, assertive for the
+  // failure so it interrupts. Visually hidden, so they add no gap to a card
+  // whose visible states are the Alerts below.
+  const progressAnnouncement =
+    state === 'starting'
+      ? `Opening the sign-in window for ${params.serverName}.`
+      : state === 'pending'
+        ? `Sign-in to ${params.serverName} is pending. Finish signing in in the provider window.`
+        : '';
   return (
     <Card
       size="small"
       style={{ margin: `${token.sizeUnit * 1.5}px 0`, background: token.colorBgContainer }}
       styles={{ body: { padding: token.paddingSM } }}
     >
+      <span role="status" aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
+        {progressAnnouncement}
+      </span>
+      <span role="alert" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
+        {failure ? `Sign-in to ${params.serverName} was not completed. ${failure}` : ''}
+      </span>
       <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         <Space size="small">
           <ApiOutlined style={{ color: token.colorPrimary }} />
@@ -288,51 +311,29 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
           </Space>
         ) : null}
 
-        {/*
-          This is a multi-window async flow: the user clicks, a popup opens, a
-          provider round-trip happens, and the card rewrites itself. A screen
-          reader has to be told, and the two regions below are PERSISTENT on
-          purpose — a live region created in the same commit as its content is
-          the classic case assistive technology misses, and both alerts used to
-          be conditionally rendered. `status`/polite for progress so it waits
-          its turn; `alert` for the failure so it interrupts.
+        {state === 'pending' ? (
+          <Alert
+            // The visible copy. The announcement is the persistent region
+            // below, so this hands its role over rather than being a second
+            // one — antd puts `role="alert"` on every Alert, including this
+            // informational one, which would interrupt for mere progress.
+            role="presentation"
+            type="info"
+            showIcon
+            title="Sign-in is pending"
+            description="Finish signing in in the provider window. This card confirms once Agor has the connection."
+          />
+        ) : null}
 
-          The inner Alerts hand their role over (antd sets `role="alert"` on
-          every one, including the informational one) so the wrapper is the
-          single announcement and a failure is not read twice.
-        */}
-        <div role="status" aria-live="polite" style={{ width: '100%' }}>
-          {state === 'starting' ? (
-            <Text
-              type="secondary"
-              style={{ fontSize: token.fontSizeSM }}
-              data-testid="oauth-widget-starting"
-            >
-              Opening the sign-in window…
-            </Text>
-          ) : null}
-          {state === 'pending' ? (
-            <Alert
-              role="presentation"
-              type="info"
-              showIcon
-              title="Sign-in is pending"
-              description="Finish signing in in the provider window. This card confirms once Agor has the connection."
-            />
-          ) : null}
-        </div>
-
-        <div role="alert" style={{ width: '100%' }}>
-          {failure ? (
-            <Alert
-              role="presentation"
-              type="error"
-              showIcon
-              title="Sign-in was not completed"
-              description={failure}
-            />
-          ) : null}
-        </div>
+        {failure ? (
+          <Alert
+            role="presentation"
+            type="error"
+            showIcon
+            title="Sign-in was not completed"
+            description={failure}
+          />
+        ) : null}
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
           <Button size="small" onClick={decline} disabled={busy}>

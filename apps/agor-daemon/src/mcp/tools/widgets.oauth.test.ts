@@ -644,10 +644,10 @@ describe('agor_widgets_request_oauth — fail-closed guards', () => {
 
 /**
  * The widget mints into an Agor transcript. A Slack or Discord user is not
- * looking at that transcript, and only Slack gets a Block Kit projection of
- * the card (stage 3) — so in a Discord session, which passes the alignment
- * guard and mints a real widget, the agent previously had `{ widget_id,
- * status: "requested" }` and nothing to say.
+ * looking at that transcript, and no platform projects the card into its own
+ * thread today — so in a Discord session, which passes the alignment guard and
+ * mints a real widget, the agent previously had `{ widget_id, status:
+ * "requested" }` and nothing to say.
  */
 describe('agor_widgets_request_oauth — what a gateway agent can relay', () => {
   const gatewaySession = (channelType: string) => ({

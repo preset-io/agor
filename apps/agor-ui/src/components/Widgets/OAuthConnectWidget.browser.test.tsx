@@ -217,8 +217,18 @@ describe('OAuthConnectWidget in a real browser', () => {
       );
       fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-      const alert = await screen.findByText(/blocked the sign-in window/i);
+      // The visible copy specifically: the card also carries a persistent
+      // visually-hidden live region that repeats it for a screen reader.
+      const alert = await screen.findByText(/blocked the sign-in window/i, {
+        selector: '.ant-alert-description',
+      });
       expect(alert.getBoundingClientRect().height).toBeGreaterThan(0);
+      // ...and that live region really is out of the layout, in a real engine
+      // rather than by jsdom's say-so — it is rendered whether or not there is
+      // anything to announce, so a box would be a permanent gap in every card.
+      const announcement = document.querySelector('[role="alert"][aria-atomic="true"]');
+      expect(announcement).not.toBeNull();
+      expect((announcement as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1);
       expect(calls).toEqual([]);
       // Still retryable, and the button still fits.
       const retry = screen.getByRole('button', { name: 'Try again' });

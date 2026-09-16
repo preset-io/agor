@@ -139,7 +139,9 @@ describe('OAuthConnectWidget — pending', () => {
       <OAuthConnectWidget message={message} widget={widget()} client={makeClient()} />
     );
     // Scoped to the card: the toast this flow also raises is its own live
-    // region, and the claim here is about the card announcing itself.
+    // region, and the claim here is about the card announcing itself. Both
+    // regions are visually hidden — the visible copy is the Alerts, which hand
+    // their role over so a failure is not announced twice.
     const progress = () => container.querySelector('[role="status"]');
     const failureRegion = () => container.querySelector('[role="alert"]');
 
@@ -149,10 +151,14 @@ describe('OAuthConnectWidget — pending', () => {
     expect(failureRegion()).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-    await waitFor(() => expect(progress()).toHaveTextContent(/Sign-in is pending/i));
+    await waitFor(() => expect(progress()).toHaveTextContent(/Sign-in to Notion is pending/i));
+    // The visible alert says the same thing and stays out of the a11y tree.
+    expect(screen.getByText(/Sign-in is pending/i)).toBeVisible();
 
     release({ status: 'failed' });
-    await waitFor(() => expect(failureRegion()).toHaveTextContent(/Sign-in was not completed/i));
+    await waitFor(() =>
+      expect(failureRegion()).toHaveTextContent(/Sign-in to Notion was not completed/i)
+    );
     // The progress region empties rather than leaving a stale "pending" for a
     // screen reader to re-read next time it changes.
     expect(progress()).toHaveTextContent('');
@@ -232,7 +238,9 @@ describe('OAuthConnectWidget — pending', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-    await waitFor(() => expect(screen.getByText(/blocked the sign-in window/i)).toBeVisible());
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/blocked the sign-in window/i)
+    );
     expect(calls).toEqual([]);
   });
 
@@ -250,7 +258,9 @@ describe('OAuthConnectWidget — pending', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
     await waitFor(() =>
-      expect(screen.getByText(/OAuth requires an enabled, saved MCP server/)).toBeVisible()
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /OAuth requires an enabled, saved MCP server/
+      )
     );
     expect(popup.close).toHaveBeenCalled();
   });
