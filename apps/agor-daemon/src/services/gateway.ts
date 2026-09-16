@@ -121,6 +121,7 @@ import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import {
   buildPromptWithAttachments,
+  ingestDiscordInboundImages,
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
@@ -4236,6 +4237,35 @@ export class GatewayService {
           );
         }
         if (failedAttachments > 0) {
+          promptText = `${promptText}\n\n(an attachment could not be fetched)`;
+        }
+      }
+
+      // Discord inbound images use the provider's signed CDN URL and the
+      // same tenant/session/branch-scoped staging plus executor materializer
+      // as browser and Slack uploads. The capability is opt-in; unsupported
+      // or mixed rich payloads are rejected by the connector before reaching
+      // this boundary, while individual download failures degrade the prompt.
+      if (
+        channel.channel_type === 'discord' &&
+        channelConfig.files === true &&
+        data.files &&
+        data.files.length > 0
+      ) {
+        const ingestion = await ingestDiscordInboundImages({
+          files: data.files,
+          tenantId: requireCurrentTenantId() as TenantID,
+          sessionId,
+          branchId: channel.target_branch_id,
+          createdBy: channel.agor_user_id ?? user.user_id,
+        });
+        if (ingestion.uploads.length > 0) {
+          promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
+          console.log(
+            `[gateway] Ingested ${ingestion.uploads.length} Discord image attachment(s) for session ${shortId(sessionId)}`
+          );
+        }
+        if (ingestion.failed > 0) {
           promptText = `${promptText}\n\n(an attachment could not be fetched)`;
         }
       }

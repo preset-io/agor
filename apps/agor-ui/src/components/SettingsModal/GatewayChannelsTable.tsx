@@ -454,6 +454,7 @@ function createStepFields(
   if (type === 'discord' && step === 2) {
     return [
       'discord_allowed_channel_ids',
+      'discord_files',
       'discord_align_users',
       ...(alignDiscordUsers ? ['discord_user_map'] : ['agor_user_id']),
     ];
@@ -502,6 +503,7 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_allowed_role_ids',
   'discord_message_content_enabled',
   'discord_thread_mode',
+  'discord_files',
   'discord_thread_auto_archive_minutes',
   'discord_align_users',
   'discord_user_map',
@@ -1547,6 +1549,10 @@ const DiscordSetupFields: React.FC<{
     (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
     (config?.align_discord_users as boolean | undefined) ??
     false;
+  const filesEnabled =
+    (Form.useWatch('discord_files', form) as boolean | undefined) ??
+    (config?.files as boolean | undefined) ??
+    false;
   const applicationId = Form.useWatch('discord_application_id', form) as string | undefined;
   const allowedUserIds =
     (Form.useWatch('discord_allowed_user_ids', form) as string[] | undefined) ?? [];
@@ -1764,6 +1770,16 @@ const DiscordSetupFields: React.FC<{
               ))}
             </Select>
           </Form.Item>
+          <Form.Item name="discord_files" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Enable inbound PNG/JPEG image attachments (<code>files:true</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Only a message with text and supported PNG/JPEG attachments is admitted. Unsupported or
+            mixed rich payloads are rejected; existing text-only channels remain
+            <code> files:false</code>.
+          </Typography.Text>
           <Typography.Text strong style={{ display: 'block', margin: '16px 0 8px' }}>
             Bounded Discord REST catch-up
           </Typography.Text>
@@ -1842,7 +1858,7 @@ const DiscordSetupFields: React.FC<{
           <CompactAlert
             type="info"
             heading="Capabilities"
-            description="Files: disabled (files:false). Agent tools: none (agent_tools:[])."
+            description={`Files: ${filesEnabled ? 'PNG/JPEG inbound images enabled (files:true)' : 'disabled (files:false)'}. Agent tools: none (agent_tools:[]).`}
             style={{ marginTop: 12 }}
           />
         </div>
@@ -1992,6 +2008,7 @@ function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupD
     agorUserId: alignUsers ? null : readFormString(values.agor_user_id),
     alignUsers,
     userMap: alignUsers ? userMap : undefined,
+    files: readFormBoolean(values.discord_files, false),
     outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
     defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
     catchUp: catch_up,
@@ -4447,7 +4464,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.discord_catch_up_rate_limit_max_total_delay_ms =
         catchUp.rate_limit_max_total_delay_ms ??
         DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms;
-      formValues.discord_files = false;
+      formValues.discord_files = config?.files === true;
       formValues.discord_agent_tools = [];
       formValues.discord_outbound_enabled = config?.outbound_enabled ?? false;
       formValues.discord_default_outbound_target = config?.default_outbound_target;

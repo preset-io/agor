@@ -32,7 +32,7 @@ export function getUploadPolicyErrorDefinition(
   );
 }
 
-export type UploadProvenance = 'browser' | 'gateway-slack' | 'mcp-slack';
+export type UploadProvenance = 'browser' | 'gateway-slack' | 'gateway-discord' | 'mcp-slack';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 
 export interface UploadOwner {

@@ -24,7 +24,10 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
+import {
+  ingestDiscordInboundImages,
+  ingestInboundAttachments,
+} from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 import { SessionsService } from './sessions.js';
 
@@ -63,6 +66,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 });
 
 vi.mock('../utils/gateway-attachments.js', () => ({
+  ingestDiscordInboundImages: vi.fn(),
   ingestInboundAttachments: vi.fn(),
   buildPromptWithAttachments: vi.fn(
     (text: string, attachments: Array<{ ref: string }>) =>
@@ -405,6 +409,7 @@ afterEach(() => {
   vi.mocked(getBaseUrl).mockReset();
   vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');
   vi.mocked(getConnector).mockReset();
+  vi.mocked(ingestDiscordInboundImages).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
 });
 
@@ -2843,6 +2848,17 @@ describe('GatewayService Discord beta routing', () => {
     },
   });
 
+  const discordInboundFiles = [
+    {
+      id: '623456789012345678',
+      name: 'screenshot.png',
+      mimetype: 'image/png',
+      size: 2048,
+      url_private_download:
+        'https://cdn.discordapp.com/attachments/323456789012345678/623456789012345678/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature',
+    },
+  ];
+
   it.each([
     ['guild', { discord_guild_id: '999999999999999999' }],
     ['allowed channel', { discord_channel_id: '923456789012345678' }],
@@ -2867,6 +2883,68 @@ describe('GatewayService Discord beta routing', () => {
       expect(sessionsCreate).not.toHaveBeenCalled();
     }
   );
+
+  it('stages Discord images through the existing owner-bound upload prompt path', async () => {
+    const imageChannel = {
+      ...discordChannel,
+      config: { ...discordChannel.config, files: true },
+    } as GatewayChannel;
+    vi.mocked(ingestDiscordInboundImages).mockResolvedValue({
+      uploads: [
+        {
+          ref: 'upl_00000000-0000-4000-8000-000000000011' as never,
+          name: '623456789012345678_screenshot.png',
+          mimeType: 'image/png',
+          size: 2048,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-02T00:00:00.000Z',
+          provenance: 'gateway-discord',
+        },
+      ],
+      failed: 0,
+    });
+    const harness = makeGatewayHarness({
+      channel: imageChannel,
+      existingMapping: makeMapping({
+        channel_id: imageChannel.id,
+        thread_id: '523456789012345678',
+        metadata: validDiscordInbound().metadata,
+      }),
+      connector: {},
+    });
+    const inbound = { ...validDiscordInbound(), files: discordInboundFiles };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({
+      success: true,
+      sessionId: 'sess-1',
+    });
+    expect(ingestDiscordInboundImages).toHaveBeenCalledWith({
+      files: discordInboundFiles,
+      tenantId: 'tenant-channel',
+      sessionId: 'sess-1',
+      branchId: 'branch-1',
+      createdBy: 'user-1',
+    });
+    expect(harness.promptCreate.mock.calls[0][0].prompt).toContain(
+      'upl_00000000-0000-4000-8000-000000000011'
+    );
+  });
+
+  it('does not stage Discord files when the channel keeps the text-only default', async () => {
+    const harness = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: makeMapping({
+        channel_id: discordChannel.id,
+        thread_id: '523456789012345678',
+        metadata: validDiscordInbound().metadata,
+      }),
+      connector: {},
+    });
+    await harness.service.create({ ...validDiscordInbound(), files: discordInboundFiles });
+
+    expect(ingestDiscordInboundImages).not.toHaveBeenCalled();
+    expect(harness.promptCreate.mock.calls[0][0].prompt).toContain('hello');
+  });
 
   it('writes a new Discord mapping with the verified provider thread Snowflake', async () => {
     const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });

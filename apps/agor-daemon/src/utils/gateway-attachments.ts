@@ -1,20 +1,20 @@
 /**
  * Server-side ingestion of inbound gateway message attachments.
  *
- * Downloads image and text-like files attached to inbound Slack messages
- * using the channel's bot token and stores them in the daemon upload
- * directory — the same destination the session composer's
- * `/sessions/:sessionId/upload` route writes to — so the session's agent can
- * Read them by absolute path.
+ * Downloads supported files attached to inbound gateway messages and stores
+ * them in the existing tenant/session/branch upload staging layer. Slack
+ * downloads use the channel's bot token; Discord downloads use the signed CDN
+ * URL supplied by the provider and never receive a channel credential.
  *
  * Other attachment types (PDFs, office documents, archives, media) are out of
- * scope and never downloaded. Downloads are restricted to Slack-owned hosts
+ * scope and never downloaded. Downloads are restricted to provider-owned URLs
  * and to the same per-file size / per-message count ceilings the upload route
  * enforces.
  */
 
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import type { InboundFile } from '@agor/core/gateway';
+import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
 import type {
   BranchID,
   SessionID,
@@ -39,9 +39,10 @@ export interface AttachmentIngestResult {
 }
 
 const MAX_REDIRECT_HOPS = 3;
+const DISCORD_IMAGE_MIMES = new Set(['image/png', 'image/jpeg']);
 
 /**
- * Whether a platform file URL may be downloaded with the channel's bot token.
+ * Whether a Slack file URL may be downloaded with the channel's bot token.
  * Slack serves `url_private_download` from files.slack.com; anything outside
  * slack.com would leak the bot token to an attacker-controlled host.
  */
@@ -85,19 +86,20 @@ export function buildPromptWithAttachments(text: string, attachments: UploadMeta
 
 /**
  * Fetch an allowlisted URL, following redirects manually so that EVERY hop's
- * host is validated against the Slack allowlist before it is fetched. This
- * makes "the bot-token Authorization header is only ever sent to allowlisted
- * slack.com hosts" an invariant of this function, rather than a property of
- * the runtime's cross-origin redirect header stripping.
+ * URL is validated against the provider-specific allowlist before it is
+ * fetched. This makes credential forwarding (where a provider requires it)
+ * an invariant of this function, rather than a property of the runtime's
+ * cross-origin redirect header stripping.
  */
 async function fetchFromAllowedHosts(
   initialUrl: string,
   headers: Record<string, string>,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  isAllowedUrl: (rawUrl: string) => boolean = isAllowedSlackFileUrl
 ): Promise<Response> {
   let url = initialUrl;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    if (!isAllowedSlackFileUrl(url)) {
+    if (!isAllowedUrl(url)) {
       throw new Error('download URL host not allowed');
     }
     const response = await fetchImpl(url, { headers, redirect: 'manual' });
@@ -114,12 +116,132 @@ async function fetchFromAllowedHosts(
   throw new Error(`too many redirects (limit ${MAX_REDIRECT_HOPS})`);
 }
 
+function discordImageMime(rawMime: string): string {
+  return rawMime.split(';')[0].trim().toLowerCase();
+}
+
 /**
- * Buffer a response body while enforcing the byte ceiling on the ACTUAL bytes
- * received, aborting mid-stream the moment the running total exceeds it —
- * Content-Length can be absent or false, so the declared-size prechecks are
- * only cheap early-outs, never the bound.
+ * Download only the live Discord PNG/JPEG subset. Discord's URL is already
+ * signed, so this path deliberately sends no Authorization header and
+ * validates every manually-followed redirect against the same signed CDN
+ * policy.
  */
+export async function ingestDiscordInboundImages(args: {
+  files: InboundFile[];
+  fetchImpl?: typeof fetch;
+  tenantId: TenantID;
+  sessionId: SessionID;
+  branchId: BranchID;
+  createdBy: UserID;
+  store?: UploadStagingStore;
+}): Promise<AttachmentIngestResult> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const store = args.store ?? getUploadStagingStore();
+  const limits = getUploadLimits();
+  const uploads: UploadMetadata[] = [];
+  let failed = 0;
+  let declaredTotalBytes = 0;
+  let actualTotalBytes = 0;
+
+  for (const [index, file] of args.files.entries()) {
+    if (index >= MAX_UPLOAD_FILES_PER_REQUEST) {
+      failed++;
+      console.warn(
+        `[gateway] Skipping Discord attachment: message exceeds ${MAX_UPLOAD_FILES_PER_REQUEST}-file limit`
+      );
+      continue;
+    }
+    if (
+      !Number.isSafeInteger(file.size) ||
+      file.size < 0 ||
+      file.size > limits.maxFileBytes ||
+      file.size > limits.maxTotalBytes - declaredTotalBytes
+    ) {
+      failed++;
+      console.warn(
+        '[gateway] Skipping Discord attachment: declared size exceeds the upload limits'
+      );
+      continue;
+    }
+    if (
+      (file.mimetype !== 'image/png' && file.mimetype !== 'image/jpeg') ||
+      !isAllowedDiscordAttachmentUrl(file.url_private_download)
+    ) {
+      failed++;
+      console.warn('[gateway] Skipping Discord attachment: unsupported type or URL');
+      continue;
+    }
+    declaredTotalBytes += file.size;
+
+    try {
+      const response = await fetchFromAllowedHosts(
+        file.url_private_download,
+        {},
+        fetchImpl,
+        isAllowedDiscordAttachmentUrl
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = discordImageMime(response.headers.get('content-type') ?? '');
+      if (!DISCORD_IMAGE_MIMES.has(contentType)) {
+        throw new Error(`unexpected content-type ${contentType || 'unknown'}`);
+      }
+      const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+      if (Number.isFinite(declaredLength) && declaredLength > limits.maxFileBytes) {
+        throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
+      }
+      if (
+        Number.isFinite(declaredLength) &&
+        declaredLength > limits.maxTotalBytes - actualTotalBytes
+      ) {
+        throw new Error(`declared size ${declaredLength} exceeds total upload limit`);
+      }
+      if (!response.body) throw new Error('download response has no body');
+      let fileBytes = 0;
+      const source = Readable.fromWeb(response.body as never);
+      const aggregateLimiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          fileBytes += chunk.byteLength;
+          if (actualTotalBytes + fileBytes > limits.maxTotalBytes) {
+            callback(
+              Object.assign(new Error('Combined Discord attachment size exceeds upload limit'), {
+                status: 413,
+              })
+            );
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      source.pipe(aggregateLimiter);
+      try {
+        const staged = await store.stage({
+          owner: {
+            tenantId: args.tenantId,
+            sessionId: args.sessionId,
+            branchId: args.branchId,
+            createdBy: args.createdBy,
+          },
+          name: `${file.id}_${file.name}`,
+          mimeType: contentType,
+          provenance: 'gateway-discord',
+          body: aggregateLimiter,
+          sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
+        });
+        actualTotalBytes += staged.size;
+        uploads.push(staged);
+      } finally {
+        source.destroy();
+        aggregateLimiter.destroy();
+      }
+    } catch (error) {
+      failed++;
+      console.warn('[gateway] Failed to ingest Discord attachment:', error);
+    }
+  }
+
+  return { uploads, failed };
+}
+
 /**
  * Download the ingestable attachments of one inbound message and store them
  * in tenant-scoped staging. Never throws: every attachment that cannot be

@@ -2,16 +2,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
+import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
 import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
+  ingestDiscordInboundImages,
   ingestInboundAttachments,
   isAllowedSlackFileUrl,
   isIngestableFile,
 } from './gateway-attachments.js';
-import { MAX_UPLOAD_FILE_SIZE } from './upload.js';
+import { configureUploadLimits, MAX_UPLOAD_FILE_SIZE } from './upload.js';
 
 function makeFile(overrides: Partial<InboundFile> = {}): InboundFile {
   return {
@@ -29,6 +31,20 @@ function makeImageResponse(body: Uint8Array, headers: Record<string, string> = {
     status: 200,
     headers: { 'content-type': 'image/png', ...headers },
   });
+}
+
+const DISCORD_SIGNED_URL =
+  'https://cdn.discordapp.com/attachments/333333333333333333/777777777777777777/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature';
+
+function makeDiscordFile(overrides: Partial<InboundFile> = {}): InboundFile {
+  return {
+    id: '777777777777777777',
+    name: 'screenshot.png',
+    mimetype: 'image/png',
+    size: 1024,
+    url_private_download: DISCORD_SIGNED_URL,
+    ...overrides,
+  };
 }
 
 describe('isAllowedSlackFileUrl', () => {
@@ -501,5 +517,203 @@ describe('ingestInboundAttachments', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(10);
     expect(result.uploads).toHaveLength(10);
     expect(result.failed).toBe(2);
+  });
+});
+
+describe('ingestDiscordInboundImages', () => {
+  let uploadDir: string;
+  let store: LocalUploadStagingStore;
+  const tenantId = 'tenant-discord' as TenantID;
+  const sessionId = '00000000-0000-0000-0000-000000000011' as SessionID;
+  const branchId = '00000000-0000-0000-0000-000000000013' as never;
+  const createdBy = '00000000-0000-0000-0000-000000000014' as never;
+
+  beforeEach(async () => {
+    uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-discord-attachments-'));
+    store = new LocalUploadStagingStore(() => uploadDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(uploadDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('allows only signed Discord CDN attachment URLs', () => {
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL)).toBe(true);
+    expect(
+      isAllowedDiscordAttachmentUrl(
+        DISCORD_SIGNED_URL.replace('cdn.discordapp.com', 'evil.example')
+      )
+    ).toBe(false);
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL.replace('?ex=', '?missing='))).toBe(
+      false
+    );
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL.replace('https://', 'http://'))).toBe(
+      false
+    );
+  });
+
+  it('downloads a PNG without credentials and stages it under the exact owner', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+    const fetchImpl = vi.fn(async () => makeImageResponse(bytes));
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile()],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(DISCORD_SIGNED_URL, {
+      headers: {},
+      redirect: 'manual',
+    });
+    expect(result.failed).toBe(0);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '777777777777777777_screenshot.png',
+      mimeType: 'image/png',
+      provenance: 'gateway-discord',
+    });
+    const stored = await store.inspect({
+      tenantId,
+      sessionId,
+      branchId,
+      ref: result.uploads[0].ref,
+    });
+    expect(stored).toMatchObject({ provenance: 'gateway-discord', size: bytes.byteLength });
+    await expect(
+      store.inspect({
+        tenantId: 'other-tenant' as TenantID,
+        sessionId,
+        branchId,
+        ref: result.uploads[0].ref,
+      })
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('fails closed for unsafe URLs, expired responses, and non-image bodies', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } })
+      );
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ url_private_download: 'https://attacker.example/image.png' }),
+        makeDiscordFile({ id: '888888888888888888', url_private_download: DISCORD_SIGNED_URL }),
+        makeDiscordFile({ id: '999999999999999999', url_private_download: DISCORD_SIGNED_URL }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 3 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(DISCORD_SIGNED_URL);
+  });
+
+  it('enforces the declared per-file and existing per-message count limits', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(async () => makeImageResponse(new Uint8Array([1])));
+    const files = [
+      makeDiscordFile({ size: MAX_UPLOAD_FILE_SIZE + 1 }),
+      ...Array.from({ length: 11 }, (_, index) =>
+        makeDiscordFile({
+          id: `${String(700000000000000000 + index).padStart(18, '0')}`,
+          name: `image-${index}.png`,
+        })
+      ),
+    ];
+
+    const result = await ingestDiscordInboundImages({
+      files,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(9);
+    expect(result.uploads).toHaveLength(9);
+    expect(result.failed).toBe(3);
+  });
+
+  it('does not send credentials while rejecting a redirect to an unsafe host', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://attacker.example/exfil.png' },
+        })
+    );
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile()],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      DISCORD_SIGNED_URL,
+      { headers: {}, redirect: 'manual' },
+    ]);
+  });
+
+  it('bounds actual aggregate bytes even when Discord underreports the attachment size', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    configureUploadLimits(4);
+    let chunksPulled = 0;
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunksPulled++;
+        controller.enqueue(new Uint8Array([1]));
+      },
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(endlessBody, {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+    );
+
+    try {
+      const result = await ingestDiscordInboundImages({
+        files: [makeDiscordFile({ size: 1 })],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        tenantId,
+        sessionId,
+        branchId,
+        createdBy,
+        store,
+      });
+
+      expect(result).toEqual({ uploads: [], failed: 1 });
+      // A stream may already have one high-water-mark of data queued, but it
+      // must stop near the bounded aggregate ceiling rather than buffering
+      // the untrusted response indefinitely.
+      expect(chunksPulled).toBeLessThan(100_000);
+    } finally {
+      configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
+    }
   });
 });
