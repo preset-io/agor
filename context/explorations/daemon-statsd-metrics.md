@@ -154,8 +154,11 @@ Socket.IO client gauge, including idle zero. It also snapshots Node's bounded
 event-loop-delay histogram into per-instance p50/p90/p99/max gauges in
 milliseconds, then resets the histogram. The fixed cadence is not an overload
 control and does not alter request handling. Startup emits the three active
-gauges immediately; graceful shutdown emits a final snapshot, disables the
-histogram, and disposes the unreferenced timer.
+gauges immediately. Operational stop emits terminal zero for `socketio.clients.active`
+and both `external_requests.in_flight` transport gauges, even if the socket drain
+timed out, while retaining the final event-loop histogram sample. It then disables
+the histogram and disposes the unreferenced timer before exporter close. Repeated
+stop calls emit nothing further.
 
 “Socket.IO client” means an authenticated `user` principal accepted by the
 namespace. Service, delegated executor, and terminal-executor connections are

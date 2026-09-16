@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { TaskDispatchClaimResult } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { HookContext, Task } from '@agor/core/types';
-import type express from 'express';
+import express from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import type { Application } from '../declarations.js';
 import { createFeathersMetricsHook } from './feathers.js';
@@ -407,7 +407,7 @@ describe('HTTP metrics middleware', () => {
     expect(operationalMetrics.finished).toEqual(['http']);
   });
 
-  it('finishes HTTP in-flight state once on abort and synchronous middleware failure', () => {
+  it('finishes HTTP in-flight state once on abort', () => {
     const metrics = new RecordingMetrics();
     const operationalMetrics = new RecordingOperationalMetrics();
     const trackedApp = {
@@ -427,23 +427,53 @@ describe('HTTP metrics middleware', () => {
     abortedResponse.emit('close');
     abortedResponse.emit('finish');
 
-    const thrownResponse = Object.assign(new EventEmitter(), {
-      statusCode: 500,
-      writableFinished: false,
-    }) as unknown as express.Response;
-    expect(() =>
-      middleware(
-        { method: 'POST', path: '/sessions' } as unknown as express.Request,
-        thrownResponse,
-        () => {
-          throw new Error('downstream failed');
-        }
-      )
-    ).toThrow('downstream failed');
-    thrownResponse.emit('close');
+    expect(operationalMetrics.begun).toEqual(['http']);
+    expect(operationalMetrics.finished).toEqual(['http']);
+    expect(metrics.calls[0]?.tags?.outcome).toBe('aborted');
+  });
 
-    expect(operationalMetrics.begun).toEqual(['http', 'http']);
-    expect(operationalMetrics.finished).toEqual(['http', 'http']);
+  it('settles downstream synchronous Express errors on response finish, not next()', async () => {
+    const metrics = new RecordingMetrics();
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const get = vi.fn(() => operationalMetrics);
+    const trackedApp = { ...app, get } as unknown as Application;
+    const serverApp = express();
+    serverApp.use(createHttpMetricsMiddleware(trackedApp, metrics));
+    expect(get).toHaveBeenCalledExactlyOnceWith('daemonOperationalMetrics');
+    serverApp.get('/failure', () => {
+      throw new Error('downstream failed');
+    });
+    const pendingAtErrorHandler: number[] = [];
+    const errorHandler: express.ErrorRequestHandler = (_error, _request, response, _next) => {
+      pendingAtErrorHandler.push(
+        operationalMetrics.begun.length - operationalMetrics.finished.length
+      );
+      response.status(500).end();
+    };
+    serverApp.use(errorHandler);
+    const server = serverApp.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP address');
+      for (let index = 0; index < 2; index++) {
+        const response = await fetch(`http://127.0.0.1:${address.port}/failure`);
+        expect(response.status).toBe(500);
+        await response.text();
+      }
+      expect(pendingAtErrorHandler).toEqual([1, 1]);
+      expect(get).toHaveBeenCalledOnce();
+      expect(operationalMetrics.begun).toEqual(['http', 'http']);
+      expect(operationalMetrics.finished).toEqual(['http', 'http']);
+      expect(metrics.calls.filter((call) => call.name === 'http.requests')).toEqual([
+        expect.objectContaining({ tags: expect.objectContaining({ outcome: 'server_error' }) }),
+        expect.objectContaining({ tags: expect.objectContaining({ outcome: 'server_error' }) }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
   });
 
   it('skips code-defined static path prefixes', () => {

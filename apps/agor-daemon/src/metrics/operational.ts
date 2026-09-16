@@ -58,10 +58,6 @@ function normalizedDisconnectReason(reason: string): string {
   }
 }
 
-function hasSamples(histogram: EventLoopDelayHistogram): boolean {
-  return typeof histogram.count === 'bigint' ? histogram.count > 0n : histogram.count > 0;
-}
-
 /**
  * Process-local state for passive load signals. All export calls are isolated
  * from request/control flow even though DaemonMetrics implementations already
@@ -105,6 +101,10 @@ export class ActiveDaemonOperationalMetrics implements DaemonOperationalMetrics 
     if (!this.samplingTimer) return;
     clearInterval(this.samplingTimer);
     this.samplingTimer = undefined;
+    // Publish terminal zeros even if the socket/request drain timed out.
+    this.activeSocketClients = 0;
+    this.inFlight.http = 0;
+    this.inFlight.socketio = 0;
     this.sample();
     try {
       this.eventLoopDelayHistogram?.disable();
@@ -149,7 +149,7 @@ export class ActiveDaemonOperationalMetrics implements DaemonOperationalMetrics 
     const histogram = this.eventLoopDelayHistogram;
     if (!histogram) return;
     try {
-      if (!hasSamples(histogram)) return;
+      if (histogram.count === 0) return;
       const observations = [
         ['p50_ms', histogram.percentile(50)],
         ['p90_ms', histogram.percentile(90)],

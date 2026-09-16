@@ -857,18 +857,56 @@ describe('Socket.IO lifecycle logging', () => {
       recordSocketClientConnection: vi.fn(() => disconnect),
       recordSocketAuthenticationFailure: vi.fn(),
     };
-    const { io } = buildHarness({}, null, operationalMetrics);
+    const { app, io } = buildHarness({}, null, operationalMetrics);
     const user = makeSocket('interactive-user');
     const service = makeSocket('service-transport');
     asUser(user, ALICE);
     asServicePostConnect(service);
+    const terminalExecutor = makeSocket('terminal-executor');
+    asServiceForUser(terminalExecutor, ALICE);
+    const executor = makeSocket('task-executor');
+    executor.feathers = {};
+    const fence = getOrCreateExecutorConnectionRevocationFence(app);
+    const authResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          session_id: 'session-1',
+          task_id: 'task-1',
+          tenant_id: 'default',
+        },
+      },
+    };
+    attachExecutorConnectionCandidate(authResult, {
+      tenantId: 'default',
+      taskId: 'task-1',
+      tokenFingerprint: fingerprintExecutorSessionToken('task-executor-token'),
+      revocationGeneration: fence.snapshot('default'),
+    });
+    finalizeAuthenticatedConnectionAuthority({
+      connection: executor.feathers,
+      authResult,
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+      executorRevocationFence: fence,
+    });
 
     connect(io, user);
     connect(io, service);
+    expect(getAuthenticatedConnectionAuthority(executor.feathers)?.principal.kind).toBe('executor');
+    expect(getAuthenticatedConnectionAuthority(terminalExecutor.feathers)?.principal.kind).toBe(
+      'terminal-executor'
+    );
+    connect(io, executor);
+    connect(io, terminalExecutor);
     expect(operationalMetrics.recordSocketClientConnection).toHaveBeenCalledOnce();
 
     user.handlers.get('disconnect')?.('transport error');
     service.handlers.get('disconnect')?.('transport close');
+    executor.handlers.get('disconnect')?.('transport close');
+    terminalExecutor.handlers.get('disconnect')?.('transport close');
     expect(disconnect).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledWith('transport error');
 

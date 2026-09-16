@@ -507,7 +507,8 @@ export function createSocketIOConfig(
     options.onServerCreated?.(io);
     const operationalMetrics = getDaemonOperationalMetrics(app);
 
-    // Track active connections for periodic operational metrics.
+    // Legacy five-minute logs count all accepted sockets and a resettable auth-failure
+    // window, independently of user-only client StatsD gauges and process-lifecycle counters.
     let activeConnections = 0;
     // Intentionally system-global: the aggregate keeps only a saturated count,
     // never socket, user, tenant, channel, or client metadata.

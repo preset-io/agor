@@ -101,6 +101,8 @@ export function createHttpMetricsMiddleware(
 ): express.RequestHandler {
   if (!metrics.enabled) return (_request, _response, next) => next();
 
+  const operationalMetrics = getDaemonOperationalMetrics(app);
+
   return (request, response, next) => {
     if (
       options.excludedPathPrefixes?.some(
@@ -111,7 +113,7 @@ export function createHttpMetricsMiddleware(
       return;
     }
     const startedAt = performance.now();
-    const finishInFlight = getDaemonOperationalMetrics(app).beginExternalRequest('http');
+    const finishInFlight = operationalMetrics.beginExternalRequest('http');
     let recorded = false;
     const record = (aborted: boolean) => {
       if (recorded) return;
@@ -137,11 +139,6 @@ export function createHttpMetricsMiddleware(
     const onClose = () => record(!response.writableFinished);
     response.once('finish', onFinish);
     response.once('close', onClose);
-    try {
-      next();
-    } catch (error) {
-      record(true);
-      throw error;
-    }
+    next();
   };
 }

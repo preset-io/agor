@@ -88,6 +88,8 @@ describe('daemon operational metrics', () => {
     expect(latestGauge(metrics, 'socketio.clients.active')?.value).toBe(1);
     expect(latestGauge(metrics, 'external_requests.in_flight', 'http')?.value).toBe(1);
     expect(latestGauge(metrics, 'external_requests.in_flight', 'socketio')?.value).toBe(1);
+    expect(histogram.percentile).not.toHaveBeenCalled();
+    expect(metrics.calls.some((call) => call.name.startsWith('node.event_loop.'))).toBe(false);
 
     finishHttp();
     finishSocket();
@@ -176,6 +178,67 @@ describe('daemon operational metrics', () => {
     operational.stop();
     expect(histogram.disable).toHaveBeenCalledOnce();
     expect(histogram.reset).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the final histogram sample but zeros undrained load exactly once on stop', () => {
+    vi.useFakeTimers();
+    const metrics = new RecordingMetrics();
+    const histogram = {
+      count: 1,
+      max: 2_000_000,
+      enable: vi.fn(),
+      disable: vi.fn(),
+      percentile: vi.fn(() => 1_000_000),
+      reset: vi.fn(),
+    };
+    const operational = createDaemonOperationalMetrics(metrics, {
+      createEventLoopDelayHistogram: () => histogram,
+    });
+    operational.start();
+    operational.start();
+    expect(histogram.enable).toHaveBeenCalledOnce();
+    const finishHttp = operational.beginExternalRequest('http');
+    const finishSocket = operational.beginExternalRequest('socketio');
+    const disconnect = operational.recordSocketClientConnection();
+    vi.advanceTimersByTime(DAEMON_OPERATIONAL_METRICS_INTERVAL_MS);
+    expect(latestGauge(metrics, 'socketio.clients.active')?.value).toBe(1);
+    expect(latestGauge(metrics, 'external_requests.in_flight', 'http')?.value).toBe(1);
+    expect(latestGauge(metrics, 'external_requests.in_flight', 'socketio')?.value).toBe(1);
+    metrics.calls.length = 0;
+
+    operational.stop();
+    expect(metrics.calls.filter((call) => !call.name.startsWith('node.event_loop.'))).toEqual([
+      expect.objectContaining({ name: 'socketio.clients.active', value: 0 }),
+      expect.objectContaining({
+        name: 'external_requests.in_flight',
+        value: 0,
+        tags: { transport: 'http' },
+      }),
+      expect.objectContaining({
+        name: 'external_requests.in_flight',
+        value: 0,
+        tags: { transport: 'socketio' },
+      }),
+    ]);
+    expect(metrics.calls.filter((call) => call.name.startsWith('node.event_loop.'))).toEqual([
+      expect.objectContaining({ name: 'node.event_loop.delay.p50_ms', value: 1 }),
+      expect.objectContaining({ name: 'node.event_loop.delay.p90_ms', value: 1 }),
+      expect.objectContaining({ name: 'node.event_loop.delay.p99_ms', value: 1 }),
+      expect.objectContaining({ name: 'node.event_loop.delay.max_ms', value: 2 }),
+    ]);
+    const finalCalls = [...metrics.calls];
+    operational.stop();
+    vi.advanceTimersByTime(DAEMON_OPERATIONAL_METRICS_INTERVAL_MS);
+    expect(metrics.calls).toEqual(finalCalls);
+    expect(histogram.disable).toHaveBeenCalledOnce();
+    expect(histogram.reset).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Late drain callbacks cannot replace the terminal zero gauges.
+    finishHttp();
+    finishSocket();
+    disconnect('transport close');
+    expect(metrics.calls.filter((call) => call.type === 'gauge')).toEqual(finalCalls);
   });
 
   it('unrefs and disposes the sampler and isolates exporter failures', () => {
