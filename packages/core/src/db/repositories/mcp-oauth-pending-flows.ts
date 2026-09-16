@@ -388,7 +388,11 @@ export class MCPOAuthPendingFlowRepository {
     return row ? { outcome: 'claimed', flow: mapRow(row) } : { outcome: 'not_claimed', flow: null };
   }
 
-  /** Authenticated return-ticket routing; never a callback/system discovery capability. */
+  /** Authenticated return-ticket routing; never a callback/system discovery capability.
+   * Completion can race the browser. A succeeded attempt remains routable only while
+   * the exact original grant is still present; a generic later grant is not evidence.
+   * This reads no plaintext credentials and does not consume or replace the worker ticket.
+   */
   async getManagedForTransaction(
     tenantId: string,
     userId: UserID,
@@ -403,10 +407,20 @@ export class MCPOAuthPendingFlowRepository {
     const rows = rawRows(
       await executeRaw(
         this.db,
-        sql`SELECT * FROM public.mcp_oauth_pending_flows
-      WHERE tenant_id=${tenantId} AND user_id=${userId} AND managed_transaction_id=${transactionId}
-        AND credential_origin='cloud_managed_v1' AND is_current=true AND status IN ('pending','exchanging')
-        AND expires_at>clock_timestamp() LIMIT 2`
+        sql`SELECT p.* FROM public.mcp_oauth_pending_flows p
+      WHERE p.tenant_id=${tenantId} AND p.user_id=${userId} AND p.managed_transaction_id=${transactionId}
+        AND p.credential_origin='cloud_managed_v1' AND p.is_current=true
+        AND p.expires_at>clock_timestamp()
+        AND (p.status IN ('pending','exchanging') OR (p.status='succeeded' AND EXISTS (
+          SELECT 1 FROM public.user_mcp_oauth_tokens t
+          WHERE t.tenant_id=p.tenant_id AND t.user_id=p.user_id AND t.granted_by_user_id=p.user_id
+            AND t.mcp_server_id=p.mcp_server_id AND t.credential_origin='cloud_managed_v1'
+            AND t.grant_generation=p.grant_generation AND t.grant_binding_version=5
+            AND t.grant_binding_fingerprint=p.config_fingerprint AND t.oauth_client_secret IS NULL
+            AND t.oauth_access_token <> '' AND t.refresh_status IN ('idle','refreshing')
+            AND t.managed_metadata->>'transaction_id'=p.managed_transaction_id
+            AND t.managed_metadata->'owner'=p.managed_metadata->'owner'
+        ))) LIMIT 2`
       )
     );
     return rows.length === 1 ? mapRow(rows[0]) : null;
