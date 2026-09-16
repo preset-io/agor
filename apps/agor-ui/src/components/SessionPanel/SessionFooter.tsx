@@ -118,6 +118,9 @@ export interface SessionFooterProps {
   promptInputSlot: React.ReactNode;
 }
 
+// Height of the mobile info-bar chips (MCP / effort / model) so they line up.
+const MOBILE_CHIP_HEIGHT = 22;
+
 // Memoized: the panel re-renders once per animation frame while its session
 // streams (reactive-session notifies), and this footer is a large subtree of
 // dropdowns/popovers that doesn't depend on per-chunk state. SessionPanel
@@ -1432,7 +1435,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  height: 22,
+                  height: MOBILE_CHIP_HEIGHT,
                   pointerEvents: managedByPreset ? 'none' : undefined,
                   opacity: managedByPreset ? 0.65 : undefined,
                 }}
@@ -1455,11 +1458,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {modelName &&
               (isMobile ? (
                 <Button
+                  size="small"
                   icon={<RobotOutlined />}
                   onClick={() => setMoreOpen(true)}
                   aria-label={`Model and session controls: ${modelName}`}
                   title={modelName}
-                  style={{ ...touchActionStyle, maxWidth: '100%' }}
+                  style={{
+                    height: MOBILE_CHIP_HEIGHT,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    maxWidth: '100%',
+                  }}
                   data-testid="model-chip"
                 >
                   <Typography.Text ellipsis style={{ minWidth: 0 }}>
