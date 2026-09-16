@@ -214,12 +214,24 @@ describe('actual paired provider browser and registered runtime', () => {
     browser = await chromium.launch({ headless: true, args: runtime.manifest.tls.chromiumArgs });
   }, 180000);
   afterAll(async () => {
-    await browser?.close();
-    await ui?.close();
-    await runtime?.stop();
-    await cloud?.stop();
-    unregisterSourceLoader?.();
-    vi.unstubAllEnvs();
+    try {
+      await browser?.close();
+    } finally {
+      try {
+        await ui?.close();
+      } finally {
+        try {
+          await runtime?.stop();
+        } finally {
+          try {
+            await cloud?.stop();
+          } finally {
+            unregisterSourceLoader?.();
+            vi.unstubAllEnvs();
+          }
+        }
+      }
+    }
   }, 60000);
   it.each(['alpha', 'beta'])(
     'uses real Catalog UI and durable runtime authority for %s',

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build, preview } from 'vite';
+import { ownAcceptanceServerConnections } from './close-server';
 import type { ManagedAcceptanceUIOptions } from './serve-ui';
 
 export async function serveBundledManagedAcceptanceUI(
@@ -66,6 +67,7 @@ export async function serveBundledManagedAcceptanceUI(
         },
       },
     });
+    const closeListener = ownAcceptanceServerConnections(server.httpServer);
     const address = server.httpServer.address();
     if (!address || typeof address === 'string')
       throw new Error('Missing bundled browser listener');
@@ -73,9 +75,7 @@ export async function serveBundledManagedAcceptanceUI(
       origin: `http://127.0.0.1:${address.port}`,
       async close() {
         try {
-          await new Promise<void>((done, reject) =>
-            server.httpServer.close((error) => (error ? reject(error) : done()))
-          );
+          await closeListener();
         } finally {
           await rm(output, { recursive: true, force: true });
         }
