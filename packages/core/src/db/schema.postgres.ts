@@ -562,6 +562,14 @@ export const messages = pgTable(
     // Parent tool use ID (for nested tool calls - e.g., Task tool spawning Read/Grep)
     parent_tool_use_id: text('parent_tool_use_id'),
 
+    // Indexed due-work projection for the bounded Slack MCP connect-card
+    // repair sweep. Mirrors `metadata.widget.slack_connect.next_repair_at` and
+    // is written by the same locked mutation, so it cannot drift from the JSON
+    // it projects. Null for every message that is not a Slack-delivered
+    // `oauth` widget — which is all but a handful — so the partial index stays
+    // tiny on a table this large.
+    mcp_slack_connect_due_at: t.timestamp('mcp_slack_connect_due_at'),
+
     // NOTE: queueing moved off `messages` and onto `tasks.status='queued'` as
     // of migration sqlite/0040 (postgres/0030). The legacy `status` and
     // `queue_position` columns are gone — see `tasks.queue_position` instead.
@@ -593,6 +601,9 @@ export const messages = pgTable(
       table.session_id,
       table.timestamp
     ),
+    mcpSlackConnectDueIdx: index('messages_mcp_slack_connect_due_idx')
+      .on(table.tenant_id, table.mcp_slack_connect_due_at, table.message_id)
+      .where(sql`${table.mcp_slack_connect_due_at} IS NOT NULL`),
   })
 );
 

@@ -216,6 +216,16 @@ export interface TaskMetadata {
     provider_message_id?: string;
     slack_team_id?: string;
     slack_channel_id?: string;
+    /**
+     * Slack conversation kind (`im` | `mpim` | `channel` | `group`) as the
+     * inbound event reported it. Recorded because a surface that projects
+     * something back into the thread later — the MCP connect card — has to
+     * know whether it is speaking into a DM or somewhere other people are
+     * reading, and by then the inbound metadata is long gone. Absent on Tasks
+     * created before this was persisted; readers must fall back rather than
+     * assume a DM.
+     */
+    slack_conversation_type?: string;
   };
   /**
    * Durable identity of the Task's first transcript row. Internal

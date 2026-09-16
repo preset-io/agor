@@ -1135,7 +1135,69 @@ export interface MCPSlackConnectDelivery {
   oauth_started_at?: string;
   oauth_succeeded_at?: string;
   oauth_failed_at?: string;
+
+  // -------------------------------------------------------------------------
+  // Block Kit projection
+  //
+  // The fields above describe the *link*; these describe the one Slack row
+  // that offers it. They live on the same record — and therefore under the
+  // same row lock — because the card and the link share a lifecycle: a
+  // re-issue must repost, a consume must redraw, and a resolution must
+  // retire. A second record would be a second thing to keep in step.
+  // -------------------------------------------------------------------------
+
+  /** Slack `ts` of the posted card. Set once; every later render edits it. */
+  slack_message_ts?: string;
+  /** Last state actually rendered into Slack. A no-op re-render is skipped. */
+  rendered_state?: MCPSlackConnectRenderedState;
+  rendered_at?: string;
+  /** Durable ownership of one post/update attempt, across daemons. */
+  delivery_claim?: {
+    claim_id: string;
+    claimed_at: string;
+    expires_at: string;
+  };
+  delivery_attempt_count?: number;
+  delivery_last_failed_at?: string;
+  delivery_retry_until?: string;
+  delivery_next_retry_at?: string;
+  /**
+   * When the bounded repair sweep should look at this card again. Mirrored
+   * into the indexed `messages.mcp_slack_connect_due_at` column so the sweep
+   * is a range scan rather than a scan of every message ever written.
+   */
+  next_repair_at?: string;
+  /**
+   * The workspace moved under a live card: the channel was reconfigured or
+   * disabled, alignment was switched off, the server changed, or the
+   * redeemer lost the role floor. Terminal for this delivery — a tap would be
+   * refused at `/oauth-resolve` anyway, so the card says so instead.
+   */
+  binding_invalidated_at?: string;
 }
+
+/**
+ * What one Slack connect card currently says.
+ *
+ * Derived, never stored as authority: every render recomputes it from the
+ * widget row's own status plus the delivery record. `rendered_state` persists
+ * only the last value actually sent, so an unchanged state skips the edit.
+ */
+export type MCPSlackConnectRenderedState =
+  /** Pending widget, live unconsumed link — the only state carrying a button. */
+  | 'connect_required'
+  /** The link was consumed and a provider round-trip is in flight. */
+  | 'sign_in_pending'
+  /** Resolved: the grant landed and the server is attached to the session. */
+  | 'connected'
+  /** Resolved: the grant landed, but the resolver may not attach to this session. */
+  | 'connected_not_attached'
+  /** Pending widget, but the link expired or its sign-in did not complete. */
+  | 'expired'
+  /** The widget was dismissed or superseded by a newer request. */
+  | 'cancelled'
+  /** The binding moved under the card; no link can be offered here. */
+  | 'unavailable';
 
 /** Optional connect context sealed into the canonical OAuth pending flow. */
 export interface MCPSlackOAuthConnectContext {
