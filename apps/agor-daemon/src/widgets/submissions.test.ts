@@ -9,7 +9,7 @@
  *   - `auto_resume: false` skips the task creation
  *   - Dismissal path uses `buildDismissedPrompt`
  *   - WebSocket broadcast: `widget:resolved` fires
- *   - OAuth lane: `/oauth-resolve` dispatches to `resolveFromOAuthCallback`,
+ *   - OAuth lane: `/oauth-resolve` dispatches to `resolveFromDaemonVerification`,
  *     reuses the SAME claim / auto-resume / broadcast machinery, and the two
  *     resolution kinds cannot be reached through each other's endpoint
  *
@@ -903,12 +903,14 @@ describe('widget registry', () => {
  * is irrelevant to what these tests check, which is the dispatch.
  */
 function registerOAuthTestWidget(
-  resolveFromOAuthCallback = vi.fn(async (_ctx: unknown, _evidence: unknown, _params: unknown) => ({
-    mcp_server_id: 'srv-1',
-    name: 'Notion',
-    oauth_mode: 'per_user' as const,
-    attached: true,
-  })),
+  resolveFromDaemonVerification = vi.fn(
+    async (_ctx: unknown, _evidence: unknown, _params: unknown) => ({
+      mcp_server_id: 'srv-1',
+      name: 'Notion',
+      oauth_mode: 'per_user' as const,
+      attached: true,
+    })
+  ),
   authorizeResolve?: (ctx: unknown, params: unknown) => void | Promise<void>
 ) {
   const entry: WidgetRegistryEntry<
@@ -917,16 +919,16 @@ function registerOAuthTestWidget(
     { mcp_server_id: string; name: string; oauth_mode: 'per_user'; attached: boolean }
   > = {
     type: 'env_vars',
-    resolution: 'oauth_callback',
+    resolution: 'daemon_verified',
     schemaVersion: 1,
     paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
-    resolveFromOAuthCallback,
+    resolveFromDaemonVerification,
     buildAutoResumePrompt: (rm) => `[Agor] User connected "${rm.name}" (attached: ${rm.attached}).`,
     buildDismissedPrompt: () => `[Agor] User declined to connect.`,
     ...(authorizeResolve ? { authorizeResolve: authorizeResolve as never } : {}),
   };
   registerWidget(entry);
-  return { entry, resolveFromOAuthCallback };
+  return { entry, resolveFromDaemonVerification };
 }
 
 describe('resolveWidget — OAuth resolution lane', () => {
@@ -941,11 +943,11 @@ describe('resolveWidget — OAuth resolution lane', () => {
     resolveSessionPromptAuthority: allowPrompt,
   });
 
-  it('dispatches to resolveFromOAuthCallback and reuses the shared post-resolution machinery', async () => {
+  it('dispatches to resolveFromDaemonVerification and reuses the shared post-resolution machinery', async () => {
     const fixtures = makeFixtures();
     const harness = makeApp(fixtures);
     const { app, calls, events, resolutionStore } = harness;
-    const { resolveFromOAuthCallback } = registerOAuthTestWidget();
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
 
     const result = await resolveWidget(
       'widget-msg-1',
@@ -955,7 +957,7 @@ describe('resolveWidget — OAuth resolution lane', () => {
     );
 
     // The advisory attempt id reaches the handler; the widget params do too.
-    expect(resolveFromOAuthCallback).toHaveBeenCalledWith(
+    expect(resolveFromDaemonVerification).toHaveBeenCalledWith(
       expect.objectContaining({ submitterUserId: 'creator-user-id' }),
       { attempt_id: 'att-9' },
       { names: ['HUBSPOT_API_KEY'], reason: 'call Hubspot' }
@@ -1016,7 +1018,7 @@ describe('resolveWidget — OAuth resolution lane', () => {
     const fixtures = makeFixtures();
     const harness = makeApp(fixtures);
     const { app, resolutionStore } = harness;
-    const { resolveFromOAuthCallback } = registerOAuthTestWidget();
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
 
     await expect(
       resolveWidget(
@@ -1026,8 +1028,8 @@ describe('resolveWidget — OAuth resolution lane', () => {
         deps(app, resolutionStore)
       )
       // Otherwise a client could resolve an OAuth widget by asserting success.
-    ).rejects.toThrow(/resolved by 'oauth_callback'/);
-    expect(resolveFromOAuthCallback).not.toHaveBeenCalled();
+    ).rejects.toThrow(/resolved by 'daemon_verified'/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
     expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
   });
 
@@ -1065,7 +1067,7 @@ describe('resolveWidget — OAuth resolution lane', () => {
     const harness = makeApp(fixtures);
     const { app, calls, resolutionStore } = harness;
     const claimSpy = vi.spyOn(resolutionStore, 'claim');
-    const { resolveFromOAuthCallback } = registerOAuthTestWidget(undefined, () => {
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget(undefined, () => {
       throw new Forbidden('This channel no longer aligns platform users');
     });
 
@@ -1079,7 +1081,7 @@ describe('resolveWidget — OAuth resolution lane', () => {
     ).rejects.toThrow(/no longer aligns/);
 
     expect(claimSpy).not.toHaveBeenCalled();
-    expect(resolveFromOAuthCallback).not.toHaveBeenCalled();
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
     expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
     expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeUndefined();
     expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();

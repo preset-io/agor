@@ -12,11 +12,19 @@
  *     `POST /widgets/:id/submit`, the entry validates it with `submitSchema`
  *     and applies it through `applySubmit`. `env_vars` and `gateway_token`
  *     work this way.
- *   - `'oauth_callback'` — there is no form body to trust. The browser runs
- *     the ordinary MCP OAuth flow and then POSTs
- *     `/widgets/:id/oauth-resolve`; the entry's `resolveFromOAuthCallback`
- *     re-derives the outcome from durable daemon state (the persisted grant)
- *     rather than from anything the client asserted. `oauth` works this way.
+ *   - `'daemon_verified'` — there is no form body to trust. The client reports
+ *     that something finished and the entry's `resolveFromDaemonVerification`
+ *     re-derives the outcome from durable daemon state rather than from
+ *     anything the client asserted. `oauth` works this way, via
+ *     `POST /widgets/:id/oauth-resolve` and the persisted grant.
+ *
+ *     The name is deliberately kind-neutral. Nothing about this machinery is
+ *     OAuth-specific — a GitHub App install or a device-code flow is the same
+ *     shape — and the next such widget should not have to register itself as an
+ *     OAuth callback to get it. (The resolution ACTION is still
+ *     `'oauth_callback'`: that names the endpoint the request arrived at and is
+ *     persisted in `resolution_claim.action`, so it is a route/compatibility
+ *     value rather than a statement about the machinery.)
  *
  * Everything downstream of the handler — the durable claim, the auto-resume
  * task, the terminal status patch, the `widget:resolved` broadcast — is the
@@ -97,10 +105,10 @@ export interface WidgetSubmitCtx {
  *
  * Advisory only. `attempt_id` identifies the durable OAuth attempt the browser
  * polled so the daemon can log and correlate, but no field here is trusted as
- * proof: `resolveFromOAuthCallback` re-reads the persisted grant and decides
+ * proof: `resolveFromDaemonVerification` re-reads the persisted grant and decides
  * for itself. A client that invents an attempt id resolves nothing.
  */
-export interface WidgetOAuthCallbackEvidence {
+export interface WidgetDaemonVerifiedEvidence {
   attempt_id?: string;
 }
 
@@ -156,7 +164,7 @@ interface WidgetRegistryEntryBase<TParams, TResultMeta> {
    * still true now". They are different questions whenever the window between
    * them is long and the world can change inside it — which for a widget that
    * waits on a human is always. `applySubmit` /
-   * `resolveFromOAuthCallback` may of course check more; this hook is for the
+   * `resolveFromDaemonVerification` may of course check more; this hook is for the
    * preconditions that are the SAME question as the mint-time one, so the two
    * can be written next to each other and stay in step.
    */
@@ -202,15 +210,17 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
 }
 
 /**
- * A widget resolved by the completion of a browser OAuth flow.
+ * A widget the DAEMON resolves by re-reading its own durable state, after a
+ * client reports that some out-of-band flow finished.
  *
  * There is no submit body and no `submitSchema`: `POST /widgets/:id/submit`
  * refuses this kind outright, because accepting a form body here would mean
- * accepting a client's word that a grant exists. Resolution arrives at
- * `POST /widgets/:id/oauth-resolve`, and the handler below is the only thing
+ * accepting a client's word for the outcome. Today the only member is `oauth`,
+ * whose resolution arrives at `POST /widgets/:id/oauth-resolve` and whose
+ * durable state is the persisted grant; the handler below is the only thing
  * that decides whether it really did.
  *
- * `resolveFromOAuthCallback` therefore RETURNS the `result_meta` rather than
+ * `resolveFromDaemonVerification` therefore RETURNS the `result_meta` rather than
  * having it derived from a submit body — the sanitized facts come from the
  * durable rows the handler just read, not from the request.
  *
@@ -218,12 +228,12 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
  * the claim back to `pending`, so the handler must be idempotent (the OAuth
  * widget re-checks the grant and re-attaches, both of which are).
  */
-export interface OAuthCallbackWidgetRegistryEntry<TParams, TResultMeta>
+export interface DaemonVerifiedWidgetRegistryEntry<TParams, TResultMeta>
   extends WidgetRegistryEntryBase<TParams, TResultMeta> {
-  resolution: 'oauth_callback';
-  resolveFromOAuthCallback: (
+  resolution: 'daemon_verified';
+  resolveFromDaemonVerification: (
     ctx: WidgetSubmitCtx,
-    evidence: WidgetOAuthCallbackEvidence,
+    evidence: WidgetDaemonVerifiedEvidence,
     params: TParams
   ) => Promise<TResultMeta>;
 }
@@ -237,7 +247,7 @@ export interface OAuthCallbackWidgetRegistryEntry<TParams, TResultMeta>
  */
 export type WidgetRegistryEntry<TParams, TSubmit, TResultMeta> =
   | SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
-  | OAuthCallbackWidgetRegistryEntry<TParams, TResultMeta>;
+  | DaemonVerifiedWidgetRegistryEntry<TParams, TResultMeta>;
 
 // Untyped variant used for storage / dispatch — the public API restores
 // generics via the registerWidget()/getWidget() helpers.

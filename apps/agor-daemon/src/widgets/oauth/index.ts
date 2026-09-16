@@ -10,7 +10,7 @@
  * widget.
  *
  * Two properties make this different from every other widget type, and both
- * are why it resolves through `resolveFromOAuthCallback` rather than
+ * are why it resolves through `resolveFromDaemonVerification` rather than
  * `applySubmit`:
  *
  *  1. **There is no form body.** The credential never passes through the
@@ -49,8 +49,8 @@ import {
 } from '../../utils/gateway-prompt-identity.js';
 import {
   registerWidget,
+  type WidgetDaemonVerifiedEvidence,
   type WidgetMintCtx,
-  type WidgetOAuthCallbackEvidence,
   type WidgetRegistryEntry,
   type WidgetSubmitCtx,
 } from '../registry.js';
@@ -280,7 +280,7 @@ async function attachToSession(
  */
 async function resolveOAuthWidgetFromCallback(
   ctx: WidgetSubmitCtx,
-  evidence: WidgetOAuthCallbackEvidence,
+  evidence: WidgetDaemonVerifiedEvidence,
   params: OAuthWidgetParams
 ): Promise<OAuthWidgetResultMeta> {
   // The role floor and the gateway identity question are both re-asked by
@@ -395,12 +395,12 @@ export async function authorizeOAuthWidgetResolve(
 
 export const oauthWidget: WidgetRegistryEntry<OAuthWidgetParams, never, OAuthWidgetResultMeta> = {
   type: 'oauth',
-  resolution: 'oauth_callback',
+  resolution: 'daemon_verified',
   schemaVersion: 1,
   paramsSchema: oauthParamsSchema,
   authorizeMint: authorizeOAuthWidgetMint,
   authorizeResolve: authorizeOAuthWidgetResolve,
-  resolveFromOAuthCallback: resolveOAuthWidgetFromCallback,
+  resolveFromDaemonVerification: resolveOAuthWidgetFromCallback,
   buildAutoResumePrompt: (rm, params) => {
     const name = rm.name || params.serverName;
     if (!rm.attached) {

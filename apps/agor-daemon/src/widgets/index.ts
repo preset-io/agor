@@ -15,7 +15,7 @@ import { registerGatewayTokenWidget } from './gateway-token/index.js';
 import { registerOAuthWidget } from './oauth/index.js';
 
 export type {
-  WidgetOAuthCallbackEvidence,
+  WidgetDaemonVerifiedEvidence,
   WidgetRegistryEntry,
   WidgetSubmitCtx,
 } from './registry.js';
