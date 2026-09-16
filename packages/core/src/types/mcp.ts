@@ -6,7 +6,7 @@
 //
 // See: apps/agor-docs/pages/guide/internal-mcp.mdx for the user-facing reference
 
-import type { SessionID, UserID, UUID } from './id';
+import type { MessageID, SessionID, UserID, UUID } from './id';
 
 /**
  * MCP Server ID (branded UUID)
@@ -223,7 +223,21 @@ export function isMCPOAuthGrantBindingVersion(
  * attempts, users, tenants, or MCP servers.
  */
 export interface MCPOAuthPendingFlowSealedMaterial {
-  version: 2;
+  /**
+   * Envelope contract version.
+   *
+   * New envelopes are always sealed at the current version. An older version
+   * is accepted on read ONLY while every field it lacks is optional-and-absent
+   * by construction, which is what lets a rolling upgrade finish the attempts
+   * an older daemon already started. The reverse never holds: a daemon that
+   * predates a version refuses the newer envelope rather than silently
+   * ignoring a binding it does not know about — that is the whole reason the
+   * number moves when a context sibling is added.
+   *
+   * v2 → v3 added {@link slackConnect}. A v2 envelope therefore carries no
+   * Slack connect binding, so reading one under v3 rules loses nothing.
+   */
+  version: 2 | 3;
   attemptId: MCPOAuthAttemptID;
   tenantId: string;
   userId: UserID;
@@ -249,6 +263,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   allowLocalhostHttp: boolean;
   /** Non-secret durable routing back to an exact Slack recovery notice. */
   slackRecovery?: MCPSlackOAuthRecoveryContext;
+  /** Non-secret durable routing back to an exact Slack connect delivery. */
+  slackConnect?: MCPSlackOAuthConnectContext;
 }
 
 /**
@@ -1023,6 +1039,112 @@ export interface MCPSlackOAuthRecoveryContext {
   mcp_server_id: MCPServerID;
   recovery_generation: number;
   recovery_request_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Agent-initiated MCP OAuth connect, delivered into Slack
+//
+// The reactive recovery lane above fires after a mediated MCP call has already
+// failed, and binds to the Task that failed. This lane is its intent-initiated
+// counterpart: the user asked an agent to "connect me to Notion", the agent
+// minted an `oauth` widget, and the widget needs a Slack-tappable face. Nothing
+// has failed, so the binding target is the WIDGET rather than a recovery state
+// machine — which is why this is a separate token type, audience, and durable
+// record rather than a reuse of the recovery one.
+//
+// See docs/internal/slack-mcp-oauth-connect-2026-09-16.md §7.
+// ---------------------------------------------------------------------------
+
+/**
+ * Authenticated, encrypted browser-entry claims for a Slack-delivered MCP
+ * connect link. Every field is compared against durable state at redemption.
+ *
+ * The claims are a *pin*, never an authority: the token proves which widget,
+ * server, channel, thread, and Slack person Agor issued this link for, and the
+ * redeemer must separately be signed into Agor as both `sub` and
+ * `credential_user_id`. A chat-delivered link is not an authentication bearer.
+ */
+export interface MCPOAuthConnectTokenClaims {
+  type: 'mcp-oauth-connect';
+  tid: string;
+  /** Principal the prompt was attributed to. */
+  sub: UserID;
+  /** Whose MCP grant this sign-in will mint. Equal to `sub`; no delegation. */
+  credential_user_id: UserID;
+  /**
+   * Slack sender recorded on the originating Task.
+   *
+   * Alignment at mint time proves the channel resolves senders to real Agor
+   * accounts. It does NOT prove the person who tapped the button is the person
+   * who asked, so this is re-compared at redemption against the durable
+   * `gateway_task_source` of the Task that minted the widget.
+   */
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  /** Gateway Task that minted the widget; carries the Slack sender identity. */
+  task_id: string;
+  session_id: SessionID;
+  /** Session owner at issue time. A transfer invalidates the link. */
+  session_owner_user_id: UserID;
+  /** The exact widget card this link resolves. */
+  widget_id: MessageID;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  oauth_mode: MCPOAuthMode;
+  delivery_id: string;
+  /** Monotonic per-widget issue counter; only the latest link is redeemable. */
+  delivery_generation: number;
+  jti: string;
+  iat: number;
+  exp: number;
+  aud: 'agor:mcp-oauth-connect';
+  iss: 'agor';
+}
+
+/**
+ * Durable, daemon-owned delivery state for one Slack-delivered connect link.
+ *
+ * Lives on the widget message's own metadata (`metadata.widget.slack_connect`)
+ * so it is covered by the widget write boundary — external callers cannot
+ * patch a widget message at all — and so the one-use consume is a
+ * compare-and-set on the same row the widget lifecycle already locks.
+ *
+ * Deliberately holds NO Slack routing or principal identity. Every binding the
+ * redemption checks is re-read from its own authority (the channel row, the
+ * thread map, the Task's gateway source, the server row, the user rows) and
+ * compared against the token's claims. A copy kept here would be one more
+ * thing that can go stale without anything noticing.
+ */
+export interface MCPSlackConnectDelivery {
+  delivery_id: string;
+  /** Incremented on every re-issue; the token must match the current value. */
+  delivery_generation: number;
+  token_jti: string;
+  issued_at: string;
+  expires_at: string;
+  /** Set by the one-use consume CAS at redemption. */
+  token_consumed_at?: string;
+  oauth_attempt_id?: MCPOAuthAttemptID;
+  /** Short lease between one-use consumption and canonical flow creation. */
+  oauth_start_claimed_at?: string;
+  oauth_start_claim_expires_at?: string;
+  oauth_started_at?: string;
+  oauth_succeeded_at?: string;
+  oauth_failed_at?: string;
+}
+
+/** Optional connect context sealed into the canonical OAuth pending flow. */
+export interface MCPSlackOAuthConnectContext {
+  delivery_id: string;
+  delivery_generation: number;
+  widget_id: MessageID;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  gateway_channel_id: string;
 }
 
 // ============================================================================

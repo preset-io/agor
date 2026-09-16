@@ -86,6 +86,7 @@ import type {
   GatewayChannel,
   HookContext,
   MCPServer,
+  Message,
   MessageID,
   Paginated,
   Params,
@@ -191,6 +192,7 @@ import {
 import {
   redactMcpRecoveryTopology,
   stripMcpSlackRecoveryNotice,
+  stripWidgetSlackConnectDelivery,
 } from './utils/mcp-recovery-redaction.js';
 import {
   didMcpPrincipalRoleChange,
@@ -961,6 +963,37 @@ function redactMCPServerPayload(result: any): any {
  * property for a redaction gate. Which methods it is registered on is pinned
  * separately in `register-hooks.mcp-headers-redaction.test.ts`.
  */
+/**
+ * Keep the authoritative Message result intact while projecting the external
+ * caller response without the widget's Slack connect delivery state.
+ *
+ * Mirrors `createRedactTaskMcpRecoveryAfter`: `context.dispatch` is what the
+ * external caller receives, while `context.result` stays whole for
+ * audience-specific publishers (which do their own strip).
+ */
+export const redactMessageSlackConnect = async (context: HookContext): Promise<HookContext> => {
+  if (!context.params.provider) return context;
+  const project = (value: unknown): unknown =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? stripWidgetSlackConnectDelivery(value as Message)
+      : value;
+  let dispatch: unknown = context.result;
+  if (Array.isArray(context.result)) {
+    dispatch = (context.result as Message[]).map(project);
+  } else if (
+    context.result &&
+    typeof context.result === 'object' &&
+    Array.isArray((context.result as { data?: unknown }).data)
+  ) {
+    const page = context.result as { data: Message[] } & Record<string, unknown>;
+    dispatch = { ...page, data: page.data.map(project) };
+  } else {
+    dispatch = project(context.result);
+  }
+  context.dispatch = dispatch;
+  return context;
+};
+
 export const redactMCPServerSecretFields = async (context: HookContext) => {
   if (context.event) {
     context.dispatch = redactMCPServerPayload(context.result);
@@ -1885,6 +1918,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
+      all: [redactMessageSlackConnect],
       create: [gatewayRouteHook],
       patch: [
         async (context: HookContext<Board>) => {
