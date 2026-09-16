@@ -25,18 +25,17 @@ describe('MobileTabBar fits narrow viewports', () => {
         <ConfigProvider theme={{ token: { motion: false } }}>
           <div style={{ width, boxSizing: 'border-box' }} data-testid="vp">
             <MobileTabBar
-              activeTab="comments"
+              activeTab="marketplace"
               onSelect={vi.fn()}
               askEmoji="🤖"
               sessionsBadge={12}
-              commentsBadge={34}
             />
           </div>
         </ConfigProvider>
       );
       const vp = container.querySelector<HTMLElement>('[data-testid="vp"]')!;
       const limit = vp.getBoundingClientRect().right;
-      for (const name of ['Home', 'Board', 'Comments', 'More', 'Ask your primary assistant']) {
+      for (const name of ['Home', 'Board', 'Marketplace', 'More', 'Ask your primary assistant']) {
         expect(vp.querySelector(`[aria-label="${name}"]`), `${name} missing`).toBeTruthy();
       }
       const bad = overflowers(vp, limit);

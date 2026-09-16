@@ -1,5 +1,11 @@
-import { ArrowLeftOutlined, CheckOutlined, DownOutlined, SearchOutlined } from '@ant-design/icons';
-import { Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
+import {
+  ArrowLeftOutlined,
+  BellOutlined,
+  CheckOutlined,
+  DownOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
+import { Badge, Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { BrandMark } from '../BrandMark';
@@ -21,6 +27,10 @@ interface MobileHeaderProps {
   onBack?: () => void;
   /** When set, a search icon appears on the right (opens the search screen). */
   onSearch?: () => void;
+  /** When set, a bell icon appears on the right that opens comments/mentions. */
+  onOpenComments?: () => void;
+  /** Unread comments/mentions count shown on the bell (0 hides the badge). */
+  commentsBadge?: number;
   /**
    * When set, the title becomes a button with a chevron that opens a compact
    * board-switch sheet.
@@ -39,6 +49,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   showLogo = false,
   onBack,
   onSearch,
+  onOpenComments,
+  commentsBadge,
   boardSwitcher,
 }) => {
   const { token } = theme.useToken();
@@ -119,6 +131,18 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           onClick={onSearch}
           style={iconButtonStyle}
         />
+      )}
+
+      {onOpenComments && (
+        <Badge count={commentsBadge ?? 0} size="small" offset={[-6, 6]}>
+          <Button
+            type="text"
+            aria-label="Comments"
+            icon={<BellOutlined />}
+            onClick={onOpenComments}
+            style={iconButtonStyle}
+          />
+        </Badge>
       )}
 
       {boardSwitcher && (

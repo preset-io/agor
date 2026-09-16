@@ -15,8 +15,8 @@ describe('MobileTabBar', () => {
   });
 
   it('marks the active tab for assistive tech (not colour alone)', () => {
-    render(<MobileTabBar activeTab="comments" onSelect={vi.fn()} />);
-    expect(screen.getByRole('button', { name: 'Comments' })).toHaveAttribute(
+    render(<MobileTabBar activeTab="marketplace" onSelect={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Marketplace' })).toHaveAttribute(
       'aria-current',
       'page'
     );
@@ -24,10 +24,10 @@ describe('MobileTabBar', () => {
   });
 
   it('is icon-only: destination names exist as aria-labels, not visible text', () => {
-    render(<MobileTabBar activeTab="comments" onSelect={vi.fn()} />);
+    render(<MobileTabBar activeTab="marketplace" onSelect={vi.fn()} />);
     // The active tab is indicated by the highlight + colour, never a text label,
     // so even the active destination renders no visible label text.
-    for (const name of ['Home', 'Board', 'Comments', 'More']) {
+    for (const name of ['Home', 'Board', 'Marketplace', 'More']) {
       expect(screen.queryByText(name)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }

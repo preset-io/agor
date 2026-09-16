@@ -22,6 +22,10 @@ interface MobileHomePageProps {
   assistantSessionCount?: number;
   /** Opens the assistant's session list; when set, the hero body becomes tappable. */
   onOpenAssistantSessions?: () => void;
+  /** Unread comments count for the header bell. */
+  commentsBadge?: number;
+  /** Opens comments/mentions from the header bell. */
+  onOpenComments?: () => void;
 }
 
 const RECENT_LIMIT = 5;
@@ -41,6 +45,8 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   primaryTeammateEmoji,
   assistantSessionCount,
   onOpenAssistantSessions,
+  commentsBadge,
+  onOpenComments,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -91,6 +97,8 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
       <MobileHeader
         title={greetingName ? `Welcome back, ${greetingName}` : 'Home'}
         onSearch={() => navigate('/m/search')}
+        commentsBadge={commentsBadge}
+        onOpenComments={onOpenComments}
       />
       <div
         style={{

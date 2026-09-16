@@ -54,6 +54,7 @@ function renderMobileApp(
             element={
               <MobileApp
                 client={null}
+                authGeneration={0}
                 onSendComment={vi.fn()}
                 onOpenWorkspaceSettings={vi.fn()}
                 onOpenUserSettings={vi.fn()}

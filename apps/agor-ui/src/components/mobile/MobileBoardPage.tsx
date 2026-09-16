@@ -65,6 +65,10 @@ interface MobileBoardPageProps {
   onGiveFirstTask: () => void;
   /** Display name of the assistant used in the empty-board CTA. */
   firstTaskAssistantName?: string;
+  /** Unread comments count for the header bell. */
+  commentsBadge?: number;
+  /** Opens comments/mentions from the header bell. */
+  onOpenComments?: () => void;
 }
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
@@ -112,6 +116,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   onNewSession,
   onGiveFirstTask,
   firstTaskAssistantName,
+  commentsBadge,
+  onOpenComments,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -284,6 +290,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
         title={board.name}
         boardSwitcher={boardSwitcher}
         onSearch={() => navigate('/m/search')}
+        commentsBadge={commentsBadge}
+        onOpenComments={onOpenComments}
       />
       <Content
         style={{

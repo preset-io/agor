@@ -38,6 +38,7 @@ import { resolveAskPrimaryTarget } from './askPrimary';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHomePage } from './MobileHomePage';
+import { MobileMarketplacePage } from './MobileMarketplacePage';
 import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileSearchPage } from './MobileSearchPage';
 import { MobileSessionsPage } from './MobileSessionsPage';
@@ -47,6 +48,8 @@ import { SessionPage } from './SessionPage';
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
+  /** Authentication generation, forwarded to the reused Marketplace catalog. */
+  authGeneration: number;
   /** Shared post-onboarding banners (e.g. "AI not connected"); shown above the shell content. */
   topBanner?: React.ReactNode;
   onSendPrompt?: (
@@ -85,6 +88,7 @@ interface MobileAppProps {
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
+  authGeneration,
   topBanner,
   onSendPrompt,
   onCreateSession,
@@ -173,14 +177,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   }, [currentBoardId, boardById, user?.preferences?.mainBoardId]);
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
-  // swallows `/m/sessions` (the Sessions tab).
+  // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
+  // bell as a full-screen sub-view (like session detail), not a bottom tab.
   const isSessionRoute = location.pathname.startsWith('/m/session/');
+  const isCommentsRoute = location.pathname.startsWith('/m/comments');
+  const isSubView = isSessionRoute || isCommentsRoute;
   // Sessions folded into Home: /m and the sessions list both read as Home.
   const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
     ? 'board'
-    : location.pathname.startsWith('/m/comments')
-      ? 'comments'
-      : isSessionRoute
+    : location.pathname.startsWith('/m/marketplace')
+      ? 'marketplace'
+      : isSubView
         ? null
         : 'home';
 
@@ -272,9 +279,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         case 'ask':
           void askPrimaryAssistant();
           break;
-        case 'comments':
-          if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
-          else setMoreOpen(true);
+        case 'marketplace':
+          navigate('/m/marketplace');
           break;
         case 'more':
           setMoreOpen(true);
@@ -283,6 +289,13 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     },
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
+
+  // The top-bar bell opens the current board's comments/mentions (a full-screen
+  // sub-view). No board yet -> the More sheet, which lists boards.
+  const openComments = useCallback(() => {
+    if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
+    else setMoreOpen(true);
+  }, [effectiveBoardId, navigate]);
 
   return (
     // The shell root is pinned to exactly the viewport and clips horizontally,
@@ -313,8 +326,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         />
       )}
       {/* Proactive connect-AI / integrations banner, shared with desktop. Hidden
-          on the full-screen session view (its composer surfaces credentials). */}
-      {topBanner && !isSessionRoute && <div style={{ flexShrink: 0 }}>{topBanner}</div>}
+          on full-screen sub-views (session detail, comments). */}
+      {topBanner && !isSubView && <div style={{ flexShrink: 0 }}>{topBanner}</div>}
       <div
         style={{
           flex: 1,
@@ -349,6 +362,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onOpenAssistantSessions={
                   primaryBranch ? () => navigate('/m/sessions?scope=assistant') : undefined
                 }
+                commentsBadge={commentsBadge}
+                onOpenComments={openComments}
               />
             }
           />
@@ -369,6 +384,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onForkSession={onForkSession}
                 onSpawnSession={onSpawnSession}
                 onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
+                commentsBadge={commentsBadge}
+                onOpenComments={openComments}
+              />
+            }
+          />
+          <Route
+            path="marketplace"
+            element={
+              <MobileMarketplacePage
+                client={client}
+                currentUser={user}
+                authGeneration={authGeneration}
+                commentsBadge={commentsBadge}
+                onOpenComments={openComments}
               />
             }
           />
@@ -408,6 +437,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 firstTaskAssistantName={
                   primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
                 }
+                commentsBadge={commentsBadge}
+                onOpenComments={openComments}
               />
             }
           />
@@ -441,6 +472,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 branchById={branchById}
                 userById={userById}
                 currentUser={user}
+                onBack={() => (location.key !== 'default' ? navigate(-1) : navigate('/m'))}
                 onSendComment={onSendComment}
                 onReplyComment={onReplyComment}
                 onResolveComment={onResolveComment}
@@ -452,12 +484,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         </Routes>
       </div>
 
-      {!isSessionRoute && (
+      {!isSubView && (
         <MobileTabBar
           activeTab={activeTab}
           onSelect={handleTabSelect}
           sessionsBadge={sessionsBadge}
-          commentsBadge={commentsBadge}
         />
       )}
 

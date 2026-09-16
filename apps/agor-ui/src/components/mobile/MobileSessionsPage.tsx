@@ -23,6 +23,10 @@ interface MobileSessionsPageProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   /** Opens the agent picker to start a session on the given branch. */
   onCreateSessionOnBranch: (branchId: string) => void;
+  /** Unread comments count for the header bell. */
+  commentsBadge?: number;
+  /** Opens comments/mentions from the header bell. */
+  onOpenComments?: () => void;
 }
 
 /**
@@ -44,6 +48,8 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   onForkSession,
   onSpawnSession,
   onCreateSessionOnBranch,
+  commentsBadge,
+  onOpenComments,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -79,7 +85,12 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader title="Sessions" onSearch={() => navigate('/m/search')} />
+      <MobileHeader
+        title="Sessions"
+        onSearch={() => navigate('/m/search')}
+        commentsBadge={commentsBadge}
+        onOpenComments={onOpenComments}
+      />
       {canScopeAssistant && (
         <div style={{ paddingInline: token.padding, paddingBottom: token.paddingSM }}>
           <Segmented<SessionScope>

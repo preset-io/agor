@@ -13,6 +13,8 @@ interface MobileCommentsPageProps {
   branchById: Map<string, Branch>;
   userById: Map<string, User>;
   currentUser?: User | null;
+  /** Back to the surface the bell was tapped from (comments is a full-screen sub-view). */
+  onBack?: () => void;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -27,6 +29,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   branchById,
   userById,
   currentUser,
+  onBack,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -67,6 +70,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
         title={board.name}
+        onBack={onBack}
         boardSwitcher={boardSwitcher}
         onSearch={() => navigate('/m/search')}
       />

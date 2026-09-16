@@ -1,23 +1,21 @@
 import {
   AppstoreOutlined,
-  CommentOutlined,
   EditOutlined,
   HomeOutlined,
   MenuOutlined,
+  ShopOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Flex, theme } from 'antd';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MOBILE_TOUCH_TARGET as TOUCH_TARGET } from './constants';
 
-export type MobileTab = 'home' | 'board' | 'ask' | 'comments' | 'more';
+export type MobileTab = 'home' | 'board' | 'ask' | 'marketplace' | 'more';
 
 export interface MobileTabBarProps {
   activeTab: MobileTab | null;
   onSelect: (tab: MobileTab) => void;
   /** Count of sessions awaiting the user / running (0 hides the badge). */
   sessionsBadge?: number;
-  /** Count of unresolved comments (0 hides the badge). */
-  commentsBadge?: number;
 }
 
 interface TabDef {
@@ -29,7 +27,7 @@ interface TabDef {
 
 /**
  * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]
- * . Comments . More. Icon-only: the active destination is marked by a rounded
+ * . Marketplace . More. Icon-only: the active destination is marked by a rounded
  * highlight behind its icon plus colorPrimary (not text), so no label can wrap.
  * Ask is the flat solid-teal center action. Safe-area aware; every tab keeps an
  * aria-label and the active one aria-current so names are still announced.
@@ -38,7 +36,6 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
   onSelect,
   sessionsBadge,
-  commentsBadge,
 }) => {
   const { token } = theme.useToken();
   const askActive = activeTab === 'ask';
@@ -49,7 +46,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
     { key: 'board', label: 'Board', icon: <AppstoreOutlined /> },
   ];
   const rightTabs: TabDef[] = [
-    { key: 'comments', label: 'Comments', icon: <CommentOutlined />, badge: commentsBadge },
+    { key: 'marketplace', label: 'Marketplace', icon: <ShopOutlined /> },
     { key: 'more', label: 'More', icon: <MenuOutlined /> },
   ];
 

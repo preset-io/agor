@@ -15,6 +15,7 @@ vi.mock('./MobileBoardPage', () => ({ MobileBoardPage: () => null }));
 vi.mock('./MobileCommentsPage', () => ({ MobileCommentsPage: () => null }));
 vi.mock('./MobileSearchPage', () => ({ MobileSearchPage: () => null }));
 vi.mock('./MobileSessionsPage', () => ({ MobileSessionsPage: () => null }));
+vi.mock('./MobileMarketplacePage', () => ({ MobileMarketplacePage: () => null }));
 vi.mock('./MobileMoreSheet', () => ({ MobileMoreSheet: () => null }));
 vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
@@ -25,6 +26,7 @@ vi.mock('../AgentSelectionGrid', () => ({
 }));
 
 const handlers = {
+  authGeneration: 0,
   onCreateSession: vi.fn(async () => null),
   onForkSession: vi.fn(async () => {}),
   onBtwForkSession: vi.fn(async () => {}),
@@ -66,7 +68,7 @@ describe('MobileApp shell clips over-wide content and keeps the nav', () => {
 
       // All five destinations plus the Ask FAB are present and within the viewport.
       const limit = vp.getBoundingClientRect().right;
-      for (const name of ['Home', 'Board', 'Comments', 'More', 'Ask your primary assistant']) {
+      for (const name of ['Home', 'Board', 'Marketplace', 'More', 'Ask your primary assistant']) {
         const el = vp.querySelector<HTMLElement>(`[aria-label="${name}"]`);
         expect(el, `${name} missing at ${width}px`).toBeTruthy();
         expect(

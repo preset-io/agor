@@ -2431,6 +2431,7 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
+                  authGeneration={authenticationGeneration}
                   topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
                   onCreateSession={handleCreateSession}
