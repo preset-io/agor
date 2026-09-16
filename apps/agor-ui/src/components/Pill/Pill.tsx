@@ -14,6 +14,7 @@ import {
   FileTextOutlined,
   ForkOutlined,
   GithubOutlined,
+  HddOutlined,
   IdcardOutlined,
   LinkOutlined,
   MessageOutlined,
@@ -27,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
+import type { BranchStorageMode } from '../../utils/branchStorage';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -819,6 +821,32 @@ export const DirtyStatePill: React.FC<DirtyStatePillProps> = ({ style }) => {
     <Tag icon={<EditOutlined />} color={PILL_COLORS.warning} style={style}>
       <span style={{ fontFamily: token.fontFamilyCode }}>uncommitted changes</span>
     </Tag>
+  );
+};
+
+interface StorageModePillProps extends BasePillProps {
+  storageMode?: BranchStorageMode;
+}
+
+/**
+ * Storage-mode indicator for a branch: git `worktree` (shared parent repo,
+ * the common default) vs a self-standing `clone` (independent repository copy).
+ *
+ * Worktree is intentionally quiet — it's the default on the vast majority of
+ * branches, so we render nothing to keep the board uncluttered. Only the rarer
+ * `clone` gets a pill, making it easy to spot at a glance.
+ */
+export const StorageModePill: React.FC<StorageModePillProps> = ({ storageMode, style }) => {
+  const { token } = theme.useToken();
+
+  if (storageMode !== 'clone') return null;
+
+  return (
+    <Tooltip title="Self-standing git clone — an independent repository copy, not a shared worktree">
+      <Tag icon={<HddOutlined />} color={PILL_COLORS.spawn} style={style}>
+        <span style={{ fontFamily: token.fontFamilyCode }}>clone</span>
+      </Tag>
+    </Tooltip>
   );
 };
 
