@@ -28,6 +28,13 @@ describe('Discord setup artifact', () => {
     );
     expect(artifact.messageContent.required).toBe(true);
     expect(artifact.draft.config.catch_up).toBeTruthy();
+    expect(artifact.draft.config.files).toBe(false);
+  });
+
+  it('carries the explicit inbound-image opt-in without changing the default', () => {
+    const artifact = buildDiscordSetupArtifact({ ...decisions, files: true });
+    expect(artifact.validation).toEqual({ ok: true, errors: [] });
+    expect(artifact.draft.config.files).toBe(true);
   });
 
   it('requires a parent, author allowlist, and fixed or mapped identity', () => {
