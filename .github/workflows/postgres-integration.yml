@@ -14,6 +14,8 @@ on:
       - '.github/workflows/postgres-integration.yml'
       - 'apps/agor-cli/package.json'
       - 'apps/agor-cli/src/lib/managed-oauth-retirement.ts'
+      - 'apps/agor-cli/src/lib/managed-oauth-observation*.ts'
+      - 'apps/agor-cli/src/commands/managed-oauth/**'
       - 'apps/agor-cli/src/commands/tenant/retirement*.ts'
       - 'apps/agor-daemon/package.json'
       - 'apps/agor-daemon/src/**'
@@ -29,6 +31,8 @@ on:
       - 'scripts/test-postgres-docker.sh'
       - 'scripts/test-managed-oauth-downgrade*.mjs'
       - 'scripts/managed-oauth-old-image-proof.mjs'
+      - 'scripts/managed-oauth-old-package-proof.mjs'
+      - 'scripts/fixtures/managed-old-package/**'
       - 'turbo.json'
   pull_request:
     branches: [main]
@@ -36,6 +40,8 @@ on:
       - '.github/workflows/postgres-integration.yml'
       - 'apps/agor-cli/package.json'
       - 'apps/agor-cli/src/lib/managed-oauth-retirement.ts'
+      - 'apps/agor-cli/src/lib/managed-oauth-observation*.ts'
+      - 'apps/agor-cli/src/commands/managed-oauth/**'
       - 'apps/agor-cli/src/commands/tenant/retirement*.ts'
       - 'apps/agor-daemon/package.json'
       - 'apps/agor-daemon/src/**'
@@ -51,6 +57,8 @@ on:
       - 'scripts/test-postgres-docker.sh'
       - 'scripts/test-managed-oauth-downgrade*.mjs'
       - 'scripts/managed-oauth-old-image-proof.mjs'
+      - 'scripts/managed-oauth-old-package-proof.mjs'
+      - 'scripts/fixtures/managed-old-package/**'
       - 'turbo.json'
   workflow_dispatch:
 
@@ -76,7 +84,7 @@ jobs:
   postgres-integration:
     name: PostgreSQL integration (non-superuser RLS)
     runs-on: ubuntu-latest
-    # Full isolated schema/RLS matrix plus the immutable old-image startup proof.
+    # Full isolated schema/RLS matrix plus the immutable published npm startup proof.
     timeout-minutes: 20
 
     services:
@@ -152,7 +160,7 @@ jobs:
         timeout-minutes: 10
         run: pnpm test:postgres:integration
 
-      - name: Prove compiled and published old daemons refuse the managed schema
+      - name: Prove compiled and published npm old daemons refuse the managed schema
         env:
           SCHEMA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -162,4 +170,4 @@ jobs:
           pnpm exec turbo run build --filter='@agor/git...' --filter='@agor/agentic-tools...' --filter='@agor/agentic-tool-opencode...'
           node --test scripts/test-managed-oauth-downgrade.test.mjs
           node scripts/test-managed-oauth-downgrade.mjs --schema-sha "$SCHEMA_SHA" \
-            --old-image docker.io/preset/agor@sha256:18dcf91c084499ce0862ac608b72ce27d6e8f9fc76796c041ef678a848f98403
+            --old-package 0.26.3

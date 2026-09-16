@@ -422,11 +422,19 @@ until the separately approved recovery process admits a new cohort. Restoring
 database rows or copying attestation files does not establish that authority.
 
 The PostgreSQL compatibility lane exercises both the prior compiled startup
-module and a pinned prior published `agor-daemon` executable against a newly
-migrated, run-owned database. The published-image check uses the actual old
-dependencies and an isolated internal network, not mocked migration status.
-It verifies refusal before serving or creating users/grants. The image's
-SQLite initialization wrapper is not the PostgreSQL daemon entrypoint.
+module and the published `agor-live@0.26.3` daemon executable against a newly
+migrated, run-owned database. The npm tarball's integrity and embedded source
+revision are pinned, as is its complete dependency lock. Installation uses no
+credentials or lifecycle scripts. The unmodified executable and frozen
+dependencies run read-only on an immutable public Node image, on an isolated
+internal network. The test requires schema refusal before serving or creating
+users/grants; it does not mock or patch the migration guard.
+
+This is a **published npm executable** proof, not proof of the separately
+published Agor Docker image's packaging. The optional digest-pinned old-image
+proof uses that image's original dependencies, but requires registry access;
+PR jobs do not receive registry credentials or silently skip that prerequisite.
+Its SQLite initialization wrapper is not the PostgreSQL daemon entrypoint.
 This is **startup downgrade refusal**, not containment of an already running
 old daemon or executor: terminate old processes/connections and verify the
 complete cohort before admitting managed OAuth. Do not treat a successful

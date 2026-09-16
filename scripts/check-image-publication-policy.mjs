@@ -119,8 +119,11 @@ const oldImageProof = await readFile(
   'utf8'
 );
 assert.match(oldImageProof, /'--internal'/);
-assert.match(oldImageProof, /'--entrypoint',\s*'agor-daemon'/);
-assert.match(oldImageProof, /assert\.equal\(revision\.stdout\.trim\(\), baseline/);
+assert.match(oldImageProof, /'--entrypoint',\s*publishedPackage \? 'node' : 'agor-daemon'/);
+assert.match(oldImageProof, /assert\.equal\(revision, baseline/);
+assert.match(oldImageProof, /'--read-only'/);
+assert.match(oldImageProof, /dst=\/opt\/published-package,readonly/);
+assert.match(oldImageProof, /mount\.RW === false/);
 assert.doesNotMatch(oldImageProof, /docker\(\[\s*['"](?:push|login|build|tag)['"]/);
 
 async function scan(directory) {
@@ -149,12 +152,9 @@ async function scan(directory) {
       continue;
     }
     if (relative === '.github/workflows/postgres-integration.yml') {
-      // Only this digest-pinned argument is allowed; any other consumer in the
-      // PostgreSQL workflow (including a mutable tag or another step) still fails.
-      const pinnedProofArgument =
-        /^ {12}--old-image docker\.io\/preset\/agor@sha256:[a-f0-9]{64}$/gm;
-      assert.equal([...contents.matchAll(pinnedProofArgument)].length, 1);
-      contents = contents.replace(pinnedProofArgument, '');
+      // PR CI uses the integrity-pinned public npm executable, not private
+      // registry credentials. No Agor image reference is exempted in this lane.
+      assert.equal([...contents.matchAll(/^ {12}--old-package 0\.26\.3$/gm)].length, 1);
     }
     if (imageReference.test(contents)) references.push(relative);
   }

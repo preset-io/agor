@@ -2,6 +2,8 @@
 /**
  * Actual old compiled daemon startup module against an owned newer PostgreSQL schema.
  * With --old-image, also runs the unmodified published agor-daemon executable/dependencies.
+ * With --old-package 0.26.3, runs the integrity-pinned npm executable and frozen dependencies
+ * read-only on public Node. This is deliberately not an Agor Docker packaging proof.
  * Without that option the compiled module proof does not establish full entrypoint behavior.
  * No caller database URL is accepted. Run: node scripts/test-managed-oauth-downgrade.mjs
  * Requires Docker and installed workspace dependencies; missing prerequisites FAIL.
@@ -15,6 +17,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { provePublishedOldDaemon, validateOldImage } from './managed-oauth-old-image-proof.mjs';
+import {
+  OLD_PACKAGE_VERSION,
+  preparePublishedOldPackage,
+} from './managed-oauth-old-package-proof.mjs';
 
 export const BASELINE_SHA = 'c675abdd306d866860483b6d7289078951f71f37';
 export const SCHEMA_SHA = '34676f927ad09f46ad6f1bd7f392a2589d6bdfed';
@@ -25,6 +31,15 @@ const REFUSAL =
 export function parseOptions(args) {
   const options = { baseline: BASELINE_SHA, schema: SCHEMA_SHA };
   for (let i = 0; i < args.length; i += 2) {
+    if (args[i] === '--old-package') {
+      assert.equal(
+        args[i + 1],
+        OLD_PACKAGE_VERSION,
+        'Only the pinned published npm version is accepted'
+      );
+      options.oldPackage = args[i + 1];
+      continue;
+    }
     if (args[i] === '--old-image') {
       options.oldImage = validateOldImage(args[i + 1]);
       continue;
@@ -34,6 +49,7 @@ export function parseOptions(args) {
       throw new Error('Only exact source SHAs and an immutable --old-image digest are accepted');
     options[key] = args[i + 1];
   }
+  assert(!(options.oldPackage && options.oldImage), 'Select one published-artifact proof');
   return options;
 }
 
@@ -201,16 +217,21 @@ async function worker(source, directory, options) {
     assert.match(result.stdout, /EXPECTED_OLD_STARTUP_REFUSAL/);
     assert.doesNotMatch(result.stdout, /Database ready|Seeding initial data/);
     assert.equal(result.stderr, '');
-    stage = 'published-old-image';
-    const publishedImage = options.oldImage
-      ? await provePublishedOldDaemon({
-          image: options.oldImage,
-          baseline: options.baseline,
-          owned,
-          directory,
-          environment,
-        })
+    stage = options.oldPackage ? 'published-old-package' : 'published-old-image';
+    const publishedPackage = options.oldPackage
+      ? await preparePublishedOldPackage(directory, environment)
       : undefined;
+    const publishedArtifact =
+      options.oldImage || publishedPackage
+        ? await provePublishedOldDaemon({
+            image: options.oldImage,
+            baseline: options.baseline,
+            owned,
+            directory,
+            environment,
+            publishedPackage,
+          })
+        : undefined;
     stage = 'unchanged-state';
     const after = await owned.sql`SELECT (SELECT count(*)::text FROM users) AS users,
       (SELECT count(*)::text FROM user_mcp_oauth_tokens) AS grants,
@@ -245,7 +266,12 @@ async function worker(source, directory, options) {
             'installed npm/compiler and unused workspace dependency packages reused read-only',
           rows_unchanged: true,
           http_requests: 0,
-          ...(publishedImage ? { published_image_proof: publishedImage } : {}),
+          ...(publishedArtifact
+            ? {
+                [publishedPackage ? 'published_package_proof' : 'published_image_proof']:
+                  publishedArtifact,
+              }
+            : {}),
         },
         null,
         2

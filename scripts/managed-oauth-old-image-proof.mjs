@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { PACKAGE_NODE_IMAGE } from './managed-oauth-old-package-proof.mjs';
 
 const command = promisify(execFile);
 const label = 'agor.managed-old-image';
@@ -29,8 +30,18 @@ export function publishedImageEnvironment(options) {
   };
 }
 
-export async function provePublishedOldDaemon({ image, baseline, owned, directory, environment }) {
-  validateOldImage(image);
+export async function provePublishedOldDaemon({
+  image,
+  baseline,
+  owned,
+  directory,
+  environment,
+  publishedPackage,
+}) {
+  if (publishedPackage) {
+    assert.equal(publishedPackage.directory, join(directory, 'published-package'));
+    image = PACKAGE_NODE_IMAGE;
+  } else validateOldImage(image);
   const run = randomUUID();
   const docker = async (args) => {
     try {
@@ -58,18 +69,28 @@ export async function provePublishedOldDaemon({ image, baseline, owned, director
       throw error;
     }
   };
-  // Pull the exact public digest; no caller registry or credential file is inherited.
+  // Pull the exact digest; no caller registry or credential file is inherited.
+  // Registry access is a prerequisite, not evidence that this image is anonymous/public.
   await docker(['pull', image]);
-  const revision = await docker([
-    'image',
-    'inspect',
-    '--format',
-    '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-    image,
-  ]);
-  assert.equal(revision.stdout.trim(), baseline, 'Published image must match the old source pin');
+  const revision = publishedPackage
+    ? publishedPackage.revision
+    : (
+        await docker([
+          'image',
+          'inspect',
+          '--format',
+          '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+          image,
+        ])
+      ).stdout.trim();
+  if (!publishedPackage)
+    assert.equal(revision, baseline, 'Published image must match the old source pin');
   const options = owned.sql.options;
   const env = publishedImageEnvironment(options);
+  const home = publishedPackage ? '/home/node' : '/home/agor';
+  env.AGOR_CONFIG_PATH = publishedPackage
+    ? '/opt/published-package/operator-config.yaml'
+    : `${home}/config.yaml`;
   const pgRun = options.user.slice('runtime_'.length);
   const lookup = await docker([
     'ps',
@@ -84,6 +105,8 @@ export async function provePublishedOldDaemon({ image, baseline, owned, director
   let network;
   let connected = false;
   let container;
+  let packageVolume;
+  let stagingContainer;
   const assertOwned = async (kind, id) => {
     const result = await docker([
       kind,
@@ -126,8 +149,46 @@ export async function provePublishedOldDaemon({ image, baseline, owned, director
         .join('\n')}\n`,
       { mode: 0o600 }
     );
-    // Run the published PostgreSQL daemon command, not the image's SQLite init wrapper.
-    // Only a synthetic operator config is copied; compiled application/dependencies stay untouched.
+    if (publishedPackage) {
+      // Docker may be remote from the test client: populate a labeled volume
+      // through a never-started, network-none staging container, not a host bind.
+      packageVolume = (
+        await docker(['volume', 'create', '--label', `${label}=${run}`])
+      ).stdout.trim();
+      assert.match(packageVolume, /^[a-f0-9]{64}$/);
+      stagingContainer = (
+        await docker([
+          'create',
+          '--network',
+          'none',
+          '--label',
+          `${label}=${run}`,
+          '--mount',
+          `type=volume,src=${packageVolume},dst=/opt/published-package`,
+          image,
+          'node',
+          '--version',
+        ])
+      ).stdout.trim();
+      assert.match(stagingContainer, /^[a-f0-9]{64}$/);
+      await docker([
+        'cp',
+        `${publishedPackage.directory}/.`,
+        `${stagingContainer}:/opt/published-package`,
+      ]);
+      await docker([
+        'cp',
+        config,
+        `${stagingContainer}:/opt/published-package/operator-config.yaml`,
+      ]);
+      await assertOwned('container', stagingContainer);
+      await docker(['rm', stagingContainer]);
+      stagingContainer = undefined;
+    }
+    // Run the published daemon entrypoint, never a patched startup/guard. The npm
+    // variant copies its complete frozen dependency tree onto public Node and
+    // makes the runtime root filesystem read-only (no host-path mount assumptions);
+    // it is not evidence about the separately published Agor Docker packaging.
     container = (
       await docker([
         'create',
@@ -138,16 +199,52 @@ export async function provePublishedOldDaemon({ image, baseline, owned, director
         '--tmpfs',
         '/tmp:rw,nosuid,nodev',
         '--tmpfs',
-        '/home/agor/.agor:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700',
+        `${home}/.agor:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700`,
+        ...(publishedPackage
+          ? [
+              '--user',
+              '1000:1000',
+              '--read-only',
+              '--mount',
+              `type=volume,src=${packageVolume},dst=/opt/published-package,readonly`,
+            ]
+          : []),
         '--entrypoint',
-        'agor-daemon',
+        publishedPackage ? 'node' : 'agor-daemon',
         '--env-file',
         envFile,
         image,
+        ...(publishedPackage
+          ? ['/opt/published-package/node_modules/agor-live/bin/agor-daemon.js']
+          : []),
       ])
     ).stdout.trim();
     assert.match(container, /^[a-f0-9]{64}$/);
-    await docker(['cp', config, `${container}:/home/agor/config.yaml`]);
+    if (publishedPackage) {
+      assert.equal(
+        (
+          await docker([
+            'container',
+            'inspect',
+            '--format',
+            '{{.HostConfig.ReadonlyRootfs}}',
+            container,
+          ])
+        ).stdout.trim(),
+        'true'
+      );
+      const mounts = JSON.parse(
+        (await docker(['container', 'inspect', '--format', '{{json .Mounts}}', container])).stdout
+      );
+      assert(
+        mounts.some(
+          (mount) =>
+            mount.Name === packageVolume &&
+            mount.Destination === '/opt/published-package' &&
+            mount.RW === false
+        )
+      );
+    } else await docker(['cp', config, `${container}:${home}/config.yaml`]);
     await docker(['start', container]);
     const stopped = await docker(['wait', container]);
     const logs = await docker(['logs', container]);
@@ -158,17 +255,33 @@ export async function provePublishedOldDaemon({ image, baseline, owned, director
     assert(!/Database migrations up to date|Seeding initial data|listening on/i.test(output));
     return {
       image,
-      revision: baseline,
-      entrypoint: 'agor-daemon',
+      revision,
+      entrypoint: publishedPackage ? 'agor-live/bin/agor-daemon.js' : 'agor-daemon',
       exit_code: 1,
       network: 'run-owned internal network; no published daemon ports or external egress',
-      application:
-        'unmodified published executable and dependencies; synthetic operator configuration only',
+      application: publishedPackage
+        ? 'unmodified integrity-pinned published npm executable; frozen dependency tree on a read-only runtime filesystem; NOT the Agor Docker-image packaging'
+        : 'unmodified published executable and dependencies; synthetic operator configuration only',
+      ...(publishedPackage
+        ? {
+            package_version: publishedPackage.version,
+            package_integrity: publishedPackage.integrity,
+            dependency_lock_sha256: publishedPackage.dependency_lock_sha256,
+          }
+        : {}),
     };
   } finally {
     if (container) {
       await assertOwned('container', container);
       await docker(['rm', '--force', '--volumes', container]);
+    }
+    if (stagingContainer) {
+      await assertOwned('container', stagingContainer);
+      await docker(['rm', stagingContainer]);
+    }
+    if (packageVolume) {
+      await assertOwned('volume', packageVolume);
+      await docker(['volume', 'rm', packageVolume]);
     }
     if (network) {
       await assertOwned('network', network);

@@ -1,0 +1,8 @@
+{
+  "name": "managed-oauth-published-daemon-proof",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "agor-live": "https://registry.npmjs.org/agor-live/-/agor-live-0.26.3.tgz"
+  }
+}

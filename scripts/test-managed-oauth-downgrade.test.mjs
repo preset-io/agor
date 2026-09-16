@@ -7,6 +7,11 @@ import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { publishedImageEnvironment, validateOldImage } from './managed-oauth-old-image-proof.mjs';
 import {
+  OLD_PACKAGE_INTEGRITY,
+  OLD_PACKAGE_SHA,
+  validatePublishedPackageLock,
+} from './managed-oauth-old-package-proof.mjs';
+import {
   BASELINE_SHA,
   isolatedEnvironment,
   parseOptions,
@@ -43,7 +48,7 @@ test('environment is an allowlist, not inherited credentials or runtime configur
   assert.equal(env.AGOR_DATA_HOME, env.HOME);
 });
 
-test('published old daemon requires a digest from the single public image repository', () => {
+test('published old daemon requires a digest from the single pinned image repository', () => {
   const image = `docker.io/preset/agor@sha256:${'a'.repeat(64)}`;
   assert.equal(parseOptions(['--old-image', image]).oldImage, image);
   for (const value of [
@@ -67,6 +72,43 @@ test('published daemon credentials come only from the generated run-owned role',
   assert.throws(() => publishedImageEnvironment({ user: 'shared', database: 'agor' }));
 });
 
+test('published npm proof pins artifact, embedded revision and every external dependency', async () => {
+  const lock = JSON.parse(
+    await readFile(
+      new URL('./fixtures/managed-old-package/package-lock.json', import.meta.url),
+      'utf8'
+    )
+  );
+  validatePublishedPackageLock(lock);
+  assert.match(OLD_PACKAGE_SHA, /^[a-f0-9]{40}$/);
+  assert.equal(lock.packages['node_modules/agor-live'].integrity, OLD_PACKAGE_INTEGRITY);
+  assert.equal(parseOptions(['--old-package', '0.26.3']).oldPackage, '0.26.3');
+  assert.throws(() => parseOptions(['--old-package', 'latest']));
+  assert.throws(() =>
+    parseOptions([
+      '--old-package',
+      '0.26.3',
+      '--old-image',
+      `docker.io/preset/agor@sha256:${'a'.repeat(64)}`,
+    ])
+  );
+  for (const mutation of [
+    (x) => {
+      x.packages['node_modules/agor-live'].integrity = `sha512-${'a'.repeat(86)}==`;
+    },
+    (x) => {
+      x.packages['node_modules/@agor-live/client'].resolved = 'https://foreign.invalid/client.tgz';
+    },
+    (x) => {
+      delete x.packages['node_modules/@agor-live/client'].integrity;
+    },
+  ]) {
+    const changed = structuredClone(lock);
+    mutation(changed);
+    assert.throws(() => validatePublishedPackageLock(changed));
+  }
+});
+
 test('publication policy admits only the isolated immutable compatibility consumer', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'image-policy-proof-'));
   const files = [
@@ -75,6 +117,7 @@ test('publication policy admits only the isolated immutable compatibility consum
     '.github/workflows/postgres-integration.yml',
     'scripts/check-image-publication-policy.mjs',
     'scripts/managed-oauth-old-image-proof.mjs',
+    'scripts/managed-oauth-old-package-proof.mjs',
   ];
   const run = () =>
     promisify(execFile)(process.execPath, [join(directory, files[3])], { timeout: 10000 });
@@ -89,7 +132,7 @@ test('publication policy admits only the isolated immutable compatibility consum
     await run();
     const workflowPath = join(directory, files[2]);
     const workflow = await readFile(workflowPath, 'utf8');
-    await writeFile(workflowPath, workflow.replace(/agor@sha256:[a-f0-9]{64}/, 'agor:main'));
+    await writeFile(workflowPath, workflow.replace('--old-package 0.26.3', '--old-package latest'));
     await assert.rejects(run);
     await writeFile(
       workflowPath,
