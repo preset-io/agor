@@ -296,7 +296,7 @@ import {
 } from './utils/upload.js';
 import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
-import { WidgetResolutionStore } from './widgets/resolution-store.js';
+import { WIDGET_RESOLUTION_STORE_KEY, WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 export function appendResponseHeaderValue(
@@ -3629,18 +3629,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
   const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+  const widgetResolutionStore = new WidgetResolutionStore(widgetResolutionMessages, (message) =>
+    emitServiceEvent(app, {
+      path: 'messages',
+      event: 'patched',
+      data: message,
+      id: message.message_id,
+    })
+  );
+  // Every writer of widget lifecycle state goes through this one store, so it
+  // is published where an in-process caller that is not a route can reach it —
+  // notably the MCP tool that supersedes a replaced Connect button. The
+  // repository is bound to the tenant unit of work, so it resolves its tenant
+  // from the caller's ambient scope rather than from whoever constructed it.
+  app.set(WIDGET_RESOLUTION_STORE_KEY, widgetResolutionStore);
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
     runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
-    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
-      emitServiceEvent(app, {
-        path: 'messages',
-        event: 'patched',
-        data: message,
-        id: message.message_id,
-      })
-    ),
+    resolutionStore: widgetResolutionStore,
     publishResolved: (payload: Record<string, unknown>) =>
       emitServiceEvent(app, {
         path: 'messages',

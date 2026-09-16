@@ -65,6 +65,10 @@ import {
 import type { OAuthWidgetParams } from '../../widgets/oauth/index.js';
 import { oauthParamsSchema } from '../../widgets/oauth/index.js';
 import { authorizeWidgetMint, type WidgetMintCtx } from '../../widgets/registry.js';
+import {
+  WIDGET_RESOLUTION_STORE_KEY,
+  type WidgetResolutionStore,
+} from '../../widgets/resolution-store.js';
 import { resolveSessionId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
@@ -369,6 +373,13 @@ async function installCatalogOAuthServer(
  * Used by both short-circuits (already connected, or no auth at all). Records
  * a terminal `already_present` widget row so the transcript still shows what
  * happened — the same status the env_vars short-circuit uses.
+ *
+ * Supersedes first, for the same reason the ordinary path does — and this is
+ * the case where a stale Connect button is most obviously stale, because the
+ * connection it offers to make already exists. The user who connected through
+ * the Catalog drawer and then re-asked the agent would otherwise be left with a
+ * live button that runs a full unnecessary re-authorization and queues a second
+ * auto-resume prompt under a different widget id, so the two do not coalesce.
  */
 async function attachAndResume(
   ctx: McpContext,
@@ -377,6 +388,7 @@ async function attachAndResume(
   prompt: string
 ) {
   const serverName = server.display_name || server.name;
+  await supersedePendingOAuthWidgets(ctx, sessionId, server.mcp_server_id);
   await ctx.app
     .service('/sessions/:id/mcp-servers')
     .create(
@@ -406,6 +418,16 @@ async function attachAndResume(
 }
 
 /**
+ * How far back the supersede sweep looks for a still-live Connect button.
+ *
+ * A pending oauth widget is one the user has not acted on yet, so it is near
+ * the end of the transcript in every case that matters. The bound exists so the
+ * sweep does not grow with a long session's whole message history; a card older
+ * than this is one nobody is about to click.
+ */
+const OAUTH_SUPERSEDE_SCAN_LIMIT = 200;
+
+/**
  * Retire any still-pending `oauth` widget for the same (session, server).
  *
  * Supersede rather than stack: two live Connect buttons drive the same
@@ -413,6 +435,11 @@ async function attachAndResume(
  * forever. Marked `dismissed` WITHOUT queueing the dismissal prompt — the
  * agent is not being told "no", it is re-asking, and a "user declined" message
  * would be a lie.
+ *
+ * The write goes through `WidgetResolutionStore`, which is the only writer of
+ * widget lifecycle state: writing `metadata.widget` through the repository
+ * directly skipped the realtime patch, so a superseded Connect button stayed
+ * live and clickable in every open browser until a reload, and then 403'd.
  *
  * Best-effort: failing to tidy an old row must not stop the new request.
  */
@@ -422,26 +449,30 @@ async function supersedePendingOAuthWidgets(
   mcpServerId: string
 ): Promise<void> {
   try {
-    await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-      const repo = new MessagesRepository(db);
-      const rows = await repo.findBySessionIdAndType(sessionId, 'widget_request');
-      const resolvedAt = new Date().toISOString();
-      for (const row of rows) {
-        const widget = row.metadata?.widget;
-        if (widget?.widget_type !== 'oauth' || widget.status !== 'pending') continue;
-        if ((widget.params as OAuthWidgetParams | undefined)?.mcpServerId !== mcpServerId) continue;
-        await repo.mutateMetadataLocked(row.message_id, (metadata) => {
-          const current = metadata?.widget;
-          // Re-read under the row lock: another daemon may have claimed it in
-          // the meantime, and a `resolving` claim must never be stolen.
-          if (current?.status !== 'pending') return null;
-          return {
-            ...metadata,
-            widget: { ...current, status: 'dismissed', resolved_at: resolvedAt },
-          };
-        });
-      }
-    });
+    const store = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.(
+      WIDGET_RESOLUTION_STORE_KEY
+    ) as WidgetResolutionStore | undefined;
+    if (!store) {
+      console.warn(
+        '[widgets] no widget resolution store on this app; leaving superseded oauth widgets pending'
+      );
+      return;
+    }
+    const rows = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+      new MessagesRepository(db).findBySessionIdAndType(sessionId, 'widget_request', {
+        limit: OAUTH_SUPERSEDE_SCAN_LIMIT,
+        newestFirst: true,
+      })
+    );
+    const resolvedAt = new Date().toISOString();
+    for (const row of rows) {
+      const widget = row.metadata?.widget;
+      if (widget?.widget_type !== 'oauth' || widget.status !== 'pending') continue;
+      if ((widget.params as OAuthWidgetParams | undefined)?.mcpServerId !== mcpServerId) continue;
+      // The store re-reads `pending` under the row lock, so a widget another
+      // daemon claimed in the meantime is left alone.
+      await store.supersede(row.message_id, resolvedAt);
+    }
   } catch (err) {
     console.warn(
       `[widgets] failed to supersede pending oauth widgets for server ${mcpServerId}:`,

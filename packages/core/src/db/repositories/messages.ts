@@ -483,12 +483,24 @@ export class MessagesRepository {
   /**
    * Get all messages for a session filtered by type (ordered by index)
    */
-  async findBySessionIdAndType(sessionId: SessionID, type: Message['type']): Promise<Message[]> {
-    const rows = await select(this.db)
+  /**
+   * All messages of one type in a session, oldest first.
+   *
+   * `options.newestFirst` with `options.limit` is for callers that only care
+   * about recent rows — a widget sweep, say — so the read stays bounded in a
+   * long-running session instead of growing with its whole history.
+   */
+  async findBySessionIdAndType(
+    sessionId: SessionID,
+    type: Message['type'],
+    options?: { limit?: number; newestFirst?: boolean }
+  ): Promise<Message[]> {
+    const ordering = options?.newestFirst ? desc(messages.index) : messages.index;
+    const query = select(this.db)
       .from(messages)
       .where(and(eq(messages.session_id, sessionId), eq(messages.type, type)))
-      .orderBy(messages.index)
-      .all();
+      .orderBy(ordering);
+    const rows = await (options?.limit ? query.limit(options.limit) : query).all();
 
     return rows.map((r: MessageRow) => this.rowToMessage(r));
   }
