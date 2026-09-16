@@ -131,12 +131,19 @@ so a recovery reader can tell which lane owned an abandoned claim.
 
 ### 3.2 The resolution handler
 
-`resolveFromDaemonVerification` performs, in order:
+Before it runs at all, `submissions.ts` calls the entry's `authorizeResolve`,
+which re-asks both mint-time questions — the role floor and gateway identity —
+ahead of the durable claim. A pending card has no expiry, so "true when minted"
+is not evidence of "true now": an admin can switch `align_slack_users` off, or
+demote the resolver, while the card sits there. See §5.2 and §5.3.
+
+`resolveFromDaemonVerification` then performs, in order:
 
 1. **Role floor.** Shared-mode grants are workspace-wide credentials, so
    `ROLES.ADMIN` — the same floor `oauth-start` applies. Per-user needs only the
    `ROLES.MEMBER` floor the route already enforces. An undefined role normalizes
-   to member and therefore fails closed.
+   to member and therefore fails closed. (Repeated here as well as in
+   `authorizeResolve` so the handler is safe to call directly.)
 2. **Pinned-destination revalidation.** The server named in `params.mcpServerId`
    must still be loadable, usable by the caller, enabled, `auth.type === 'oauth'`,
    and in the same `oauth_mode` the widget was minted for.
@@ -166,6 +173,20 @@ whole entry. `permission_disclosure` and `starter_prompt` are paragraphs written
 for a human reading a drawer; repeating 25 of them crowds out the `name`, which
 is the one thing the agent is here for.
 
+### 3.3.1 Where enforcement lives
+
+Mint-time and resolve-time preconditions are `authorizeMint` / `authorizeResolve`
+hooks on the **registry entry**, not free functions a caller remembers to call.
+`mintWidgetMessage` runs the mint gate for every widget the MCP tools create and
+refuses a widget type this daemon has not registered; `submissions.ts` runs the
+resolve gate before the durable claim. Stage 3's Slack projection inherits both
+by minting through the same seam rather than by deciding to.
+
+`agor_widgets_request_oauth` also calls the mint gate EARLY, with no params,
+before it resolves a destination — so an unaligned gateway channel is refused
+before a catalog install puts an orphan server row in the database. That call is
+an optimization: skipping it would cost an orphan row, not a missed check.
+
 ### 3.4 `agor_widgets_request_oauth`
 
 Accepts exactly one of `mcpServerId` | `catalogEntryName`, plus `reason` and an
@@ -185,7 +206,12 @@ optional `sessionId`. Fire-and-forget. In order:
    widget row for the transcript, queue the auto-resume, return.
 7. **Supersede**, not stack: any still-`pending` `oauth` widget for the same
    (session, server) is marked `dismissed` — **without** queueing the dismissal
-   prompt, because the agent is re-asking, not being told no.
+   prompt, because the agent is re-asking, not being told no. Both
+   short-circuits supersede too (it happens inside `attachAndResume`), since a
+   live Connect button is most obviously stale when the connection it offers
+   already exists. The write goes through `WidgetResolutionStore.supersede`, the
+   one writer of widget lifecycle state, so the row is patched into every open
+   browser instead of staying clickable until a reload.
 8. Mint the widget.
 
 Two non-OAuth outcomes are handled rather than failed: a destination whose
@@ -266,9 +292,20 @@ session may legitimately complete a sign-in and still not be allowed to change
 what that session's agent can reach. The grant is real either way. Failing the
 resolution would reopen the widget and invite the user to repeat a browser flow
 that already worked, fixing nothing — the missing thing is someone else's
-permission. So the handler catches `Forbidden` from the attach only, records
-`attached: false`, and the auto-resume prompt says what to ask for. Every other
-error propagates and genuinely reopens the widget.
+permission. So the handler records `attached: false`, and the auto-resume prompt
+says what to ask for. Every other error propagates and genuinely reopens the
+widget.
+
+That decision is **asked, not inferred**. The handler calls
+`checkSessionOwnerOrAdmin` itself before attaching — which is what
+`authorizeMcpSessionConfigAccess` reduces to for this provider-less,
+executor-scope-free call — rather than catching a `Forbidden` from the route.
+Catching was wrong in both directions: `MCPServerNotUsableError` maps to
+`Forbidden('That MCP server is private to another user')`, and tenant
+write-gate and member-policy refusals are `Forbidden` too, so all three
+surfaced as "ask the session owner to attach it" — advice that is false for
+each, and for the first one impossible, since the session owner cannot attach a
+server private to a third user either.
 
 ---
 
