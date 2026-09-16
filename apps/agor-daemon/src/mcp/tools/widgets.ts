@@ -243,6 +243,28 @@ async function queueWidgetAutoResume(
 }
 
 /**
+ * Schema maxima `oauthParamsSchema` enforces, repeated here because the fields
+ * they bound are decided before the parse runs — and, for the catalog install,
+ * before a durable row exists to be orphaned by a late failure.
+ */
+const SERVER_NAME_MAX = 200;
+const REASON_MAX = 200;
+const CATALOG_ENTRY_NAME_MAX = 200;
+const PERMISSION_DISCLOSURE_MAX = 1000;
+
+/**
+ * Clamp a string the DAEMON or the CATALOG owns to what the widget schema
+ * accepts, with an ellipsis so a reader can see it was cut.
+ *
+ * Only for fields the agent did not supply. An over-long value from an agent is
+ * a refusal (its own schema says so); an over-long value from a checked-in
+ * catalog file is a curation slip that should not stop a user connecting.
+ */
+function clampToSchemaMax(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+/**
  * A destination the `oauth` widget can be minted against, plus the catalog
  * provenance to show alongside it.
  */
@@ -330,6 +352,22 @@ async function installCatalogOAuthServer(
       `"${catalogDisplayName(entry)}" is connected with an API key, not OAuth. Connect it from the MCP Catalog in Agor.`
     );
   }
+  // Everything the widget row will carry from this entry is checked BEFORE the
+  // install, because the install is the first durable effect: an entry whose
+  // disclosure exceeded `oauthParamsSchema`'s limit used to leave an installed
+  // server row behind and then fail the tool. The disclosure is prose the
+  // catalog owns, so it is clamped rather than refused — losing its tail is
+  // better than refusing to connect over it. The entry NAME is an identity and
+  // cannot be clamped without corrupting it, so an over-long one refuses, here,
+  // where refusing still costs nothing.
+  if (entry.name.length > CATALOG_ENTRY_NAME_MAX) {
+    throw new Error(
+      `Catalog entry name "${entry.name}" is too long for a connect request; report this entry.`
+    );
+  }
+  const permissionDisclosure = entry.permission_disclosure
+    ? clampToSchemaMax(entry.permission_disclosure, PERMISSION_DISCLOSURE_MAX)
+    : undefined;
 
   // Caller params verbatim — in particular, KEEP `provider`. Connect stamps
   // catalog provenance only for a transport-bearing caller:
@@ -360,11 +398,7 @@ async function installCatalogOAuthServer(
       `"${catalogDisplayName(entry)}" asked for ${authType} credentials rather than OAuth. Connect it from the MCP Catalog in Agor.`
     );
   }
-  return {
-    server,
-    catalogEntryName: entry.name,
-    permissionDisclosure: entry.permission_disclosure,
-  };
+  return { server, catalogEntryName: entry.name, permissionDisclosure };
 }
 
 /**
@@ -387,7 +421,7 @@ async function attachAndResume(
   server: MCPServer,
   prompt: string
 ) {
-  const serverName = server.display_name || server.name;
+  const serverName = clampToSchemaMax(server.display_name || server.name, SERVER_NAME_MAX);
   await supersedePendingOAuthWidgets(ctx, sessionId, server.mcp_server_id);
   await ctx.app
     .service('/sessions/:id/mcp-servers')
@@ -402,7 +436,7 @@ async function attachAndResume(
       mcpServerId: server.mcp_server_id,
       serverName,
       oauthMode: (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared',
-      reason: `Connect ${serverName}.`,
+      reason: clampToSchemaMax(`Connect ${serverName}.`, REASON_MAX),
     } satisfies OAuthWidgetParams,
     content: `"${serverName}" is already connected.`,
     contentPreview: `Widget: oauth (${serverName}, already connected)`,
@@ -578,6 +612,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           ),
         reason: z
           .string()
+          .min(1)
           .max(200)
           .optional()
           .describe('One short sentence explaining why the connection is needed.'),
@@ -640,12 +675,20 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       }
       const { server, catalogEntryName, permissionDisclosure } = resolved;
       const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared';
-      const serverName = server.display_name || server.name;
+      const serverName = clampToSchemaMax(server.display_name || server.name, SERVER_NAME_MAX);
       const params: OAuthWidgetParams = oauthParamsSchema.parse({
         mcpServerId: server.mcp_server_id,
         serverName,
         oauthMode,
-        reason: args.reason ?? `Connect ${serverName} so its tools are available in this session.`,
+        // `?? default` does not substitute for an empty string, and the widget
+        // schema requires a non-empty reason — so fall back on anything blank.
+        // The fallback interpolates a name that is itself only bounded at 200,
+        // so it is clamped too rather than trusted to fit.
+        reason: clampToSchemaMax(
+          args.reason?.trim() ||
+            `Connect ${serverName} so its tools are available in this session.`,
+          REASON_MAX
+        ),
         ...(catalogEntryName ? { catalogEntryName } : {}),
         ...(permissionDisclosure ? { permissionDisclosure } : {}),
       });
@@ -705,6 +748,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           .describe('Gateway channel ID (UUIDv7 or short ID) whose tokens are being set.'),
         reason: z
           .string()
+          .min(1)
           .max(200)
           .optional()
           .describe('One short sentence explaining why the tokens are needed.'),
@@ -745,7 +789,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         channelName: channel.name,
         fields,
         reason:
-          args.reason ??
+          args.reason?.trim() ||
           `Provide the ${channelType} credentials to finish connecting "${channel.name}".`,
       });
 
