@@ -23,7 +23,6 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
-  ArrowLeftOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -1573,6 +1572,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {/* Row 1: icon + title + badge + actions, center-aligned */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+            {/* Mobile: a full-screen session reads as a dismissible overlay, so a
+                leading Close (X) is the right metaphor. Desktop keeps its
+                trailing Close on the right (below). */}
+            {isMobileShell && (
+              <Tooltip title="Close">
+                <Button
+                  type="text"
+                  aria-label="Close"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ ...mobileHeaderButtonStyle, marginLeft: -token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
             <div style={{ flexShrink: 0 }}>
               <ToolIcon tool={session.agentic_tool} size={40} />
             </div>
@@ -1620,7 +1633,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       textAlign: 'left',
                     }}
                   >
-                    <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
+                    <Typography.Text
+                      strong
+                      style={{ fontSize: 18, ...getSessionTitleStyles(isMobileShell ? 1 : 2) }}
+                    >
                       {session.title || session.description
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
@@ -1671,15 +1687,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 style={mobileHeaderButtonStyle}
               />
             </Tooltip>
-            <Tooltip title={isMobileShell ? 'Back' : 'Close Panel'}>
-              <Button
-                type="text"
-                aria-label={isMobileShell ? 'Back' : 'Close panel'}
-                icon={isMobileShell ? <ArrowLeftOutlined /> : <CloseOutlined />}
-                onClick={onClose}
-                style={{ ...mobileHeaderButtonStyle, marginLeft: token.sizeUnit }}
-              />
-            </Tooltip>
+            {/* Desktop closes from the right; mobile closes from the leading X above. */}
+            {!isMobileShell && (
+              <Tooltip title="Close Panel">
+                <Button
+                  type="text"
+                  aria-label="Close panel"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
           </Space>
         </div>
         {/* Row 2: search bar — always in DOM, animates in/out */}

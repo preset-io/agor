@@ -78,6 +78,11 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: reactive.useSharedReactiveSession,
 }));
 
+const viewport = vi.hoisted(() => ({ isMobile: false }));
+vi.mock('../../hooks/useIsMobileViewport', () => ({
+  useIsMobileViewport: () => viewport.isMobile,
+}));
+
 const connected = {
   connected: true,
   connecting: false,
@@ -122,12 +127,14 @@ function renderPanel({
   client = null,
   activeSession = session,
   open = true,
+  onClose = vi.fn(),
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
   onChooseAgenticTool?: ReturnType<typeof vi.fn>;
   client?: AgorClient | null;
   activeSession?: Session;
   open?: boolean;
+  onClose?: ReturnType<typeof vi.fn>;
 } = {}) {
   render(
     <ConnectionProvider value={connected}>
@@ -138,13 +145,13 @@ function renderPanel({
             session={activeSession}
             branch={branch}
             open={open}
-            onClose={vi.fn()}
+            onClose={onClose}
           />
         </AntApp>
       </AppActionsProvider>
     </ConnectionProvider>
   );
-  return { onOpenTerminal };
+  return { onOpenTerminal, onClose };
 }
 
 const findShortcuts = [
@@ -510,5 +517,39 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     await screen.findByText('Failed to stop execution. You can try again.');
     expect(create).toHaveBeenCalledOnce();
     await waitFor(() => expect(stop).toBeEnabled());
+  });
+});
+
+describe('SessionPanel mobile header', () => {
+  afterEach(() => {
+    viewport.isMobile = false;
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('shows a leading Close (X) and no far-right Back on the mobile shell', () => {
+    viewport.isMobile = true;
+    const { onClose } = renderPanel();
+
+    // Leading close uses the "Close" label; the old right-side "Back" is gone.
+    const close = screen.getByRole('button', { name: 'Close' });
+    expect(close).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    // Desktop's trailing "Close panel" is not rendered on mobile.
+    expect(screen.queryByRole('button', { name: 'Close panel' })).not.toBeInTheDocument();
+
+    // The X is the leading control (before Search / More actions in DOM order).
+    const search = screen.getByRole('button', { name: 'Search session' });
+    expect(close.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the desktop trailing Close panel and no leading Close', () => {
+    viewport.isMobile = false;
+    renderPanel();
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
   });
 });
