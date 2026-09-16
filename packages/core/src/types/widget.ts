@@ -12,6 +12,7 @@
  */
 
 import type { MessageID, UserID } from './id';
+import type { MCPSlackConnectDelivery } from './mcp';
 
 /** Lifecycle status of a widget request. */
 export type WidgetStatus = 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present';
@@ -98,4 +99,14 @@ export interface WidgetMessageMetadata<
    * `auto_resume: false` to the MCP tool.
    */
   auto_resume?: boolean;
+  /**
+   * Durable Slack delivery state for an `oauth` widget that was also offered
+   * as a tappable link in a Slack thread.
+   *
+   * Daemon-owned: minted by the connect-link issuer, consumed one-use at
+   * redemption, and stripped from every external Message projection
+   * (`utils/mcp-recovery-redaction.ts`). Absent on every widget that was only
+   * ever shown on the canvas.
+   */
+  slack_connect?: MCPSlackConnectDelivery;
 }

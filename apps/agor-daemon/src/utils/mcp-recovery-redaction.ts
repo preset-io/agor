@@ -1,4 +1,4 @@
-import type { Task } from '@agor/core/types';
+import type { Message, Task } from '@agor/core/types';
 
 /** Internal Slack recovery authority and routing never cross API or realtime boundaries. */
 export function stripMcpSlackRecoveryNotice(task: Task): Task {
@@ -31,4 +31,22 @@ export function redactMcpRecoveryTopology(task: Task): Task {
       },
     },
   };
+}
+
+/**
+ * Internal Slack connect delivery state never crosses API or realtime
+ * boundaries.
+ *
+ * Same rule as `stripMcpSlackRecoveryNotice`, applied to the widget message
+ * that carries the connect lane's durable record. The record is deliberately
+ * routing-free, but it is still daemon-owned lifecycle state — a one-use
+ * identity, an issue epoch, and a provider-attempt lease — that no transcript
+ * viewer has any use for, and stage 3 will add the Slack message coordinates
+ * to it. Strip it now so that addition cannot leak by default.
+ */
+export function stripWidgetSlackConnectDelivery(message: Message): Message {
+  const widget = message.metadata?.widget;
+  if (!widget?.slack_connect) return message;
+  const { slack_connect: _slackConnect, ...rest } = widget;
+  return { ...message, metadata: { ...message.metadata, widget: rest } };
 }
