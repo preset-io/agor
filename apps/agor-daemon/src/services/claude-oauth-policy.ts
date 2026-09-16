@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 
-// Constants are the PROD OAuth config read out of the native `claude` binary
-// bundled by the pinned SDK: package.json pins
-// @anthropic-ai/claude-agent-sdk@0.3.259, whose manifest.json bundles claude
+// Constants are the PROD OAuth config originally read out of the native `claude`
+// binary in @anthropic-ai/claude-agent-sdk@0.3.259, whose manifest.json bundles claude
 // CLI v2.1.259 (commit 9b549c8d). The URLs, client id, redirect, scope set, and
 // JSON authorization-code exchange were re-checked in that native binary for
-// this upgrade. The `-local-oauth` config (client id 22422756-…,
+// that upgrade. The client id, endpoints, redirect, and scope strings remain
+// present in SDK 0.3.272's Claude 2.1.272 binary; the binding is unchanged.
+// The `-local-oauth` config (client id 22422756-…,
 // localhost:8205) is dev-only and deliberately not used here.
 /** PROD OAuth client id (`yol.CLIENT_ID`). Fixed and public across installs. */
 export const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';

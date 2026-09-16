@@ -66,6 +66,14 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         description: 'Tenant A description',
       };
       try {
+        for (const method of ['GET', 'HEAD']) {
+          const own = await fetch(resource, {
+            method,
+            headers: server.headers(a.owner.user_id, tenantA),
+          });
+          expect(own.status).toBe(200);
+          if (method === 'HEAD') expect(await own.text()).toBe('');
+        }
         const ownAccess = await fetch(`${resource}/effective-access`, {
           headers: server.headers(a.owner.user_id, tenantA),
         });
@@ -80,6 +88,10 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         ]) {
           const foreignAccess = await fetch(`${resource}/effective-access`, { headers });
           expect([400, 401, 403, 404]).toContain(foreignAccess.status);
+          for (const method of ['GET', 'HEAD']) {
+            const denied = await fetch(resource, { method, headers });
+            expect([400, 401, 403, 404]).toContain(denied.status);
+          }
           for (const method of ['PATCH', 'PUT']) {
             const denied = await fetch(resource, {
               method,

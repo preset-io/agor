@@ -67,6 +67,17 @@ dbTest(
         body: JSON.stringify(data),
       });
     try {
+      // Feathers 5.0.50 maps HEAD to get/find. It must traverse the same
+      // authentication and board projection hooks, not become a metadata leak.
+      for (const method of ['GET', 'HEAD']) {
+        expect((await fetch(resource, { method })).status).toBe(401);
+        const own = await fetch(resource, {
+          method,
+          headers: server.headers(owner.user_id),
+        });
+        expect(own.status).toBe(200);
+        if (method === 'HEAD') expect(await own.text()).toBe('');
+      }
       expect((await fetch(`${resource}/effective-access`)).status).toBe(401);
       const access = await fetch(`${resource}/effective-access`, {
         headers: server.headers(owner.user_id),

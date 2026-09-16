@@ -76,6 +76,16 @@ describe('managed agentic tool loading', () => {
     });
   });
 
+  it('keeps the Gemini git security fix on the npm install root, not only the workspace', () => {
+    expect(createManagedAgenticToolInstallManifest('gemini', '1.2.3')).toEqual({
+      name: 'agor-managed-gemini',
+      version: '0.0.0',
+      private: true,
+      dependencies: { '@agor-live/gemini': '1.2.3' },
+      overrides: { '@google/gemini-cli-core': { 'simple-git': '3.36.0' } },
+    });
+  });
+
   it('loads only the version-aligned package from the managed directory', async () => {
     const packageDirectory = await createFakeManagedClaude('1.2.3');
     await writeFile(

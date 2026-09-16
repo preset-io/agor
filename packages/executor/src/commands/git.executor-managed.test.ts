@@ -986,3 +986,68 @@ describe('managed executor git/fs commands', () => {
     );
   });
 });
+
+describe('local teammate materialization', () => {
+  it.each([false, true])(
+    'derives independent clone from the trusted row, restore=%s',
+    async (restoreMode) => {
+      const root = await mkdtemp(join(tmpdir(), 'local-teammate-executor-'));
+      const path = join(root, 'home');
+      try {
+        const patchedBranches: Array<Record<string, unknown>> = [];
+        createClient({
+          repo: {
+            repo_id: repoId,
+            remote_url: 'https://github.com/preset-io/agor-teammate.git',
+            local_path: '/unmounted/cache',
+          },
+          branch: {
+            branch_id: branchId,
+            repo_id: repoId,
+            name: 'private-builder',
+            path,
+            storage_mode: 'clone',
+            new_branch: true,
+            base_ref: 'template/builder',
+            custom_context: {
+              teammate: { kind: 'teammate', displayName: 'Builder', localHome: true },
+            },
+          },
+          patchedBranches,
+        });
+        mocks.createBranchAsClone.mockImplementationOnce(async (options) => {
+          expect(options).toMatchObject({
+            localHome: true,
+            ref: 'template/builder',
+            newBranchName: 'private-builder',
+          });
+          expect(options.referencePath).toBeUndefined();
+          expect(options.depth).toBeUndefined();
+          expect(patchedBranches).toEqual([]); // no readiness before clone + remote removal settle
+        });
+        const result = await handleGitBranchAdd(
+          {
+            command: 'git.branch.add',
+            sessionToken: 'tenant-token',
+            params: { branchId, repoId, useReference: true, restoreMode },
+          },
+          {}
+        );
+        expect(result.success).toBe(!restoreMode);
+        if (restoreMode) {
+          expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+          await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+          expect(patchedBranches).toContainEqual(
+            expect.objectContaining({ filesystem_status: 'failed' })
+          );
+        } else {
+          expect(patchedBranches).toContainEqual(
+            expect.objectContaining({ filesystem_status: 'ready' })
+          );
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+});

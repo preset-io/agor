@@ -34,6 +34,8 @@ export interface TeammateTabResult {
   repoId?: string;
   branchName?: string;
   sourceBranch?: string;
+  sourceRemoteUrl?: string;
+  templateId?: string | null;
   agent: AgenticToolName;
   agenticToolPresetId?: string;
   modelConfig?: ModelConfig;
@@ -77,6 +79,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
     setCustomRepoSelected,
     validateForm,
     handleDisplayNameChange,
+    handleTemplateChange,
   } = useTeammateForm(frameworkRepo);
 
   useEffect(() => {
@@ -129,7 +132,9 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         emoji: values.emoji || undefined,
         repoId: values.repoId || frameworkRepo?.repo_id,
         branchName: values.name || `private-${slugify(values.displayName)}`,
-        sourceBranch: values.sourceBranch || 'main',
+        sourceBranch: values.sourceBranch || undefined,
+        sourceRemoteUrl: values.sourceRemoteUrl || undefined,
+        templateId: values.templateId,
         agent: selectedAgent,
         agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
         modelConfig: isInline
@@ -165,14 +170,10 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   };
 
   return (
-    <Form
-      form={form}
-      layout="vertical"
-      onFieldsChange={validateForm}
-      initialValues={{ sourceBranch: 'main' }}
-    >
+    <Form form={form} layout="vertical" onFieldsChange={validateForm}>
       <TeammateFormFields
         form={form}
+        onTemplateChange={handleTemplateChange}
         repos={repos}
         frameworkRepo={frameworkRepo}
         isCloning={isCloning}

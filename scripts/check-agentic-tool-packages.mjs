@@ -30,6 +30,17 @@ for (const dependency of forbiddenBaseDependencies) {
 const runtimeManifestAllowlist = new Set(
   integrations.map((id) => `packages/agor-${id}/package.json`)
 );
+// Typechecking against a newer SDK than the managed runtime hides real API
+// incompatibilities. Keep these source-only copies on the wrapper's exact pin.
+const alignedSdks = new Map();
+for (const [id, dependency] of [
+  ['claude', '@anthropic-ai/claude-agent-sdk'],
+  ['codex', '@openai/codex-sdk'],
+  ['gemini', '@google/gemini-cli-core'],
+]) {
+  const pkg = JSON.parse(await readFile(join(root, `packages/agor-${id}/package.json`), 'utf8'));
+  alignedSdks.set(dependency, pkg.dependencies?.[dependency]);
+}
 for (const parent of ['packages', 'apps']) {
   for (const entry of await readdir(join(root, parent), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -39,6 +50,12 @@ for (const parent of ['packages', 'apps']) {
       pkg = JSON.parse(await readFile(join(root, relative), 'utf8'));
     } catch {
       continue;
+    }
+    for (const [dependency, expected] of alignedSdks) {
+      const version = pkg.devDependencies?.[dependency];
+      if (version !== undefined && version !== expected) {
+        failures.push(`${relative}: ${dependency} is ${version}, expected runtime pin ${expected}`);
+      }
     }
     for (const dependency of forbiddenBaseDependencies) {
       if (pkg.dependencies?.[dependency] && !runtimeManifestAllowlist.has(relative)) {
@@ -52,6 +69,13 @@ for (const parent of ['packages', 'apps']) {
         );
       }
     }
+  }
+}
+
+const watchdog = await readFile(join(root, 'packages/executor/src/sdk-watchdog.ts'), 'utf8');
+for (const [dependency, version] of alignedSdks) {
+  if (!watchdog.includes(`'${dependency}@${version}'`)) {
+    failures.push(`SDK watchdog version drift: expected ${dependency}@${version}`);
   }
 }
 

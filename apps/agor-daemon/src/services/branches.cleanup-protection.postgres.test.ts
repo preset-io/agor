@@ -10,7 +10,13 @@ import {
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { type AuthenticatedParams, branchCleanupCommandId, type TenantID } from '@agor/core/types';
+import {
+  type AuthenticatedParams,
+  branchCleanupCommandId,
+  type EffectiveBranchAccess,
+  type Params,
+  type TenantID,
+} from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import {
@@ -19,6 +25,7 @@ import {
 } from '../auth/executor-session-token';
 import { BranchCleanupStepsService } from './branch-cleanup-steps';
 import { BranchesService } from './branches';
+import { setupBranchEffectiveAccessService } from './groups';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
 const app = { get: () => ({}) } as unknown as Application;
@@ -111,6 +118,22 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         seedEnvironmentCommandBranch(scoped)
       );
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        let accessService!: { find(params: Params): Promise<EffectiveBranchAccess> };
+        setupBranchEffectiveAccessService(
+          {
+            use: (_path: string, service: typeof accessService) => {
+              accessService = service;
+            },
+          } as unknown as Application,
+          new BranchRepository(scoped),
+          { allowSuperadmin: true }
+        );
+        await expect(
+          accessService.find({
+            route: { id: branch.branch_id },
+            user: { ...user, role: 'superadmin' },
+          } as Params)
+        ).rejects.toThrow(/not found/i);
         const service = new BranchesService(scoped, app);
         await expect(
           service.patch(branch.branch_id, { cleanup_protected: true }, { user })

@@ -1,5 +1,6 @@
-import type { Branch, Repo } from '@agor-live/client';
+import type { BoardID, Branch, Repo, UUID } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
+import { findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { createTeammateBranch } from './teammateCreation';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
@@ -140,4 +141,50 @@ describe('createTeammateBranch', () => {
       })
     );
   });
+});
+
+it.each([undefined, 'custom-start'])(
+  'Blank uses the chosen repo default, unless a custom ref is explicit: %s',
+  async (sourceBranch) => {
+    const repo = makeRepo({ default_branch: 'trunk' });
+    const onCreateBranch = vi
+      .fn()
+      .mockResolvedValue(makeBranch({ board_id: 'board-1' as BoardID }));
+    const boards = { ensureTeammateWelcomeNote: vi.fn(), setPrimaryTeammate: vi.fn() };
+    await createTeammateBranch(
+      { displayName: 'Blank', repoId: repo.repo_id, boardId: 'board-1', sourceBranch },
+      {
+        client: { service: () => boards } as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch: vi.fn(),
+      }
+    );
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({ sourceBranch: sourceBranch ?? 'trunk' })
+    );
+    expect(onCreateBranch.mock.calls[0][1]).not.toHaveProperty('sourceRemoteUrl');
+  }
+);
+
+it('keeps the registered private-name preference over the public starter', () => {
+  const publicRepo = makeRepo({
+    repo_id: 'public' as UUID,
+    slug: 'preset-io/agor-teammate',
+    remote_url: 'https://github.com/preset-io/agor-teammate.git',
+  });
+  const privateRepo = makeRepo({
+    repo_id: 'private' as UUID,
+    slug: 'acme/agor-teammate-private',
+    remote_url: 'https://github.com/acme/agor-teammate-private.git',
+  });
+  expect(
+    findFrameworkRepo(
+      new Map([
+        [publicRepo.repo_id, publicRepo],
+        [privateRepo.repo_id, privateRepo],
+      ])
+    )?.[0]
+  ).toBe(privateRepo.repo_id);
 });

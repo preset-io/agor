@@ -437,7 +437,10 @@ it('retains pointer anchoring and line-mode deltas when forwarding pinch', async
   expect(canvasViewport.zoom).toBeGreaterThan(initialViewport.zoom);
   await settle();
   await act(async () => flow.setViewport(initialViewport));
-  await settle();
+  // React Flow's setViewport returns void and applies its D3 transition on an
+  // animation frame. A fixed sleep can finish first in a throttled browser tab;
+  // prove the reset landed before comparing two independent pinch gestures.
+  await waitFor(() => expect(flow.getViewport()).toEqual(initialViewport));
   expect(wheel(row, gesture).defaultPrevented).toBe(true);
   expect(flow.getViewport()).toEqual(canvasViewport);
   const after = flow.screenToFlowPosition(pointer);

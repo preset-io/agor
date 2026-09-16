@@ -44,11 +44,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@feathersjs/authentication-client": "^5.0.46",
-    "@feathersjs/feathers": "^5.0.46",
-    "@feathersjs/rest-client": "^5.0.46",
-    "@feathersjs/socketio-client": "^5.0.46",
-    "js-yaml": "^5.2.3",
+    "@feathersjs/authentication-client": "^5.0.50",
+    "@feathersjs/feathers": "^5.0.50",
+    "@feathersjs/rest-client": "^5.0.50",
+    "@feathersjs/socketio-client": "^5.0.50",
+    "js-yaml": "^4.3.2",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
@@ -58,7 +58,7 @@
     "@types/node": "^24.6.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.1"
   },
   "keywords": [
     "agor",

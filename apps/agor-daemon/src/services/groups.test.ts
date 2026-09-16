@@ -209,12 +209,15 @@ describe('normalized branch effective-access service', () => {
   const branchId = '019f0000-0000-7000-8000-00000000beef';
   const userId = '019f0000-0000-7000-8000-00000000abcd';
 
-  function install(access: {
-    can: 'none' | 'view' | 'session' | 'prompt' | 'all';
-    fs_access?: 'none' | 'read' | 'write';
-    is_owner: boolean;
-    source: 'owner' | 'group' | 'others';
-  }) {
+  function install(
+    access: {
+      can: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      fs_access?: 'none' | 'read' | 'write';
+      is_owner: boolean;
+      source: 'owner' | 'group' | 'others';
+    },
+    allowSuperadmin = true
+  ) {
     let service:
       | {
           find(params: {
@@ -232,7 +235,7 @@ describe('normalized branch effective-access service', () => {
       findById: vi.fn(async () => ({ branch_id: branchId })),
       resolveUserAccess: vi.fn(async () => access),
     } as unknown as BranchRepository;
-    setupBranchEffectiveAccessService(app as never, repo);
+    setupBranchEffectiveAccessService(app as never, repo, { allowSuperadmin });
     if (!service) throw new Error('effective-access service was not registered');
     return { service, repo };
   }
@@ -270,12 +273,36 @@ describe('normalized branch effective-access service', () => {
     await expect(service.find(params(ROLES.MEMBER))).rejects.toThrow(/view permission/i);
   });
 
-  it('retains the configured superadmin bypass without consulting policy rows', async () => {
-    const { service, repo } = install({ can: 'none', is_owner: false, source: 'others' });
+  it('projects writable workspace access for the configured superadmin bypass', async () => {
+    const { service } = install({ can: 'none', is_owner: false, source: 'others' });
     await expect(service.find(params(ROLES.SUPERADMIN))).resolves.toMatchObject({
       can: 'all',
+      fs_access: 'write',
       source: 'superadmin',
     });
+  });
+
+  it('does not widen disabled superadmin bypass or ordinary admin access', async () => {
+    const effective = {
+      can: 'view' as const,
+      fs_access: 'read' as const,
+      is_owner: false,
+      source: 'others' as const,
+    };
+    const { service } = install(effective, false);
+    await expect(service.find(params(ROLES.SUPERADMIN))).resolves.toEqual(effective);
+    await expect(service.find(params(ROLES.ADMIN))).resolves.toEqual(effective);
+  });
+
+  it('does not project authority when the scoped branch lookup is missing', async () => {
+    const { service, repo } = install({
+      can: 'all',
+      fs_access: 'write',
+      is_owner: true,
+      source: 'owner',
+    });
+    vi.mocked(repo.findById).mockResolvedValue(null);
+    await expect(service.find(params(ROLES.SUPERADMIN))).rejects.toThrow('Branch not found');
     expect(repo.resolveUserAccess).not.toHaveBeenCalled();
   });
 
