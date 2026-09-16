@@ -137,10 +137,13 @@ async function worker(source, directory, options) {
     pathToFileURL(join(newer, 'packages/core/dist/db/test-support/owned-postgres.mjs')).href
   );
   let owned;
+  let stage = 'owned-schema';
   try {
     // The pinned harness creates its own cluster and checks run/container identity before cleanup.
     owned = await createOwnedPostgres();
+    stage = 'non-owner-role';
     await assertNonOwnerPostgres(owned.sql);
+    stage = 'schema-watermark';
     const [row] =
       await owned.sql`SELECT MAX(created_at)::text AS watermark FROM drizzle.__drizzle_migrations`;
     assert.equal(row.watermark, EXPECTED_WATERMARK);
@@ -155,6 +158,7 @@ async function worker(source, directory, options) {
     const o = owned.sql.options;
     const databaseUrl = `postgresql://${encodeURIComponent(o.user)}:${encodeURIComponent(o.pass ?? o.password)}@${o.host[0]}:${o.port[0]}/${o.database}`;
     const moduleUrl = pathToFileURL(join(old, 'apps/agor-daemon/dist/setup/database.js')).href;
+    stage = 'compiled-old-startup';
     const program = `
       import { initializeDatabase } from ${JSON.stringify(moduleUrl)};
       let requests = 0;
@@ -197,6 +201,7 @@ async function worker(source, directory, options) {
     assert.match(result.stdout, /EXPECTED_OLD_STARTUP_REFUSAL/);
     assert.doesNotMatch(result.stdout, /Database ready|Seeding initial data/);
     assert.equal(result.stderr, '');
+    stage = 'published-old-image';
     const publishedImage = options.oldImage
       ? await provePublishedOldDaemon({
           image: options.oldImage,
@@ -206,6 +211,7 @@ async function worker(source, directory, options) {
           environment,
         })
       : undefined;
+    stage = 'unchanged-state';
     const after = await owned.sql`SELECT (SELECT count(*)::text FROM users) AS users,
       (SELECT count(*)::text FROM user_mcp_oauth_tokens) AS grants,
       (SELECT count(*)::text FROM mcp_oauth_pending_flows) AS attempts`;
@@ -245,6 +251,9 @@ async function worker(source, directory, options) {
         2
       )
     );
+  } catch (error) {
+    console.error(JSON.stringify({ stage, assertion: error?.code === 'ERR_ASSERTION' }));
+    throw error;
   } finally {
     await owned?.dispose();
     console.log('Owned PostgreSQL cluster disposed');

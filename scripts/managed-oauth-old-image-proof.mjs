@@ -32,8 +32,32 @@ export function publishedImageEnvironment(options) {
 export async function provePublishedOldDaemon({ image, baseline, owned, directory, environment }) {
   validateOldImage(image);
   const run = randomUUID();
-  const docker = (args) =>
-    command('docker', args, { env: environment, timeout: 120000, maxBuffer: 1024 * 1024 });
+  const docker = async (args) => {
+    try {
+      return await command('docker', args, {
+        env: environment,
+        timeout: 120000,
+        maxBuffer: 1024 * 1024,
+      });
+    } catch (error) {
+      // Only fixed operation and classified availability, never raw Docker
+      // diagnostics, command arguments, container logs or generated credentials.
+      const message = String(error?.stderr ?? '');
+      console.error(
+        JSON.stringify({
+          stage: 'published-old-docker',
+          operation: args[0],
+          rate_limited: /toomanyrequests|pull rate limit/i.test(message),
+          authorization_denied: /unauthorized|denied/i.test(message),
+          missing_manifest: /manifest unknown|no matching manifest/i.test(message),
+          unavailable:
+            error?.code === 'ENOENT' || /Cannot connect to the Docker daemon/i.test(message),
+          timed_out: error?.killed === true,
+        })
+      );
+      throw error;
+    }
+  };
   // Pull the exact public digest; no caller registry or credential file is inherited.
   await docker(['pull', image]);
   const revision = await docker([
