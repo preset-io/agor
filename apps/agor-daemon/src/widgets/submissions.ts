@@ -1,17 +1,19 @@
 /**
- * Widget submission / dismissal route handlers.
+ * Widget resolution route handlers.
  *
- * Two custom REST routes:
+ * Three custom REST routes, one resolver:
  *   POST /widgets/:widget_id/submit
  *   POST /widgets/:widget_id/dismiss
+ *   POST /widgets/:widget_id/oauth-resolve
  *
- * Both follow the same resolution path:
+ * All three follow the same resolution path:
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
  *   2. Authorize through the canonical session prompt authority resolver.
  *   3. Idempotency: status MUST be 'pending'.
  *   4. Durably claim `pending -> resolving` with an opaque token.
- *   5. The sole claimant dispatches to the registry (`applySubmit` for
- *      submit; no external side-effect for dismiss).
+ *   5. The sole claimant dispatches to the registry — `applySubmit` for a
+ *      submit-resolved widget, `resolveFromOAuthCallback` for an
+ *      OAuth-resolved one, no external side-effect for dismiss.
  *   6. Queue a system-authored auto-resume task via the existing
  *      `/sessions/:id/prompt` route (the "Never lose a prompt" #1068 path),
  *      unless `auto_resume === false`.
@@ -22,6 +24,13 @@
  * the raw submit body reaches; from `result_meta` onward, no
  * caller-supplied values flow back into the agent context. See §5.1 of the
  * design doc for the path-by-path enumeration.
+ *
+ * The OAuth lane strengthens that rather than widening it: it has no submit
+ * body at all. `resolveFromOAuthCallback` receives only an advisory attempt
+ * id and re-derives the outcome from durable daemon state, so the
+ * `result_meta` it returns is composed from rows the daemon read, never from
+ * the request. Steps 1-3 and 5-8 are byte-identical for all three actions;
+ * only step 4's dispatch differs.
  */
 
 import { generateId } from '@agor/core/db';
@@ -39,7 +48,7 @@ import type {
 import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
-import { getWidget, type WidgetSubmitCtx } from './registry.js';
+import { getWidget, type WidgetOAuthCallbackEvidence, type WidgetSubmitCtx } from './registry.js';
 import type { WidgetResolutionStore } from './resolution-store.js';
 
 /**
@@ -79,12 +88,23 @@ export interface AuthenticatedCaller {
 
 export type WidgetResolutionAction =
   | { kind: 'submit'; body: Record<string, unknown> }
-  | { kind: 'dismiss' };
+  | { kind: 'dismiss' }
+  /**
+   * The browser finished the MCP OAuth flow and is asking the daemon to check.
+   * `evidence` is correlation material only — see
+   * {@link WidgetOAuthCallbackEvidence}.
+   */
+  | { kind: 'oauth_callback'; evidence: WidgetOAuthCallbackEvidence };
 
 export interface WidgetResolutionResult {
   widget_id: MessageID;
   status: 'submitted' | 'dismissed';
   auto_resume_queued: boolean;
+}
+
+/** Terminal status a resolution action lands the widget on. */
+function terminalStatusFor(kind: WidgetResolutionAction['kind']): 'submitted' | 'dismissed' {
+  return kind === 'dismiss' ? 'dismissed' : 'submitted';
 }
 
 /**
@@ -193,6 +213,7 @@ async function doResolveWidget(
   let resultMeta: unknown | undefined;
   let autoResumePrompt: string | undefined;
   let parsedSubmit: unknown;
+  let oauthEvidence: WidgetOAuthCallbackEvidence | undefined;
 
   // Context for the registry hooks, built for BOTH paths so a widget can gate
   // who may dismiss it (authorizeDismiss), not just who may submit.
@@ -203,20 +224,40 @@ async function doResolveWidget(
     submitterUserId: caller.user_id,
     submitterRole: caller.role,
     sessionCreatorUserId: session.created_by as UserID,
+    runInTenantDatabaseScope: deps.runInTenantDatabaseScope,
   };
 
-  if (action.kind === 'submit') {
+  if (action.kind === 'submit' || action.kind === 'oauth_callback') {
     if (!entry) {
       throw new NotFound(
         `Widget type '${widget.widget_type}' is not registered on this daemon. ` +
           `Update the daemon or use a known widget type.`
       );
     }
-    const parsed = entry.submitSchema.safeParse(action.body);
-    if (!parsed.success) {
-      throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
+    // The endpoint and the registered resolution kind must agree. A
+    // submit-resolved widget reached through `/oauth-resolve` would skip its
+    // payload validation entirely; an OAuth-resolved widget reached through
+    // `/submit` would be resolved on a client's say-so, with no grant check.
+    // Both are refusals, not fallbacks.
+    const registeredKind = entry.resolution ?? 'submit';
+    const requestedKind = action.kind === 'oauth_callback' ? 'oauth_callback' : 'submit';
+    if (registeredKind !== requestedKind) {
+      throw new Forbidden(
+        `Widget type '${widget.widget_type}' is resolved by '${registeredKind}', ` +
+          `not '${requestedKind}'.`
+      );
     }
-    parsedSubmit = parsed.data;
+    if (action.kind === 'oauth_callback') {
+      // No payload to validate: there is nothing in the request this path
+      // trusts. The handler reads durable state instead.
+      oauthEvidence = action.evidence;
+    } else if (entry.resolution !== 'oauth_callback') {
+      const parsed = entry.submitSchema.safeParse(action.body);
+      if (!parsed.success) {
+        throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
+      }
+      parsedSubmit = parsed.data;
+    }
   } else {
     // dismiss — an admin-only widget gates this so a member-level dismissal
     // can't terminally decline a flow its submit path would have rejected.
@@ -243,13 +284,25 @@ async function doResolveWidget(
     throw new Forbidden(`Widget ${widgetId} is already ${status}; cannot ${action.kind} again.`);
   }
 
-  if (action.kind === 'submit') {
+  if (action.kind !== 'dismiss') {
     // The registry entry and parsed payload are established before the claim;
     // only the durable winner reaches this external-work boundary. A handler
     // that explicitly reports failure is the sole safe case for reopening the
     // widget: no later admission/completion failure may replay this effect.
+    const resolved = entry!;
     try {
-      await entry!.applySubmit(ctx, parsedSubmit, widget.params);
+      if (resolved.resolution === 'oauth_callback') {
+        // Returns its own sanitized result_meta — see the registry docs for
+        // why an OAuth resolution cannot derive one from the request.
+        resultMeta = await resolved.resolveFromOAuthCallback(
+          ctx,
+          oauthEvidence ?? {},
+          widget.params
+        );
+      } else {
+        await resolved.applySubmit(ctx, parsedSubmit, widget.params);
+        resultMeta = resolved.buildResultMeta(parsedSubmit);
+      }
     } catch (error) {
       await deps.resolutionStore.fail(widget.widget_id, claimToken, {
         failedAt: new Date().toISOString(),
@@ -257,7 +310,6 @@ async function doResolveWidget(
       });
       throw error;
     }
-    resultMeta = entry!.buildResultMeta(parsedSubmit);
     autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
   }
 
@@ -303,8 +355,7 @@ async function doResolveWidget(
   }
 
   // 7. Only the claim token can publish the terminal resolution.
-  const newStatus: WidgetMessageMetadata['status'] =
-    action.kind === 'submit' ? 'submitted' : 'dismissed';
+  const newStatus: WidgetMessageMetadata['status'] = terminalStatusFor(action.kind);
   const resolvedAt = new Date().toISOString();
   const finished = await deps.resolutionStore.complete(widget.widget_id, claimToken, {
     status: newStatus,

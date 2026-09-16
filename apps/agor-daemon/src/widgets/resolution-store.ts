@@ -1,9 +1,15 @@
 import type { MessagesRepository } from '@agor/core/db';
-import type { Message, MessageID, UserID, WidgetMessageMetadata } from '@agor/core/types';
+import type {
+  Message,
+  MessageID,
+  UserID,
+  WidgetMessageMetadata,
+  WidgetResolutionActionKind,
+} from '@agor/core/types';
 
 export interface WidgetResolutionClaimInput {
   token: string;
-  action: 'submit' | 'dismiss';
+  action: WidgetResolutionActionKind;
   claimedAt: string;
   claimedBy: UserID;
 }

@@ -16,11 +16,20 @@ import type { MessageID, UserID } from './id';
 /** Lifecycle status of a widget request. */
 export type WidgetStatus = 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present';
 
+/**
+ * Which resolution action a claim owns.
+ *
+ * `oauth_callback` is the browser reporting that an MCP OAuth flow finished;
+ * it is persisted distinctly from `submit` because the two carry different
+ * evidence and a recovery reader needs to know which one was in flight.
+ */
+export type WidgetResolutionActionKind = 'submit' | 'dismiss' | 'oauth_callback';
+
 /** Durable ownership of one widget resolution attempt. */
 export interface WidgetResolutionClaim {
   /** Opaque compare-and-set token; only this claimant may finish the attempt. */
   token: string;
-  action: 'submit' | 'dismiss';
+  action: WidgetResolutionActionKind;
   claimed_at: string;
   claimed_by: UserID;
 }

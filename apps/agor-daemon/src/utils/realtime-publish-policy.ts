@@ -497,6 +497,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Widget input is deliberately kept out of broadcast.',
   },
+  'widgets/:id/oauth-resolve': {
+    audience: 'none',
+    why: 'The resolution answers the caller; subscribers learn the outcome from the messages room.',
+  },
 } as const satisfies Record<string, RealtimePublishPolicy>;
 
 export type RealtimePublishPolicyPath = keyof typeof REALTIME_PUBLISH_POLICY;
