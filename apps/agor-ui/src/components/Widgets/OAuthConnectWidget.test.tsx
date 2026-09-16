@@ -109,7 +109,7 @@ describe('OAuthConnectWidget — pending', () => {
   });
 
   it('warns that a shared connection is used by the whole workspace', () => {
-    renderWidget(
+    const { container } = renderWidget(
       <OAuthConnectWidget
         message={message}
         widget={widget({ params: { ...PARAMS, oauthMode: 'shared' } })}
@@ -117,6 +117,45 @@ describe('OAuthConnectWidget — pending', () => {
       />
     );
     expect(screen.getByText(/everyone in this Agor workspace/i)).toBeVisible();
+    // Not colour alone. This one line is what separates a personal sign-in
+    // from handing the whole workspace an account, and `type="warning"` says
+    // so only in the text colour.
+    expect(container.querySelector('.anticon-warning')).not.toBeNull();
+  });
+
+  /**
+   * Nothing about this flow is synchronous: the user clicks, a popup opens, a
+   * provider round-trip happens, and the card rewrites itself. Without live
+   * regions a screen-reader user hears none of it.
+   */
+  it('announces progress politely and failure assertively', async () => {
+    let release: (v: { status: string }) => void = () => {};
+    waitForAttempt.mockReturnValue(
+      new Promise<{ status: string }>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { container } = renderWidget(
+      <OAuthConnectWidget message={message} widget={widget()} client={makeClient()} />
+    );
+    // Scoped to the card: the toast this flow also raises is its own live
+    // region, and the claim here is about the card announcing itself.
+    const progress = () => container.querySelector('[role="status"]');
+    const failureRegion = () => container.querySelector('[role="alert"]');
+
+    // Both regions exist BEFORE anything happens. A live region created in the
+    // same commit as its content is the case assistive technology misses.
+    expect(progress()).not.toBeNull();
+    expect(failureRegion()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(progress()).toHaveTextContent(/Sign-in is pending/i));
+
+    release({ status: 'failed' });
+    await waitFor(() => expect(failureRegion()).toHaveTextContent(/Sign-in was not completed/i));
+    // The progress region empties rather than leaving a stale "pending" for a
+    // screen reader to re-read next time it changes.
+    expect(progress()).toHaveTextContent('');
   });
 
   it('runs start → popup → poll → oauth-resolve, in that order', async () => {

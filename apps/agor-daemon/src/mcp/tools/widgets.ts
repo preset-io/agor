@@ -21,6 +21,7 @@
  * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  */
 
+import { getBaseUrl } from '@agor/core/config';
 import { generateId, MessagesRepository } from '@agor/core/db';
 import type {
   ChannelType,
@@ -42,9 +43,11 @@ import {
   catalogDisplayName,
   getRequiredSecretFields,
   hasMinimumRole,
+  isGatewaySession,
   MessageRole,
   ROLES,
 } from '@agor/core/types';
+import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
@@ -402,6 +405,38 @@ async function installCatalogOAuthServer(
 }
 
 /**
+ * Where a gateway user has to go to press Connect.
+ *
+ * The widget renders in the Agor transcript. For a session that came from
+ * Slack, Discord, GitHub or Teams, that transcript is a page the user is not
+ * looking at — and only Slack gets a Block Kit projection of the card (stage
+ * 3). A Discord session passes the alignment guard, mints a real widget, and
+ * then has nothing at all to show for it: the agent returns `status:
+ * "requested"` and, having no link, can only say a button exists somewhere.
+ *
+ * So gateway-sourced mints carry the session URL back to the agent, to relay
+ * into the thread. Returns null for a canvas session (the user is already
+ * looking at the transcript) and for a deployment whose configured base URL is
+ * a bind address rather than somewhere a browser can reach — the same
+ * `0.0.0.0` guard `fetchExistingSessionUrlForGatewayUser` applies, for the
+ * same reason: a link nobody can open is worse than none, because the agent
+ * will relay it.
+ */
+async function gatewaySessionConnectUrl(
+  session: Pick<Session, 'custom_context'>,
+  sessionId: SessionID
+): Promise<string | null> {
+  if (!isGatewaySession(session)) return null;
+  try {
+    const url = getSessionUrl(sessionId, await getBaseUrl());
+    return new URL(url).hostname === '0.0.0.0' ? null : url;
+  } catch {
+    console.warn('[widgets] could not build a session URL for a gateway oauth widget');
+    return null;
+  }
+}
+
+/**
  * Attach a server that needs no further authorization and wake the agent.
  *
  * Used by both short-circuits (already connected, or no auth at all). Records
@@ -593,6 +628,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         'PREFER this tool whenever the user asks you to "connect me to X" or a task needs an MCP server they have not authorized: call it instead of telling them to open Settings or the MCP Catalog. ' +
         'Resolve the server FIRST: use `agor_mcp_catalog_list` to turn a product name into a `catalogEntryName` (e.g. "Notion" -> "com.notion/mcp"), or `agor_mcp_servers_list` for a server that already exists. NEVER invent a URL — pass exactly one of `mcpServerId` or `catalogEntryName`. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it resolves. ' +
+        'If the result contains `session_url` you are in a Slack/Discord/GitHub thread where the user CANNOT see the inline card: you MUST relay the link in your reply (the `relay_to_user` sentence is ready to paste), or the user will never find the button. ' +
         'If the account is already connected the tool attaches it and resumes you immediately (status "already_present") — no button is shown. ' +
         'Tokens never enter your context: only the server name and OAuth mode do. The server is attached to this session only AFTER the grant lands, so its tools appear on a later turn, not this one. ' +
         'Keep `reason` to ONE short sentence (<=200 chars).',
@@ -727,7 +763,19 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         autoResume: true,
       });
 
-      return textResult({ widget_id: widgetId, status: 'requested' });
+      // The card renders in the Agor transcript, which a gateway user is not
+      // looking at. Hand the agent something it can say.
+      const sessionUrl = await gatewaySessionConnectUrl(session, targetSessionId);
+      return textResult({
+        widget_id: widgetId,
+        status: 'requested',
+        ...(sessionUrl
+          ? {
+              session_url: sessionUrl,
+              relay_to_user: `Open ${sessionUrl} and click Connect to sign in to "${serverName}".`,
+            }
+          : {}),
+      });
     }
   );
 

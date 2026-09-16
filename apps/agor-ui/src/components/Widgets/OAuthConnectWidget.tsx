@@ -37,6 +37,7 @@ import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
   MinusCircleOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Card, Space, Typography, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
@@ -272,24 +273,66 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
         ) : null}
 
         {params.oauthMode === 'shared' ? (
-          <Text type="warning" style={{ fontSize: token.fontSizeSM }}>
-            This is a workspace-wide connection: everyone in this Agor workspace will use the
-            account you sign in with.
-          </Text>
+          // Icon, not colour alone: this is the one line that distinguishes a
+          // personal sign-in from handing the whole workspace an account, and
+          // `type="warning"` carries that entirely in the text colour.
+          <Space size="small" align="start">
+            <WarningOutlined
+              aria-hidden
+              style={{ color: token.colorWarning, fontSize: token.fontSizeSM, marginTop: 3 }}
+            />
+            <Text type="warning" style={{ fontSize: token.fontSizeSM }}>
+              This is a workspace-wide connection: everyone in this Agor workspace will use the
+              account you sign in with.
+            </Text>
+          </Space>
         ) : null}
 
-        {state === 'pending' ? (
-          <Alert
-            type="info"
-            showIcon
-            title="Sign-in is pending"
-            description="Finish signing in in the provider window. This card confirms once Agor has the connection."
-          />
-        ) : null}
+        {/*
+          This is a multi-window async flow: the user clicks, a popup opens, a
+          provider round-trip happens, and the card rewrites itself. A screen
+          reader has to be told, and the two regions below are PERSISTENT on
+          purpose — a live region created in the same commit as its content is
+          the classic case assistive technology misses, and both alerts used to
+          be conditionally rendered. `status`/polite for progress so it waits
+          its turn; `alert` for the failure so it interrupts.
 
-        {failure ? (
-          <Alert type="error" showIcon title="Sign-in was not completed" description={failure} />
-        ) : null}
+          The inner Alerts hand their role over (antd sets `role="alert"` on
+          every one, including the informational one) so the wrapper is the
+          single announcement and a failure is not read twice.
+        */}
+        <div role="status" aria-live="polite" style={{ width: '100%' }}>
+          {state === 'starting' ? (
+            <Text
+              type="secondary"
+              style={{ fontSize: token.fontSizeSM }}
+              data-testid="oauth-widget-starting"
+            >
+              Opening the sign-in window…
+            </Text>
+          ) : null}
+          {state === 'pending' ? (
+            <Alert
+              role="presentation"
+              type="info"
+              showIcon
+              title="Sign-in is pending"
+              description="Finish signing in in the provider window. This card confirms once Agor has the connection."
+            />
+          ) : null}
+        </div>
+
+        <div role="alert" style={{ width: '100%' }}>
+          {failure ? (
+            <Alert
+              role="presentation"
+              type="error"
+              showIcon
+              title="Sign-in was not completed"
+              description={failure}
+            />
+          ) : null}
+        </div>
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
           <Button size="small" onClick={decline} disabled={busy}>
