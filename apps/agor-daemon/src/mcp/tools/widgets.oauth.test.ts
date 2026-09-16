@@ -390,6 +390,65 @@ describe('agor_widgets_request_oauth — catalog install', () => {
   });
 });
 
+describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an install', () => {
+  it('clamps an over-long permission disclosure instead of installing then failing', async () => {
+    // The install is the first durable effect. A disclosure longer than
+    // `oauthParamsSchema`'s 1000 used to leave an installed server row behind
+    // and then throw out of the tool. The longest entry in today's curated.yaml
+    // is 808 chars, so this is a curation slip away.
+    const { app, calls } = makeApp({
+      catalogEntry: { ...NOTION_ENTRY, permission_disclosure: 'x'.repeat(1400) },
+    });
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({
+      catalogEntryName: 'com.notion/mcp',
+    });
+
+    expect(payload(result).status).toBe('requested');
+    const disclosure = appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure;
+    expect(disclosure).toHaveLength(1000);
+    expect(disclosure.endsWith('…')).toBe(true);
+    // The install still ran, and it acknowledged the entry's REAL text.
+    const connect = calls.find((c) => c.service === 'mcp-catalog/connect');
+    const connectArgs = connect?.args[0] as { acknowledged_disclosure: string } | undefined;
+    expect(connectArgs?.acknowledged_disclosure).toBe('x'.repeat(1400));
+  });
+
+  it('refuses an over-long catalog entry name BEFORE installing anything', async () => {
+    // An identity cannot be clamped without corrupting it, so this refuses —
+    // but early, where refusing still costs nothing.
+    const { app, calls } = makeApp({
+      catalogEntry: { ...NOTION_ENTRY, name: `com.${'x'.repeat(300)}/mcp` },
+    });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    ).rejects.toThrow(/too long/i);
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeUndefined();
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
+  it('clamps an over-long server display name', async () => {
+    const { app } = makeApp({ server: { ...OAUTH_SERVER, display_name: 'N'.repeat(260) } });
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.serverName).toHaveLength(200);
+  });
+
+  it('substitutes the default reason for a blank one, which `?? default` would not', async () => {
+    const { app } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion', reason: '   ' });
+    // The widget schema requires `reason.min(1)`, so an empty string would have
+    // thrown a Zod error at the agent instead of reading as "unspecified".
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.reason).toMatch(/Connect Notion/);
+  });
+});
+
 describe('agor_widgets_request_oauth — already connected', () => {
   it('skips the button, attaches, and resumes when a live grant exists', async () => {
     livenessStub.mockResolvedValue({ live: true });
