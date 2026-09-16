@@ -55,6 +55,15 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   const greetingName = currentUser?.name?.split(' ')[0];
   const askName = primaryTeammateName ?? 'your primary assistant';
 
+  // One inner padding for every card (header + body) so titles, rows, and the
+  // Ask hero content all line up on a single left edge. The outer 16px gutter
+  // lives once on the scroll Flex; rows inside defer to the body (paddingInline
+  // 0) instead of adding a second inset.
+  const cardStyles = {
+    header: { paddingInline: token.padding },
+    body: { padding: token.padding },
+  } as const;
+
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
@@ -74,7 +83,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
             size="small"
             blur={false}
             highlights={{ intensity: 'subtle' }}
-            styles={{ body: { padding: token.padding } }}
+            styles={cardStyles}
           >
             <Flex align="center" gap={token.margin}>
               <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
@@ -114,7 +123,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                 </Button>
               ) : undefined
             }
-            styles={{ body: { padding: recent.length > 0 ? 0 : token.padding } }}
+            styles={cardStyles}
           >
             {recent.length > 0 ? (
               <List
@@ -135,12 +144,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
           </GlassPanel>
 
           {boards.length > 0 && (
-            <GlassPanel
-              size="small"
-              blur={false}
-              title="Your boards"
-              styles={{ body: { padding: 0 } }}
-            >
+            <GlassPanel size="small" blur={false} title="Your boards" styles={cardStyles}>
               <List
                 dataSource={boards}
                 renderItem={(board) => (
@@ -155,7 +159,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                         navigate(`/m/board/${board.board_id}`);
                       }
                     }}
-                    style={{ cursor: 'pointer', paddingInline: token.padding, minHeight: 44 }}
+                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
                   >
                     <List.Item.Meta
                       avatar={

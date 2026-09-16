@@ -107,4 +107,54 @@ describe('MobileHomePage horizontal fit', () => {
       expect(wideCards, `card overflow at ${width}px:\n${wideCards.join('\n')}`).toEqual([]);
     });
   }
+
+  const spread = (vals: number[]) => Math.max(...vals) - Math.min(...vals);
+
+  for (const width of [360, 390, 430]) {
+    it(`aligns every card's content to one left edge at ${width}px`, () => {
+      agorStore.getState().reset();
+      const { container } = render(
+        <ConfigProvider theme={{ token: { motion: false } }}>
+          <MemoryRouter>
+            <div
+              style={{ width, height: 800, display: 'flex', flexDirection: 'column' }}
+              data-testid="viewport"
+            >
+              <MobileHomePage
+                sessionById={sessionById}
+                branchById={branchById}
+                boardById={boardById}
+                currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
+                onAsk={vi.fn()}
+                primaryTeammateName="Fable"
+                primaryTeammateEmoji="🤖"
+              />
+            </div>
+          </MemoryRouter>
+        </ConfigProvider>
+      );
+      const viewport = container.querySelector<HTMLElement>('[data-testid="viewport"]')!;
+      const cards = Array.from(viewport.querySelectorAll<HTMLElement>('.ant-card'));
+      expect(cards.length).toBeGreaterThan(1);
+
+      // Every card sits at the single outer gutter (no card adds its own margin).
+      expect(spread(cards.map((c) => c.getBoundingClientRect().left))).toBeLessThanOrEqual(1);
+
+      // One inner padding across every card header + body (no 0/12/16 mix).
+      const insets = [
+        ...viewport.querySelectorAll<HTMLElement>('.ant-card-head'),
+        ...viewport.querySelectorAll<HTMLElement>('.ant-card-body'),
+      ].map((el) => Number.parseFloat(getComputedStyle(el).paddingLeft));
+      expect(spread(insets)).toBeLessThanOrEqual(0.5);
+
+      // Titles and rows (session + board list content) share one vertical edge,
+      // including the nested list content (no double gutter).
+      const contentLefts = [
+        ...viewport.querySelectorAll<HTMLElement>('.ant-card-head-title'),
+        ...viewport.querySelectorAll<HTMLElement>('.ant-list-item-meta'),
+      ].map((el) => el.getBoundingClientRect().left);
+      expect(contentLefts.length).toBeGreaterThan(2);
+      expect(spread(contentLefts)).toBeLessThanOrEqual(1);
+    });
+  }
 });
