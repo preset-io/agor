@@ -9,7 +9,6 @@ import {
   MCP_HEADER_REDACTED_SENTINEL,
   redactMCPCustomHeaders,
 } from '@agor/core/tools/mcp/http-headers';
-import { oauthGrantCanAuthenticate } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   CreateMCPServerInput,
   MCPAuth,
@@ -29,7 +28,7 @@ import {
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { isMCPOAuthGrantAuthorizedForServer } from '../../services/mcp-oauth-grant-authority.js';
+import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
@@ -85,32 +84,23 @@ async function getOAuthStatus(
     return { authenticated: true };
   }
 
-  // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
-  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres). MCP
-  // service responses have already passed through token injection + secret
-  // redaction hooks, so binding authority must come from the raw stored row.
-  const { MCPServerRepository, UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const tokenData = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-    const authoritativeServer = await new MCPServerRepository(db).findById(mcpServer.mcp_server_id);
-    if (!authoritativeServer?.enabled || authoritativeServer.auth?.type !== 'oauth') return null;
-    const lookupUserId =
-      (authoritativeServer.auth.oauth_mode ?? 'per_user') === 'shared' ? null : ctx.userId;
-    const grant = await new UserMCPOAuthTokenRepository(db).getToken(
-      lookupUserId,
-      mcpServer.mcp_server_id
-    );
-    if (!grant) return null;
-    return (await isMCPOAuthGrantAuthorizedForServer(db, authoritativeServer, grant))
-      ? grant
-      : null;
-  });
-  if (tokenData && oauthGrantCanAuthenticate(tokenData)) {
-    return {
-      authenticated: true,
-      tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
-    };
-  }
-  return { authenticated: false };
+  // The shared read, not a hand-rolled copy of it. This surface used to carry
+  // its own inline server re-read, lookup-key derivation, binding check,
+  // `refresh_status` rule, and expiry comparison — five rules that had to stay
+  // identical to the widget's resolution gate by hand. When they drifted, a
+  // user one refresh away from usable read "connected" here while the widget's
+  // mint short-circuit read "not connected" and offered a Connect button for a
+  // server that already worked.
+  //
+  // `resolveMCPOAuthGrantLiveness` re-reads the row from the database on
+  // purpose: MCP service responses have already passed through token injection
+  // and secret redaction, so binding authority must come from stored state.
+  const liveness = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+    resolveMCPOAuthGrantLiveness(db, mcpServer.mcp_server_id, ctx.userId)
+  );
+  return liveness.live
+    ? { authenticated: true, tokenExpiresAt: liveness.expiresAt?.getTime() }
+    : { authenticated: false };
 }
 
 /** Build the standard MCP-server summary, resolving OAuth status inline. */

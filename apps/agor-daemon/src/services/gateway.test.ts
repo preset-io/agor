@@ -3,13 +3,18 @@ import { getBaseUrl } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
+  createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   GatewayListenerDiscoveryRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  MCPServerRepository,
+  runMigrations,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   shortId,
+  UserMCPOAuthTokenRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import { GatewayListenerError, getConnector } from '@agor/core/gateway';
 import type {
@@ -26,6 +31,10 @@ import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+import {
+  fingerprintMCPOAuthGrantConfiguration,
+  MCP_OAUTH_GRANT_BINDING_VERSION,
+} from './mcp-oauth-grant-binding.js';
 import { SessionsService } from './sessions.js';
 
 vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
@@ -83,6 +92,18 @@ const user: User = {
   default_agentic_config: {},
   unix_username: null,
 } as unknown as User;
+
+/** The OAuth configuration the gateway's seeded grants are issued against. */
+const GATEWAY_GRANT_BINDING = {
+  resourceUri: 'https://mcp.example.test/mcp',
+  metadataUrl: 'https://mcp.example.test/.well-known/oauth-authorization-server',
+  issuer: 'https://auth.example.test',
+  authorizationEndpoint: 'https://auth.example.test/authorize',
+  tokenEndpoint: 'https://auth.example.test/token',
+  redirectUri: 'https://agor.example.test/oauth/callback',
+  clientId: 'client-abc',
+  compatibilityMode: 'strict' as const,
+};
 
 const slackChannel: GatewayChannel = {
   id: 'chan-slack',
@@ -2726,58 +2747,123 @@ describe('GatewayService MCP resolution', () => {
     expect(emitted).toHaveBeenCalledOnce();
   });
 
-  it('warns when raw OAuth tokens exist but their authoritative binding is invalid', async () => {
-    const channel = {
-      ...slackChannel,
-      mcp_server_ids: [channelMcpId],
-    } as unknown as GatewayChannel;
-    const { service, promptCreate } = makeGatewayHarness({ channel, existingMapping: null });
-    Object.assign(service as unknown as Record<string, unknown>, {
-      mcpServerRepo: {
-        findById: vi.fn(async () => ({
-          mcp_server_id: channelMcpId,
-          name: 'bound-oauth',
-          display_name: 'Bound OAuth',
-          transport: 'http',
-          scope: 'global',
-          enabled: true,
-          source: 'user',
-          url: 'https://mcp.example.test',
-          auth: { type: 'oauth', oauth_mode: 'per_user' },
-        })),
-      },
-      userTokenRepo: {
-        getToken: vi.fn(async () => ({
-          user_id: user.user_id,
-          mcp_server_id: channelMcpId,
-          oauth_access_token: 'raw-token-must-not-suppress-warning',
-          oauth_refresh_token: 'raw-refresh-must-not-suppress-warning',
-          grant_generation: 1,
-          grant_binding_version: 5,
-          refresh_status: 'idle',
-          refresh_generation: 0,
-          refresh_success_generation: 0,
-          created_at: new Date(),
-        })),
-      },
-    });
+  /**
+   * The warning is the ONE surface that deliberately answers looser than
+   * `resolveMCPOAuthGrantLiveness`'s `live` — it also stays quiet for a grant
+   * that is merely expired, because the inject hook will JIT-refresh it. That
+   * widening is `refreshable` on the SAME read, not a second rule, so these
+   * cases pin exactly how far the looseness goes.
+   *
+   * They run against a real migrated database rather than an injected
+   * repository double: the point is which stored row the gateway's decision
+   * comes from, and a `getToken` stub answers that by construction.
+   */
+  describe.each([
+    {
+      state: 'a grant whose binding no longer matches the server',
+      grant: 'unbound' as const,
+      warns: true,
+    },
+    { state: 'no grant at all', grant: 'absent' as const, warns: true },
+    {
+      state: 'an expired grant with nothing to refresh with',
+      grant: 'expired-dead' as const,
+      warns: true,
+    },
+    {
+      // Deliberately optimistic, and only here: the executor never sees the
+      // stale access token, so warning a Slack thread that the server is
+      // unavailable would be the wrong error on a warning surface.
+      state: 'an expired grant that is one refresh away from usable',
+      grant: 'expired-refreshable' as const,
+      warns: false,
+    },
+    { state: 'a live grant', grant: 'live' as const, warns: false },
+  ])('gateway MCP auth warning — $state', ({ grant, warns }) => {
+    it(warns ? 'warns' : 'stays quiet', async () => {
+      const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+      await runMigrations(rawDb);
+      const db = rawDb as unknown as TenantScopeAwareDatabase;
+      await new UsersRepository(rawDb).create({
+        user_id: user.user_id,
+        email: user.email,
+        name: user.name,
+        role: 'admin',
+      });
 
-    await service.create({
-      channel_key: channel.channel_key,
-      thread_id: 'C123-100.000000',
-      text: 'start',
-      metadata: {
-        channel: 'C123',
-        channel_type: 'channel',
-        slack_has_mention: true,
-        slack_message_ts: '100.000000',
-      },
-    });
+      const servers = new MCPServerRepository(db);
+      const saved = await servers.create({
+        mcp_server_id: channelMcpId,
+        name: 'bound-oauth',
+        display_name: 'Bound OAuth',
+        transport: 'http',
+        url: 'https://mcp.example.test/mcp',
+        scope: 'global',
+        source: 'user',
+        enabled: true,
+        auth: { type: 'oauth', oauth_mode: 'per_user' },
+      } as Parameters<MCPServerRepository['create']>[0]);
 
-    expect(promptCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: expect.stringContaining('Bound OAuth') }),
-      expect.anything()
-    );
+      if (grant !== 'absent') {
+        const expiresAt =
+          grant === 'live' ? new Date(Date.now() + 3600_000) : new Date(Date.now() - 3600_000);
+        await new UserMCPOAuthTokenRepository(db).saveToken(
+          user.user_id,
+          saved.mcp_server_id,
+          {
+            accessToken: 'at-1',
+            expiresAt,
+            ...(grant === 'expired-refreshable' ? { refreshToken: 'rt-1' } : {}),
+            clientId: GATEWAY_GRANT_BINDING.clientId,
+            grantBinding: {
+              generation: 1,
+              version: MCP_OAUTH_GRANT_BINDING_VERSION,
+              fingerprint: fingerprintMCPOAuthGrantConfiguration(
+                process.env.AGOR_MASTER_SECRET!,
+                saved,
+                GATEWAY_GRANT_BINDING,
+                MCP_OAUTH_GRANT_BINDING_VERSION
+              ),
+              metadataUri: GATEWAY_GRANT_BINDING.metadataUrl,
+              resourceUri: GATEWAY_GRANT_BINDING.resourceUri,
+              issuer: GATEWAY_GRANT_BINDING.issuer,
+              authorizationEndpoint: GATEWAY_GRANT_BINDING.authorizationEndpoint,
+              tokenEndpoint: GATEWAY_GRANT_BINDING.tokenEndpoint,
+              redirectUri: GATEWAY_GRANT_BINDING.redirectUri,
+            },
+          },
+          user.user_id
+        );
+        // The grant is real and its tokens are raw in the row; only its
+        // binding to the server's current configuration is broken.
+        if (grant === 'unbound') {
+          await servers.update(saved.mcp_server_id, { url: 'https://moved.example.test/mcp' });
+        }
+      }
+
+      const channel = {
+        ...slackChannel,
+        mcp_server_ids: [channelMcpId],
+      } as unknown as GatewayChannel;
+      const { service, promptCreate } = makeGatewayHarness({ channel, existingMapping: null, db });
+
+      await service.create({
+        channel_key: channel.channel_key,
+        thread_id: 'C123-100.000000',
+        text: 'start',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '100.000000',
+        },
+      });
+
+      const [firstCall] = promptCreate.mock.calls;
+      expect(firstCall).toBeDefined();
+      const { prompt } = firstCall[0] as { prompt: string };
+      expect(prompt.includes('Bound OAuth')).toBe(warns);
+    });
   });
 });
 
