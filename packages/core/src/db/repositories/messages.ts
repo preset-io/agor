@@ -63,6 +63,20 @@ export class MessageIdentifierIntegrityError extends Error {
   }
 }
 
+/**
+ * The indexed due-work projection of a message's widget delivery record.
+ *
+ * Only a Slack-delivered `oauth` widget ever sets one. Kept beside the
+ * mutation that writes it so there is exactly one place the column's meaning
+ * is decided.
+ */
+function mcpSlackConnectDueAt(metadata: Message['metadata']): Date | null {
+  const dueAt = metadata?.widget?.slack_connect?.next_repair_at;
+  if (!dueAt) return null;
+  const parsed = new Date(dueAt);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
   return {
     content: MESSAGE_CONTENT_OMITTED,
@@ -336,7 +350,14 @@ export class MessagesRepository {
             sanitizedData = omittedMessageData(error.category);
           }
           const updatedRow = await update(txDb, messages)
-            .set({ data: sanitizedData })
+            .set({
+              data: sanitizedData,
+              // Projected from the JSON in the same statement that writes it,
+              // so the indexed due-work column can never name a repair time
+              // the metadata does not. Null for every message that is not a
+              // Slack-delivered `oauth` widget awaiting repair.
+              mcp_slack_connect_due_at: mcpSlackConnectDueAt(metadata),
+            })
             .where(eq(messages.message_id, messageId))
             .returning()
             .one();
@@ -345,6 +366,40 @@ export class MessagesRepository {
         { sqliteImmediate: true }
       )
     );
+  }
+
+  /**
+   * Page Slack-delivered `oauth` widgets whose card projection is due for
+   * bounded repair.
+   *
+   * The same shape as `TaskRepository.findMcpSlackRecoveryNoticePage`, for the
+   * same reason: a restart, a lost realtime event, or a daemon that died
+   * mid-delivery leaves a card that nothing else will ever revisit. `horizon`
+   * bounds how far back a sweep reaches so an abandoned row from last month
+   * cannot crowd out today's work, and the query rides the partial index
+   * rather than reading a table that holds every message ever sent.
+   */
+  async findMcpSlackConnectDuePage(
+    options: { now?: Date; horizon?: Date; limit?: number } = {}
+  ): Promise<{ messages: Message[] }> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('MCP Slack connect repair limit must be between 1 and 100');
+    }
+    const now = options.now ?? new Date();
+    const horizon = options.horizon ?? new Date(now.getTime() - 24 * 60 * 60_000);
+    const rows = await select(this.db)
+      .from(messages)
+      .where(
+        and(
+          gte(messages.mcp_slack_connect_due_at, horizon),
+          lte(messages.mcp_slack_connect_due_at, now)
+        )
+      )
+      .orderBy(asc(messages.mcp_slack_connect_due_at), asc(messages.message_id))
+      .limit(limit)
+      .all();
+    return { messages: rows.map((row: MessageRow) => this.rowToMessage(row)) };
   }
 
   /**

@@ -4330,6 +4330,14 @@ export class GatewayService {
               ...(typeof data.metadata?.channel === 'string'
                 ? { slack_channel_id: data.metadata.channel }
                 : {}),
+              // Only meaningful for Slack, and only available here: a later
+              // projection into this thread (the MCP connect card) needs to
+              // know whether it is speaking into a DM or a room other people
+              // read, and nothing else persists the conversation kind.
+              ...(channel.channel_type === 'slack' &&
+              typeof data.metadata?.channel_type === 'string'
+                ? { slack_conversation_type: data.metadata.channel_type }
+                : {}),
             },
           },
           ...(data.idempotency_task_id ? { idempotencyTaskId: data.idempotency_task_id } : {}),
