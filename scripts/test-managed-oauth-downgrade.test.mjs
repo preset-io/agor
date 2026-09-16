@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { promisify } from 'node:util';
 import { publishedImageEnvironment, validateOldImage } from './managed-oauth-old-image-proof.mjs';
 import {
   BASELINE_SHA,
@@ -60,4 +65,48 @@ test('published daemon credentials come only from the generated run-owned role',
   assert.equal(env.AGOR_TELEMETRY, '0');
   assert.equal(env.AGOR_CONFIG_PATH, '/home/agor/config.yaml');
   assert.throws(() => publishedImageEnvironment({ user: 'shared', database: 'agor' }));
+});
+
+test('publication policy admits only the isolated immutable compatibility consumer', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'image-policy-proof-'));
+  const files = [
+    '.agor.yml',
+    '.github/workflows/build-image.yml',
+    '.github/workflows/postgres-integration.yml',
+    'scripts/check-image-publication-policy.mjs',
+    'scripts/managed-oauth-old-image-proof.mjs',
+  ];
+  const run = () =>
+    promisify(execFile)(process.execPath, [join(directory, files[3])], { timeout: 10000 });
+  try {
+    for (const file of files) {
+      await mkdir(dirname(join(directory, file)), { recursive: true });
+      await writeFile(
+        join(directory, file),
+        await readFile(new URL(`../${file}`, import.meta.url))
+      );
+    }
+    await run();
+    const workflowPath = join(directory, files[2]);
+    const workflow = await readFile(workflowPath, 'utf8');
+    await writeFile(workflowPath, workflow.replace(/agor@sha256:[a-f0-9]{64}/, 'agor:main'));
+    await assert.rejects(run);
+    await writeFile(
+      workflowPath,
+      `${workflow}\n# additional unreviewed preset/agor:main consumer\n`
+    );
+    await assert.rejects(run);
+    await writeFile(workflowPath, workflow);
+    await writeFile(join(directory, 'unreviewed.sh'), 'docker pull preset/agor:main\n');
+    await assert.rejects(run);
+    await rm(join(directory, 'unreviewed.sh'));
+    const proofPath = join(directory, files[4]);
+    await writeFile(
+      proofPath,
+      (await readFile(proofPath, 'utf8')).replace("'--internal'", "'--attachable'")
+    );
+    await assert.rejects(run);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
