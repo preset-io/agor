@@ -36,6 +36,7 @@ import type {
   TaskID,
   User,
   WidgetMessageMetadata,
+  WidgetType,
 } from '@agor/core/types';
 import {
   catalogDisplayName,
@@ -49,10 +50,6 @@ import { z } from 'zod';
 import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
-import {
-  gatewayIdentityRefusalMessage,
-  resolveGatewayPromptIdentity,
-} from '../../utils/gateway-prompt-identity.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
@@ -65,11 +62,9 @@ import {
   gatewayTokenParamsSchema,
   isSupportedGatewayTokenChannelType,
 } from '../../widgets/gateway-token/index.js';
-import {
-  assertOAuthWidgetRoleFloor,
-  type OAuthWidgetParams,
-  oauthParamsSchema,
-} from '../../widgets/oauth/index.js';
+import type { OAuthWidgetParams } from '../../widgets/oauth/index.js';
+import { oauthParamsSchema } from '../../widgets/oauth/index.js';
+import { authorizeWidgetMint, type WidgetMintCtx } from '../../widgets/registry.js';
 import { resolveSessionId } from '../resolve-ids.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
@@ -111,6 +106,22 @@ function allNamesPresentInScope(
 }
 
 /**
+ * The context a widget type's `authorizeMint` gate decides from.
+ *
+ * `userId` is the PROMPT ACTOR, not the session owner — for a credential
+ * widget that is the identity the credential would land under (D2).
+ */
+function widgetMintCtx(ctx: McpContext, sessionId: SessionID): WidgetMintCtx {
+  return {
+    app: ctx.app,
+    sessionId,
+    userId: ctx.userId,
+    role: ctx.authenticatedUser?.role,
+    serviceParams: ctx.baseServiceParams,
+  };
+}
+
+/**
  * Create the transcript row that IS the widget.
  *
  * Every widget tool needs the same three steps and they are easy to get subtly
@@ -126,6 +137,11 @@ function allNamesPresentInScope(
  *     inside the task's window (mirrors the daemon-restart injection path at
  *     `startup.ts`). Non-fatal: the widget still renders via the task_id
  *     lookup.
+ *
+ * It is also where a widget type's own `authorizeMint` gate runs. Putting the
+ * gate on the seam every mint passes through — rather than at each call site —
+ * is what stops a future minting path (stage 3's Slack projection, a new tool)
+ * from silently skipping a precondition it never knew about.
  */
 async function mintWidgetMessage(
   ctx: McpContext,
@@ -139,6 +155,11 @@ async function mintWidgetMessage(
     autoResume: boolean;
   }
 ): Promise<MessageID> {
+  await authorizeWidgetMint(
+    input.widgetType as WidgetType,
+    widgetMintCtx(ctx, input.sessionId),
+    input.params
+  );
   const requestedAt = new Date().toISOString();
   const terminal = input.status !== 'pending';
   const hostTask = await findHostTaskForSession(ctx.app, input.sessionId, ctx.baseServiceParams);
@@ -568,19 +589,13 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
-      // Fail closed on gateway identity. An unaligned channel runs every
-      // message as one shared account, so a sign-in started from here would
-      // mint a credential the whole channel drives. Refuse, and hand the agent
-      // text it can relay verbatim.
-      const identity = await resolveGatewayPromptIdentity(session, async (channelId) => {
-        const channel = (await ctx.app
-          .service('gateway-channels')
-          .get(channelId, ctx.baseServiceParams)) as GatewayChannel | undefined;
-        return channel ? { channel_type: channel.channel_type, config: channel.config } : undefined;
-      });
-      if (!identity.aligned) {
-        throw new Error(gatewayIdentityRefusalMessage(identity));
-      }
+      // Run the widget type's own mint gate EARLY, before resolving a
+      // destination. `mintWidgetMessage` runs it again with the full params and
+      // is the enforcement point — this call exists only so a refusal (an
+      // unaligned gateway channel, say) happens before a catalog install puts
+      // an orphan server row in the database. Skipping it would cost an orphan,
+      // not a missed check.
+      await authorizeWidgetMint('oauth', widgetMintCtx(ctx, targetSessionId));
 
       // Resolve the destination server row. Both branches end with an enabled
       // OAuth server row owned/usable by the caller, or a refusal.
@@ -594,10 +609,6 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       }
       const { server, catalogEntryName, permissionDisclosure } = resolved;
       const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared';
-
-      // Same role floor `oauth-start` and the widget's own resolution apply.
-      assertOAuthWidgetRoleFloor(ctx.authenticatedUser?.role, oauthMode);
-
       const serverName = server.display_name || server.name;
       const params: OAuthWidgetParams = oauthParamsSchema.parse({
         mcpServerId: server.mcp_server_id,
@@ -607,6 +618,11 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         ...(catalogEntryName ? { catalogEntryName } : {}),
         ...(permissionDisclosure ? { permissionDisclosure } : {}),
       });
+
+      // The full gate, now that the destination decided the OAuth mode. Same
+      // hook `mintWidgetMessage` will run; called here so a refusal lands
+      // before the already-connected branch can attach anything.
+      await authorizeWidgetMint('oauth', widgetMintCtx(ctx, targetSessionId), params);
 
       // Already-connected short-circuit: a live grant means there is nothing
       // to sign in to. Attach and resume immediately.

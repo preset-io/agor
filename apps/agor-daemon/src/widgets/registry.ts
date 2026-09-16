@@ -41,6 +41,27 @@ import type { SessionID, UserID, WidgetType } from '@agor/core/types';
 import type { z } from 'zod';
 
 /**
+ * Context passed to a widget's `authorizeMint` hook — everything the daemon
+ * knows at the moment a widget is about to be created, before the row exists.
+ *
+ * Deliberately NOT the same shape as {@link WidgetSubmitCtx}: at mint there is
+ * no submitter, no claim, and no durable row. `userId`/`role` are the prompt
+ * actor asking for the widget, which for a credential-minting widget is the
+ * identity the credential would eventually land under.
+ */
+export interface WidgetMintCtx {
+  app: Application;
+  /** Session the widget will be minted into. */
+  sessionId: SessionID;
+  /** The prompt actor requesting the widget. */
+  userId: UserID;
+  /** The prompt actor's global role. `undefined` normalizes to member. */
+  role: string | undefined;
+  /** Feathers params carrying the caller's identity, for service reads. */
+  serviceParams: unknown;
+}
+
+/**
  * Context passed to a widget's `applySubmit` handler. Contains just enough
  * to perform the side-effect (write env vars, attach an MCP server, etc.)
  * without exposing internals of the submit endpoint.
@@ -110,6 +131,36 @@ interface WidgetRegistryEntryBase<TParams, TResultMeta> {
    * widgets set this so a dismissal can't sidestep the submit-side role check.
    */
   authorizeDismiss?: (ctx: WidgetSubmitCtx, params: TParams) => void | Promise<void>;
+  /**
+   * Optional gate on whether this widget may be CREATED at all, run by
+   * `mintWidgetMessage` before the row is written. Throw (e.g. Forbidden) to refuse.
+   *
+   * This exists so a widget type owns its own preconditions instead of every
+   * caller remembering to repeat them. The MCP tool that mints today and the
+   * Slack projection that will mint tomorrow both go through `mintWidgetMessage`, so
+   * neither can forget; a caller that wants to fail before doing expensive or
+   * externally-visible setup work may ALSO call it early via
+   * {@link authorizeWidgetMint}.
+   *
+   * `params` is absent on such an early call, because the destination is not
+   * resolved yet. A hook must therefore enforce everything it can from the
+   * context alone and treat params-dependent checks as additive. Both calls
+   * run; the hook must be side-effect free and idempotent.
+   */
+  authorizeMint?: (ctx: WidgetMintCtx, params?: TParams) => void | Promise<void>;
+  /**
+   * Optional gate re-asked at RESOLVE time, before the durable claim and
+   * before any handler side-effect. Throw to refuse.
+   *
+   * A mint-time gate answers "may this be asked for"; this answers "is that
+   * still true now". They are different questions whenever the window between
+   * them is long and the world can change inside it — which for a widget that
+   * waits on a human is always. `applySubmit` /
+   * `resolveFromOAuthCallback` may of course check more; this hook is for the
+   * preconditions that are the SAME question as the mint-time one, so the two
+   * can be written next to each other and stay in step.
+   */
+  authorizeResolve?: (ctx: WidgetSubmitCtx, params: TParams) => void | Promise<void>;
 }
 
 /**
@@ -215,6 +266,34 @@ export function registerWidget<TParams, TSubmit, TResultMeta>(
 /** Look up a widget by type. Returns `undefined` for unknown types. */
 export function getWidget(type: WidgetType): AnyWidgetEntry | undefined {
   return widgetRegistry.get(type);
+}
+
+/**
+ * Run a widget type's mint-time gate.
+ *
+ * The single entry point every mint path uses, so "did you remember to check"
+ * is not a question a caller can answer wrongly.
+ *
+ * An unregistered type THROWS rather than passing. A widget whose entry is
+ * missing is a widget whose gate is missing, and the whole point of moving
+ * enforcement onto the type is that a mint cannot proceed without it — a
+ * silent no-op here would restore exactly the failure mode this replaced
+ * (something mints, nothing checks). It is also what the resolve path already
+ * does for an unknown type.
+ */
+export async function authorizeWidgetMint(
+  type: WidgetType,
+  ctx: WidgetMintCtx,
+  params?: unknown
+): Promise<void> {
+  const entry = widgetRegistry.get(type);
+  if (!entry) {
+    throw new Error(
+      `Widget type '${type}' is not registered on this daemon; refusing to mint it. ` +
+        `Widget types register at boot via registerAllWidgets().`
+    );
+  }
+  await entry.authorizeMint?.(ctx, params);
 }
 
 /** All registered widget types (for diagnostics / tests). */

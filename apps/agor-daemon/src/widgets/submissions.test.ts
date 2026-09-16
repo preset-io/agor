@@ -17,7 +17,7 @@
  * mock, so we exercise the full state machine with a hand-rolled stub.
  */
 
-import { BadRequest, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type { Branch, Message, MessageID, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -908,7 +908,8 @@ function registerOAuthTestWidget(
     name: 'Notion',
     oauth_mode: 'per_user' as const,
     attached: true,
-  }))
+  })),
+  authorizeResolve?: (ctx: unknown, params: unknown) => void | Promise<void>
 ) {
   const entry: WidgetRegistryEntry<
     { names: string[]; reason: string },
@@ -922,6 +923,7 @@ function registerOAuthTestWidget(
     resolveFromOAuthCallback,
     buildAutoResumePrompt: (rm) => `[Agor] User connected "${rm.name}" (attached: ${rm.attached}).`,
     buildDismissedPrompt: () => `[Agor] User declined to connect.`,
+    ...(authorizeResolve ? { authorizeResolve: authorizeResolve as never } : {}),
   };
   registerWidget(entry);
   return { entry, resolveFromOAuthCallback };
@@ -1052,6 +1054,58 @@ describe('resolveWidget — OAuth resolution lane', () => {
     expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
     expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeDefined();
     expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it("runs the widget type's resolve gate BEFORE claiming, and leaves the row pending", async () => {
+    // A pending widget never expires, so a mint-time precondition can be false
+    // by the time the button is pressed. The gate runs ahead of the claim so a
+    // refusal costs nothing to unwind: no claim to release, no handler side
+    // effect to have happened, no `resolution_failure` to explain away.
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const claimSpy = vi.spyOn(resolutionStore, 'claim');
+    const { resolveFromOAuthCallback } = registerOAuthTestWidget(undefined, () => {
+      throw new Forbidden('This channel no longer aligns platform users');
+    });
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/no longer aligns/);
+
+    expect(claimSpy).not.toHaveBeenCalled();
+    expect(resolveFromOAuthCallback).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+    expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeUndefined();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('runs the resolve gate on the submit lane too', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const gate = vi.fn(() => {
+      throw new Forbidden('no longer permitted');
+    });
+    const entry = registerTestWidget().entry;
+    _resetWidgetRegistryForTests();
+    registerWidget({ ...entry, authorizeResolve: gate as never });
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'x', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/no longer permitted/);
+    expect(gate).toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
   });
 
   it('still dismisses through the shared dismiss path', async () => {

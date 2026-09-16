@@ -258,6 +258,14 @@ async function doResolveWidget(
       }
       parsedSubmit = parsed.data;
     }
+    // Re-ask whatever the widget type required in order to be MINTED. A
+    // pending widget has no expiry, so the world can change arbitrarily far
+    // between the two; the widget type owns the question so a resolve path
+    // cannot answer it differently from the mint path. Before the claim, so a
+    // refusal leaves the row pending rather than needing to be released.
+    if (entry.authorizeResolve) {
+      await entry.authorizeResolve(ctx, widget.params);
+    }
   } else {
     // dismiss — an admin-only widget gates this so a member-level dismissal
     // can't terminally decline a flow its submit path would have rejected.
@@ -301,7 +309,6 @@ async function doResolveWidget(
         );
       } else {
         await resolved.applySubmit(ctx, parsedSubmit, widget.params);
-        resultMeta = resolved.buildResultMeta(parsedSubmit);
       }
     } catch (error) {
       await deps.resolutionStore.fail(widget.widget_id, claimToken, {
@@ -309,6 +316,16 @@ async function doResolveWidget(
         errorCode: structuredLogErrorCode(error),
       });
       throw error;
+    }
+    // OUTSIDE the catch on purpose. `resolutionStore.fail` reopens the widget
+    // to `pending`, which is only ever safe for a handler that reported failure
+    // BEFORE its external effect ran. `buildResultMeta` runs after
+    // `applySubmit` has already written env vars or restarted a connector, so a
+    // throwing builder must not be able to invite a replay of that
+    // (`resolution-store.ts`). Unreachable with today's pure builders; the
+    // ordering is the guarantee, not their purity.
+    if (resolved.resolution !== 'oauth_callback') {
+      resultMeta = resolved.buildResultMeta(parsedSubmit);
     }
     autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
   }

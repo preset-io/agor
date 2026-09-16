@@ -47,6 +47,11 @@ interface MakeCtxOpts {
   submitterRole?: string | undefined;
   server?: Record<string, unknown> | null;
   attachError?: unknown;
+  /** Session owner. Defaults to the resolver, i.e. the attach is allowed. */
+  sessionCreator?: string;
+  /** `custom_context` on the host session — set `gateway_source` for the guard. */
+  customContext?: Record<string, unknown>;
+  gatewayChannel?: { channel_type: string; config: Record<string, unknown> };
 }
 
 /** The default row the pinned server resolves to. */
@@ -66,6 +71,9 @@ function makeCtx(opts: MakeCtxOpts = {}) {
     if (opts.attachError) throw opts.attachError;
     return {};
   });
+  const channelSpy = vi.fn(async () =>
+    opts.gatewayChannel ? { id: 'chan-1', name: 'eng-help', ...opts.gatewayChannel } : undefined
+  );
   const app = {
     get: (key: string) => (key === 'database' ? ({} as never) : undefined),
     service(name: string) {
@@ -77,6 +85,17 @@ function makeCtx(opts: MakeCtxOpts = {}) {
           }),
         };
       }
+      if (name === 'sessions') {
+        return {
+          get: vi.fn(async () => ({
+            session_id: 'sess-1',
+            branch_id: 'wt-1',
+            created_by: opts.sessionCreator ?? 'user-actor',
+            ...(opts.customContext ? { custom_context: opts.customContext } : {}),
+          })),
+        };
+      }
+      if (name === 'gateway-channels') return { get: channelSpy };
       if (name === '/sessions/:id/mcp-servers') return { create: attachSpy };
       throw new Error(`Unexpected service call: ${name}`);
     },
@@ -91,6 +110,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       runInTenantDatabaseScope: <T>(work: () => Promise<T>) => work(),
     },
     attachSpy,
+    channelSpy,
   };
 }
 
@@ -211,17 +231,33 @@ describe('oauth widget — resolveFromOAuthCallback', () => {
   });
 
   it('degrades to attached:false when the resolver may not configure the session', async () => {
-    const { ctx } = makeCtx({ attachError: new Forbidden('Only the session owner') });
+    // The resolver is a shared-session collaborator, not the owner: the grant
+    // is real, only somebody else's permission is missing. Failing outright
+    // would reopen the widget and ask the user to repeat a flow that worked.
+    const { ctx, attachSpy } = makeCtx({ sessionCreator: 'user-session-owner' });
     const meta = await resolve(ctx);
 
-    // The grant is real; only the attach was refused. Failing outright would
-    // reopen the widget and ask the user to repeat a flow that worked.
     expect(meta.attached).toBe(false);
+    // Decided by ASKING, before the attach — not by classifying its exception.
+    expect(attachSpy).not.toHaveBeenCalled();
   });
 
   it('propagates a non-authorization attach failure so the widget reopens', async () => {
     const { ctx } = makeCtx({ attachError: new Error('database is down') });
     await expect(resolve(ctx)).rejects.toThrow(/database is down/);
+  });
+
+  it('does NOT report attached:false for a Forbidden it did not reason about', async () => {
+    // `MCPServerNotUsableError` maps to Forbidden('That MCP server is private
+    // to another user') at `register-routes.ts`. Swallowing it produced a card
+    // and an auto-resume prompt telling the agent to ask the session owner to
+    // attach — but the session owner cannot attach a server private to a third
+    // user either, so the agent looped on something impossible. Tenant
+    // write-gate and member-policy refusals had the same wrong advice.
+    const { ctx } = makeCtx({
+      attachError: new Forbidden('That MCP server is private to another user'),
+    });
+    await expect(resolve(ctx)).rejects.toThrow(/private to another user/);
   });
 
   it('refuses a resolver who does not own the pinned server', async () => {
@@ -300,6 +336,109 @@ describe('oauth widget — resolveFromOAuthCallback', () => {
     const serialized = JSON.stringify(meta);
     expect(Object.keys(meta).sort()).toEqual(['attached', 'mcp_server_id', 'name', 'oauth_mode']);
     expect(serialized).not.toMatch(/token|expires|scope|secret|2030/i);
+  });
+});
+
+describe('oauth widget — authorizeResolve (the mint-time questions, re-asked)', () => {
+  const gatewaySession = {
+    gateway_source: {
+      channel_id: 'chan-1',
+      channel_name: 'eng-help',
+      channel_type: 'slack',
+      thread_id: 't1',
+    },
+  };
+
+  const authorizeResolve = (ctx: ReturnType<typeof makeCtx>['ctx'], params = defaultParams) => {
+    const entry = getWidget('oauth');
+    if (!entry?.authorizeResolve) throw new Error('oauth widget declares no resolve gate');
+    return entry.authorizeResolve(ctx, params);
+  };
+
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+    registerOAuthWidget();
+  });
+
+  it('passes for an ordinary non-gateway session', async () => {
+    const { ctx } = makeCtx();
+    await expect(authorizeResolve(ctx)).resolves.toBeUndefined();
+  });
+
+  it('refuses when alignment was switched OFF after the widget was minted', async () => {
+    // The window here is unbounded: a pending card never expires, so "aligned
+    // when minted" is not evidence of "aligned now". Resolving anyway would
+    // persist the grant under the channel's shared "Post messages as" account
+    // — exactly what the mint gate refused.
+    const { ctx } = makeCtx({
+      customContext: gatewaySession,
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: false } },
+    });
+    await expect(authorizeResolve(ctx)).rejects.toThrow(/align_slack_users/);
+  });
+
+  it('passes while the channel is still aligned', async () => {
+    const { ctx } = makeCtx({
+      customContext: gatewaySession,
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: true } },
+    });
+    await expect(authorizeResolve(ctx)).resolves.toBeUndefined();
+  });
+
+  it('re-asks the role floor too, for a resolver demoted since mint', async () => {
+    const { ctx } = makeCtx({ submitterRole: 'member' });
+    await expect(authorizeResolve(ctx, { ...defaultParams, oauthMode: 'shared' })).rejects.toThrow(
+      /admin/i
+    );
+  });
+});
+
+describe('oauth widget — authorizeMint', () => {
+  const mintCtx = (app: unknown, role = 'member') => ({
+    app: app as never,
+    sessionId: 'sess-1' as never,
+    userId: 'user-actor' as UserID,
+    role,
+    serviceParams: { user: { user_id: 'user-actor', role } },
+  });
+
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+    registerOAuthWidget();
+  });
+
+  const authorizeMint = (app: unknown, role?: string, params?: typeof defaultParams) => {
+    const entry = getWidget('oauth');
+    if (!entry?.authorizeMint) throw new Error('oauth widget declares no mint gate');
+    return entry.authorizeMint(mintCtx(app, role), params);
+  };
+
+  it('answers the identity question with no params, so a caller can refuse early', async () => {
+    const { ctx } = makeCtx({
+      customContext: {
+        gateway_source: {
+          channel_id: 'chan-1',
+          channel_name: 'eng-help',
+          channel_type: 'slack',
+          thread_id: 't1',
+        },
+      },
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: false } },
+    });
+    // No params: the destination is not resolved yet, and the identity
+    // question does not need one.
+    await expect(authorizeMint(ctx.app)).rejects.toThrow(/align_slack_users/);
+  });
+
+  it('adds the role floor once params name the mode', async () => {
+    const { ctx } = makeCtx();
+    await expect(authorizeMint(ctx.app, 'member')).resolves.toBeUndefined();
+    await expect(
+      authorizeMint(ctx.app, 'member', { ...defaultParams, oauthMode: 'shared' })
+    ).rejects.toThrow(/admin/i);
+    await expect(
+      authorizeMint(ctx.app, 'admin', { ...defaultParams, oauthMode: 'shared' })
+    ).resolves.toBeUndefined();
   });
 });
 

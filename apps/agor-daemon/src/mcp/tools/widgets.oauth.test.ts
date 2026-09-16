@@ -41,7 +41,15 @@ vi.mock('@agor/core/db', async (importOriginal) => ({
 
 import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { registerAllWidgets } from '../../widgets/index.js';
+import { _resetWidgetRegistryForTests } from '../../widgets/registry.js';
 import { registerWidgetTools } from './widgets.js';
+
+// The mint gate lives on the registry entry, so the tool is only as guarded as
+// the daemon's boot registration makes it. Registering here is not scaffolding
+// — it is the same call `index.ts` makes, and without it `authorizeWidgetMint`
+// refuses outright rather than passing silently.
+registerAllWidgets();
 
 const livenessStub = resolveMCPOAuthGrantLiveness as unknown as ReturnType<typeof vi.fn>;
 const appendStub = appendSystemMessage as unknown as ReturnType<typeof vi.fn>;
@@ -229,6 +237,22 @@ describe('agor_widgets_request_oauth — destination selection', () => {
         catalogEntryName: 'com.notion/mcp',
       })
     ).rejects.toThrow(/exactly one/i);
+  });
+
+  it('refuses to mint a widget type this daemon does not speak', async () => {
+    // Fail-closed backstop: an unregistered type has no gate, so minting it
+    // would be minting something nothing checked.
+    _resetWidgetRegistryForTests();
+    try {
+      const { app } = makeApp();
+      const tools = registerAndCapture({ app });
+      await expect(
+        tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+      ).rejects.toThrow(/not registered on this daemon/i);
+      expect(appendStub).not.toHaveBeenCalled();
+    } finally {
+      registerAllWidgets();
+    }
   });
 
   it('mints a pending widget pinned to an existing OAuth server', async () => {
