@@ -89,9 +89,12 @@ import type {
   GatewaySource,
   MCPOAuthAttemptID,
   MCPServerID,
+  MCPSlackConnectDelivery,
+  MCPSlackConnectRenderedState,
   MCPSlackRecoveryNotice,
   MCPSlackRecoveryRenderedState,
   Message,
+  MessageID,
   MessageSource,
   Session,
   SessionID,
@@ -128,8 +131,26 @@ import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import {
+  issueMCPOAuthConnectLink,
+  type MCPOAuthConnectLinkDeps,
+  mutateSlackConnectDelivery,
+  resolveSlackConnectBinding,
+  type SlackConnectCoordinates,
+} from './mcp-oauth-connect-delivery.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { resolveMCPOAuthGrantLiveness } from './mcp-oauth-grant-liveness.js';
+import {
+  MCP_SLACK_CONNECT_EVENT_TYPE,
+  MCP_SLACK_CONNECT_SHARED_WARNING_KEY,
+  mcpSlackConnectBlocks,
+  mcpSlackConnectCardCopy,
+  mcpSlackConnectExpiryDelay,
+  mcpSlackConnectMayReissue,
+  mcpSlackConnectRenderedState,
+  mcpSlackConnectSharedThreadWarning,
+  slackConversationIsDirectMessage,
+} from './mcp-slack-connect-card.js';
 import type { SessionParams } from './sessions.js';
 
 /**
@@ -206,6 +227,8 @@ const MCP_SLACK_ACTIVE_BACKSTOP_MS = 60_000;
 const MCP_SLACK_DELIVERY_RETRY_WINDOW_MS = 15 * 60_000;
 const MCP_SLACK_DELIVERY_MAX_ATTEMPTS = 6;
 const MCP_SLACK_DELIVERY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
+/** Lease one daemon holds while posting or editing one connect card. */
+const MCP_SLACK_CONNECT_CLAIM_MS = 30_000;
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -1068,6 +1091,8 @@ export class GatewayService {
   private mcpSlackRecoveryExpiryTimers = new Map<string, NodeJS.Timeout>();
   private mcpSlackDeliveryRetryTimers = new Map<string, NodeJS.Timeout>();
   private mcpSlackOAuthStartClaimTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackConnectExpiryTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackConnectRetryTimers = new Map<string, NodeJS.Timeout>();
   private mcpSlackRepairTenants = new Set<string>();
   private mcpSlackRecoveryTenants = new Set<string>();
   private mcpSlackSweepTimer: NodeJS.Timeout | null = null;
@@ -1202,13 +1227,27 @@ export class GatewayService {
       }
       void runWithTenantContext(tenantId, async () => {
         const now = new Date();
+        const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
         const page = await this.taskRepo.findMcpSlackRecoveryNoticePage({
           limit: MCP_SLACK_REPAIR_BATCH,
           now,
-          horizon: new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS),
+          horizon,
         });
         for (const task of page.tasks) {
           await this.syncMcpSlackRecoveryNotice(task.task_id).catch(() => undefined);
+        }
+        // The connect lane rides the same sweep, on its own indexed due-work
+        // column. One tenant visit repairs both rather than two schedules
+        // racing each other for the same Slack rate limit.
+        const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
+          limit: MCP_SLACK_REPAIR_BATCH,
+          now,
+          horizon,
+        });
+        for (const card of cards.messages) {
+          await this.deliverMcpSlackConnectCard(card.message_id as MessageID).catch(
+            () => undefined
+          );
         }
       })
         .catch(() => console.warn('[gateway] MCP Slack recovery bounded repair failed'))
@@ -1930,6 +1969,488 @@ export class GatewayService {
       params,
       () => this.syncMcpSlackRecoveryNotice(taskId),
       () => console.warn('[gateway] MCP recovery notice synchronization failed')
+    );
+  }
+
+  // ==========================================================================
+  // Agent-initiated MCP connect — the Slack face of an `oauth` widget
+  //
+  // Same operational discipline as the recovery notice above (delivery claim
+  // CAS, bounded backoff, `next_repair_at`, config-generation re-check) bound
+  // to a different record: the widget message. `WidgetResolutionStore` patches
+  // that row in realtime on every lifecycle transition, so this lane has no
+  // state machine of its own — the widget row already is one, and a second
+  // would be a second thing to keep in step. The card's presentation lives in
+  // `services/mcp-slack-connect-card.ts`.
+  //
+  // See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
+  // ==========================================================================
+
+  /**
+   * Dependencies for the connect-link issuer.
+   *
+   * Every repository here is bound to the tenant unit of work, so each read
+   * opens its own guarded database scope from the ambient tenant context. That
+   * is what keeps this lane clear of the failure `/mcp-oauth-connect` hit: a
+   * route registered outside `TENANT_OWNED_SERVICE_PATHS` has nothing upstream
+   * to arm its scope, and a fail-closed catch then turns the resulting
+   * `MissingTenantDatabaseScopeError` into a generic refusal that no unit test
+   * against an unarmed `:memory:` database can see.
+   */
+  private async mcpSlackConnectDeps(): Promise<MCPOAuthConnectLinkDeps> {
+    return {
+      repositories: {
+        sessions: this.sessionRepo,
+        users: this.usersRepo,
+        channels: this.channelRepo,
+        servers: this.mcpServerRepo,
+        threadMap: this.threadMapRepo,
+      },
+      messages: this.messagesRepo,
+      tasks: { findById: (id: string) => this.taskRepo.findById(id) },
+      masterSecret: this.recoveryEnvelopeSecret() ?? '',
+      baseUrl: await getBaseUrl(),
+    };
+  }
+
+  private mcpSlackConnectNextActiveRepairAt(
+    state: MCPSlackConnectRenderedState,
+    delivery: MCPSlackConnectDelivery | undefined,
+    now = Date.now()
+  ): string | undefined {
+    if (state !== 'connect_required' && state !== 'sign_in_pending') return undefined;
+    const expiryDelay = mcpSlackConnectExpiryDelay(state, delivery, now);
+    return new Date(
+      now + Math.min(expiryDelay ?? MCP_SLACK_ACTIVE_BACKSTOP_MS, MCP_SLACK_ACTIVE_BACKSTOP_MS)
+    ).toISOString();
+  }
+
+  private mcpSlackConnectFailedDelivery(
+    delivery: MCPSlackConnectDelivery,
+    now = new Date()
+  ): MCPSlackConnectDelivery {
+    const attempt = (delivery.delivery_attempt_count ?? 0) + 1;
+    const retryUntil = delivery.delivery_retry_until
+      ? new Date(delivery.delivery_retry_until)
+      : new Date(now.getTime() + MCP_SLACK_DELIVERY_RETRY_WINDOW_MS);
+    const backoff =
+      MCP_SLACK_DELIVERY_BACKOFF_MS[
+        Math.min(attempt - 1, MCP_SLACK_DELIVERY_BACKOFF_MS.length - 1)
+      ]!;
+    const next = new Date(now.getTime() + backoff);
+    const canRetry =
+      attempt < MCP_SLACK_DELIVERY_MAX_ATTEMPTS &&
+      Number.isFinite(retryUntil.getTime()) &&
+      next.getTime() <= retryUntil.getTime();
+    return {
+      ...delivery,
+      delivery_claim: undefined,
+      delivery_attempt_count: attempt,
+      delivery_last_failed_at: now.toISOString(),
+      delivery_retry_until: retryUntil.toISOString(),
+      delivery_next_retry_at: canRetry ? next.toISOString() : undefined,
+      next_repair_at: canRetry ? next.toISOString() : undefined,
+    };
+  }
+
+  private async recordMcpSlackConnectDeliveryFailure(
+    widgetId: MessageID,
+    claimId: string
+  ): Promise<void> {
+    const failed = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
+      current?.delivery_claim?.claim_id === claimId
+        ? this.mcpSlackConnectFailedDelivery(current)
+        : null
+    ).catch(() => undefined);
+    console.warn('[gateway] MCP connect Slack delivery failed');
+    if (failed?.changed && failed.delivery?.delivery_next_retry_at) {
+      this.scheduleMcpSlackConnectRetry(
+        widgetId,
+        Math.max(100, new Date(failed.delivery.delivery_next_retry_at).getTime() - Date.now())
+      );
+    }
+  }
+
+  private async releaseMcpSlackConnectClaim(
+    widgetId: MessageID,
+    claimId: string,
+    repairNow = false
+  ): Promise<void> {
+    await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
+      current?.delivery_claim?.claim_id === claimId
+        ? {
+            ...current,
+            delivery_claim: undefined,
+            next_repair_at: repairNow ? new Date().toISOString() : undefined,
+          }
+        : null
+    ).catch(() => undefined);
+  }
+
+  /**
+   * Retire a card whose binding moved, once and durably.
+   *
+   * Terminal on purpose, matching the recovery lane. Switching
+   * `align_slack_users` off, reconfiguring a channel, and demoting a user are
+   * all deliberate administrative acts; a card that silently became clickable
+   * again when one was reverted would be a surprising thing to find in a
+   * thread weeks later. Asking again mints a fresh widget, which re-asks every
+   * question from scratch.
+   */
+  private async invalidateMcpSlackConnectBinding(widgetId: MessageID): Promise<boolean> {
+    const invalidated = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
+      current && !current.binding_invalidated_at
+        ? {
+            ...current,
+            delivery_claim: undefined,
+            binding_invalidated_at: new Date().toISOString(),
+            next_repair_at: new Date().toISOString(),
+          }
+        : null
+    ).catch(() => undefined);
+    return !!invalidated?.changed;
+  }
+
+  /**
+   * Announce, once per (session, conversation), that this is not a DM.
+   *
+   * §4.8 allows channels rather than restricting the lane to DMs: credentials
+   * belong to the prompt actor in both egress modes (D2), so there is no
+   * credential-borrowing path to close. What a channel does change is who can
+   * read what the connected account returns. The claim is a row-locked
+   * compare-and-set rather than a read-then-write so two daemons projecting
+   * the same thread cannot both decide they are first.
+   *
+   * Best effort by design: a thread that could not be warned still gets its
+   * card. Failing the delivery instead would trade a missing sentence for a
+   * missing button.
+   */
+  private async postMcpSlackSharedThreadWarning(
+    connector: GatewayConnector,
+    slack: SlackConnectCoordinates,
+    sessionId: string
+  ): Promise<void> {
+    if (slackConversationIsDirectMessage(slack.channelId, slack.conversationType)) return;
+    try {
+      const mapping = await this.threadMapRepo.findBySession(sessionId);
+      if (!mapping || mapping.thread_id !== slack.threadId) return;
+      const claimed = await this.threadMapRepo.claimMetadataFlag(
+        mapping.id,
+        MCP_SLACK_CONNECT_SHARED_WARNING_KEY,
+        new Date().toISOString()
+      );
+      if (!claimed) return;
+      await connector.sendMessage({
+        threadId: slack.threadId,
+        text: mcpSlackConnectSharedThreadWarning(),
+      });
+    } catch {
+      console.warn('[gateway] MCP connect shared-thread notice failed');
+    }
+  }
+
+  /**
+   * Post or edit the one Slack row that belongs to this widget.
+   *
+   * Idempotent by construction: one durable `delivery_claim` at a time, one
+   * `slack_message_ts` reconciled from Slack's own message metadata when a
+   * crash lost it, and a no-op when the state already rendered is the state
+   * that would render now.
+   */
+  private async deliverMcpSlackConnectCard(widgetId: MessageID): Promise<void> {
+    const deps = await this.mcpSlackConnectDeps();
+    const binding = await resolveSlackConnectBinding(deps, widgetId);
+    const widget = binding.widget;
+    const slack = binding.slack;
+    // A widget that was never Slack-delivered — the whole canvas case, and
+    // every Discord/GitHub/Teams session — has no row here and must not
+    // acquire one. B3's session deep link remains their answer.
+    if (!widget || !slack) return;
+    const delivery = widget.slack_connect;
+    if (!delivery && (!binding.ok || !this.recoveryEnvelopeSecret())) return;
+
+    const now = Date.now();
+    const willReissue = binding.ok && mcpSlackConnectMayReissue(widget, delivery, now);
+    const state = mcpSlackConnectRenderedState(
+      { widget, delivery, willReissue, ...(binding.ok ? {} : { refusal: binding.reason }) },
+      now
+    );
+    this.scheduleMcpSlackConnectExpiry(widgetId, delivery, state);
+
+    // The binding moved under a card that is already in the thread. Record it
+    // once, so the card's terminal state stops depending on a read that could
+    // flap, then render from the recorded fact.
+    if (state === 'unavailable' && delivery && !delivery.binding_invalidated_at) {
+      if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
+        await this.deliverMcpSlackConnectCard(widgetId);
+        return;
+      }
+    }
+
+    if (delivery?.slack_message_ts && delivery.rendered_state === state && !willReissue) {
+      const nextRepairAt = this.mcpSlackConnectNextActiveRepairAt(state, delivery, now);
+      if (delivery.next_repair_at !== nextRepairAt) {
+        await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
+          current?.delivery_id === delivery.delivery_id && current.rendered_state === state
+            ? { ...current, next_repair_at: nextRepairAt }
+            : null
+        );
+      }
+      return;
+    }
+
+    const claimId = randomUUID();
+    const claimExpiresAt = new Date(now + MCP_SLACK_CONNECT_CLAIM_MS).toISOString();
+    let current = delivery;
+    if (delivery) {
+      const result = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
+        if (!latest || latest.delivery_id !== delivery.delivery_id) return null;
+        if (latest.slack_message_ts && latest.rendered_state === state && !willReissue) return null;
+        if (latest.delivery_claim && new Date(latest.delivery_claim.expires_at).getTime() > now) {
+          return null;
+        }
+        return {
+          ...latest,
+          delivery_claim: {
+            claim_id: claimId,
+            claimed_at: new Date(now).toISOString(),
+            expires_at: claimExpiresAt,
+          },
+          next_repair_at: claimExpiresAt,
+        };
+      });
+      if (!result.changed || result.delivery?.delivery_claim?.claim_id !== claimId) {
+        // Another daemon owns this render. Come back once its lease lapses, so
+        // a claimant that died mid-delivery does not strand the card.
+        const live = result.delivery?.delivery_claim;
+        if (live && new Date(live.expires_at).getTime() > Date.now()) {
+          this.scheduleMcpSlackConnectRetry(
+            widgetId,
+            Math.max(100, new Date(live.expires_at).getTime() - Date.now() + 100)
+          );
+        }
+        return;
+      }
+      current = result.delivery;
+    }
+
+    // Mint the link only when one is about to be posted: a card in a steady
+    // state returned above, so the ten-minute clock starts when the button
+    // appears rather than on every repair tick. On the first card the mint IS
+    // the claim — there is no record to claim beforehand, and two daemons
+    // minting concurrently would otherwise each post one.
+    let url: string | undefined;
+    if (state === 'connect_required') {
+      if (!binding.ok) return;
+      const issued = await issueMCPOAuthConnectLink(deps, {
+        tenantId: requireCurrentTenantId(),
+        widgetId,
+        binding,
+        claim: { claimId, expiresAt: claimExpiresAt },
+      });
+      if (!issued) {
+        // The widget resolved under the claim, or another daemon holds it.
+        if (current) await this.releaseMcpSlackConnectClaim(widgetId, claimId, true);
+        return;
+      }
+      url = issued.url;
+      current = issued.delivery;
+    }
+    if (!current) return;
+    const fence = {
+      deliveryId: current.delivery_id,
+      generation: current.delivery_generation,
+    };
+
+    const channel = await this.channelRepo.findById(slack.gatewayChannelId);
+    if (!channel?.enabled || channel.channel_type !== 'slack') {
+      await this.releaseMcpSlackConnectClaim(widgetId, claimId);
+      return;
+    }
+    let parsedThread: ReturnType<typeof parseSlackThreadId>;
+    try {
+      parsedThread = parseSlackThreadId(slack.threadId);
+    } catch {
+      parsedThread = { channel: '', thread_ts: '' };
+    }
+    if (
+      parsedThread.channel !== slack.channelId ||
+      !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
+    ) {
+      await this.invalidateMcpSlackConnectBinding(widgetId);
+      return;
+    }
+    // A generation mismatch must never reuse the process-local listener: its
+    // connector can still carry the pre-mutation token while a listener
+    // restart drains. Verify and deliver only with freshly loaded credentials.
+    const generationCurrent =
+      current.gateway_config_generation === undefined ||
+      current.gateway_config_generation === channel.provider_config_generation;
+    let connector: GatewayConnector;
+    try {
+      connector = generationCurrent
+        ? (this.getActiveListener(channel.id) ?? getConnector('slack', channel.config))
+        : getConnector('slack', channel.config);
+    } catch {
+      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+      return;
+    }
+    if (!generationCurrent) {
+      let currentApp: Awaited<ReturnType<NonNullable<GatewayConnector['getAppInfo']>>> | undefined;
+      try {
+        currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
+      } catch {
+        await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+        return;
+      }
+      if (
+        currentApp?.teamId !== slack.teamId ||
+        !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
+      ) {
+        await this.releaseMcpSlackConnectClaim(widgetId, claimId);
+        return;
+      }
+      // Same app, still allowed to write here — but the configuration this
+      // link was sealed against has changed, and the sealed token pins the
+      // generation redemption compares. The button would be refused, so the
+      // card stops offering it rather than showing one that 403s.
+      if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
+        await this.deliverMcpSlackConnectCard(widgetId);
+      }
+      return;
+    }
+
+    const copy = mcpSlackConnectCardCopy(state, {
+      serverName: binding.params?.serverName ?? 'this MCP server',
+      reason: binding.params?.reason ?? '',
+      oauthMode: binding.params?.oauthMode ?? 'per_user',
+      ...(binding.ok ? {} : { refusal: binding.reason }),
+    });
+    const blocks = mcpSlackConnectBlocks(copy, url);
+    try {
+      // Once, before the first card lands in the thread — not on every edit.
+      if (!current.slack_message_ts && binding.message) {
+        await this.postMcpSlackSharedThreadWarning(connector, slack, binding.message.session_id);
+      }
+      let reconciledMessageTs = current.slack_message_ts;
+      if (!reconciledMessageTs && connector.findMessageByMetadata) {
+        reconciledMessageTs = await connector
+          .findMessageByMetadata({
+            threadId: slack.threadId,
+            eventType: MCP_SLACK_CONNECT_EVENT_TYPE,
+            payloadKey: 'delivery_id',
+            payloadValue: current.delivery_id,
+            limit: 100,
+          })
+          .catch(() => undefined);
+      }
+      const sent = await connector.sendMessage({
+        threadId: slack.threadId,
+        text: copy.text,
+        blocks,
+        metadata: {
+          ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
+          ...(!reconciledMessageTs
+            ? {
+                slack_message_metadata: {
+                  event_type: MCP_SLACK_CONNECT_EVENT_TYPE,
+                  event_payload: { delivery_id: current.delivery_id },
+                },
+              }
+            : {}),
+        },
+      });
+      const receipt = normalizeSendReceipt(sent);
+      const renderedAt = new Date();
+      await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
+        if (!latest || latest.delivery_id !== fence.deliveryId) return null;
+        if (latest.delivery_generation !== fence.generation) return null;
+        if (latest.delivery_claim && latest.delivery_claim.claim_id !== claimId) return null;
+        return {
+          ...latest,
+          slack_message_ts: latest.slack_message_ts ?? reconciledMessageTs ?? receipt.messageId,
+          delivery_claim: undefined,
+          rendered_state: state,
+          rendered_at: renderedAt.toISOString(),
+          delivery_attempt_count: 0,
+          delivery_next_retry_at: undefined,
+          next_repair_at: this.mcpSlackConnectNextActiveRepairAt(
+            state,
+            latest,
+            renderedAt.getTime()
+          ),
+        };
+      });
+      const retry = this.mcpSlackConnectRetryTimers.get(widgetId);
+      if (retry) clearTimeout(retry);
+      this.mcpSlackConnectRetryTimers.delete(widgetId);
+    } catch {
+      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+    }
+  }
+
+  private scheduleMcpSlackConnectRetry(widgetId: MessageID, delay = 5_000): void {
+    if (this.mcpSlackConnectRetryTimers.has(widgetId)) return;
+    const tenantId = requireCurrentTenantId();
+    const timer = setTimeout(() => {
+      this.mcpSlackConnectRetryTimers.delete(widgetId);
+      void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
+        () => console.warn('[gateway] MCP connect Slack retry failed')
+      );
+    }, delay);
+    timer.unref?.();
+    this.mcpSlackConnectRetryTimers.set(widgetId, timer);
+  }
+
+  /**
+   * Wake this card when its own link expires.
+   *
+   * Only the two live states age, and only on the connect token's clock — the
+   * one clock D7 chose to keep. Every other state is terminal and must not
+   * hold a timer open.
+   */
+  private scheduleMcpSlackConnectExpiry(
+    widgetId: MessageID,
+    delivery: MCPSlackConnectDelivery | undefined,
+    state: MCPSlackConnectRenderedState
+  ): void {
+    const delay = mcpSlackConnectExpiryDelay(state, delivery);
+    if (delay === undefined) {
+      const existing = this.mcpSlackConnectExpiryTimers.get(widgetId);
+      if (existing) clearTimeout(existing);
+      this.mcpSlackConnectExpiryTimers.delete(widgetId);
+      return;
+    }
+    if (this.mcpSlackConnectExpiryTimers.has(widgetId)) return;
+    const tenantId = requireCurrentTenantId();
+    const timer = setTimeout(() => {
+      this.mcpSlackConnectExpiryTimers.delete(widgetId);
+      void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
+        () => console.warn('[gateway] MCP connect expiry projection failed')
+      );
+    }, delay);
+    timer.unref?.();
+    this.mcpSlackConnectExpiryTimers.set(widgetId, timer);
+  }
+
+  /** Project one `oauth` widget's durable state into its Slack row. */
+  async syncMcpSlackConnectCard(widgetId: MessageID): Promise<void> {
+    await this.deliverMcpSlackConnectCard(widgetId);
+  }
+
+  /**
+   * Project after the caller's transaction commits.
+   *
+   * Every trigger is post-commit for the same reason the recovery lane's is:
+   * Slack must never be told about a widget transition that has not landed,
+   * and a provider call must never be made while a database transaction is
+   * open.
+   */
+  syncMcpSlackConnectCardAfterCommit(widgetId: MessageID, params?: unknown): void {
+    deferWithTenantContext(
+      params,
+      () => this.syncMcpSlackConnectCard(widgetId),
+      () => console.warn('[gateway] MCP connect card synchronization failed')
     );
   }
 
@@ -5621,6 +6142,10 @@ export class GatewayService {
     this.mcpSlackDeliveryRetryTimers.clear();
     for (const timer of this.mcpSlackOAuthStartClaimTimers.values()) clearTimeout(timer);
     this.mcpSlackOAuthStartClaimTimers.clear();
+    for (const timer of this.mcpSlackConnectExpiryTimers.values()) clearTimeout(timer);
+    this.mcpSlackConnectExpiryTimers.clear();
+    for (const timer of this.mcpSlackConnectRetryTimers.values()) clearTimeout(timer);
+    this.mcpSlackConnectRetryTimers.clear();
     const leases = new Map(this.activeListenerLeases);
     const retryKeys = new Set(this.listenerRetries.keys());
     for (const retry of this.listenerRetries.values()) {

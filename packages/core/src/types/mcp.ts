@@ -1146,6 +1146,14 @@ export interface MCPSlackConnectDelivery {
   // retire. A second record would be a second thing to keep in step.
   // -------------------------------------------------------------------------
 
+  /**
+   * The channel's `provider_config_generation` at the moment this link was
+   * sealed. The token pins the same value and redemption compares it, so a
+   * card whose channel has been reconfigured since must stop offering a button
+   * that would be refused — and this is the only place the delivery path can
+   * learn that, since re-reading the channel would only compare it to itself.
+   */
+  gateway_config_generation?: number;
   /** Slack `ts` of the posted card. Set once; every later render edits it. */
   slack_message_ts?: string;
   /** Last state actually rendered into Slack. A no-op re-render is skipped. */

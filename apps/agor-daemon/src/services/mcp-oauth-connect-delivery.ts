@@ -60,13 +60,54 @@ export interface PendingOAuthConnectWidget {
 export function readPendingOAuthConnectWidget(
   message: Message | null | undefined
 ): PendingOAuthConnectWidget | null {
+  const widget = readOAuthConnectWidget(message);
+  return widget?.widget.status === 'pending' ? widget : null;
+}
+
+/**
+ * Read a message as an `oauth` widget in ANY state.
+ *
+ * The Slack card outlives the moment a tap can do anything: a resolved or
+ * superseded widget still owns a posted row that has to be edited to say so.
+ * Callers that grant something use `readPendingOAuthConnectWidget`; callers
+ * that only render use this.
+ */
+export function readOAuthConnectWidget(
+  message: Message | null | undefined
+): PendingOAuthConnectWidget | null {
   if (message?.type !== 'widget_request') return null;
   const widget = message.metadata?.widget;
-  if (widget?.widget_type !== 'oauth' || widget.status !== 'pending') return null;
+  if (widget?.widget_type !== 'oauth') return null;
   if (widget.widget_id !== message.message_id) return null;
   const params = widget.params as OAuthWidgetParams | undefined;
   if (!params?.mcpServerId || !params.oauthMode) return null;
   return { widget, params };
+}
+
+/**
+ * The Slack coordinates of the Task that minted a widget, or `null` when it
+ * was not a Slack prompt.
+ *
+ * Read separately from the authority because a card whose authority has moved
+ * still has to be edited in the thread it was posted to — the two questions
+ * ("where does this live" and "may it still offer a link") have different
+ * answers and different lifetimes.
+ */
+export function readSlackConnectCoordinates(
+  task: Task | null | undefined
+): SlackConnectCoordinates | null {
+  const source = task?.metadata?.gateway_task_source;
+  if (source?.channel_type !== 'slack') return null;
+  const { slack_team_id: teamId, slack_channel_id: channelId } = source;
+  if (!teamId || !channelId || !source.provider_user_id) return null;
+  return {
+    gatewayChannelId: source.gateway_channel_id,
+    teamId,
+    channelId,
+    threadId: source.thread_id,
+    userId: source.provider_user_id,
+    ...(source.slack_conversation_type ? { conversationType: source.slack_conversation_type } : {}),
+  };
 }
 
 /** Compare-and-set the widget's delivery record inside one short row lock. */
@@ -140,6 +181,127 @@ export interface MCPOAuthConnectLinkResult {
 }
 
 /**
+ * Why a widget has no Slack connect link to offer.
+ *
+ * The projection needs the reason, not just the absence: a channel that
+ * stopped aligning its Slack users must say so on the card, while a widget
+ * that was never Slack-delivered must say nothing at all. Collapsing both to
+ * `null` would make the second indistinguishable from the first, and the card
+ * would either go silent on a real block or narrate a block that never applied.
+ */
+export type SlackConnectBindingRefusal =
+  /** No `AGOR_MASTER_SECRET`, so no link can be sealed anywhere in this deployment. */
+  | 'no_secret'
+  /** Not a still-pending `oauth` widget — resolved, dismissed, or another type. */
+  | 'not_connectable'
+  /** The Task that minted the widget did not come from a Slack thread. */
+  | 'not_slack'
+  /** `align_slack_users` is not `true` on the channel; see §5.3. */
+  | 'unaligned'
+  /** The channel, session, server, or a user role moved under the card. */
+  | 'authority_moved';
+
+/** Where a connect card lives, once every optional field has been proven. */
+export interface SlackConnectCoordinates {
+  gatewayChannelId: string;
+  teamId: string;
+  channelId: string;
+  threadId: string;
+  /** Slack user who sent the prompt that minted the widget. */
+  userId: string;
+  /** `im` | `mpim` | `channel` | `group`, when the inbound event recorded it. */
+  conversationType?: string;
+}
+
+export type SlackConnectBinding =
+  | {
+      ok: true;
+      message: Message;
+      params: OAuthWidgetParams;
+      widget: WidgetMessageMetadata;
+      task: Task;
+      /** The Slack coordinates, narrowed to the ones proven present. */
+      slack: SlackConnectCoordinates;
+      authority: SlackMCPOAuthAuthoritySnapshot;
+    }
+  | {
+      ok: false;
+      reason: SlackConnectBindingRefusal;
+      message: Message | null;
+      /** Present once the card's thread is known, even though no link may be offered. */
+      slack?: SlackConnectCoordinates;
+      params?: OAuthWidgetParams;
+      widget?: WidgetMessageMetadata;
+    };
+
+/**
+ * Re-prove everything a Slack connect link depends on, without issuing one.
+ *
+ * Split out of `issueMCPOAuthConnectLink` because the card projection asks the
+ * same question for a different purpose — it renders whatever the answer is,
+ * including the refusals — and two copies of this list is exactly the drift
+ * `mcp-slack-oauth-authority.ts` exists to prevent one level down.
+ */
+export async function resolveSlackConnectBinding(
+  deps: MCPOAuthConnectLinkDeps,
+  widgetId: MessageID
+): Promise<SlackConnectBinding> {
+  const message = await deps.messages.findById(widgetId);
+  const found = readOAuthConnectWidget(message);
+  if (!found || !message?.task_id) return { ok: false, reason: 'not_connectable', message };
+  const { widget, params } = found;
+
+  const task = await deps.tasks.findById(message.task_id);
+  const slack = readSlackConnectCoordinates(task);
+  if (!task || !slack) return { ok: false, reason: 'not_slack', message, widget, params };
+  const refuse = (reason: SlackConnectBindingRefusal): SlackConnectBinding => ({
+    ok: false,
+    reason,
+    message,
+    slack,
+    widget,
+    params,
+  });
+
+  if (!deps.masterSecret) return refuse('no_secret');
+  if (widget.status !== 'pending') return refuse('not_connectable');
+
+  const authority = await readSlackMCPOAuthAuthority(deps.repositories, {
+    principalUserId: task.created_by as UserID,
+    credentialUserId: task.created_by as UserID,
+    sessionId: message.session_id as SessionID,
+    gatewayChannelId: slack.gatewayChannelId,
+    gatewayConfigGeneration: await currentChannelGeneration(deps, slack.gatewayChannelId),
+    slackChannelId: slack.channelId,
+    slackThreadId: slack.threadId,
+    mcpServerId: params.mcpServerId as MCPServerID,
+    mcpServerConfigVersion: await currentServerConfigVersion(
+      deps,
+      params.mcpServerId as MCPServerID
+    ),
+  });
+  if (!authority) return refuse('authority_moved');
+
+  // Defence in depth against the exposure `agor_widgets_request_oauth` already
+  // refuses at mint: with alignment off, every message in the channel prompts
+  // as the channel's "Post messages as" account, so this link would mint a
+  // credential the whole channel can drive. The card turns this into visible
+  // copy naming the setting; this is the floor beneath it, which refuses
+  // whether or not anything is rendered.
+  if (authority.channel.config.align_slack_users !== true) return refuse('unaligned');
+
+  // The redeem-time server precondition, applied at issue as well: the pure
+  // ownership predicate, never the params-shaped caller variant, which would
+  // classify this daemon-side call as internal and always allow it.
+  if (!isMCPServerUsableBy(authority.server, task.created_by)) return refuse('authority_moved');
+  if ((authority.server.auth?.oauth_mode ?? 'per_user') !== params.oauthMode) {
+    return refuse('authority_moved');
+  }
+
+  return { ok: true, message, params, widget, task, slack, authority };
+}
+
+/**
  * Issue (or re-issue) the Slack deep link for one pending `oauth` widget.
  *
  * Re-issuing bumps `delivery_generation`, which is compared at redemption, so
@@ -149,13 +311,27 @@ export interface MCPOAuthConnectLinkResult {
  *
  * Returns `null` rather than throwing on any authority failure: the caller is
  * a projection loop deciding whether there is a link to post, not a user
- * action that deserves a diagnosis.
+ * action that deserves a diagnosis. A caller that needs the diagnosis calls
+ * `resolveSlackConnectBinding` and passes the proven binding back in.
  */
 export async function issueMCPOAuthConnectLink(
   deps: MCPOAuthConnectLinkDeps,
-  input: { tenantId: string; widgetId: MessageID; now?: Date }
+  input: {
+    tenantId: string;
+    widgetId: MessageID;
+    now?: Date;
+    /** A binding this caller already proved. Re-proved here when absent. */
+    binding?: SlackConnectBinding;
+    /**
+     * Take (or keep) this delivery claim in the same write that mints the
+     * link. The first card a widget ever gets has no record to claim
+     * beforehand, so without this two daemons minting concurrently would each
+     * create a link and each post a card. A claim already held by this caller
+     * is kept; one held by anyone else refuses the mint.
+     */
+    claim?: { claimId: string; expiresAt: string };
+  }
 ): Promise<MCPOAuthConnectLinkResult | null> {
-  if (!deps.masterSecret) return null;
   // Second-aligned on purpose. The sealed claims carry `iat`/`exp` in whole
   // seconds (JWT-shaped), while the delivery record stores ISO timestamps, and
   // redemption compares the two for equality. Minting at a wall clock with
@@ -163,43 +339,9 @@ export async function issueMCPOAuthConnectLink(
   // driving the real lane, not by a unit test that reused one clock.
   const now = new Date(Math.floor((input.now ?? new Date()).getTime() / 1_000) * 1_000);
 
-  const message = await deps.messages.findById(input.widgetId);
-  const pending = readPendingOAuthConnectWidget(message);
-  if (!pending || !message?.task_id) return null;
-
-  const task = await deps.tasks.findById(message.task_id);
-  const source = task?.metadata?.gateway_task_source;
-  if (!task || !source || source.channel_type !== 'slack') return null;
-  if (!source.slack_team_id || !source.slack_channel_id || !source.provider_user_id) return null;
-
-  const authority = await readSlackMCPOAuthAuthority(deps.repositories, {
-    principalUserId: task.created_by as UserID,
-    credentialUserId: task.created_by as UserID,
-    sessionId: message.session_id as SessionID,
-    gatewayChannelId: source.gateway_channel_id,
-    gatewayConfigGeneration: await currentChannelGeneration(deps, source.gateway_channel_id),
-    slackChannelId: source.slack_channel_id,
-    slackThreadId: source.thread_id,
-    mcpServerId: pending.params.mcpServerId as MCPServerID,
-    mcpServerConfigVersion: await currentServerConfigVersion(
-      deps,
-      pending.params.mcpServerId as MCPServerID
-    ),
-  });
-  if (!authority) return null;
-
-  // Defence in depth against the exposure `agor_widgets_request_oauth` already
-  // refuses at mint: with alignment off, every message in the channel prompts
-  // as the channel's "Post messages as" account, so this link would mint a
-  // credential the whole channel can drive. Stage 3 owns the user-facing hard
-  // block and its explanatory copy; this is the silent floor beneath it.
-  if (authority.channel.config.align_slack_users !== true) return null;
-
-  // The redeem-time server precondition, applied at issue as well: the pure
-  // ownership predicate, never the params-shaped caller variant, which would
-  // classify this daemon-side call as internal and always allow it.
-  if (!isMCPServerUsableBy(authority.server, task.created_by)) return null;
-  if ((authority.server.auth?.oauth_mode ?? 'per_user') !== pending.params.oauthMode) return null;
+  const binding = input.binding ?? (await resolveSlackConnectBinding(deps, input.widgetId));
+  if (!binding.ok) return null;
+  const { message, task, slack, authority, params } = binding;
 
   const expiresAt = new Date(now.getTime() + MCP_OAUTH_CONNECT_TOKEN_TTL_MS);
   const issued = await mutateSlackConnectDelivery(
@@ -209,12 +351,43 @@ export async function issueMCPOAuthConnectLink(
       // Re-check liveness under the row lock. The snapshot above was read
       // outside it, and a resolution may have landed since.
       if (widget.widget_type !== 'oauth' || widget.status !== 'pending') return null;
+      const heldByAnother =
+        !!current?.delivery_claim &&
+        new Date(current.delivery_claim.expires_at).getTime() > now.getTime() &&
+        current.delivery_claim.claim_id !== input.claim?.claimId;
+      if (heldByAnother) return null;
       return {
+        // Re-issue keeps the card — `slack_message_ts` and the delivery
+        // identity — and replaces the link. Dropping the posted `ts` here
+        // would leave the old row in the thread offering a token that no
+        // longer matches the record, beside a new row that does.
+        ...current,
         delivery_id: current?.delivery_id ?? generateId(),
         delivery_generation: (current?.delivery_generation ?? 0) + 1,
         token_jti: generateId(),
         issued_at: now.toISOString(),
         expires_at: expiresAt.toISOString(),
+        gateway_config_generation: authority.channel.provider_config_generation,
+        ...(input.claim
+          ? {
+              delivery_claim: {
+                claim_id: input.claim.claimId,
+                claimed_at: now.toISOString(),
+                expires_at: input.claim.expiresAt,
+              },
+              next_repair_at: input.claim.expiresAt,
+            }
+          : {}),
+        // The previous link's one-use consume and its provider outcome belong
+        // to the previous generation. Carrying them forward would render the
+        // new card as a sign-in that already happened.
+        token_consumed_at: undefined,
+        oauth_attempt_id: undefined,
+        oauth_start_claimed_at: undefined,
+        oauth_start_claim_expires_at: undefined,
+        oauth_started_at: undefined,
+        oauth_succeeded_at: undefined,
+        oauth_failed_at: undefined,
       };
     }
   );
@@ -226,19 +399,19 @@ export async function issueMCPOAuthConnectLink(
     tid: input.tenantId,
     sub: task.created_by as UserID,
     credential_user_id: task.created_by as UserID,
-    slack_user_id: source.provider_user_id,
-    slack_team_id: source.slack_team_id,
-    gateway_channel_id: source.gateway_channel_id,
+    slack_user_id: slack.userId,
+    slack_team_id: slack.teamId,
+    gateway_channel_id: slack.gatewayChannelId,
     gateway_config_generation: authority.channel.provider_config_generation,
-    slack_channel_id: source.slack_channel_id,
-    slack_thread_id: source.thread_id,
+    slack_channel_id: slack.channelId,
+    slack_thread_id: slack.threadId,
     task_id: task.task_id,
     session_id: message.session_id as SessionID,
     session_owner_user_id: authority.session.created_by as UserID,
     widget_id: input.widgetId,
-    mcp_server_id: pending.params.mcpServerId as MCPServerID,
+    mcp_server_id: params.mcpServerId as MCPServerID,
     mcp_server_config_version: authority.server.config_version ?? 1,
-    oauth_mode: pending.params.oauthMode,
+    oauth_mode: params.oauthMode,
     delivery_id: delivery.delivery_id,
     delivery_generation: delivery.delivery_generation,
     jti: delivery.token_jti,
