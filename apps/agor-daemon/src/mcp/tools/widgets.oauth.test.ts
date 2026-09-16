@@ -25,16 +25,32 @@ vi.mock('../../utils/append-system-message.js', () => ({
 vi.mock('../../services/mcp-oauth-grant-liveness.js', () => ({
   resolveMCPOAuthGrantLiveness: vi.fn(),
 }));
+/**
+ * Widget rows the supersede sweep will find, and the calls it made. Reassigned
+ * per test; the repository stub below reads them.
+ */
+const superseded = {
+  rows: [] as Array<Record<string, unknown>>,
+  scans: [] as Array<{ type: string; options?: { limit?: number; newestFirst?: boolean } }>,
+};
+
 vi.mock('@agor/core/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/db')>()),
   // The supersede sweep is best-effort and its repository has no business
   // touching a real handle here; stub it so it is observable but inert.
   MessagesRepository: class {
-    async findBySessionIdAndType() {
-      return [];
+    async findBySessionIdAndType(
+      _sessionId: string,
+      type: string,
+      options?: { limit?: number; newestFirst?: boolean }
+    ) {
+      superseded.scans.push({ type, options });
+      return superseded.rows;
     }
     async mutateMetadataLocked() {
-      return { changed: false };
+      throw new Error(
+        'widget lifecycle state must be written through WidgetResolutionStore, not the repository'
+      );
     }
   },
 }));
@@ -160,9 +176,14 @@ function makeApp(opts: MakeAppOpts = {}) {
     users: { get: async (...args) => ({ user_id: args[0], env_vars: {} }) },
   };
 
+  // The one writer of widget lifecycle state, as the daemon publishes it.
+  const supersedeSpy = vi.fn(async () => ({ outcome: 'superseded' as const }));
   return {
     calls,
+    supersedeSpy,
     app: {
+      get: (key: string) =>
+        key === 'widgetResolutionStore' ? { supersede: supersedeSpy } : undefined,
       service(name: string) {
         const svc = services[name];
         if (!svc) throw new Error(`Unexpected service call: ${name}`);
@@ -216,6 +237,20 @@ beforeEach(() => {
   );
   livenessStub.mockReset();
   livenessStub.mockResolvedValue({ live: false });
+  superseded.rows = [];
+  superseded.scans = [];
+});
+
+/** A still-pending oauth Connect button for `serverId`, as the sweep sees it. */
+const pendingOAuthWidget = (messageId: string, serverId: string) => ({
+  message_id: messageId,
+  metadata: {
+    widget: {
+      widget_type: 'oauth',
+      status: 'pending',
+      params: { mcpServerId: serverId },
+    },
+  },
 });
 
 describe('agor_widgets_request_oauth — destination selection', () => {
@@ -380,6 +415,82 @@ describe('agor_widgets_request_oauth — already connected', () => {
     await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
 
     expect(livenessStub).toHaveBeenCalledWith(expect.anything(), 'srv-notion', 'user-actor');
+  });
+});
+
+describe('agor_widgets_request_oauth — superseding a stale Connect button', () => {
+  it('supersedes the earlier pending widget when a new one is minted', async () => {
+    superseded.rows = [pendingOAuthWidget('widget-old', 'srv-notion')];
+    const { app, supersedeSpy } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(supersedeSpy).toHaveBeenCalledWith('widget-old', expect.any(String));
+  });
+
+  it('supersedes on the already-connected short-circuit too', async () => {
+    // THE case where a live Connect button is most obviously stale: the user
+    // connected through the Catalog drawer and then re-asked the agent. Clicking
+    // the old button would run a full unnecessary re-authorization and queue a
+    // second auto-resume prompt that will not coalesce (different widget id).
+    livenessStub.mockResolvedValue({ live: true });
+    superseded.rows = [pendingOAuthWidget('widget-old', 'srv-notion')];
+    const { app, supersedeSpy } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(payload(result).status).toBe('already_present');
+    expect(supersedeSpy).toHaveBeenCalledWith('widget-old', expect.any(String));
+  });
+
+  it('supersedes on the no-auth-needed short-circuit too', async () => {
+    superseded.rows = [pendingOAuthWidget('widget-old', 'srv-notion')];
+    const { app, supersedeSpy } = makeApp({
+      catalogEntry: { ...NOTION_ENTRY, auth_type: 'none' },
+      connectResult: {
+        mcp_server: { ...OAUTH_SERVER, auth: undefined },
+        reused_existing_server: false,
+      },
+    });
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' });
+
+    expect(supersedeSpy).toHaveBeenCalledWith('widget-old', expect.any(String));
+  });
+
+  it('leaves a pending widget for a DIFFERENT server alone', async () => {
+    superseded.rows = [pendingOAuthWidget('widget-other', 'srv-linear')];
+    const { app, supersedeSpy } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(supersedeSpy).not.toHaveBeenCalled();
+  });
+
+  it('bounds the sweep instead of loading every widget in the session', async () => {
+    const { app } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(superseded.scans[0]).toMatchObject({
+      type: 'widget_request',
+      options: { newestFirst: true, limit: expect.any(Number) },
+    });
+  });
+
+  it('does not stop the new request when superseding fails', async () => {
+    superseded.rows = [pendingOAuthWidget('widget-old', 'srv-notion')];
+    const { app, supersedeSpy } = makeApp();
+    supersedeSpy.mockRejectedValueOnce(new Error('row lock timeout') as never);
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(payload(result).status).toBe('requested');
   });
 });
 

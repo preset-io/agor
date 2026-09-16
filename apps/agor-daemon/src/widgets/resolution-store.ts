@@ -22,7 +22,19 @@ export type WidgetResolutionFinishResult =
   | { outcome: 'updated'; message: Message }
   | { outcome: 'claim_lost'; message: Message };
 
+export type WidgetSupersedeResult =
+  | { outcome: 'superseded'; message: Message }
+  | { outcome: 'not_pending'; message: Message };
+
 type LockedMetadataRepository = Pick<MessagesRepository, 'mutateMetadataLocked'>;
+
+/**
+ * Feathers app key the singleton {@link WidgetResolutionStore} is published
+ * under, so an in-process caller that is not a route (the MCP widget tools) can
+ * write widget lifecycle state through the same object the routes use rather
+ * than reaching for a repository of its own.
+ */
+export const WIDGET_RESOLUTION_STORE_KEY = 'widgetResolutionStore';
 
 /**
  * Durable widget-resolution state machine.
@@ -68,6 +80,38 @@ export class WidgetResolutionStore {
     if (!result.changed) return { outcome: 'not_pending', message: result.message };
     this.publishChanged(result.message);
     return { outcome: 'claimed', message: result.message };
+  }
+
+  /**
+   * Retire a still-`pending` widget because a newer request replaced it.
+   *
+   * Not a dismissal by the user, and not a resolution: no claim is taken, no
+   * prompt is queued, nothing external happens. The row simply stops offering
+   * a button that would drive a flow a newer row now owns.
+   *
+   * It lives on the store rather than in the caller for the same reason every
+   * other transition does. Widget lifecycle state is written HERE and nowhere
+   * else — a second writer poking `metadata.widget` through the repository
+   * both breaks the invariant that generic Message mutation cannot alter live
+   * widget state, and skips `publishChanged`, which is what patches the row
+   * into every open browser. Without it a superseded Connect button stays
+   * clickable until a reload, and then 403s.
+   *
+   * Only `pending` is superseded, re-read under the row lock: a `resolving`
+   * claim belongs to whoever took it and must never be stolen.
+   */
+  async supersede(widgetId: MessageID, resolvedAt: string): Promise<WidgetSupersedeResult> {
+    const result = await this.messages.mutateMetadataLocked(widgetId, (metadata) => {
+      const widget = metadata?.widget;
+      if (widget?.status !== 'pending') return null;
+      return {
+        ...metadata,
+        widget: { ...widget, status: 'dismissed', resolved_at: resolvedAt },
+      };
+    });
+    if (!result.changed) return { outcome: 'not_pending', message: result.message };
+    this.publishChanged(result.message);
+    return { outcome: 'superseded', message: result.message };
   }
 
   async complete(
