@@ -104,6 +104,7 @@ import type {
 } from '@agor/core/types';
 import {
   DEFAULT_DISCORD_CATCH_UP,
+  GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   hasMinimumRole,
   isDiscordSnowflake,
   isTerminalTaskStatus,
@@ -3275,14 +3276,24 @@ export class GatewayService {
       get: (id: string) => Promise<User>;
     };
     const channelConfig = channel.config as Record<string, unknown>;
+    //
+    // Flag names come from GATEWAY_USER_ALIGNMENT_CONFIG_KEYS so that the
+    // fail-closed identity guard (`utils/gateway-prompt-identity.ts`) and this
+    // fallback read the same declaration. A platform added here without an
+    // entry there would be reported as having a real per-user sender when it
+    // does not.
     const alignSlackUsers =
-      channelConfig.align_slack_users === true || data.metadata?.align_slack_users === true;
+      channelConfig[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.slack] === true ||
+      data.metadata?.[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.slack] === true;
     const alignGitHubUsers =
-      channelConfig.align_github_users === true || data.metadata?.align_github_users === true;
+      channelConfig[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.github] === true ||
+      data.metadata?.[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.github] === true;
     const alignShortcutUsers =
-      channelConfig.align_shortcut_users === true || data.metadata?.align_shortcut_users === true;
+      channelConfig[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.shortcut] === true ||
+      data.metadata?.[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.shortcut] === true;
     const alignDiscordUsers =
-      channel.channel_type === 'discord' && channelConfig.align_discord_users === true;
+      channel.channel_type === 'discord' &&
+      channelConfig[GATEWAY_USER_ALIGNMENT_CONFIG_KEYS.discord] === true;
 
     // Only fetch and use channel owner when NO alignment is active.
     // When alignment is ON, agor_user_id may be empty (the "Post messages as"

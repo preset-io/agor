@@ -303,9 +303,24 @@ refuses on a negative, with text written to be relayed verbatim into the thread:
 it names the channel, states the consequence, and names the setting to enable,
 because the person reading it in Slack is usually not the person who can change
 it. Every uncertain answer lands on the refusing side — flag absent, flag
-truthy-but-not-`true`, channel unreadable. A platform with no alignment switch
-at all is not treated as unaligned, because it cannot admit a foreign prompt in
-the first place.
+truthy-but-not-`true`, channel unreadable.
+
+Alignment is an **allowlist**, derived from
+`GATEWAY_USER_ALIGNMENT_CONFIG_KEYS` — the same declaration `gateway.ts` reads
+before deciding whether to fall back to `channel.agor_user_id`. A platform with
+no entry is unaligned, not exempt. The first cut had this backwards ("a platform
+with no alignment switch cannot admit a foreign prompt in the first place"),
+which reported Teams as aligned — Teams is inbound via webhook, a Teams channel
+is multi-member, and `gateway.ts:3291` falls through to the channel owner
+unconditionally — and reported Shortcut as aligned even though it has a real
+`align_shortcut_users` flag the map simply omitted. Shortcut now requires its
+flag; Teams, WhatsApp, Telegram, and any future `ChannelType` are refused until
+they are listed.
+
+Known gap in the safe direction: `gateway.ts` also honours a per-message
+`data.metadata.align_*` override, which is not visible from a Session row, so a
+channel aligned only that way reads as unaligned. That costs a spurious refusal
+and grants nothing.
 
 The Slack _binding_ is stage 3. The guard is here because the exposure exists
 the moment an agent in a gateway session can mint this widget, which is now.
