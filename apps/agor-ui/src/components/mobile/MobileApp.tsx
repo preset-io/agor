@@ -205,15 +205,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     return count;
   }, [commentById, effectiveBoardId]);
 
-  // Continue the branch's live session, else start a fresh one, and land in the
-  // full-screen composer.
+  // Always start a FRESH session on the primary branch and land in the
+  // full-screen composer; every Ask tap creates a new one (never continues).
   const startPrimarySession = useCallback(
     async (branch: Branch) => {
-      const target = resolveAskPrimaryTarget(branch, sessionsByBranch.get(branch.branch_id) ?? []);
-      if (target.kind === 'continue') {
-        navigate(`/m/session/${target.sessionId}`);
-        return;
-      }
+      const target = resolveAskPrimaryTarget(branch);
       if (target.kind !== 'create') return; // a real branch never resolves to 'pick'
       const agent = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
       const result = await onCreateSession(
@@ -226,7 +222,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       );
       if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
     },
-    [sessionsByBranch, navigate, user, agenticToolSettings, onCreateSession]
+    [navigate, user, agenticToolSettings, onCreateSession]
   );
 
   // Create a session on any branch with a chosen agent, then open its composer.
