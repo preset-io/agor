@@ -179,6 +179,20 @@ async function worker(source, directory, options) {
       encoding: 'utf8',
       timeout: 30000,
     });
+    if (result.status !== 42 || result.stderr !== '') {
+      // Do not dump subprocess output: an unexpected startup may include its
+      // generated DB URL. Codes/booleans identify missing CI prerequisites safely.
+      console.error(
+        JSON.stringify({
+          stage: 'compiled-old-startup',
+          status: result.status,
+          signaled: result.signal !== null,
+          missing_module: /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/.test(result.stderr ?? ''),
+          timed_out: result.error?.code === 'ETIMEDOUT',
+          stderr_present: Boolean(result.stderr),
+        })
+      );
+    }
     assert.equal(result.status, 42, 'Actual old startup must reject the newer schema');
     assert.match(result.stdout, /EXPECTED_OLD_STARTUP_REFUSAL/);
     assert.doesNotMatch(result.stdout, /Database ready|Seeding initial data/);

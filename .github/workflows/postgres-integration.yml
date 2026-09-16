@@ -156,6 +156,10 @@ jobs:
         env:
           SCHEMA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          # Source-conditioned Vitest does not produce package import artifacts.
+          # The captured old executable uses normal Node imports, so build its
+          # explicitly linked workspace dependencies before the no-source proof.
+          pnpm exec turbo run build --filter='@agor/git...' --filter='@agor/agentic-tools...' --filter='@agor/agentic-tool-opencode...'
           node --test scripts/test-managed-oauth-downgrade.test.mjs
           node scripts/test-managed-oauth-downgrade.mjs --schema-sha "$SCHEMA_SHA" \
             --old-image docker.io/preset/agor@sha256:18dcf91c084499ce0862ac608b72ce27d6e8f9fc76796c041ef678a848f98403
