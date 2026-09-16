@@ -156,7 +156,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     return (
       <div
         style={{
-          height: '100dvh',
+          height: '100%',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
