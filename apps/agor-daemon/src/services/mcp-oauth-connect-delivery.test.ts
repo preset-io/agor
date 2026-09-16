@@ -190,11 +190,18 @@ describe('Slack MCP connect delivery', () => {
     // delivery record stores ISO timestamps, and redemption compares them for
     // equality. A mint at a millisecond-precision clock used to produce a link
     // that every redemption refused.
+    //
+    // The ragged clock is built relative to now rather than pinned to a
+    // literal instant: `verifyMCPOAuthConnectToken` below reads the real
+    // system clock, so a hardcoded date only passes inside the token's
+    // ten-minute TTL of whenever the test was written.
+    const raggedNow = new Date(Math.floor(Date.now() / 1_000) * 1_000 + 201);
     const issued = await issueMCPOAuthConnectLink(deps, {
       tenantId: 'tenant-1',
       widgetId: WIDGET_ID,
-      now: new Date('2026-09-16T12:58:40.201Z'),
+      now: raggedNow,
     });
+    expect(raggedNow.getMilliseconds()).toBe(201);
     const claims = verifyMCPOAuthConnectToken(
       decodeURIComponent(issued!.url.split('#token=')[1]),
       SECRET

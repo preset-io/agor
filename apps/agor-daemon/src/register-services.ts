@@ -5218,12 +5218,14 @@ export async function registerMCPServices(
           gateway_channel_id: claims.gateway_channel_id,
         },
       };
-    } catch (e) {
-      console.warn(
-        '[STAGE2-DEBUG] connect binding refused:',
-        (e as Error)?.message,
-        (e as Error)?.stack?.split('\n')[1]
-      );
+      // Deliberately silent, exactly as `loadSlackRecoveryBinding` is. Which
+      // of the dozen bindings moved is the oracle this lane's single generic
+      // message exists to withhold, and a `debug` line still writes it to
+      // daemon stdout. `context/guidelines/logging.md` keeps debug for a
+      // recurring operator problem the lifecycle stream cannot diagnose; a
+      // refused one-use link is not one, and the durable delivery record on
+      // the widget already says what the lane did.
+    } catch {
       throw new Forbidden(genericFailure);
     }
   };
