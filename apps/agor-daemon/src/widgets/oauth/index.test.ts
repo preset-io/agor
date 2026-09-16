@@ -121,7 +121,7 @@ function resolve(ctx: ReturnType<typeof makeCtx>['ctx'], params = defaultParams)
 
 beforeEach(() => {
   livenessStub.mockReset();
-  livenessStub.mockResolvedValue({ live: true });
+  livenessStub.mockResolvedValue({ live: true, reason: 'live', refreshable: false });
 });
 
 describe('oauth widget — registry registration', () => {
@@ -199,10 +199,43 @@ describe('oauth widget — role floor', () => {
 
 describe('oauth widget — resolveFromDaemonVerification', () => {
   it('refuses, and does NOT attach, when no live grant exists', async () => {
-    livenessStub.mockResolvedValue({ live: false });
+    livenessStub.mockResolvedValue({ live: false, reason: 'no_grant', refreshable: false });
     const { ctx, attachSpy } = makeCtx();
 
     await expect(resolve(ctx)).rejects.toThrow(/has not completed/i);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The daemon's JIT refresh can be in flight at exactly the moment the
+   * browser POSTs: the callback persisted the grant and the inject hook is
+   * already spending it. Refusing is right — nobody knows the outcome of a
+   * `refreshing` row, so nothing may be granted against it — but the user on
+   * the other end just finished signing in, and "finish the provider sign-in"
+   * is both false and an instruction to redo a flow that worked.
+   */
+  it('re-reads once when a refresh is in flight, and resolves if it settles', async () => {
+    livenessStub
+      .mockResolvedValueOnce({ live: false, reason: 'refreshing', refreshable: true })
+      .mockResolvedValueOnce({ live: true, reason: 'live', refreshable: false });
+    const { ctx, attachSpy } = makeCtx();
+
+    const meta = await resolve(ctx);
+    expect(livenessStub).toHaveBeenCalledTimes(2);
+    expect(meta.attached).toBe(true);
+    expect(attachSpy).toHaveBeenCalled();
+  });
+
+  it('tells a still-refreshing user to wait, not to sign in again', async () => {
+    livenessStub.mockResolvedValue({ live: false, reason: 'refreshing', refreshable: true });
+    const { ctx, attachSpy } = makeCtx();
+
+    const error = await resolve(ctx).then(
+      () => null,
+      (err: Error) => err
+    );
+    expect(error?.message).toMatch(/still finishing/i);
+    expect(error?.message).not.toMatch(/Finish the provider sign-in/i);
     expect(attachSpy).not.toHaveBeenCalled();
   });
 
@@ -330,7 +363,12 @@ describe('oauth widget — resolveFromDaemonVerification', () => {
 
   it('never puts credential material in result_meta', async () => {
     const { ctx } = makeCtx();
-    livenessStub.mockResolvedValue({ live: true, expiresAt: new Date('2030-01-01') });
+    livenessStub.mockResolvedValue({
+      live: true,
+      reason: 'live',
+      refreshable: false,
+      expiresAt: new Date('2030-01-01'),
+    });
     const meta = await resolve(ctx);
 
     const serialized = JSON.stringify(meta);

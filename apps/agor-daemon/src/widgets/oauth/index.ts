@@ -59,6 +59,17 @@ import {
 type GrantLookupDatabase = TenantScopeAwareDatabase;
 
 /**
+ * How long to let an in-flight token refresh settle before refusing.
+ *
+ * Short on purpose: this is a resolve request a browser is waiting on, and the
+ * refusal is recoverable (the widget reopens and Connect works again). One
+ * look is enough to turn the common race — the JIT refresh firing between the
+ * provider callback and this POST — into a success instead of advice to redo
+ * a sign-in that already worked.
+ */
+const GRANT_REFRESH_SETTLE_MS = 400;
+
+/**
  * Agent-provided params, validated when the MCP tool fires and then frozen
  * onto the widget row.
  *
@@ -329,15 +340,35 @@ async function resolveOAuthWidgetFromCallback(
   if (!db) {
     throw new Forbidden('MCP OAuth status is unavailable on this daemon; try Connect again.');
   }
-  const liveness = await ctx.runInTenantDatabaseScope(() =>
-    resolveMCPOAuthGrantLiveness(db, params.mcpServerId as MCPServerID, ctx.submitterUserId)
-  );
+  const readLiveness = () =>
+    ctx.runInTenantDatabaseScope(() =>
+      resolveMCPOAuthGrantLiveness(db, params.mcpServerId as MCPServerID, ctx.submitterUserId)
+    );
+  let liveness = await readLiveness();
+
+  // A refresh this daemon started can be in flight at exactly the moment the
+  // browser POSTs — the callback persisted the grant and the inject hook is
+  // already spending it. `refresh_status !== 'idle'` is correct to refuse on
+  // (nobody knows the outcome yet, so nothing may be granted against it), but
+  // it is a race, not a verdict: give it one short look before deciding.
+  if (liveness.reason === 'refreshing') {
+    await new Promise((resolve) => setTimeout(resolve, GRANT_REFRESH_SETTLE_MS));
+    liveness = await readLiveness();
+  }
+
   if (!liveness.live) {
     console.info(
-      `[widgets] event=oauth_widget_unverified server_id=${params.mcpServerId} attempt_id=${evidence.attempt_id ?? 'none'}`
+      `[widgets] event=oauth_widget_unverified server_id=${params.mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
     );
+    // The copy has to distinguish "you have not signed in" from "you have, and
+    // Agor is still finishing". Telling the user who just completed a provider
+    // sign-in to go and complete it is false, and it sends them back through a
+    // flow that already worked. Both reopen the widget for a retry; only the
+    // instruction differs.
     throw new Forbidden(
-      `Sign-in to "${params.serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
+      liveness.reason === 'refreshing'
+        ? `Agor is still finishing the connection to "${params.serverName}". Wait a moment, then press Connect again — you should not need to sign in again.`
+        : `Sign-in to "${params.serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
     );
   }
 

@@ -15,9 +15,10 @@
  *   - widget params carry names and identities only — no credential
  */
 
-import type { MessageID } from '@agor/core/types';
+import type { MessageID, SessionID } from '@agor/core/types';
+import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../utils/append-system-message.js', () => ({
   appendSystemMessage: vi.fn(),
@@ -638,6 +639,80 @@ describe('agor_widgets_request_oauth — fail-closed guards', () => {
     await expect(
       tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion', sessionId: 'sess-other' })
     ).rejects.toThrow(/session owner or an admin/i);
+  });
+});
+
+/**
+ * The widget mints into an Agor transcript. A Slack or Discord user is not
+ * looking at that transcript, and only Slack gets a Block Kit projection of
+ * the card (stage 3) — so in a Discord session, which passes the alignment
+ * guard and mints a real widget, the agent previously had `{ widget_id,
+ * status: "requested" }` and nothing to say.
+ */
+describe('agor_widgets_request_oauth — what a gateway agent can relay', () => {
+  const gatewaySession = (channelType: string) => ({
+    customContext: {
+      gateway_source: {
+        channel_id: 'chan-1',
+        channel_name: 'eng-help',
+        channel_type: channelType,
+        thread_id: 't1',
+      },
+    },
+  });
+
+  beforeEach(() => {
+    vi.stubEnv('AGOR_BASE_URL', 'https://agor.example.test');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns a session deep link and a sentence to paste, in a Discord session', async () => {
+    const { app } = makeApp({
+      ...gatewaySession('discord'),
+      gatewayChannel: { channel_type: 'discord', config: { align_discord_users: true } },
+    });
+    const tools = registerAndCapture({ app, sessionId: 'sess-1' });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    );
+    expect(result.status).toBe('requested');
+    // The real `getSessionUrl`, so the shape is whatever the UI actually
+    // routes on rather than a string this test invented.
+    expect(result.session_url).toBe(
+      getSessionUrl('sess-1' as SessionID, 'https://agor.example.test')
+    );
+    expect(result.relay_to_user).toContain(result.session_url);
+    expect(result.relay_to_user).toContain('Notion');
+  });
+
+  it('says nothing about a link on the canvas, where the card is already visible', async () => {
+    const { app } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    );
+    expect(result.status).toBe('requested');
+    expect(result.session_url).toBeUndefined();
+    expect(result.relay_to_user).toBeUndefined();
+  });
+
+  it('omits the link rather than relaying a bind address nobody can open', async () => {
+    vi.stubEnv('AGOR_BASE_URL', 'http://0.0.0.0:3030');
+    const { app } = makeApp({
+      ...gatewaySession('discord'),
+      gatewayChannel: { channel_type: 'discord', config: { align_discord_users: true } },
+    });
+    const tools = registerAndCapture({ app });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    );
+    expect(result.status).toBe('requested');
+    expect(result.session_url).toBeUndefined();
   });
 });
 
