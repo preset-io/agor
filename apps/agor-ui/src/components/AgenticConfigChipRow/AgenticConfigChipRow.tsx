@@ -3,6 +3,7 @@ import {
   agenticToolRequiresModelSelection,
   getAgenticToolModelSelectionError,
 } from '@agor/agentic-tools';
+import { useAgenticToolReasoningEffortLevels } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolName,
   AgorClient,
@@ -29,10 +30,11 @@ import {
   Form,
   Popover,
   Select,
+  Space,
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import {
   INLINE_AGENTIC_CONFIGURATION,
@@ -136,8 +138,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const form = Form.useFormInstance();
   const isClaude = CLAUDE_TOOLS.has(tool);
   const toolCapabilities = AGENTIC_TOOL_CAPABILITIES[tool];
-  const effortLevels = toolCapabilities.reasoningEffortLevels;
-  const supportsEffort = showEffort && Boolean(effortLevels?.length);
+  const toolEffortLevels = toolCapabilities.reasoningEffortLevels;
+  const supportsEffort = showEffort && Boolean(toolEffortLevels?.length);
   const {
     inlineAllowed,
     loading,
@@ -175,28 +177,47 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const resolved = configForSource(source);
   const resolvedModelConfig = resolved.modelConfig as ModelConfig | undefined;
+  const modelEffortLevels = useAgenticToolReasoningEffortLevels({
+    tool,
+    selection:
+      resolvedModelConfig?.provider && resolvedModelConfig.model
+        ? { provider: resolvedModelConfig.provider, model: resolvedModelConfig.model }
+        : undefined,
+    client,
+    branchId,
+    catalogEnabled,
+  });
+  const modelEffortMetadataKnown = tool === 'opencode' && modelEffortLevels !== undefined;
+  const effortLevels = modelEffortMetadataKnown ? modelEffortLevels : toolEffortLevels;
   const modelSelectionError = validateModelSelection
     ? getAgenticToolModelSelectionError(tool, resolvedModelConfig)
     : undefined;
-  const configError = getSourceError(source) ?? modelSelectionError;
+  const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
+  const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
+  const explicitEffort = isInline ? formEffort : resolved.modelConfig?.effort;
+  const effortSelectionError =
+    modelEffortMetadataKnown && explicitEffort && !modelEffortLevels.includes(explicitEffort)
+      ? modelEffortLevels.length > 0
+        ? `Choose a supported effort: ${modelEffortLevels.join(', ')}`
+        : 'This model has no explicit effort in the configured OpenCode runtime; use inherited.'
+      : undefined;
+  const configError = getSourceError(source) ?? modelSelectionError ?? effortSelectionError;
   const configResolvable = !configError;
+  const correctionError = modelSelectionError ?? effortSelectionError;
   const [chipsExpanded, setChipsExpanded] = useState(false);
-  const disclosureExpanded = Boolean(modelSelectionError) || chipsExpanded;
+  const disclosureExpanded = Boolean(correctionError) || chipsExpanded;
 
-  // Invalid required model configuration forces the corrective controls open.
+  // Invalid model/effort configuration forces the corrective controls open.
   // Latch that open state so an automatic suggestion or user correction does
   // not make the controls disappear as soon as the error clears.
   useEffect(() => {
-    if (modelSelectionError) setChipsExpanded(true);
-  }, [modelSelectionError]);
+    if (correctionError) setChipsExpanded(true);
+  }, [correctionError]);
 
   useEffect(() => {
     onConfigValidityChange?.(configResolvable, configError);
   }, [configError, configResolvable, onConfigValidityChange]);
 
-  const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
-  const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
-  const explicitEffort = isInline ? formEffort : resolved.modelConfig?.effort;
   const resolvedEffort = explicitEffort ?? toolCapabilities.defaultReasoningEffort;
   const advisorModel = resolved.modelConfig?.advisorModel;
   const mcpCount = formMcp?.length ?? 0;
@@ -277,6 +298,14 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const permissionMeta = getPermissionModeMeta(tool, resolvedPermission);
   const permissionColor =
     permissionMeta?.tone === 'warning' ? getPermissionModeColor('warning', token) : undefined;
+  const modelEffortAvailabilityRef = useRef<
+    | {
+        provider: string;
+        model: string;
+        levels: readonly EffortLevel[] | undefined;
+      }
+    | undefined
+  >(undefined);
 
   const managedNote = (
     <Typography.Text type="secondary">
@@ -330,12 +359,30 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             <ModelSelector
               value={resolved.modelConfig as ModelConfig | undefined}
               onChange={onModelChange}
-              onCommit={close}
               agentic_tool={tool}
               client={client}
               branchId={branchId}
               catalogEnabled={catalogEnabled}
               showAdvisor={false}
+              onReasoningEffortLevelsChange={(availability) => {
+                modelEffortAvailabilityRef.current = availability;
+              }}
+              onCommit={(next) => {
+                const availability = modelEffortAvailabilityRef.current;
+                const currentEffort = form.getFieldValue('effort') as EffortLevel | undefined;
+                if (
+                  tool === 'opencode' &&
+                  currentEffort &&
+                  availability !== undefined &&
+                  availability.provider === next.provider &&
+                  availability.model === next.model &&
+                  availability.levels !== undefined &&
+                  !availability.levels.includes(currentEffort)
+                ) {
+                  form.setFieldValue('effort', undefined);
+                }
+                close();
+              }}
             />
           )}
         />
@@ -370,20 +417,37 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           title="Reasoning effort"
           editable={inlineAllowed}
           managedNote={managedNote}
+          color={effortSelectionError ? token.colorError : undefined}
           width={300}
           testid="effort-chip"
           renderContent={(close) => (
-            <EffortSelector
-              value={resolvedEffort}
-              levels={effortLevels}
-              fallbackValue={toolCapabilities.defaultReasoningEffort}
-              allowInherited={!toolCapabilities.defaultReasoningEffort}
-              onChange={(effort) => {
-                onEffortChange(effort);
-                close();
-              }}
-              fullWidth
-            />
+            <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+              {tool === 'opencode' &&
+                modelEffortMetadataKnown &&
+                modelEffortLevels.length === 0 && (
+                  <Typography.Text type={effortSelectionError ? 'danger' : 'secondary'}>
+                    This model has no explicit effort in the configured OpenCode runtime. Use
+                    inherited.
+                  </Typography.Text>
+                )}
+              {tool === 'opencode' && !modelEffortMetadataKnown && (
+                <Typography.Text type="secondary">
+                  Available efforts are unknown for this exact model and will be validated at
+                  runtime.
+                </Typography.Text>
+              )}
+              <EffortSelector
+                value={resolvedEffort}
+                levels={effortLevels}
+                fallbackValue={toolCapabilities.defaultReasoningEffort}
+                allowInherited={!toolCapabilities.defaultReasoningEffort}
+                onChange={(effort) => {
+                  onEffortChange(effort);
+                  close();
+                }}
+                fullWidth
+              />
+            </Space>
           )}
         />
       )}
@@ -471,9 +535,9 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           activeKey={disclosureExpanded ? ['chips'] : []}
           onChange={(activeKeys) => {
             // AntD may still report a requested key change for a disabled
-            // header. Keep the forced-open latch intact until the required
-            // model selection is valid.
-            if (modelSelectionError) return;
+            // header. Keep the forced-open latch intact until the invalid
+            // model/effort selection is corrected.
+            if (correctionError) return;
             const keys = Array.isArray(activeKeys) ? activeKeys : [activeKeys];
             setChipsExpanded(keys.includes('chips'));
           }}
@@ -492,13 +556,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           items={[
             {
               key: 'chips',
-              collapsible: modelSelectionError ? 'disabled' : 'header',
+              collapsible: correctionError ? 'disabled' : 'header',
               label: (
                 <Typography.Text
                   aria-label={`Session configuration: ${chipSummary}${
                     modelSelectionError
                       ? '. Complete the required model selection before collapsing.'
-                      : ''
+                      : effortSelectionError
+                        ? '. Correct the invalid reasoning effort before collapsing.'
+                        : ''
                   }`}
                   type="secondary"
                   ellipsis={{ tooltip: chipSummary }}

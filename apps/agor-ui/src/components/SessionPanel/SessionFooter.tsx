@@ -1,3 +1,4 @@
+import { useAgenticToolReasoningEffortLevels } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolCapabilities,
   AgenticToolName,
@@ -98,7 +99,7 @@ export interface SessionFooterProps {
   modelLabel?: string;
   modelConfig?: ModelConfig;
   // Handlers
-  onModelConfigCommit: (config: ModelConfig) => void;
+  onModelConfigCommit: (config: ModelConfig, options?: { clearEffort?: boolean }) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onSendPrompt: () => void;
   onStop: () => void;
@@ -162,6 +163,46 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
+  const modelEffortLevels = useAgenticToolReasoningEffortLevels({
+    tool: session.agentic_tool,
+    selection:
+      modelConfig?.provider && modelConfig.model
+        ? { provider: modelConfig.provider, model: modelConfig.model }
+        : undefined,
+    client,
+    branchId: session.branch_id,
+    catalogEnabled: session.created_by === currentUserId,
+  });
+  const modelEffortMetadataKnown =
+    session.agentic_tool === 'opencode' && modelEffortLevels !== undefined;
+  const effectiveEffortLevels = modelEffortMetadataKnown
+    ? modelEffortLevels
+    : toolCaps?.reasoningEffortLevels;
+  const modelEffortAvailabilityRef = React.useRef<
+    | {
+        provider: string;
+        model: string;
+        levels: readonly EffortLevel[] | undefined;
+      }
+    | undefined
+  >(undefined);
+  const handleModelConfigCommit = React.useCallback(
+    (next: ModelConfig) => {
+      const availability = modelEffortAvailabilityRef.current;
+      const clearEffort = Boolean(
+        session.agentic_tool === 'opencode' &&
+          effortLevel &&
+          availability !== undefined &&
+          availability.provider === next.provider &&
+          availability.model === next.model &&
+          availability.levels !== undefined &&
+          !availability.levels.includes(effortLevel)
+      );
+      if (clearEffort) onModelConfigCommit(next, { clearEffort: true });
+      else onModelConfigCommit(next);
+    },
+    [effortLevel, onModelConfigCommit, session.agentic_tool]
+  );
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
@@ -336,7 +377,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <ModelSelector
             key={session.session_id}
             value={modelConfig}
-            onCommit={onModelConfigCommit}
+            onCommit={handleModelConfigCommit}
+            onReasoningEffortLevelsChange={(availability) => {
+              modelEffortAvailabilityRef.current = availability;
+            }}
             agentic_tool={session.agentic_tool}
             client={client}
             branchId={session.branch_id}
@@ -374,7 +418,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             <EffortSelector
               value={effortLevel}
               onChange={onEffortChange}
-              levels={toolCaps.reasoningEffortLevels}
+              levels={effectiveEffortLevels}
               fallbackValue={toolCaps.defaultReasoningEffort}
               allowInherited={!toolCaps.defaultReasoningEffort}
               size="small"
@@ -1417,7 +1461,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       <ModelSelector
                         key={session.session_id}
                         value={modelConfig}
-                        onCommit={onModelConfigCommit}
+                        onCommit={handleModelConfigCommit}
+                        onReasoningEffortLevelsChange={(availability) => {
+                          modelEffortAvailabilityRef.current = availability;
+                        }}
                         agentic_tool={session.agentic_tool}
                         client={client}
                         branchId={session.branch_id}

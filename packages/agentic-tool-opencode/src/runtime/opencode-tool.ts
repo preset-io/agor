@@ -29,6 +29,7 @@ import {
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
+import { filterOpenCodeReasoningEffortLevels } from '../shared/reasoning-effort.js';
 import type { OpenCodeCommand } from './binary.js';
 import {
   createOpenCodeEventTranslator,
@@ -880,6 +881,7 @@ export class OpenCodeTool {
   ): Promise<void> {
     let modelAvailable = false;
     let effortAvailable = !effort;
+    let supportedEfforts: EffortLevel[] = [];
     try {
       const query = { directory };
       const [catalogResponse, runtimeResponse] = await Promise.all([
@@ -900,7 +902,8 @@ export class OpenCodeTool {
       if (modelAvailable && effort) {
         // OpenCode returns native variants here; the generated SDK model type currently omits them.
         const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
-        effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+        supportedEfforts = filterOpenCodeReasoningEffortLevels(variants ?? {}) ?? [];
+        effortAvailable = supportedEfforts.includes(effort);
       }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.
@@ -911,8 +914,12 @@ export class OpenCodeTool {
       );
     }
     if (!effortAvailable) {
+      const guidance =
+        supportedEfforts.length > 0
+          ? `choose one of: ${supportedEfforts.join(', ')}, or leave it unset`
+          : 'this model exposes no supported explicit efforts; leave it unset';
       throw new Error(
-        "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
+        `The selected OpenCode reasoning effort "${effort}" is not available for this session owner's ${providerId}/${modelId} branch configuration; ${guidance}`
       );
     }
   }

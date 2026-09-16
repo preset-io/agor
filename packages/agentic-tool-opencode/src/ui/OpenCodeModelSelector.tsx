@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor/core/client';
-import type { OpenCodeModelCatalog } from '@agor/core/types';
+import type { EffortLevel, OpenCodeModelCatalog } from '@agor/core/types';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -7,8 +7,9 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Popover, Select, Space, Tooltip, Typography } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
+import { useOpenCodeReasoningEffortLevels } from './useOpenCodeReasoningEffortLevels';
 
 const { Text } = Typography;
 
@@ -24,6 +25,11 @@ export interface OpenCodeModelSelectorProps {
   onChange?: (config: OpenCodeModelConfig | undefined) => void;
   /** Fired for an explicit catalog or exact-ID selection, never an automatic suggestion. */
   onCommit?: (config: OpenCodeModelConfig) => void;
+  onReasoningEffortLevelsChange?: (availability: {
+    provider: string;
+    model: string;
+    levels: readonly EffortLevel[] | undefined;
+  }) => void;
   client?: AgorClient | null;
   branchId?: string;
   /**
@@ -206,6 +212,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
   onChange,
   onCommit,
+  onReasoningEffortLevelsChange,
   client,
   branchId,
   catalogEnabled = true,
@@ -219,6 +226,24 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const appliedSuggestionRef = useRef<string | null>(null);
   const { catalog, availabilityResolved, loading, refreshFailed, refresh } =
     useOpenCodeModelCatalog({ client, catalogEnabled });
+  const {
+    levels: selectedReasoningEffortLevels,
+    resolve: resolveReasoningEffortLevels,
+    liveLoading,
+    liveFailed,
+    retry: retryLiveDiscovery,
+  } = useOpenCodeReasoningEffortLevels({
+    client,
+    branchId,
+    catalogEnabled,
+    provider,
+    model,
+  });
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refresh(), retryLiveDiscovery()]);
+  }, [refresh, retryLiveDiscovery]);
+  const discoveryLoading = loading || liveLoading;
+  const discoveryFailed = refreshFailed || liveFailed;
 
   useEffect(() => {
     setProvider(value?.provider ?? '');
@@ -240,6 +265,15 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   }, [availabilityResolved, catalog, value]);
 
   useEffect(() => {
+    if (!provider || !model) return;
+    onReasoningEffortLevelsChange?.({
+      provider,
+      model,
+      levels: selectedReasoningEffortLevels,
+    });
+  }, [model, onReasoningEffortLevelsChange, provider, selectedReasoningEffortLevels]);
+
+  useEffect(() => {
     if (
       !compact &&
       catalog &&
@@ -251,11 +285,16 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
 
   const selectPair = (nextProvider: string, nextModel: string) => {
     const selection = { provider: nextProvider, model: nextModel };
+    const reasoningEffortLevels = resolveReasoningEffortLevels(nextProvider, nextModel);
     setProvider(nextProvider);
     setModel(nextModel);
     setManualOpen(false);
     setCompactManualOpen(false);
     onChange?.(selection);
+    onReasoningEffortLevelsChange?.({
+      ...selection,
+      levels: reasoningEffortLevels,
+    });
     onCommit?.(selection);
   };
 
@@ -341,14 +380,14 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         catalog={catalog}
         catalogEnabled={catalogEnabled}
         client={client}
-        loading={loading}
+        loading={discoveryLoading}
         availabilityResolved={availabilityResolved}
-        refreshFailed={refreshFailed}
+        refreshFailed={discoveryFailed}
         storedCatalogState={storedCatalogState}
         manualFields={manualFields}
         manualOpen={compactManualOpen}
         setManualOpen={setCompactManualOpen}
-        refresh={refresh}
+        refresh={refreshAll}
         selectPair={selectPair}
         getPopupContainer={getPopupContainer}
       />
@@ -366,14 +405,14 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         />
       )}
 
-      {refreshFailed && (
+      {discoveryFailed && (
         <Alert
           type="warning"
           showIcon
           title="Could not load configured OpenCode providers"
           description="The stored selection was not changed. Retry or enter an exact provider/model pair manually."
           action={
-            <Button size="small" loading={loading} onClick={() => void refresh()}>
+            <Button size="small" loading={discoveryLoading} onClick={() => void refreshAll()}>
               Retry
             </Button>
           }

@@ -8,6 +8,7 @@ import {
   CURSOR_MODEL_METADATA,
   DEFAULT_CODEX_MODEL,
   DEFAULT_COPILOT_MODEL,
+  type EffortLevel,
   GEMINI_MODELS,
   type GeminiModel,
 } from '@agor-live/client';
@@ -38,6 +39,11 @@ export interface ModelSelectorProps {
   onChange?: (config: ModelConfig) => void;
   /** Fired after an explicit user selection or completed exact-model edit. */
   onCommit?: (config: ModelConfig) => void;
+  onReasoningEffortLevelsChange?: (availability: {
+    provider: string;
+    model: string;
+    levels: readonly EffortLevel[] | undefined;
+  }) => void;
   agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
   agentic_tool?: AgenticToolName;
   /**
@@ -140,6 +146,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
   onChange,
   onCommit,
+  onReasoningEffortLevelsChange,
   agent,
   agentic_tool,
   client,
@@ -342,6 +349,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             provider: selection.provider,
           });
         }}
+        onReasoningEffortLevelsChange={onReasoningEffortLevelsChange}
       />
     );
   }

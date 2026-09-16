@@ -36,12 +36,14 @@ const nativeScaleCatalog = {
   })),
 };
 
-function clientWithCatalog(result: unknown = catalog) {
+function clientWithCatalog(result: unknown = catalog, liveResult: unknown = null) {
   const find = vi.fn().mockResolvedValue(result);
+  const liveFind = vi.fn().mockResolvedValue(liveResult);
   return {
     find,
+    liveFind,
     client: {
-      service: vi.fn(() => ({ find })),
+      service: vi.fn((path: string) => ({ find: path === 'opencode-auth' ? liveFind : find })),
     },
   };
 }
@@ -83,6 +85,68 @@ describe('OpenCodeModelSelector', () => {
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
     expect(onCommit).toHaveBeenCalledOnce();
     expect(onCommit).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
+  });
+
+  it('prefers safe branch-scoped live effort metadata over static catalog advice', async () => {
+    const onReasoningEffortLevelsChange = vi.fn();
+    const staticCatalog = {
+      ...catalog,
+      providers: [
+        {
+          ...catalog.providers[0],
+          models: [
+            {
+              id: 'gpt-5',
+              name: 'GPT-5',
+              status: 'active',
+              reasoningEffortLevels: ['high'],
+            },
+          ],
+        },
+      ],
+    };
+    const liveConfiguration = {
+      runtime: 'available',
+      runtimeVersion: '1.14.33',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          runtimeAvailable: true,
+          credentialPresence: 'present',
+          authMethods: [],
+          models: [
+            {
+              id: 'gpt-5',
+              name: 'GPT-5',
+              status: 'active',
+              reasoningEffortLevels: [],
+            },
+          ],
+        },
+      ],
+    };
+    const { client, liveFind } = clientWithCatalog(staticCatalog, liveConfiguration);
+
+    render(
+      <OpenCodeModelSelector
+        value={{ provider: 'openai', model: 'gpt-5' }}
+        client={client as never}
+        branchId="branch-1"
+        onReasoningEffortLevelsChange={onReasoningEffortLevelsChange}
+      />
+    );
+
+    await waitFor(() =>
+      expect(liveFind).toHaveBeenCalledWith({ query: { branch_id: 'branch-1' } })
+    );
+    await waitFor(() =>
+      expect(onReasoningEffortLevelsChange).toHaveBeenLastCalledWith({
+        provider: 'openai',
+        model: 'gpt-5',
+        levels: [],
+      })
+    );
   });
 
   it('keeps immediate catalog entries unselectable until availability resolves', async () => {
@@ -209,18 +273,20 @@ describe('OpenCodeModelSelector', () => {
   });
 
   it('keeps a foreign owner stored compact pair private without calling it unavailable', () => {
-    const { client, find } = clientWithCatalog();
+    const { client, find, liveFind } = clientWithCatalog();
 
     render(
       <OpenCodeModelSelector
         value={{ provider: 'private-provider', model: 'private-model' }}
         client={client as never}
+        branchId="private-branch"
         catalogEnabled={false}
         compact
       />
     );
 
     expect(find).not.toHaveBeenCalled();
+    expect(liveFind).not.toHaveBeenCalled();
     expect(screen.getByText('private-provider/private-model')).toBeInTheDocument();
     expect(screen.queryByText(/\(unavailable\)/i)).not.toBeInTheDocument();
   });

@@ -15,8 +15,22 @@ interface KnownProvider {
 }
 
 const activeModels = (
-  models: ReadonlyArray<readonly [id: string, name: string]>
-): OpenCodeCatalogModel[] => models.map(([id, name]) => ({ id, name, status: 'active' }));
+  models: ReadonlyArray<
+    readonly [
+      id: string,
+      name: string,
+      reasoningEffortLevels?: OpenCodeCatalogModel['reasoningEffortLevels'],
+    ]
+  >
+): OpenCodeCatalogModel[] =>
+  models.map(([id, name, reasoningEffortLevels]) => ({
+    id,
+    name,
+    status: 'active',
+    ...(reasoningEffortLevels !== undefined
+      ? { reasoningEffortLevels: [...reasoningEffortLevels] }
+      : {}),
+  }));
 
 /** Curated against the OpenCode version pinned by this package. */
 const KNOWN_PROVIDERS = [
@@ -78,6 +92,49 @@ const KNOWN_PROVIDERS = [
       ['claude-opus-4-5', 'Claude Opus 4.5'],
       ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
       ['claude-haiku-4-5', 'Claude Haiku 4.5'],
+    ]),
+  },
+  {
+    // Active lineup and native variant keys captured from the OpenCode
+    // 1.14.33 post-connect catalog on 2026-08-30.
+    id: 'opencode-go',
+    name: 'OpenCode Go',
+    availableWithoutCredentials: false,
+    suggestedModel: 'gpt-5.6-luna',
+    models: activeModels([
+      ['gpt-5.6-luna', 'GPT-5.6 Luna', ['low', 'medium', 'high', 'xhigh']],
+      ['deepseek-v4-flash', 'DeepSeek V4 Flash', ['low', 'medium', 'high', 'max']],
+      [
+        'deepseek-v4-flash-vision-exp',
+        'DeepSeek V4 Flash Vision Exp',
+        ['low', 'medium', 'high', 'max'],
+      ],
+      ['deepseek-v4-pro', 'DeepSeek V4 Pro (New)', ['low', 'medium', 'high', 'max']],
+      ['glm-5.1', 'GLM-5.1', []],
+      ['glm-5.2', 'GLM-5.2', []],
+      ['glm-5.3', 'GLM-5.3', []],
+      ['glm-5.3-flash', 'GLM-5.3-Flash (2x usage)', []],
+      ['grok-4.6', 'Grok 4.6', []],
+      ['hy3', 'Hy3 (8x usage)', ['low', 'medium', 'high']],
+      ['hy4-preview', 'Hy4 preview', ['low', 'medium', 'high']],
+      ['kimi-k2.6', 'Kimi K2.6', []],
+      ['kimi-k2.7-code', 'Kimi K2.7 Code', []],
+      ['kimi-k3', 'Kimi K3', []],
+      ['longcat-2.0', 'LongCat-2.0', ['low', 'medium', 'high']],
+      ['mimo-v2.5', 'MiMo V2.5', ['low', 'medium', 'high']],
+      ['mimo-v2.5-pro', 'MiMo V2.5 Pro', ['low', 'medium', 'high']],
+      ['minimax-m2.7', 'MiniMax-M2.7', []],
+      ['minimax-m3', 'MiniMax-M3', []],
+      [
+        'muse-spark-1.2-contributor',
+        'Muse Spark 1.2 Contributor',
+        ['low', 'medium', 'high', 'xhigh'],
+      ],
+      ['qwen3.6-plus', 'Qwen3.6 Plus', []],
+      ['qwen3.7-max', 'Qwen3.7 Max', []],
+      ['qwen3.7-plus', 'Qwen3.7 Plus', []],
+      ['qwen3.8-flash', 'Qwen3.8 Flash', []],
+      ['qwen3.8-max', 'Qwen3.8 Max', []],
     ]),
   },
   {
