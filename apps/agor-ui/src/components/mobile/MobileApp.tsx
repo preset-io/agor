@@ -347,6 +347,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 primaryTeammateEmoji={
                   primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined
                 }
+                assistantSessionCount={
+                  primaryBranch ? (sessionsByBranch.get(primaryBranch.branch_id)?.length ?? 0) : 0
+                }
+                onOpenAssistantSessions={
+                  primaryBranch ? () => navigate('/m/sessions?scope=assistant') : undefined
+                }
               />
             }
           />
@@ -356,7 +362,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               <MobileSessionsPage
                 sessionById={sessionById}
                 branchById={branchById}
+                userById={userById}
+                sessionsByBranch={sessionsByBranch}
                 currentUser={user}
+                client={client}
+                primaryBranch={primaryBranch}
+                primaryTeammateName={
+                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
+                }
+                onForkSession={onForkSession}
+                onSpawnSession={onSpawnSession}
+                onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
               />
             }
           />

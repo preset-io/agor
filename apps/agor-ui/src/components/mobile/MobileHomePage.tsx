@@ -18,6 +18,10 @@ interface MobileHomePageProps {
   onAsk: () => void;
   primaryTeammateName?: string;
   primaryTeammateEmoji?: string;
+  /** Number of the primary assistant's own sessions (shown on the hero). */
+  assistantSessionCount?: number;
+  /** Opens the assistant's session list; when set, the hero body becomes tappable. */
+  onOpenAssistantSessions?: () => void;
 }
 
 const RECENT_LIMIT = 5;
@@ -35,6 +39,8 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   onAsk,
   primaryTeammateName,
   primaryTeammateEmoji,
+  assistantSessionCount,
+  onOpenAssistantSessions,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -64,6 +70,22 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
     body: { padding: token.padding },
   } as const;
 
+  const heroContent = (
+    <>
+      <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
+        {primaryTeammateEmoji ?? <RobotOutlined />}
+      </span>
+      <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text strong>Ask {askName}</Typography.Text>
+        <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+          {assistantSessionCount && assistantSessionCount > 0
+            ? `${assistantSessionCount} session${assistantSessionCount === 1 ? '' : 's'} · tap to view`
+            : 'Kick off a task, ask a question, or get help.'}
+        </Typography.Text>
+      </Flex>
+    </>
+  );
+
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <MobileHeader
@@ -86,15 +108,37 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
             styles={cardStyles}
           >
             <Flex align="center" gap={token.margin}>
-              <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
-                {primaryTeammateEmoji ?? <RobotOutlined />}
-              </span>
-              <Flex vertical style={{ flex: 1, minWidth: 0 }}>
-                <Typography.Text strong>Ask {askName}</Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  Kick off a task, ask a question, or get help.
-                </Typography.Text>
-              </Flex>
+              {/* Body opens the assistant's session list; the Ask button stays
+                  the quick-compose action. */}
+              {onOpenAssistantSessions ? (
+                <button
+                  type="button"
+                  aria-label={`View ${askName}'s sessions`}
+                  onClick={onOpenAssistantSessions}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: token.margin,
+                    flex: 1,
+                    minWidth: 0,
+                    minHeight: MOBILE_TOUCH_TARGET,
+                    cursor: 'pointer',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    textAlign: 'left',
+                    font: 'inherit',
+                    color: 'inherit',
+                  }}
+                >
+                  {heroContent}
+                  <RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />
+                </button>
+              ) : (
+                <Flex align="center" gap={token.margin} style={{ flex: 1, minWidth: 0 }}>
+                  {heroContent}
+                </Flex>
+              )}
               <Button type="primary" onClick={onAsk} style={{ minHeight: MOBILE_TOUCH_TARGET }}>
                 Ask
               </Button>

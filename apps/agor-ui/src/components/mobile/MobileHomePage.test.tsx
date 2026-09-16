@@ -18,6 +18,8 @@ function renderHome(props: Partial<React.ComponentProps<typeof MobileHomePage>> 
               currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
               onAsk={props.onAsk ?? vi.fn()}
               primaryTeammateName={props.primaryTeammateName}
+              assistantSessionCount={props.assistantSessionCount}
+              onOpenAssistantSessions={props.onOpenAssistantSessions}
             />
           }
         />
@@ -53,5 +55,28 @@ describe('MobileHomePage', () => {
     expect(screen.getByText('Recent work')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Delivery'));
     expect(screen.getByText('board view')).toBeInTheDocument();
+  });
+
+  it('opens the assistant session list from the hero body while Ask stays compose', () => {
+    const onAsk = vi.fn();
+    const onOpenAssistantSessions = vi.fn();
+    renderHome({
+      onAsk,
+      primaryTeammateName: 'Fable',
+      assistantSessionCount: 3,
+      onOpenAssistantSessions,
+    });
+
+    // Count is surfaced on the hero.
+    expect(screen.getByText(/3 sessions/)).toBeInTheDocument();
+
+    // The body region opens the assistant's sessions, not compose.
+    fireEvent.click(screen.getByRole('button', { name: "View Fable's sessions" }));
+    expect(onOpenAssistantSessions).toHaveBeenCalled();
+    expect(onAsk).not.toHaveBeenCalled();
+
+    // The Ask button still composes.
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(onAsk).toHaveBeenCalled();
   });
 });
