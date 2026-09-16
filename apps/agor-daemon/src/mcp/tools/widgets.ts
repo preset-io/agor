@@ -221,6 +221,25 @@ async function mintWidgetMessage(
 }
 
 /**
+ * Ask the gateway to project this widget into its Slack thread, if it has one.
+ *
+ * The gateway decides whether there is a thread at all — this tool does not
+ * know and should not learn. Silent on every failure for the same reason the
+ * store hook is: the widget is minted either way, and the repair sweep owns
+ * the card that did not post.
+ */
+function queueMcpSlackConnectCard(ctx: McpContext, widgetId: MessageID): void {
+  try {
+    const gateway = ctx.app.service('gateway') as unknown as {
+      syncMcpSlackConnectCardAfterCommit?: (id: MessageID, params?: unknown) => void;
+    };
+    gateway?.syncMcpSlackConnectCardAfterCommit?.(widgetId, ctx.baseServiceParams);
+  } catch {
+    console.warn('[widgets] MCP connect card projection could not be queued');
+  }
+}
+
+/**
  * Queue the system-authored prompt that wakes the agent back up.
  *
  * Used by the short-circuit paths only — the ordinary path queues this from
@@ -764,6 +783,14 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         status: 'pending',
         autoResume: true,
       });
+
+      // A Slack-originated request also gets a tappable card in the thread it
+      // was asked in. Fire-and-forget, after the mint has committed: the card
+      // is a projection of the widget row, so a projection that never runs
+      // costs a card the bounded repair sweep will post, not a lost widget.
+      // Every other platform — and the canvas — is served by the deep link
+      // below, which stays regardless.
+      queueMcpSlackConnectCard(ctx, widgetId);
 
       // The card renders in the Agor transcript, which a gateway user is not
       // looking at. Hand the agent something it can say.

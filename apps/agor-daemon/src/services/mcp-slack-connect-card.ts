@@ -17,6 +17,7 @@ import type {
   MCPSlackConnectDelivery,
   MCPSlackConnectRenderedState,
   Message,
+  MessageID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import type { OAuthWidgetResultMeta } from '../widgets/oauth/index.js';
@@ -279,4 +280,34 @@ export function messageMayNeedMcpSlackConnectSync(message: unknown): boolean {
 /** Clamp a button label to Slack's limit without emitting a bare ellipsis. */
 function clampButton(text: string): string {
   return text.length <= BUTTON_TEXT_MAX ? text : `${text.slice(0, BUTTON_TEXT_MAX - 1)}…`;
+}
+
+/**
+ * Nudge the Slack card after a widget lifecycle transition, if it has one.
+ *
+ * Hooked into `WidgetResolutionStore`'s change callback — the single writer of
+ * widget lifecycle state — rather than onto a global `messages` listener, so
+ * the projection wakes for widget transitions and not for every transcript row
+ * the daemon writes. The guard runs before the service lookup because most
+ * widgets never acquire a `slack_connect` record at all.
+ *
+ * Deliberately silent on every failure: a card that missed one edit is
+ * repaired by the bounded sweep, while a throw here would fail the widget
+ * resolution that has already committed.
+ */
+export function notifyMcpSlackConnectCard(
+  app: { service: (path: string) => unknown },
+  message: unknown,
+  params?: unknown
+): void {
+  if (!messageMayNeedMcpSlackConnectSync(message)) return;
+  const widgetId = (message as Message).message_id;
+  try {
+    const gateway = app.service('gateway') as {
+      syncMcpSlackConnectCardAfterCommit?: (id: MessageID, params?: unknown) => void;
+    };
+    gateway?.syncMcpSlackConnectCardAfterCommit?.(widgetId as MessageID, params);
+  } catch {
+    console.warn('[widgets] MCP connect card notification failed');
+  }
 }
