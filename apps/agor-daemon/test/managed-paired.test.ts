@@ -144,6 +144,20 @@ describe('actual paired provider browser and registered runtime', () => {
                 ).toString('base64'),
               }),
         })) as { status: number; headers: Record<string, string>; bodyBase64: string };
+        if (runtime && /\/(?:refresh|receipt)$/.test(new URL(target).pathname)) {
+          try {
+            const parsed = McpOAuthOperationResponseSchema.safeParse(
+              JSON.parse(Buffer.from(response.bodyBase64, 'base64').toString('utf8'))
+            );
+            if (parsed.success && 'failure_code' in parsed.data)
+              runtime.observations.push({
+                path: 'refresh-outcome',
+                outcome: `${parsed.data.status}:${parsed.data.failure_code}`,
+              });
+          } catch {
+            /* Never log raw provider, transport or token response bodies. */
+          }
+        }
         if (new URL(target).pathname === MCP_OAUTH_ROUTES.return_ticket)
           await afterReturnResponse?.();
         return new Response(
@@ -386,9 +400,11 @@ describe('actual paired provider browser and registered runtime', () => {
               string,
               { token: number; mcp: number }
             >;
-            expect(await runtime.call('mcp-servers/oauth-refresh', request)).toMatchObject({
-              success: true,
-            });
+            const refreshed = await runtime.call('mcp-servers/oauth-refresh', request);
+            expect(
+              refreshed.success,
+              `Refresh denied: ${String(refreshed.error)} ${failureFrames.join(' ')} ${JSON.stringify(runtime.observations.slice(-4))}`
+            ).toBe(true);
             const afterRefresh = (await cloud.call('counters')) as Record<
               string,
               { token: number; mcp: number }

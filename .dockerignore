@@ -45,6 +45,7 @@ Desktop.ini
 coverage
 .nyc_output
 **/.managed-paired-*
+**/.managed-integration-*
 
 # Storybook
 storybook-static
