@@ -97,6 +97,9 @@ jobs:
 
       # Docs have their own PR/push workflow and are intentionally excluded.
       - run: pnpm turbo run build typecheck --filter='!@agor/docs'
+      # The explicit paired lane is outside production declaration roots; still
+      # typecheck its real source graph even when private Cloud is unavailable.
+      - run: pnpm --filter @agor/daemon exec tsc -p tsconfig.managed-paired.json
       - run: pnpm check:mcp-oauth-build
 
       # @agor/executor#test includes this runtime check, which requires dist.

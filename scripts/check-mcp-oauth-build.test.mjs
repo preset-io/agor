@@ -1,13 +1,22 @@
-// Run after building core: node --test scripts/check-mcp-oauth-build.test.mjs
+// Run after building core and daemon: node --test scripts/check-mcp-oauth-build.test.mjs
 // Source aliases cannot detect duplicated state in independently bundled exports.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
+
+test('the published daemon excludes cross-repository provider and database fixtures', () => {
+  assert(existsSync(new URL('../apps/agor-daemon/dist/main.js', import.meta.url)));
+  assert.equal(
+    existsSync(new URL('../apps/agor-daemon/dist/services/test-support', import.meta.url)),
+    false,
+    'test-only subprocess and owned PostgreSQL fixtures must not be release entries'
+  );
+});
 
 for (const format of ['js', 'cjs']) {
   test(`OAuth refresh shares the daemon DB authority (${format})`, async (t) => {
