@@ -388,8 +388,12 @@ async function resolveOAuthWidgetFromCallback(
  * Mint gate — may this widget be created at all?
  *
  * Both checks belong to the widget type rather than to whichever caller is
- * minting, which is the point: stage 3's Slack projection will mint through the
- * same `mintWidgetMessage` seam and inherits them without deciding to.
+ * minting, which is the point: a caller cannot skip a precondition it never
+ * knew about. `agor_widgets_request_oauth`'s two mint paths — the pending
+ * widget and the `already_present` short-circuit — inherit both without
+ * deciding to, which is exactly how the short-circuit path kept getting the
+ * gate while it was quietly missing the params schema until
+ * `parseWidgetMintParams` joined it on the same seam.
  *
  * `params` is absent when a caller runs this early, before it has resolved a
  * destination — the identity question needs no params and is worth answering

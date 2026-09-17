@@ -451,16 +451,19 @@ async function installCatalogOAuthServer(
  *
  * The widget renders in the Agor transcript. For a session that came from
  * Slack, Discord, GitHub or Teams, that transcript is a page the user is not
- * looking at, and NO platform projects the card into its own thread today —
- * the Slack Block Kit projection is the one piece of §7 that is not built, and
- * it is Slack-only when it is. So a gateway session passes the alignment
- * guard, mints a real widget, and then has nothing to show for it: the agent
- * returns `status: "requested"` and, having no link, can only say a button
- * exists somewhere.
+ * looking at. Slack now gets a Block Kit card in its own thread (§7); every
+ * other platform still does not, and even on Slack the card can be refused —
+ * an unaligned channel, a moved binding, a deployment with no
+ * `AGOR_MASTER_SECRET`, or the operator kill switch. So a gateway session can
+ * pass the alignment guard, mint a real widget, and still have nothing to show
+ * for it: the agent returns `status: "requested"` and, having no link, can
+ * only say a button exists somewhere.
  *
- * So gateway-sourced mints carry the session URL back to the agent, to relay
- * into the thread. Returns null for a canvas session (the user is already
- * looking at the transcript) and for a deployment whose configured base URL is
+ * So EVERY gateway-sourced mint carries the session URL back to the agent, to
+ * relay into the thread — including Slack's, where it is the fallback the card
+ * degrades to rather than a duplicate of it. Returns null for a canvas session
+ * (the user is already looking at the transcript) and for a deployment whose
+ * configured base URL is
  * a bind address rather than somewhere a browser can reach — the same
  * `0.0.0.0` guard `fetchExistingSessionUrlForGatewayUser` applies, for the
  * same reason: a link nobody can open is worse than none, because the agent

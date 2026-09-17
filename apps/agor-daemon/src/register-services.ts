@@ -3670,8 +3670,8 @@ export async function registerMCPServices(
    * attempt, and the widget itself is still only resolved when the browser
    * POSTs `/widgets/:id/oauth-resolve` and the daemon re-reads the grant. What
    * this gives is a record of what the provider round-trip did, which the
-   * preflight renders and which stage 3's Slack projection will read to decide
-   * what the thread should now say.
+   * preflight renders and which the Slack projection reads — through
+   * `mcpSlackConnectRenderedState` — to decide what the thread should now say.
    */
   const projectSlackConnectOAuthResult = async (
     pendingFlow: PendingOAuthFlow,
