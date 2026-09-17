@@ -271,14 +271,18 @@ export async function resolveSlackConnectBinding(
     credentialUserId: task.created_by as UserID,
     sessionId: message.session_id as SessionID,
     gatewayChannelId: slack.gatewayChannelId,
-    gatewayConfigGeneration: await currentChannelGeneration(deps, slack.gatewayChannelId),
+    // Issue time: there is no earlier claim to compare against, and pinning
+    // whatever is stored right now is exactly what makes a later change
+    // invalidate the link. Said in the type rather than by re-reading the row
+    // and handing its own value back — that spelling reads as a check while
+    // being `x !== x`. The link already sealed against an OLDER generation is
+    // caught below, from the delivery record, which is the only thing that
+    // remembers it.
+    gatewayConfigGeneration: 'current',
     slackChannelId: slack.channelId,
     slackThreadId: slack.threadId,
     mcpServerId: params.mcpServerId as MCPServerID,
-    mcpServerConfigVersion: await currentServerConfigVersion(
-      deps,
-      params.mcpServerId as MCPServerID
-    ),
+    mcpServerConfigVersion: 'current',
   });
   if (!authority) return refuse('authority_moved');
 
@@ -296,9 +300,9 @@ export async function resolveSlackConnectBinding(
   // A link already sealed against an older channel configuration would be
   // refused at redemption, because the token pins the generation and the
   // authority re-read compares it. Catch that HERE rather than at delivery:
-  // the authority read above compares the channel's generation to itself (it
-  // has no earlier claim to compare against at issue time), so the only record
-  // of what the live link was sealed against is the delivery row.
+  // the authority read above is deliberately `'current'` (it has no earlier
+  // claim to compare against at issue time), so the only record of what the
+  // live link was sealed against is the delivery row.
   const sealedGeneration = widget.slack_connect?.gateway_config_generation;
   if (
     sealedGeneration !== undefined &&
@@ -442,26 +446,4 @@ export async function issueMCPOAuthConnectLink(
     },
     authority,
   };
-}
-
-/**
- * The generation/version the authority read must agree with is whatever is
- * stored right now: at issue time there is no earlier claim to compare
- * against, and pinning the current value is exactly what makes a later change
- * invalidate the link.
- */
-async function currentChannelGeneration(
-  deps: MCPOAuthConnectLinkDeps,
-  channelId: string
-): Promise<number> {
-  const channel = await deps.repositories.channels.findById(channelId);
-  return channel?.provider_config_generation ?? -1;
-}
-
-async function currentServerConfigVersion(
-  deps: MCPOAuthConnectLinkDeps,
-  serverId: MCPServerID
-): Promise<number> {
-  const server = await deps.repositories.servers.findById(serverId);
-  return server?.config_version ?? 1;
 }
