@@ -100,6 +100,53 @@ describe.runIf(bwrapRuntimeAvailable)('Claude credential sandbox containment', (
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
 
+  it('preserves host identity for branch writes but not projected home paths', async () => {
+    const siblingBranch = join(root, 'data', 'worktrees', 'repo', 'sibling');
+    await mkdir(siblingBranch);
+    await writeFile(join(siblingBranch, 'private.txt'), 'sibling-private');
+
+    const wrapped = buildSandboxWrap({
+      sandbox: {
+        enabled: true,
+        home_mode: 'per_user',
+        preserve_canonical_home_alias: true,
+        fail_if_unavailable: true,
+        include: { tmp: false },
+      },
+      branchPath: branch,
+      branchAccess: 'write',
+      cmd: '/bin/sh',
+      args: [
+        '-c',
+        `set -eu
+printf branch-write > "$1/branch-canary"
+printf home-write > "$2/home-canary"
+test "$(cat "$3/home-canary")" = home-write
+if cat "$4/private.txt" 2>/dev/null; then exit 70; fi`,
+        'sh',
+        branch,
+        home,
+        canonicalHome,
+        siblingBranch,
+      ],
+      ownerHomeStore: ownerStore,
+      runtimePaths,
+    });
+    expect(wrapped).not.toBeNull();
+    const result = spawnSync(wrapped!.cmd, wrapped!.args, { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+
+    // A consumer outside this mount namespace (e.g. dockerd) sees branch
+    // writes at the same path. Home writes reach the owner store instead:
+    // resolving a home alias outside the sandbox does not reach that inode.
+    expect(await readFile(join(branch, 'branch-canary'), 'utf8')).toBe('branch-write');
+    expect(await readFile(join(ownerStore, 'home-canary'), 'utf8')).toBe('home-write');
+    for (const alias of [home, canonicalHome]) {
+      await expect(readFile(join(alias, 'home-canary'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(await readFile(join(siblingBranch, 'private.txt'), 'utf8')).toBe('sibling-private');
+  });
+
   it('blocks parent/sidecar attacks through every live alias while ordinary Claude state stays writable', async () => {
     const authorityPaths = AUTHORITY_FILENAMES.map((filename) =>
       join(ownerStore, '.claude', filename)
