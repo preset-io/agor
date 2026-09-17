@@ -980,6 +980,37 @@ their own claim, mint, render and settle loops over their own records. Pinning
 the contract in a test first is what makes that extraction checkable when it
 happens.
 
+### 7.1.7 The batch-A real-stack drive
+
+Same shape as §7.1 and §7.1.2 — a real daemon (`tsx src/main.ts`), an isolated
+`HOME`, a migrated SQLite database, and **Slack's API and only Slack's API
+replaced** at `WebClient.prototype.apiCall` — repeated for the delivery paths
+this batch touched. Fifty widgets on an unaligned channel and one healthy
+widget behind them, all seeded through real repositories before the daemon
+started, so nothing in process knew any of them existed.
+
+| Case                                         | Result                                                                                                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Start with 50 refused markers ahead          | One `chat.postMessage`, for the healthy card, with the sealed token in the fragment. All 50 refused markers rescheduled into the future; none retired.                                                              |
+| Administrator re-enables `align_slack_users` | All 50 previously blocked cards delivered once their rescheduled time arrived — one post per thread, no duplicates. The marker kept its trigger and gave up its queue position, which is the whole intent.          |
+| Delayed edit loses its claim                 | Two `chat.update` calls on the same `ts`: the late edit putting the Connect button back, then the repaint removing it. Durable end state `status: dismissed`, `rendered_state: cancelled`, no claim, no repair due. |
+| Restart on the fixed tree                    | No card reposted or repainted; 51 records steady.                                                                                                                                                                   |
+
+The A1 interleaving was driven rather than simulated: the fake Slack layer runs
+a **separate process** on the first `chat.update`, which takes the widget row
+through the real `MessagesRepository.mutateMetadataLocked` and leaves exactly
+what a second claimant leaves — dismissed widget, `cancelled` rendered onto the
+recorded `ts`, claim released.
+
+What this drive could NOT discriminate is the tenant-scope fix. The inbound
+path it can reach is `POST /gateway` with a personal API key, and that request
+holds a tenant database scope for its whole life, so the pre-fix build warns
+correctly there too. The path the defect is on — `GatewayService.create` called
+**directly** by the Socket Mode listener under `runWithTenantContext` and
+nothing else — needs a live Socket Mode connection the fake does not provide.
+That entry shape is what the regression test drives, against the production
+guard, and it fails on the preceding commit.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers
