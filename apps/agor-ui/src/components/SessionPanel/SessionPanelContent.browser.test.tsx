@@ -363,16 +363,27 @@ it.each([390, 220])(
       expect(queueList().clientHeight).toBeGreaterThan(25);
     });
     const composer = screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji');
-    // Scroll to the queue's end using real wheel input, then chain into the outer
-    // session body. Do not focus/scrollIntoView the composer to make this pass.
+    // Chromium can keep successive wheel events latched to the queue even at
+    // its end. Exercise continued real wheel input until the outer body scrolls,
+    // rather than assuming exactly two events cross that native gesture boundary.
+    // Never focus/scrollIntoView the composer to make wheel reachability pass.
+    const wheelToComposer = () =>
+      waitFor(
+        async () => {
+          await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
+          const rect = composer.getBoundingClientRect();
+          expect(rect.top).toBeGreaterThan(0);
+          expect(rect.bottom).toBeLessThanOrEqual(height);
+        },
+        { interval: 200, timeout: 3000 }
+      );
     await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
-    await waitFor(() => expect(queueList().scrollTop).toBeGreaterThan(0));
-    await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
-    await waitFor(() => {
-      const rect = composer.getBoundingClientRect();
-      expect(rect.top).toBeGreaterThan(0);
-      expect(rect.bottom).toBeLessThanOrEqual(height);
-    });
+    await waitFor(() =>
+      expect(
+        queueList().scrollHeight - queueList().clientHeight - queueList().scrollTop
+      ).toBeLessThanOrEqual(1)
+    );
+    await wheelToComposer();
     await userEvent.fill(composer, 'First line\nSecond line\nThird line');
     await waitFor(() => expect(composer.clientHeight).toBeGreaterThan(60));
     await userEvent.keyboard('{Shift>}{Tab}{/Shift}{Tab}');
@@ -386,12 +397,7 @@ it.each([390, 220])(
     // Repeat outer wheel reachability with the expanded draft, without focus
     // helping the browser bring the textarea back into view.
     act(() => composer.blur());
-    await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
-    await waitFor(() => {
-      const rect = composer.getBoundingClientRect();
-      expect(rect.top).toBeGreaterThan(0);
-      expect(rect.bottom).toBeLessThanOrEqual(height);
-    });
+    await wheelToComposer();
     expect(composer).toHaveValue('First line\nSecond line\nThird line');
     expect(conversation().clientHeight).toBeGreaterThan(100);
     expect(queueList().clientHeight).toBeGreaterThan(60);
