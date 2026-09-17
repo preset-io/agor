@@ -17,6 +17,12 @@ export const MOBILE_SHELL_MAX_WIDTH = 1024;
 /** Media query matching mobile-shell viewports (`< MOBILE_SHELL_MAX_WIDTH`). */
 export const MOBILE_SHELL_MEDIA_QUERY = `(max-width: ${MOBILE_SHELL_MAX_WIDTH - 1}px)`;
 
+/** The exact complement of AntD's `md` query, so it agrees with `!screens.md` at fractional widths too. */
+export const COMPACT_SETTINGS_MEDIA_QUERY = 'not all and (min-width: 768px)';
+
+/** Minimum touch-target size (px) for interactive controls on mobile-shell viewports. */
+export const MOBILE_TOUCH_TARGET = 44;
+
 /** Whether the current viewport should render the mobile shell. */
 export function isMobileViewport(): boolean {
   if (typeof window === 'undefined') return false;

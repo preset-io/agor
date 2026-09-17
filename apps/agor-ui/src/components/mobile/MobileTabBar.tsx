@@ -6,8 +6,8 @@ import {
   ShopOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Flex, theme } from 'antd';
+import { MOBILE_TOUCH_TARGET as TOUCH_TARGET } from '../../utils/deviceDetection';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
-import { MOBILE_TOUCH_TARGET as TOUCH_TARGET } from './constants';
 
 export type MobileTab = 'home' | 'board' | 'ask' | 'marketplace' | 'more';
 

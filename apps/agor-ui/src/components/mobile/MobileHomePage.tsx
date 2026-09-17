@@ -3,10 +3,12 @@ import { RightOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Empty, Flex, List, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
 import { getBoardEmoji } from '../BoardTile';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
 import { JumpBackInSection } from '../HomePage/JumpBackInSection';
-import { MOBILE_TOUCH_TARGET, mobileScrollAreaStyle } from './constants';
+import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -201,17 +203,9 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                 dataSource={boards}
                 renderItem={(board) => (
                   <List.Item
-                    role="button"
-                    tabIndex={0}
+                    {...pressableProps(() => navigate(`/m/board/${board.board_id}`))}
                     aria-label={`Open ${board.name}`}
-                    onClick={() => navigate(`/m/board/${board.board_id}`)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        navigate(`/m/board/${board.board_id}`);
-                      }
-                    }}
-                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
+                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: MOBILE_TOUCH_TARGET }}
                   >
                     <List.Item.Meta
                       avatar={

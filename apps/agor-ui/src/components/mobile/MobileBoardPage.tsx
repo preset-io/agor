@@ -39,13 +39,13 @@ import {
   theme,
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getSessionDisplayTitle } from '@/utils/sessionTitle';
+import { isSafeExternalUrl } from '@/utils/safeExternalUrl';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
-import { StatusPill } from '../Pill';
 import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
+import { MobileSessionRow } from './MobileSessionRow';
 
 const { Content } = Layout;
 const { Paragraph, Text, Title } = Typography;
@@ -84,15 +84,6 @@ function statusColor(status: Branch['filesystem_status']): string {
 
 function spatialSort<T extends { x: number; y: number }>(a: T, b: T): number {
   return a.y - b.y || a.x - b.x;
-}
-
-function safeExternalUrl(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  try {
-    return ['http:', 'https:', 'mailto:'].includes(new URL(url).protocol) ? url : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function ZoneTag({ zone }: { zone: BoardObject | undefined }) {
@@ -252,29 +243,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             size="small"
             locale={{ emptyText: 'No sessions yet' }}
             dataSource={sessions.slice(0, 4)}
-            renderItem={(session) => (
-              <List.Item
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${getSessionDisplayTitle(session, { fallbackChars: 40 })}`}
-                onClick={() => navigate(`/m/session/${session.session_id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    navigate(`/m/session/${session.session_id}`);
-                  }
-                }}
-                style={{ paddingInline: 0, cursor: 'pointer', minHeight: 44 }}
-                extra={<RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />}
-              >
-                <List.Item.Meta
-                  title={
-                    <Text ellipsis>{getSessionDisplayTitle(session, { fallbackChars: 40 })}</Text>
-                  }
-                  description={<StatusPill status={session.status} />}
-                />
-              </List.Item>
-            )}
+            renderItem={(session) => <MobileSessionRow session={session} />}
           />
           <Button block icon={<PlusOutlined />} onClick={() => onNewSession(branch.branch_id)}>
             New session
@@ -459,7 +428,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                 Cards
               </Title>
               {cards.map(({ card, placement }) => {
-                const externalUrl = safeExternalUrl(card.url);
+                const externalUrl = isSafeExternalUrl(card.url) ? card.url : undefined;
                 const zone = placement.zone_id ? board.objects?.[placement.zone_id] : undefined;
                 return (
                   <Card

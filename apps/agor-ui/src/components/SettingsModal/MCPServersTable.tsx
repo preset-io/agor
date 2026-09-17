@@ -29,6 +29,7 @@ import {
   Input,
   Popconfirm,
   Space,
+  Table,
   Tabs,
   Tag,
   Tooltip,
@@ -70,7 +71,6 @@ import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
-import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -773,7 +773,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         )}
       />
 
-      <ResponsiveTable
+      {/* Plain Table: this one already collapses to a phone-width Server/Actions layout (see the layout browser test). */}
+      <Table
         dataSource={servers}
         columns={columns}
         rowKey="mcp_server_id"

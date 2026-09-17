@@ -52,6 +52,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { EffortSelector } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
@@ -179,7 +180,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // phones so they cannot push Stop/Queue outside the viewport.
   const actionSize = isMobile ? 'middle' : 'small';
   const touchActionStyle: React.CSSProperties | undefined = isMobile
-    ? { minHeight: 44, minWidth: 44 }
+    ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
     : undefined;
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
@@ -299,7 +300,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     alignItems: 'center',
     gap: 8,
     padding: '0 6px 0 12px',
-    height: isMobile ? 44 : 32,
+    height: isMobile ? MOBILE_TOUCH_TARGET : 32,
   };
 
   const moreContent = (

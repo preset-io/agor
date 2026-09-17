@@ -1,6 +1,8 @@
 import type { Branch, Session } from '@agor-live/client';
 import { List, Typography, theme } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { StatusPill } from '../Pill';
 
@@ -10,8 +12,8 @@ interface MobileSessionRowProps {
 }
 
 /**
- * Shared session list row (title + branch/model subtitle + StatusPill), used by
- * both the Sessions list and Home's "Jump back in". Tapping opens the
+ * Shared session list row (title + branch/model subtitle + StatusPill) for every
+ * mobile session list: Sessions, Home, and Board branch cards. Tapping opens the
  * full-screen session view. Keyboard-operable.
  */
 export const MobileSessionRow: React.FC<MobileSessionRowProps> = ({ session, branch }) => {
@@ -23,17 +25,9 @@ export const MobileSessionRow: React.FC<MobileSessionRowProps> = ({ session, bra
 
   return (
     <List.Item
-      role="button"
-      tabIndex={0}
+      {...pressableProps(open)}
       aria-label={`Open ${title}`}
-      onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          open();
-        }
-      }}
-      style={{ cursor: 'pointer', paddingInline: 0, minHeight: 44 }}
+      style={{ cursor: 'pointer', paddingInline: 0, minHeight: MOBILE_TOUCH_TARGET }}
     >
       <List.Item.Meta
         title={

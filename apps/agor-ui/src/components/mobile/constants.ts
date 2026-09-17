@@ -1,8 +1,5 @@
 import type { CSSProperties } from 'react';
 
-/** Minimum touch-target size (px) for interactive controls on the mobile shell. */
-export const MOBILE_TOUCH_TARGET = 44;
-
 /**
  * Base style for a mobile page's vertical scroll region. `overflowX` is pinned
  * hidden because a `overflow-y: auto` box computes `overflow-x` to `auto` too,

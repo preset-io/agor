@@ -8,8 +8,9 @@ import {
 import { Badge, Button, Drawer, Flex, Layout, List, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
 import { BrandMark } from '../BrandMark';
-import { MOBILE_TOUCH_TARGET } from './constants';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -165,16 +166,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
               };
               return (
                 <List.Item
-                  role="button"
-                  tabIndex={0}
+                  {...pressableProps(select)}
                   aria-label={`Switch to ${board.name}`}
-                  onClick={select}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      select();
-                    }
-                  }}
                   style={{
                     cursor: 'pointer',
                     paddingInline: token.padding,

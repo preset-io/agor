@@ -1,17 +1,14 @@
 import { Button, Empty, Flex, Spin, Table, type TableProps, Typography, theme } from 'antd';
 import { useState } from 'react';
-import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { COMPACT_SETTINGS_MEDIA_QUERY } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
 
 /**
- * Drop-in AntD Table replacement that becomes a stacked card list on the mobile
- * shell so wide settings tables stop overflowing horizontally on a phone.
- *
- * On the desktop shell it renders `<Table {...props} />` verbatim (unchanged),
- * gated on the same 1024px breakpoint as the shell so 768-1023px keeps the
- * desktop table. Each card exposes the same columns (dl/dt/dd label/value pairs,
- * actions column as a footer), forwards `onRow` (row tap + keyboard), and paginates.
- * rowSelection / expandable are not represented as cards, so a table using them
- * stays a Table even on mobile rather than silently losing behavior.
+ * Drop-in AntD Table replacement that stacks rows into cards below the settings
+ * family's compact breakpoint (AntD `md`), so wide tables fit a phone and 768px+
+ * keeps the desktop table. Cards expose the same columns, forward `onRow`, and
+ * paginate. A table using rowSelection / expandable stays a Table at every width.
  */
 
 type Row = Record<string, unknown>;
@@ -36,10 +33,8 @@ function cellValue(record: Row, dataIndex: MinimalColumn['dataIndex']): unknown 
   return current;
 }
 
-// Bucketed by the explicit `actions` key, not an empty title, so a titleless
-// value/icon column isn't mistaken for the row's action buttons.
-const isActionColumn = (col: MinimalColumn): boolean =>
-  col.key === 'actions' || col.title === 'Actions';
+// Bucketed by the explicit `actions` key, never by display text, so a retitled column keeps its footer slot
+const isActionColumn = (col: MinimalColumn): boolean => col.key === 'actions';
 
 function pageSizeFor(pagination: TableProps<object>['pagination']): number {
   if (pagination && typeof pagination === 'object' && pagination.pageSize)
@@ -48,12 +43,12 @@ function pageSizeFor(pagination: TableProps<object>['pagination']): number {
 }
 
 export function ResponsiveTable<RecordType extends object>(props: TableProps<RecordType>) {
-  const isMobile = useIsMobileViewport();
+  const isCompact = useMediaQuery(COMPACT_SETTINGS_MEDIA_QUERY);
   const { token } = theme.useToken();
   const [visibleCount, setVisibleCount] = useState(() => pageSizeFor(props.pagination));
 
-  // Desktop shell, or features the card layout can't faithfully represent.
-  if (!isMobile || props.rowSelection || props.expandable) {
+  // Wide layout, or features the card layout can't faithfully represent.
+  if (!isCompact || props.rowSelection || props.expandable) {
     return <Table<RecordType> {...props} />;
   }
 
@@ -99,19 +94,7 @@ export function ResponsiveTable<RecordType extends object>(props: TableProps<Rec
         return (
           <div
             key={keyFor(record, index)}
-            role={activate ? 'button' : undefined}
-            tabIndex={activate ? 0 : undefined}
-            onClick={activate}
-            onKeyDown={
-              activate
-                ? (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      activate();
-                    }
-                  }
-                : undefined
-            }
+            {...(activate ? pressableProps(activate) : undefined)}
             style={{
               border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
               // Match the Home/settings card radius (GlassPanel / AntD Card use LG).

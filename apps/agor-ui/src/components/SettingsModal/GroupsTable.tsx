@@ -230,6 +230,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           },
           {
             title: 'Actions',
+            key: 'actions',
             width: 76,
             render: (_: unknown, group: Group) => (
               <SettingsActionGroup>
