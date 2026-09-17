@@ -188,15 +188,23 @@ it('supports keyboard and pointer resizing without sacrificing the conversation 
   await expectBounded();
   const handle = divider();
   expect(handle).toHaveAttribute('aria-orientation', 'horizontal');
+  expect(handle.getBoundingClientRect().height).toBe(4);
   act(() => handle.focus());
   await userEvent.keyboard('{Home}');
+  expect(handle).toHaveFocus();
+  expect(getComputedStyle(handle).outlineStyle).not.toBe('none');
+  expect(parseFloat(getComputedStyle(handle).outlineWidth)).toBeGreaterThan(0);
   await expectBounded();
   const expandedQueue = queueList().clientHeight;
   await userEvent.keyboard('{End}');
   await expectBounded();
   expect(queueList().clientHeight).toBeLessThanOrEqual(expandedQueue);
   if (window.innerHeight > 500) expect(queueList().clientHeight).toBeLessThan(expandedQueue);
-  await userEvent.dragAndDrop(handle, screen.getByRole('banner'));
+  // Start outside the visible 4px divider, inside the library's fine-pointer margin.
+  await userEvent.dragAndDrop(handle, screen.getByRole('banner'), {
+    sourcePosition: { x: handle.clientWidth / 2, y: -6 },
+    force: true,
+  });
   await expectBounded();
   if (window.innerHeight > 500) {
     await waitFor(() => expect(queueList().clientHeight).toBeGreaterThan(80));

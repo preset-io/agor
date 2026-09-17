@@ -31,7 +31,8 @@ export function SessionConversationLayout({
   const rowsRef = useRef<HTMLDivElement>(null);
   const [measurements, setMeasurements] = useState({ available: 0, natural: 0 });
   const hasQueue = !!queue;
-  const handleSize = token.sizeUnit * 2;
+  // Fixed visual/layout thickness; hit-area margins below preserve easy grabbing.
+  const handleSize = 4;
   const padding = token.sizeUnit;
 
   useLayoutEffect(() => {
@@ -54,7 +55,7 @@ export function SessionConversationLayout({
     }
     measure();
     return () => observer.disconnect();
-  }, [hasQueue, handleSize, padding]);
+  }, [hasQueue, padding]);
 
   const { available, natural } = measurements;
   // Protect 240px of transcript where space permits, or 60% on short panels.
@@ -106,6 +107,8 @@ export function SessionConversationLayout({
           <>
             <PanelResizeHandle
               id={`${id}-resize`}
+              // Preserve the former 8px handle's 18px fine / 38px coarse hit areas.
+              hitAreaMargins={{ fine: 7, coarse: 17 }}
               onDragging={(dragging) => {
                 draggingRef.current = dragging;
               }}
