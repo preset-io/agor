@@ -65,11 +65,14 @@ vi.mock('@agor/core/gateway', async () => {
 
 import { GatewayService } from './gateway.js';
 import {
+  MCP_SLACK_CONNECT_MARKER_BACKOFF_MS,
+  MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS,
   MCP_SLACK_CONNECT_SHARED_WARNING_KEY,
   mcpSlackConnectBlocks,
   mcpSlackConnectCardCopy,
   mcpSlackConnectExpiryDelay,
   mcpSlackConnectMayReissue,
+  mcpSlackConnectRefusedMarkerDueAt,
   mcpSlackConnectRenderedState,
   messageMayNeedMcpSlackConnectSync,
   slackConversationIsDirectMessage,
@@ -296,6 +299,41 @@ describe('Slack MCP connect presentation', () => {
     expect(
       mcpSlackConnectRenderedState({ widget: widget(), delivery: failed, willReissue: true }, NOW)
     ).toBe('connect_required');
+  });
+
+  it('reschedules a refused first-card marker without letting it live forever', () => {
+    const now = Date.parse('2026-09-16T12:00:00.000Z');
+    const fresh = mcpSlackConnectRefusedMarkerDueAt(
+      {
+        requested_at: '2026-09-16T11:59:00.000Z',
+        slack_connect_due_at: '2026-09-16T11:59:00.000Z',
+      },
+      now
+    );
+    expect(fresh).toBe(new Date(now + MCP_SLACK_CONNECT_MARKER_BACKOFF_MS).toISOString());
+
+    // Near the end of the window the next look is the deadline itself, never
+    // past it.
+    const nearly = '2026-09-15T12:02:00.000Z';
+    expect(
+      mcpSlackConnectRefusedMarkerDueAt({ requested_at: nearly, slack_connect_due_at: nearly }, now)
+    ).toBe(new Date(Date.parse(nearly) + MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS).toISOString());
+
+    // Past it, the marker is pinned back to the anchor the sweep's horizon
+    // already excludes — retired by ageing, exactly as before.
+    const aged = '2026-09-15T11:00:00.000Z';
+    expect(
+      mcpSlackConnectRefusedMarkerDueAt({ requested_at: aged, slack_connect_due_at: aged }, now)
+    ).toBe(aged);
+
+    // Nothing to write.
+    expect(mcpSlackConnectRefusedMarkerDueAt({ requested_at: aged }, now)).toBeUndefined();
+    expect(
+      mcpSlackConnectRefusedMarkerDueAt(
+        { requested_at: 'not-a-date', slack_connect_due_at: 'not-a-date' },
+        now
+      )
+    ).toBeUndefined();
   });
 
   it('never holds an expiry timer open for a terminal card', () => {
@@ -642,19 +680,50 @@ describe('Slack MCP connect durable delivery', () => {
     expect(harness.dueMarker()).toBeUndefined();
   });
 
-  it('keeps the mint marker for a refusal an administrator can undo', async () => {
-    // Alignment can be switched back on, and the card the user was promised
-    // has no other durable trigger. Dropping the marker here would make the
-    // widget's Slack face unrecoverable.
+  /**
+   * Alignment can be switched back on, and the card the user was promised has
+   * no other durable trigger — so the marker survives. Its QUEUE POSITION does
+   * not: the sweep reads the oldest page of due work, so a marker left at its
+   * original overdue timestamp sits at the front of that page for as long as
+   * the refusal lasts, and fifty of them starve every healthy card behind
+   * them of a first delivery and of every repair.
+   */
+  it('keeps a reversibly refused marker but moves it off the front of the queue', async () => {
+    const requestedAt = new Date(Date.now() - 60_000).toISOString();
     const harness = deliveryHarness({
       delivery: null,
       channel: { config: { align_slack_users: false } },
-      widget: { slack_connect_due_at: '2026-09-16T11:59:00.000Z' },
+      widget: { requested_at: requestedAt, slack_connect_due_at: requestedAt },
     });
     await withSecret(() => harness.deliver());
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
-    expect(harness.dueMarker()).toBe('2026-09-16T11:59:00.000Z');
+    const marker = harness.dueMarker();
+    expect(marker).toBeDefined();
+    expect(Date.parse(marker!)).toBeGreaterThan(Date.now());
+    expect(Date.parse(marker!)).toBeLessThanOrEqual(
+      Date.now() + MCP_SLACK_CONNECT_MARKER_BACKOFF_MS
+    );
+  });
+
+  /**
+   * Rescheduling must not make a marker immortal. The window stays anchored to
+   * the mint, so a card nobody ever unblocks falls out of the sweep's horizon
+   * exactly when it used to — by being pinned back to the anchor the horizon
+   * already excludes.
+   */
+  it('stops rescheduling a marker that has aged past the repair horizon', async () => {
+    const requestedAt = new Date(
+      Date.now() - MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS - 60_000
+    ).toISOString();
+    const harness = deliveryHarness({
+      delivery: null,
+      channel: { config: { align_slack_users: false } },
+      widget: { requested_at: requestedAt, slack_connect_due_at: requestedAt },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.dueMarker()).toBe(requestedAt);
   });
 
   it('hands the due column to the delivery record once a link is issued', async () => {

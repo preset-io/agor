@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
 import { LEAN_TRANSCRIPT_METADATA_FIELDS } from '../../types/message';
@@ -28,6 +28,12 @@ import { invalidateRecordedToolCount } from './recorded-tool-count';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
+
+/** Keyset position in the MCP Slack connect due-work ordering. */
+export interface MCPSlackConnectDueCursor {
+  dueAt: Date;
+  messageId: string;
+}
 
 export type MessageFindPageOptions = {
   messageId?: MessageID;
@@ -412,28 +418,52 @@ export class MessagesRepository {
    * bounds how far back a sweep reaches so an abandoned row from last month
    * cannot crowd out today's work, and the query rides the partial index
    * rather than reading a table that holds every message ever sent.
+   *
+   * `after` continues the same ordering, so a caller with a page budget can
+   * reach work behind a full page of cards it could not advance. Without it
+   * one page is all a tenant ever sees, and anything that reliably occupies
+   * the oldest `limit` rows hides every card behind it indefinitely.
    */
   async findMcpSlackConnectDuePage(
-    options: { now?: Date; horizon?: Date; limit?: number } = {}
-  ): Promise<{ messages: Message[] }> {
+    options: { now?: Date; horizon?: Date; limit?: number; after?: MCPSlackConnectDueCursor } = {}
+  ): Promise<{ messages: Message[]; cursor?: MCPSlackConnectDueCursor }> {
     const limit = options.limit ?? 100;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       throw new Error('MCP Slack connect repair limit must be between 1 and 100');
     }
     const now = options.now ?? new Date();
     const horizon = options.horizon ?? new Date(now.getTime() - 24 * 60 * 60_000);
+    const after = options.after;
     const rows = await select(this.db)
       .from(messages)
       .where(
         and(
           gte(messages.mcp_slack_connect_due_at, horizon),
-          lte(messages.mcp_slack_connect_due_at, now)
+          lte(messages.mcp_slack_connect_due_at, now),
+          ...(after
+            ? [
+                or(
+                  gt(messages.mcp_slack_connect_due_at, after.dueAt),
+                  and(
+                    eq(messages.mcp_slack_connect_due_at, after.dueAt),
+                    gt(messages.message_id, after.messageId)
+                  )
+                ),
+              ]
+            : [])
         )
       )
       .orderBy(asc(messages.mcp_slack_connect_due_at), asc(messages.message_id))
       .limit(limit)
       .all();
-    return { messages: rows.map((row: MessageRow) => this.rowToMessage(row)) };
+    const last = rows.at(-1) as MessageRow | undefined;
+    const lastDueAt = last?.mcp_slack_connect_due_at;
+    return {
+      messages: rows.map((row: MessageRow) => this.rowToMessage(row)),
+      ...(last && lastDueAt
+        ? { cursor: { dueAt: new Date(lastDueAt), messageId: last.message_id } }
+        : {}),
+    };
   }
 
   /**
