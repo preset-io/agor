@@ -330,6 +330,8 @@ interface HarnessOptions {
   delivery?: Partial<MCPSlackConnectDelivery> | null;
   channel?: Partial<GatewayChannel>;
   sendMessage?: ReturnType<typeof vi.fn>;
+  /** `null` stands in for a connector that cannot delete its own messages. */
+  deleteMessage?: ReturnType<typeof vi.fn> | null;
   claimMetadataFlag?: ReturnType<typeof vi.fn>;
   conversationType?: string;
   slackChannelId?: string;
@@ -355,7 +357,14 @@ function deliveryHarness(options: HarnessOptions = {}) {
 
   const sendMessage = options.sendMessage ?? vi.fn(async () => '1700000000.000002');
   const findMessageByMetadata = vi.fn(async () => undefined);
-  const connector = { channelType: 'slack' as const, findMessageByMetadata, sendMessage };
+  const deleteMessage =
+    options.deleteMessage === null ? undefined : (options.deleteMessage ?? vi.fn(async () => {}));
+  const connector = {
+    channelType: 'slack' as const,
+    findMessageByMetadata,
+    sendMessage,
+    ...(deleteMessage ? { deleteMessage } : {}),
+  };
   const claimMetadataFlag = options.claimMetadataFlag ?? vi.fn(async () => true);
 
   const service = new GatewayService({ run: vi.fn() } as never, {} as never);
@@ -428,9 +437,26 @@ function deliveryHarness(options: HarnessOptions = {}) {
   return {
     service,
     sendMessage,
+    deleteMessage,
     claimMetadataFlag,
     current: () => message.metadata?.widget?.slack_connect,
     widgetState: () => message.metadata?.widget?.status,
+    /** Stand in for a second daemon writing the same row mid-delivery. */
+    patch: (
+      mutate: (
+        widget: WidgetMessageMetadata,
+        delivery: MCPSlackConnectDelivery
+      ) => Partial<WidgetMessageMetadata> & { slack_connect: MCPSlackConnectDelivery }
+    ) => {
+      const widget = message.metadata!.widget!;
+      message = {
+        ...message,
+        metadata: {
+          ...message.metadata,
+          widget: { ...widget, ...mutate(widget, widget.slack_connect!) },
+        },
+      } as Message;
+    },
     deliver: () =>
       runWithTenantContext('tenant-a', () =>
         (
@@ -631,6 +657,100 @@ describe('Slack MCP connect durable delivery', () => {
     expect((harness.sendMessage.mock.calls[0]![0] as { text: string }).text).not.toMatch(
       /shared conversation/i
     );
+  });
+
+  /**
+   * A post that outlives its own 30s lease, landing after someone else won.
+   *
+   * The claim is a lease, so a stalled first post can return long after a
+   * second claimant took the expired claim, posted the row that counts, and
+   * released it. Treating an absent claim as consent then records the OTHER
+   * card's `ts` and drops this one's receipt: two Slack messages for one
+   * widget, and repair only ever edits the recorded one, so the stalled post's
+   * live Connect button stays in the thread for good. Exactly the stale card
+   * D7 accepted on the grounds that supersede handles it — which it cannot,
+   * because this row is not in the record.
+   */
+  it('retires the card it posted after losing its delivery claim', async () => {
+    let harness!: ReturnType<typeof deliveryHarness>;
+    const sendMessage = vi.fn(async () => {
+      if (sendMessage.mock.calls.length === 1) {
+        // Meanwhile: the widget is dismissed, a second claimant takes the
+        // expired claim, posts the terminal card, and records its own `ts`.
+        harness.patch((widget, delivery) => ({
+          status: 'dismissed',
+          slack_connect: {
+            ...delivery,
+            delivery_claim: undefined,
+            slack_message_ts: '1700000000.000009',
+            rendered_state: 'cancelled',
+          },
+        }));
+      }
+      return '1700000000.000002';
+    });
+    harness = deliveryHarness({
+      // A live link, so the card this delivery posts carries a real button —
+      // which is the thing that must not be left in the thread.
+      delivery: {
+        slack_message_ts: undefined,
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      },
+      sendMessage,
+    });
+    await withSecret(() => harness.deliver());
+
+    const posted = sendMessage.mock.calls[0]![0] as { blocks: { type: string }[] };
+    expect(posted.blocks.some((block) => block.type === 'actions')).toBe(true);
+    // The record still belongs to the claimant that won it.
+    expect(harness.current()).toMatchObject({
+      slack_message_ts: '1700000000.000009',
+      rendered_state: 'cancelled',
+    });
+    // And the message this delivery posted is gone, rather than sitting in the
+    // thread with a Connect button nothing will ever edit.
+    expect(harness.deleteMessage).toHaveBeenCalledWith({
+      threadId: THREAD,
+      messageId: '1700000000.000002',
+    });
+  });
+
+  it('edits a duplicate in place when the connector cannot delete', async () => {
+    let harness!: ReturnType<typeof deliveryHarness>;
+    const sendMessage = vi.fn(async () => {
+      if (sendMessage.mock.calls.length === 1) {
+        harness.patch((widget, delivery) => ({
+          status: 'dismissed',
+          slack_connect: {
+            ...delivery,
+            delivery_claim: undefined,
+            slack_message_ts: '1700000000.000009',
+            rendered_state: 'cancelled',
+          },
+        }));
+      }
+      return '1700000000.000002';
+    });
+    harness = deliveryHarness({
+      delivery: {
+        slack_message_ts: undefined,
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      },
+      sendMessage,
+      // A connector that cannot delete still must not leave a live button.
+      deleteMessage: null,
+    });
+    await withSecret(() => harness.deliver());
+
+    const edit = sendMessage.mock.calls.at(-1)![0] as {
+      metadata?: Record<string, unknown>;
+      text: string;
+      blocks: { type: string }[];
+    };
+    expect(edit.metadata).toMatchObject({ slack_update_ts: '1700000000.000002' });
+    expect(edit.text).toMatch(/duplicate message/i);
+    expect(edit.blocks.some((block) => block.type === 'actions')).toBe(false);
+    expect(harness.current()).toMatchObject({ slack_message_ts: '1700000000.000009' });
   });
 
   it('posts nothing when the deployment seals no tokens', async () => {

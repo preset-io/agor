@@ -145,6 +145,7 @@ import {
   MCP_SLACK_CONNECT_SHARED_WARNING_KEY,
   mcpSlackConnectBlocks,
   mcpSlackConnectCardCopy,
+  mcpSlackConnectDuplicateCardText,
   mcpSlackConnectExpiryDelay,
   mcpSlackConnectMayReissue,
   mcpSlackConnectRenderedState,
@@ -2370,10 +2371,15 @@ export class GatewayService {
       });
       const receipt = normalizeSendReceipt(sent);
       const renderedAt = new Date();
-      await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
+      const settled = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
         if (!latest || latest.delivery_id !== fence.deliveryId) return null;
         if (latest.delivery_generation !== fence.generation) return null;
-        if (latest.delivery_claim && latest.delivery_claim.claim_id !== claimId) return null;
+        // Still OURS, not merely unclaimed. The claim is a 30s lease, so a
+        // post that outlives it can land after another claimant took the
+        // expired claim, posted the row that counts, and released it — at
+        // which point an absent claim reads as consent to record a receipt
+        // that belongs to somebody else's message.
+        if (latest.delivery_claim?.claim_id !== claimId) return null;
         return {
           ...latest,
           slack_message_ts: latest.slack_message_ts ?? reconciledMessageTs ?? receipt.messageId,
@@ -2389,11 +2395,62 @@ export class GatewayService {
           ),
         };
       });
+      if (!settled.changed) {
+        await this.retireOrphanedMcpSlackConnectCard(connector, slack.threadId, {
+          // An edit reuses the row that is already recorded, so only a fresh
+          // post can orphan one.
+          orphanTs: reconciledMessageTs ? undefined : receipt.messageId,
+          ownedTs: settled.delivery?.slack_message_ts,
+          serverName: binding.params?.serverName ?? 'this MCP server',
+        });
+      }
       const retry = this.mcpSlackConnectRetryTimers.get(widgetId);
       if (retry) clearTimeout(retry);
       this.mcpSlackConnectRetryTimers.delete(widgetId);
     } catch {
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+    }
+  }
+
+  /**
+   * Retire a card this daemon posted but turned out not to own.
+   *
+   * The delivery claim is a lease. A post that outlives it can land after
+   * another claimant has already posted the row the record points at, and this
+   * one's receipt then belongs to a second Slack message nothing durable
+   * names. Repair only ever edits the recorded `ts`, so an orphan left alone
+   * keeps whatever it was last rendered with — including a live Connect button
+   * — permanently. D7 accepted a stale card on the grounds that supersede
+   * handles it; this is the case supersede cannot see, because the row is not
+   * in the record.
+   *
+   * Deleting is the honest outcome: there is one card per widget and this is
+   * not it. A connector that cannot delete gets an edit instead, which at
+   * least takes the button away and points at the row that is authoritative.
+   * Best effort throughout — the owned card is already correct, and failing
+   * the delivery over a duplicate would only schedule another one.
+   */
+  private async retireOrphanedMcpSlackConnectCard(
+    connector: GatewayConnector,
+    threadId: string,
+    orphan: { orphanTs?: string; ownedTs?: string; serverName: string }
+  ): Promise<void> {
+    const { orphanTs, ownedTs } = orphan;
+    if (!orphanTs || orphanTs === ownedTs) return;
+    try {
+      if (connector.deleteMessage) {
+        await connector.deleteMessage({ threadId, messageId: orphanTs });
+        return;
+      }
+      const text = mcpSlackConnectDuplicateCardText(orphan.serverName);
+      await connector.sendMessage({
+        threadId,
+        text,
+        blocks: mcpSlackConnectBlocks({ text }),
+        metadata: { slack_update_ts: orphanTs },
+      });
+    } catch {
+      console.warn('[gateway] MCP connect duplicate Slack card could not be retired');
     }
   }
 
