@@ -2,15 +2,15 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| §3 — the widget lane  | **Implemented.**                                                                                                                                |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                      |
-| §7 — Slack projection | **Partly built**: the sealed connect token, the redemption authority, and the landing page are in. The Block Kit post/update projection is not. |
+| Section               | State                                                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                   |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                         |
+| §7 — Slack projection | **Implemented.** Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1. |
 
 Numbering warning for anyone reading commit messages against this file: the
-branch's `stage2` commits built §7's token + landing page, not §6. §6 has never
-been started.
+branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
+built the Block Kit projection. §6 has never been started.
 
 Companion: `docs/internal/in-conversation-widgets-design-2026-05-19.md` (§6.2 anticipated this widget).
 
@@ -561,46 +561,122 @@ not this — see the status table at the top.)
 5. **Onboarding integration.** The Catalog drawer's "Start new session" flow and
    this widget now both install-then-connect. They should share one helper.
 
-## 7. The Slack projection — token and page built, Block Kit not
+## 7. The Slack projection
 
-This gives the widget a Slack face. Three pieces; two are in.
+This gives the widget a Slack face. Three pieces, all built.
 
-**Built on this branch:** the sealed connect token
-(`utils/mcp-oauth-connect-token.ts`), its redemption authority
-(`services/mcp-slack-oauth-authority.ts`), the durable delivery record on the
-widget row (`services/mcp-oauth-connect-delivery.ts`,
-`WidgetMessageMetadata.slack_connect`), and the landing page
-(`apps/agor-ui/src/pages/MCPOAuthConnectPage.tsx`).
+| Piece                                        | Where                                                   |
+| -------------------------------------------- | ------------------------------------------------------- |
+| Sealed connect token + claim matchers        | `apps/agor-daemon/src/utils/mcp-oauth-connect-token.ts` |
+| Redemption authority                         | `services/mcp-slack-oauth-authority.ts`                 |
+| Durable delivery record on the widget row    | `services/mcp-oauth-connect-delivery.ts`                |
+| Card meaning (states, copy, blocks, wake-up) | `services/mcp-slack-connect-card.ts`                    |
+| Post/update projection, claims, repair sweep | `services/gateway.ts`                                   |
+| Indexed due-work column + migration 0111     | `packages/core/src/db/repositories/messages.ts`         |
+| Landing page                                 | `apps/agor-ui/src/pages/MCPOAuthConnectPage.tsx`        |
+| Preflight + redemption routes                | `apps/agor-daemon/src/register-services.ts`             |
 
-**Not built:** the Block Kit post/update projection in `services/gateway.ts`.
-Until it exists, nothing posts the card into a Slack thread, so the token and
-page have no caller from Slack.
-
-The reactive lane is the template, and most of it is reusable:
+The reactive lane was the template, and most of it was reusable:
 
 - **Sealed token.** `MCPSlackRecoveryNotice` carries `token_jti`,
   `token_consumed_at`, `expires_at`, `principal_user_id`, `credential_user_id`,
   `slack_user_id`, `gateway_config_generation`, `mcp_server_config_version`, and a
-  one-use consume CAS. A connect token needs the same fields plus `widget_id`.
-  It must bind the _widget_, not just the server, so the landing page resolves
-  exactly the card the user tapped.
-- **Landing page.** `MCPSlackRecoveryPage` is the shape: preflight, one button,
+  one-use consume CAS. The connect token carries the same fields plus
+  `widget_id`, `delivery_id`, and `delivery_generation`. It binds the _widget_,
+  not just the server, so the landing page resolves exactly the card the user
+  tapped, and the generation is what makes a re-issued link supersede the one
+  already in the thread.
+- **Landing page.** `MCPSlackRecoveryPage` was the shape: preflight, one button,
   pre-opened popup, durable attempt poll, "Return to Slack". The connect page
   differs in its last step — instead of projecting a recovery result, it POSTs
-  `/widgets/:id/oauth-resolve`. **That endpoint already exists and needs no
-  change**, because it takes nothing from the caller but identity.
+  `/widgets/:id/oauth-resolve`. **That endpoint needed no change**, because it
+  takes nothing from the caller but identity.
 - **Block Kit projection.** `services/gateway.ts:1701+` posts and reconciles the
   recovery notice with a delivery claim and `slack_message_ts`. The connect
-  projection needs the same idempotent post/update discipline, driven off the
-  widget row's status transitions rather than a task's.
-- **Identity.** §5.3 already refuses the unaligned case at mint, so the stage-3
-  binding inherits a session whose prompts carry a real actor. The sealed token
-  must still pin `slack_user_id` and verify it against the aligned Agor user at
-  redemption, exactly as the recovery token does — alignment at mint does not
-  prove the person who tapped the button is the person who asked.
+  projection applies the same idempotent post/update discipline, driven off the
+  widget row's status transitions rather than a task's — `mcpSlackConnectRenderedState`
+  reads the widget's own lifecycle first and consults the delivery record only
+  for what a still-pending card offers, so there is no second lifecycle to keep
+  in step. It wakes three ways: immediately on a widget transition (through
+  `WidgetResolutionStore`'s change callback, which is the single writer of that
+  state), on the connect token's own expiry timer, and from the bounded repair
+  sweep that the recovery lane already runs per tenant.
+- **Identity.** §5.3 already refuses the unaligned case at mint, so the binding
+  inherits a session whose prompts carry a real actor. The sealed token still
+  pins `slack_user_id` and verifies it at redemption against the originating
+  Task's durable `gateway_task_source` — alignment at mint does not prove the
+  person who tapped the button is the person who asked. The projection refuses
+  the unaligned channel a second time at issue, independently of anything
+  rendered, and the card says so in words an admin can act on.
 
 This lane must not introduce a headless start. Sealing a token does not create a
 grant; the browser-bound flow remains the only path.
+
+### 7.1 How the projection was verified
+
+Against a real daemon (`tsx src/main.ts`, isolated `AGOR_HOME`, migrated SQLite
+database, MCP endpoint and REST routes live), with **Slack's API — and only
+Slack's API — replaced**. The fake patches `WebClient.prototype.apiCall`, which
+is the single funnel every `@slack/web-api` call goes through, so
+`SlackConnector`, the projection, the delivery record, the card builder, the
+sealed token, and every authority read ran for real; what was simulated is the
+Slack workspace on the far side of the socket. No real Slack workspace was
+available, so no case below was driven through a live Slack tenant.
+
+The widget was minted over `POST /mcp` with a personal API key
+(`agor_widgets_request_oauth`); the link was redeemed over
+`POST /mcp-oauth-connect` with a browser-shaped JWT.
+
+| Case                              | Result                                                                                                                                                                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Mint → card posted                | One `chat.postMessage` carrying the card blocks and a `Connect Notion` URL button whose fragment is the sealed token.                                                                                                                                  |
+| Preflight, correct signed-in user | `201` with `state: connect_required` and names only.                                                                                                                                                                                                   |
+| Resolve → card updates in place   | `chat.update` on the **same** `ts`, button gone, "_Notion connected_". `rendered_state: connected`, due column cleared.                                                                                                                                |
+| Agent resumed                     | The `[Agor] User connected "Notion"…` task was created and relayed into the thread.                                                                                                                                                                    |
+| Wrong signed-in user              | `403`, the single generic message.                                                                                                                                                                                                                     |
+| Alignment lost after mint         | Link `403`; card repainted in place on the backstop, button gone, naming the setting; `binding_invalidated_at` recorded once.                                                                                                                          |
+| Superseded widget                 | Old card edited in place to "replaced or cancelled" with **no button**, new card posted beside it, old link `403`.                                                                                                                                     |
+| Stale `gateway_config_generation` | Link sealed at generation 1 refused after a token rotation to generation 2 with alignment still on; delivery went out through a connector reloaded from fresh credentials (`auth.test` + `bots.info` before the edit), not the process-local listener. |
+
+What the provider round-trip could not be: `/mcp-servers/oauth-start` performs
+real discovery against the vendor endpoint, so the grant was established by
+writing a real `user_mcp_oauth_tokens` row and letting `/oauth-resolve` re-read
+it — the same substitution §8 step 4 made. Everything the daemon decides about
+that row is real; obtaining it from Notion is not.
+
+**This run found one defect, now fixed.** `SlackConnector.sendMessage` stamped
+Slack message metadata only for `agor_mcp_recovery`, so the connect card posted
+bare and `findMessageByMetadata` — the reconciliation that stops a daemon which
+crashed between the post and the `slack_message_ts` write from posting a second
+card with a second live button — could never match it. The stamp is now an
+allowlist the connector owns, and `MCP_SLACK_CONNECT_EVENT_TYPE` is typed
+against it. Re-verified by dropping `slack_message_ts` from a live delivery
+record and waking the sweep: the daemon found its own row by metadata and
+edited it instead of posting again.
+
+Every suite above this stubs the connector, which is why none of them saw it —
+the same shape as D5 and the tenant-scope bug.
+
+### 7.2 Deliberately not built
+
+- **No Slack interaction handler.** The button is a plain URL; Agor registers
+  no `action_id` callback for it. Nothing is granted until the browser
+  completes a provider flow, so there is nothing for an interaction payload to
+  decide.
+- **A retired card stays retired.** `binding_invalidated_at` is terminal:
+  re-enabling alignment does not make a weeks-old card clickable again. Asking
+  again mints a fresh widget, which re-asks every question.
+- **One re-issue, not a counter.** A durably failed sign-in may be re-offered
+  while the previous link's own clock still runs; the re-issue clears
+  `oauth_failed_at`, so another human attempt is required before another.
+- **No widget-level TTL.** Still D7, and §7's own `expires_at` is the one clock
+  the card reflects.
+- **Personal API keys cannot reach `/mcp-oauth-connect`.** Both it and the
+  pre-existing `/mcp-slack-recovery` are registered outside
+  `TENANT_OWNED_SERVICE_PATHS`, so nothing arms a tenant scope for the API-key
+  strategy's own lookup and both answer `500 Missing tenant database scope`.
+  Browser JWTs — the only caller either route has — are unaffected. Pre-existing
+  and shared with the recovery lane; not introduced or fixed here.
 
 ---
 
