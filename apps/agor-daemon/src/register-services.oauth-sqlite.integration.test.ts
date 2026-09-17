@@ -50,6 +50,7 @@ import type {
   MCPOAuthBrowserReservation,
   MCPServer,
   MCPServerID,
+  MessageID,
   User,
   UserID,
 } from '@agor/core/types';
@@ -1585,6 +1586,75 @@ describe('Slack MCP connect authenticated route', () => {
     expect(preflight.return_to_slack_url).toContain('team=T2515');
     // A preflight reads; it never consumes.
     expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * B1 — what the page is told when the sign-in already succeeded.
+   *
+   * The provider callback persists the grant and nothing else: the widget's
+   * resolution and the agent's wake-up wait on the browser's POST. This
+   * preflight used to map that straight onto `connected`, which is the one
+   * answer that makes a stuck request look finished.
+   */
+  it('preflights a grant that already landed as a finish, not as a connection', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    await new UserMCPOAuthTokenRepository(harness.rawDb).saveToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID,
+      {
+        accessToken: 'landed-access-token',
+        refreshToken: 'landed-refresh-token',
+        clientId: 'saved-client-id',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      }
+    );
+
+    const preflight = (await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness))) as { state: string };
+
+    expect(preflight).toMatchObject({ state: 'finish_required' });
+    // Still a read: the recovery is a separate, authenticated POST.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it('describes a request that already finished instead of calling the link invalid', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId as MessageID, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        status: 'submitted',
+        resolved_at: new Date().toISOString(),
+        result_meta: { attached: true },
+      },
+    }));
+
+    const preflight = (await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness))) as { state: string };
+
+    // Describing it grants nothing — `oauth-start` still refuses a widget that
+    // is no longer pending, and the consume CAS re-checks it under the row
+    // lock — but telling the person who just finished that their link is
+    // "invalid, expired, or superseded" is the opposite of what happened.
+    expect(preflight).toMatchObject({ state: 'connected' });
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ connect_token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ success: false });
     expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
   });
 

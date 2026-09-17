@@ -99,16 +99,22 @@ describe('Slack MCP connect browser surface', () => {
     expect(resolveCalls).toEqual(['widgets/widget-1/oauth-resolve']);
   });
 
-  it('reports failure when the daemon refuses to resolve the widget', async () => {
-    // The grant did not land, so the daemon rejects. The page must not claim
-    // success merely because the popup went somewhere.
+  it('does not claim success when the daemon refuses to resolve the widget', async () => {
+    // The provider round-trip succeeded and the daemon would not resolve. The
+    // page must not claim success merely because the popup went somewhere —
+    // and must not tell this reader nothing was connected either, because the
+    // callback may well have persisted their grant.
     const { agor } = client(PREFLIGHT, {
       resolve: () => Promise.reject(new Error('Sign-in has not completed')),
     });
     render(<MCPOAuthConnectPage client={agor} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to sign-in' }));
-    expect(await screen.findByText('The connection was not completed')).toBeVisible();
+    expect(await screen.findByText('You are signed in — Agor could not finish')).toBeVisible();
     expect(screen.queryByText(/Sign-in has not completed/)).toBeNull();
+    expect(screen.queryByText(/nothing was connected/i)).toBeNull();
+    // …and the recovery offered is a finish, never a second sign-in.
+    expect(screen.getByRole('button', { name: 'Finish connecting' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Continue to sign-in' })).toBeNull();
   });
 
   it('never resolves the widget when the durable attempt did not succeed', async () => {
@@ -116,7 +122,7 @@ describe('Slack MCP connect browser surface', () => {
     const { agor, resolveCalls } = client(PREFLIGHT);
     render(<MCPOAuthConnectPage client={agor} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to sign-in' }));
-    expect(await screen.findByText('The connection was not completed')).toBeVisible();
+    expect(await screen.findByText('The sign-in was not completed')).toBeVisible();
     expect(resolveCalls).toEqual([]);
   });
 
@@ -157,7 +163,7 @@ describe('Slack MCP connect browser surface', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to sign-in' }));
 
     expect(await screen.findByText('Your browser blocked the sign-in window')).toBeVisible();
-    expect(screen.queryByText('The connection was not completed')).toBeNull();
+    expect(screen.queryByText('The sign-in was not completed')).toBeNull();
     expect(resolveCalls).toEqual([]);
 
     // Still startable: allowing pop-ups and tapping again must work.
@@ -170,6 +176,80 @@ describe('Slack MCP connect browser surface', () => {
       )
     );
     expect(await screen.findByText('Notion is connected')).toBeVisible();
+  });
+
+  /**
+   * B1 — returning to a link whose sign-in already succeeded.
+   *
+   * The provider callback persists the grant; the attach and the agent's
+   * wake-up wait on this page's POST. Closing the tab in between used to leave
+   * a real credential behind a pending card, and coming back said "connected"
+   * — a milestone nothing had reached.
+   */
+  describe('returning after the grant landed', () => {
+    const FINISH = { ...PREFLIGHT, state: 'finish_required' };
+
+    it('finishes without a second sign-in, and never opens a popup', async () => {
+      const { agor, resolveCalls } = client(FINISH);
+      render(<MCPOAuthConnectPage client={agor} />);
+
+      expect(await screen.findByText('Notion is connected')).toBeVisible();
+      expect(resolveCalls).toEqual(['widgets/widget-1/oauth-resolve']);
+      expect(openPopup).not.toHaveBeenCalled();
+    });
+
+    it('offers an explicit finish when the automatic one fails, and retries it', async () => {
+      let attempts = 0;
+      const { agor, resolveCalls } = client(FINISH, {
+        resolve: () => {
+          attempts += 1;
+          return attempts === 1
+            ? Promise.reject(new Error('daemon busy'))
+            : Promise.resolve({ status: 'submitted' });
+        },
+      });
+      render(<MCPOAuthConnectPage client={agor} />);
+
+      const finish = await screen.findByRole('button', { name: 'Finish connecting' });
+      expect(screen.getByText('You are signed in — Agor could not finish')).toBeVisible();
+      fireEvent.click(finish);
+      expect(await screen.findByText('Notion is connected')).toBeVisible();
+      expect(resolveCalls).toHaveLength(2);
+      expect(openPopup).not.toHaveBeenCalled();
+    });
+
+    it('still finishes when the link itself lapsed', async () => {
+      // `finish_stalled`: the sealed link has expired, so the Slack card no
+      // longer carries a button — but this page was opened while it did, and
+      // the finish needs nothing from the token but the identity it already
+      // proved.
+      const { agor, resolveCalls } = client({ ...PREFLIGHT, state: 'finish_stalled' });
+      render(<MCPOAuthConnectPage client={agor} />);
+      expect(await screen.findByText('Notion is connected')).toBeVisible();
+      expect(resolveCalls).toEqual(['widgets/widget-1/oauth-resolve']);
+    });
+
+    it('reports an already-finished request as finished', async () => {
+      const { agor, resolveCalls } = client({ ...PREFLIGHT, state: 'connected' });
+      render(<MCPOAuthConnectPage client={agor} />);
+      expect(await screen.findByText('Notion is connected')).toBeVisible();
+      expect(screen.getByText(/continuing the conversation in Slack/i)).toBeVisible();
+      // Nothing to do: a finished request is not re-POSTed on arrival.
+      expect(resolveCalls).toEqual([]);
+    });
+
+    it('says who has to attach when the resolver could not', async () => {
+      const { agor } = client({ ...PREFLIGHT, state: 'connected_not_attached' });
+      render(<MCPOAuthConnectPage client={agor} />);
+      expect(await screen.findByText('Notion is connected')).toBeVisible();
+      expect(screen.getByText(/session owner or an Agor admin/i)).toBeVisible();
+    });
+
+    it('says a replaced request was replaced rather than calling it unavailable', async () => {
+      const { agor } = client({ ...PREFLIGHT, state: 'cancelled' });
+      render(<MCPOAuthConnectPage client={agor} />);
+      expect(await screen.findByText('This request was replaced or cancelled')).toBeVisible();
+    });
   });
 
   it('fails closed for an expired, used, superseded, or mismatched action', async () => {

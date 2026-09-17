@@ -24,12 +24,29 @@ import { Alert, Button, Spin, Typography } from 'antd';
 import {
   SlackOAuthActionShell,
   type SlackOAuthActionState,
+  slackOAuthActionIsFinishable,
   slackOAuthActionIsStartable,
   useSlackOAuthAction,
 } from './slackOAuthActionPage';
 
 interface ConnectPreflight {
-  state: 'connect_required' | 'sign_in_pending' | 'connected' | 'failed';
+  /**
+   * The same state machine the Slack card renders
+   * (`mcpSlackConnectRenderedState`), not a second one. Both read the widget
+   * row, its delivery record and the persisted grant; answering from one
+   * function is what stops the thread and this page disagreeing about which
+   * milestone a request has reached.
+   */
+  state:
+    | 'connect_required'
+    | 'sign_in_pending'
+    | 'finish_required'
+    | 'finish_stalled'
+    | 'connected'
+    | 'connected_not_attached'
+    | 'expired'
+    | 'cancelled'
+    | 'unavailable';
   widget_id: string;
   server_name: string;
   oauth_mode: 'per_user' | 'shared';
@@ -43,11 +60,39 @@ interface Props {
   client: AgorClient | null;
 }
 
+/**
+ * Which milestone the request has reached, in the page's vocabulary.
+ *
+ * Three of them, and they are not interchangeable:
+ *
+ *  1. the provider grant is persisted — `finish_required` / `finish_stalled`;
+ *  2. this widget is resolved and the server attached;
+ *  3. the agent has been resumed — both of those are `connected`.
+ *
+ * Only (1) is completed by the OAuth callback. The mapping used to collapse a
+ * persisted grant straight onto `succeeded`, which told a user the
+ * conversation was continuing when nothing had resolved and no agent had
+ * woken.
+ */
 function openingState(preflight: ConnectPreflight): SlackOAuthActionState {
-  if (preflight.state === 'sign_in_pending') return 'pending';
-  if (preflight.state === 'failed') return 'failed';
-  if (preflight.state === 'connected') return 'succeeded';
-  return 'ready';
+  switch (preflight.state) {
+    case 'sign_in_pending':
+      return 'pending';
+    case 'finish_required':
+    case 'finish_stalled':
+      return 'finalize_required';
+    case 'connected':
+    case 'connected_not_attached':
+      return 'succeeded';
+    case 'expired':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    case 'unavailable':
+      return 'unavailable';
+    default:
+      return 'ready';
+  }
 }
 
 /**
@@ -67,12 +112,17 @@ async function resolveWidget(client: AgorClient, preflight: ConnectPreflight): P
 }
 
 export function MCPOAuthConnectPage({ client }: Props) {
-  const { state, preflight, start } = useSlackOAuthAction<ConnectPreflight>({
+  const { state, preflight, start, finish } = useSlackOAuthAction<ConnectPreflight>({
     client,
     preflightService: 'mcp-oauth-connect',
     startTokenField: 'connect_token',
     initialState: openingState,
     finalize: resolveWidget,
+    // Arriving on a grant that already landed means the only thing left is
+    // this page's POST, which the daemon answers by re-reading that grant.
+    // Nothing is decided here that the user has not already decided at the
+    // provider, so it runs on arrival; the button below is the retry.
+    autoFinalize: (value) => value.state === 'finish_required' || value.state === 'finish_stalled',
   });
 
   const serverName = preflight?.server_name;
@@ -113,18 +163,61 @@ export function MCPOAuthConnectPage({ client }: Props) {
         <Alert
           type="error"
           showIcon
-          title="The connection was not completed"
-          description="Nothing was connected. Return to Slack and ask again, or connect from the Agor canvas instead."
+          title="The sign-in was not completed"
+          description="Agor has no usable connection for this request. Return to Slack and ask again, or connect from the Agor canvas instead."
+        />
+      );
+    }
+    if (state === 'cancelled') {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          title="This request was replaced or cancelled"
+          description="Nothing was connected. Ask again in the Slack thread if you still want to."
+        />
+      );
+    }
+    if (state === 'finalizing') {
+      return <Spin description="Finishing the connection…" />;
+    }
+    if (state === 'finalize_failed') {
+      // The one piece of copy this page most needed to get right. The sign-in
+      // DID complete and the grant is stored; what did not happen is the
+      // attach and the agent's wake-up. Telling this reader "nothing was
+      // connected" sends them to redo a provider flow they already hold the
+      // result of.
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          title="You are signed in — Agor could not finish"
+          description={`Your ${serverName ?? 'account'} sign-in is saved: you will not have to do it again. Agor still has to attach it to the conversation and wake the assistant. Use Finish connecting to try that again, or ask in the Slack thread and Agor will finish it there.`}
+        />
+      );
+    }
+    if (state === 'finalize_required') {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          title="Finishing up"
+          description={`You are signed in to ${serverName ?? 'the provider'}. Agor is attaching it to the conversation and waking the assistant.`}
         />
       );
     }
     if (state === 'succeeded') {
+      const attachPending = preflight?.state === 'connected_not_attached';
       return (
         <Alert
-          type="success"
+          type={attachPending ? 'warning' : 'success'}
           showIcon
           title={serverName ? `${serverName} is connected` : 'Connected'}
-          description="Agor is continuing the conversation in Slack. The tools become available on the agent's next turn."
+          description={
+            attachPending
+              ? `Your account is connected. Attaching it to this session needs the session owner or an Agor admin — ask one of them to attach ${serverName ?? 'it'}, then continue in Slack.`
+              : "Agor is continuing the conversation in Slack. The tools become available on the agent's next turn."
+          }
         />
       );
     }
@@ -173,6 +266,14 @@ export function MCPOAuthConnectPage({ client }: Props) {
         slackOAuthActionIsStartable(state) ? (
           <Button type="primary" size="large" onClick={start}>
             Continue to sign-in
+          </Button>
+        ) : slackOAuthActionIsFinishable(state) ? (
+          // Deliberately not "Connect": this button asks the daemon to finish
+          // something already signed in for, and never opens a provider
+          // window. It is idempotent — pressing it after it worked answers
+          // that it is done.
+          <Button type="primary" size="large" onClick={finish}>
+            Finish connecting
           </Button>
         ) : undefined
       }

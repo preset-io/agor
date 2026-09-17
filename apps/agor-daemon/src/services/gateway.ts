@@ -139,6 +139,7 @@ import {
   issueMCPOAuthConnectLink,
   type MCPOAuthConnectLinkDeps,
   mutateSlackConnectDelivery,
+  resealMCPOAuthConnectLink,
   resolveSlackConnectBinding,
   type SlackConnectCoordinates,
 } from './mcp-oauth-connect-delivery.js';
@@ -2282,7 +2283,13 @@ export class GatewayService {
     delivery: MCPSlackConnectDelivery | undefined,
     now = Date.now()
   ): string | undefined {
-    if (state !== 'connect_required' && state !== 'sign_in_pending') return undefined;
+    if (
+      state !== 'connect_required' &&
+      state !== 'sign_in_pending' &&
+      state !== 'finish_required'
+    ) {
+      return undefined;
+    }
     const expiryDelay = mcpSlackConnectExpiryDelay(state, delivery, now);
     return new Date(
       now + Math.min(expiryDelay ?? MCP_SLACK_ACTIVE_BACKSTOP_MS, MCP_SLACK_ACTIVE_BACKSTOP_MS)
@@ -2517,9 +2524,43 @@ export class GatewayService {
     }
 
     const now = Date.now();
-    const willReissue = binding.ok && mcpSlackConnectMayReissue(widget, delivery, now);
+    // Is the credential already on file? The card has to know, because the
+    // provider callback is the only one of this lane's three milestones the
+    // browser completes on its own: a sign-in whose page went away afterwards
+    // leaves a real grant behind an unresolved widget, and a card that only
+    // reads the delivery record renders that as a sign-in still in flight,
+    // forever, with nothing to press. Read through the one liveness function
+    // (D4), for the credential user the widget was minted for, so the card
+    // cannot offer a finish `/oauth-resolve` would then refuse.
+    //
+    // Only asked while the widget is unresolved — a resolved card's state is
+    // decided by the widget row alone — so a connected thread costs no read.
+    const grantLive =
+      binding.ok && (widget.status === 'pending' || widget.status === 'resolving')
+        ? await this.readInTenantScope((db) =>
+            resolveMCPOAuthGrantLiveness(
+              db,
+              binding.params.mcpServerId as MCPServerID,
+              binding.task.created_by as UserID
+            )
+          )
+            .then((liveness) => liveness.live)
+            .catch(() => false)
+        : false;
+    // A re-issue offers a fresh SIGN-IN link, which is exactly what a landed
+    // grant makes pointless — and, since `finish_required` outranks the state
+    // a re-issue produces, leaving it set would defeat the no-op shortcut and
+    // re-render the card on every repair tick.
+    const willReissue =
+      binding.ok && !grantLive && mcpSlackConnectMayReissue(widget, delivery, now);
     const state = mcpSlackConnectRenderedState(
-      { widget, delivery, willReissue, ...(binding.ok ? {} : { refusal: binding.reason }) },
+      {
+        widget,
+        delivery,
+        willReissue,
+        grantLive,
+        ...(binding.ok ? {} : { refusal: binding.reason }),
+      },
       now
     );
     this.scheduleMcpSlackConnectExpiry(widgetId, delivery, state);
@@ -2587,7 +2628,27 @@ export class GatewayService {
     // the claim — there is no record to claim beforehand, and two daemons
     // minting concurrently would otherwise each post one.
     let url: string | undefined;
-    if (state === 'connect_required') {
+    if (state === 'finish_required' && delivery) {
+      if (!binding.ok) return;
+      // Re-seal, never re-issue. The sign-in already happened, the one-use
+      // token already did its job, and a re-issue would clear the
+      // `oauth_succeeded_at` that is the record of it.
+      url =
+        resealMCPOAuthConnectLink(deps, binding, requireCurrentTenantId(), new Date()) ?? undefined;
+      if (!url) {
+        // The link lapsed between the state read and this line. Hand the card
+        // straight back to a fresh render, which now reads `finish_stalled`
+        // and posts the same card without a button. It cannot bounce a third
+        // time: the second read's clock is strictly past the expiry that
+        // produced this one.
+        await this.releaseMcpSlackConnectClaim(widgetId, claimId);
+        if (attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
+          await this.deliverMcpSlackConnectCard(widgetId, attempt + 1);
+        }
+        return;
+      }
+    }
+    if (state === 'connect_required' || (state === 'finish_required' && !delivery)) {
       if (!binding.ok) return;
       const issued = await issueMCPOAuthConnectLink(deps, {
         tenantId: requireCurrentTenantId(),

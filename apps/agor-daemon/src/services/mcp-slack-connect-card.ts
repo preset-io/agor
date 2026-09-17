@@ -22,6 +22,7 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import type { OAuthWidgetResultMeta } from '../widgets/oauth/index.js';
+import { WIDGET_RECLAIM_ABANDONED_AFTER_MS } from '../widgets/submissions.js';
 import type { SlackConnectBindingRefusal } from './mcp-oauth-connect-delivery.js';
 
 /** Slack's own upper bound on a button label. */
@@ -48,6 +49,24 @@ export interface MCPSlackConnectStateInput {
   refusal?: SlackConnectBindingRefusal;
   /** The caller is about to mint a fresh link, clearing the previous outcome. */
   willReissue?: boolean;
+  /**
+   * The credential this widget was minted for exists and is spendable right
+   * now, read through `resolveMCPOAuthGrantLiveness` by the caller.
+   *
+   * Read from the grant rather than from `oauth_succeeded_at` on purpose: the
+   * delivery record remembers that a browser round-trip finished, which is a
+   * different fact from a credential being on file — the round-trip can
+   * succeed and the grant be revoked, and the grant can be on file from the
+   * Catalog drawer with no round-trip here at all. The card is about what the
+   * user still has to do, so it follows the credential. Same rule and same
+   * function as the resolve gate, so the card cannot offer a finish the
+   * resolver would refuse.
+   *
+   * `refreshable` deliberately does not count: the resolve gate spends only a
+   * live grant, so a card that treated a stale one as landed would offer a
+   * button that fails.
+   */
+  grantLive?: boolean;
 }
 
 /**
@@ -77,22 +96,43 @@ export function mcpSlackConnectRenderedState(
   if (delivery?.binding_invalidated_at) return 'unavailable';
   if (refusal === 'unaligned' || refusal === 'authority_moved') return 'unavailable';
 
+  // One clock, deliberately: the connect token's own `expires_at`. D7 declined
+  // a second, widget-level TTL precisely so there is nothing to reconcile
+  // here. An abandoned sign-in ages out on the link's clock, not its own.
+  //
+  // Read here rather than where it used to be read — below the
+  // `oauth_succeeded_at` branch — because whether a link can still be TAPPED
+  // is now a question two states ask, and the previous order let a finished
+  // round-trip mask the answer.
+  const expiresAt = delivery ? new Date(delivery.expires_at).getTime() : Number.NaN;
+  const linkLapsed = !!delivery && (!Number.isFinite(expiresAt) || expiresAt <= now);
+
+  // The credential is on file and the widget is not resolved: the user's
+  // remaining work is a POST, not a sign-in. This outranks every pending state
+  // below — including an in-flight claim, once that claim is old enough for
+  // `submissions.ts` to take it over, which is the point at which the card's
+  // button would actually do something.
+  const claimIsAbandoned =
+    widget.status === 'resolving' &&
+    now - new Date(widget.resolution_claim?.claimed_at ?? '').getTime() >=
+      WIDGET_RECLAIM_ABANDONED_AFTER_MS;
+  if (input.grantLive && (widget.status === 'pending' || claimIsAbandoned)) {
+    // No delivery record yet means the first card has not been posted, and the
+    // caller can mint a link for it — the same one `connect_required` gets.
+    return linkLapsed ? 'finish_stalled' : 'finish_required';
+  }
+
   // A claim is held by whoever took it; the card should not offer a second
   // button while one resolution is in flight, wherever it was started.
   if (widget.status === 'resolving') return 'sign_in_pending';
 
   if (input.willReissue) return 'connect_required';
   if (!delivery) return 'connect_required';
-  // The grant landed. The widget is resolved by the browser's POST to
-  // `/oauth-resolve`, which the daemon answers by re-reading the grant, so
-  // "succeeded" is still pending from this card's point of view.
+  if (linkLapsed) return 'expired';
+  // The round-trip finished but no spendable grant is on file — it was
+  // revoked, or it is mid-refresh. Still pending from this card's point of
+  // view, and the link has not lapsed, so the thread waits.
   if (delivery.oauth_succeeded_at) return 'sign_in_pending';
-
-  // One clock, deliberately: the connect token's own `expires_at`. D7 declined
-  // a second, widget-level TTL precisely so there is nothing to reconcile
-  // here. An abandoned sign-in ages out on the link's clock, not its own.
-  const expiresAt = new Date(delivery.expires_at).getTime();
-  if (Number.isFinite(expiresAt) && expiresAt <= now) return 'expired';
   if (delivery.oauth_failed_at) return 'expired';
   if (delivery.token_consumed_at) return 'sign_in_pending';
   return 'connect_required';
@@ -155,6 +195,22 @@ export function mcpSlackConnectCardCopy(
       return {
         text: `*Connecting ${serverName}*\nSign-in is in progress. Finish it in the browser tab Agor opened — this message updates when it lands.`,
       };
+    case 'finish_required':
+      return {
+        // Never "connect": the sign-in is done and saying otherwise sends the
+        // reader back through a provider flow they have already completed.
+        text:
+          `*Finish connecting ${serverName}*\nYou are signed in — Agor still has to attach it here ` +
+          `and wake the conversation. That takes one tap and no second sign-in.`,
+        button: clampButton(`Finish connecting ${serverName}`),
+      };
+    case 'finish_stalled':
+      return {
+        text:
+          `*${serverName} is signed in, but not finished*\nAgor has your sign-in and did not get to ` +
+          `attach it to this conversation. Ask again in this thread — Agor will finish it, and you ` +
+          `will not have to sign in again.`,
+      };
     case 'connected':
       return {
         text: `*${serverName} connected*\nIt is attached to this session, and its tools are available on the next turn.`,
@@ -167,7 +223,11 @@ export function mcpSlackConnectCardCopy(
       };
     case 'expired':
       return {
-        text: `*Connect ${serverName}*\nThis link expired or the sign-in did not finish. Nothing was connected. Ask again in this thread and Agor will send a new one.`,
+        // "Agor has no usable connection", not "nothing was connected": this
+        // state is also reached after a round-trip that reported success and
+        // left no spendable grant, and telling that reader nothing happened is
+        // both false and unhelpful.
+        text: `*Connect ${serverName}*\nThis link expired or the sign-in did not finish, and Agor has no usable connection. Ask again in this thread and Agor will send a new one.`,
       };
     case 'cancelled':
       return {
@@ -268,16 +328,22 @@ export function mcpSlackConnectBlocks(copy: { text: string; button?: string }, u
 /**
  * How long until this card's own state changes on its own.
  *
- * Only the two live states age: a card offering a button becomes `expired`
- * when its link does, and a sign-in in flight does the same. Everything else
- * is terminal and must never hold a timer open.
+ * Only the live states age: a card offering a button becomes `expired` (or,
+ * for a finish, `finish_stalled`) when its link does, and a sign-in in flight
+ * does the same. Everything else is terminal and must never hold a timer open.
+ *
+ * `finish_stalled` deliberately does not: its link is already gone, and
+ * re-minting one on a timer would edit the same Slack row every ten minutes
+ * for a day. The way out of it is to ask again, which costs no sign-in.
  */
 export function mcpSlackConnectExpiryDelay(
   state: MCPSlackConnectRenderedState,
   delivery: MCPSlackConnectDelivery | undefined,
   now = Date.now()
 ): number | undefined {
-  if (state !== 'connect_required' && state !== 'sign_in_pending') return undefined;
+  if (state !== 'connect_required' && state !== 'sign_in_pending' && state !== 'finish_required') {
+    return undefined;
+  }
   if (!delivery) return undefined;
   const expiresAt = new Date(delivery.expires_at).getTime();
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return undefined;
