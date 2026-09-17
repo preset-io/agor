@@ -436,6 +436,8 @@ type SQLiteHarness = {
     attemptId: string;
     success: boolean;
   }>;
+  /** Widget ids the connect lane asked the gateway to repaint. */
+  syncedConnectCards: string[];
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
@@ -537,15 +539,25 @@ async function createHarness(
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
   const gatewayOAuthResults: SQLiteHarness['gatewayOAuthResults'] = [];
+  const syncedConnectCards: string[] = [];
   app.use(
     '/gateway',
     {
       async syncMcpSlackRecoveryNoticeAfterCommit() {},
+      async syncMcpSlackConnectCard(widgetId: string) {
+        syncedConnectCards.push(widgetId);
+      },
       async markMcpSlackOAuthResult(input: SQLiteHarness['gatewayOAuthResults'][number]) {
         gatewayOAuthResults.push(input);
       },
     },
-    { methods: ['syncMcpSlackRecoveryNoticeAfterCommit', 'markMcpSlackOAuthResult'] }
+    {
+      methods: [
+        'syncMcpSlackRecoveryNoticeAfterCommit',
+        'syncMcpSlackConnectCard',
+        'markMcpSlackOAuthResult',
+      ],
+    }
   );
   const deployment = options.deployment ?? ({} as RegisterServicesContext['deployment']);
   const callbackOrigin = resolveMcpOAuthCallbackOrigin({}, process.env);
@@ -624,6 +636,7 @@ async function createHarness(
     server,
     emittedBrowserEvents,
     gatewayOAuthResults,
+    syncedConnectCards,
     nextAuthorizationUrl: async () => {
       const value = await nextUrl.promise;
       nextUrl = deferred<string>();
@@ -1303,6 +1316,38 @@ describe('Slack MCP recovery authenticated route', () => {
     ).toBe('sdk-session-preserved');
   });
 
+  /**
+   * The recovery lane's own start lease, with the guard armed.
+   *
+   * It carries the identical defect the connect lane was blocked for — its
+   * lease renewal, failure marker, and `oauth_started_at` stamp all touch the
+   * Task repository outside any scope — and this file's other recovery tests
+   * could not see it, because they run without the guard.
+   */
+  it('starts a recovery sign-in with the tenant scope guard armed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      attempt_id?: string;
+    };
+
+    expect(started).toMatchObject({ success: true });
+    expect(provider.requests.length).toBeGreaterThan(0);
+    const task = await new TaskRepository(harness.rawDb).findById(seeded.taskId);
+    expect(task?.metadata?.mcp_slack_recovery_notice).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+  });
+
   it('fails closed after preflight when the Agor principal is revoked', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -1564,6 +1609,87 @@ describe('Slack MCP connect authenticated route', () => {
     ).rejects.toMatchObject({ code: 403 });
     expect(await seeded.widgetStatus()).toBe('pending');
     expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * The lane's durable touches AFTER the binding loader's own scope has closed.
+   *
+   * `loadMCPOAuthConnectBinding` opens and closes one scope of its own, so a
+   * suite that only exercises the preflight proves nothing about the rest of
+   * `oauth-start`: the start lease, its 10s renewal timer, the failure marker,
+   * and the `oauth_started_at` stamp all run after that scope is gone, on a
+   * path nothing upstream arms. Unscoped, the lease renewal throws
+   * `MissingTenantDatabaseScope`, the handler reports `success: false` before
+   * it has spoken to the provider at all, and the failure marker — which is
+   * also unscoped — swallows its own throw, leaving a consumed one-use token
+   * with no `oauth_failed_at` for the card to render.
+   */
+  it('starts the provider flow for a live link, with the scope guard armed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      attempt_id?: string;
+      error?: string;
+      authorizationUrl?: string;
+    };
+
+    expect(started).toMatchObject({ success: true });
+    expect(new URL(started.authorizationUrl!).searchParams.get('state')).toBeTruthy();
+    // The provider was actually reached: a scope failure returns before the
+    // first outbound request, which is what made the symptom look like a
+    // refusal rather than a missing unit of work.
+    expect(provider.requests.length).toBeGreaterThan(0);
+    expect(await seeded.delivery()).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+    expect((await seeded.delivery())?.oauth_start_claim_expires_at).toBeUndefined();
+    expect(await seeded.widgetStatus()).toBe('pending');
+  });
+
+  /**
+   * The same failure handler, reached on purpose.
+   *
+   * The binding still loads and the one-use token is still consumed; what
+   * fails is provider discovery, which is exactly the window the failure
+   * marker exists for. That marker is the only thing standing between a burned
+   * one-use link and a card that can say so, and unscoped it threw into a
+   * `.catch()` that dropped the result — so the link was gone and the card
+   * kept offering it.
+   */
+  it('marks a consumed link failed when the start cannot proceed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    // Take the provider away without touching the server row, whose
+    // `config_version` the sealed claims pin.
+    await provider.close();
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+
+    expect(started.success).toBe(false);
+    // The user's one-shot link is gone; the record has to say why, or the card
+    // keeps offering a button that can never work again.
+    expect(await seeded.delivery()).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_failed_at: expect.any(String),
+    });
+    expect((await seeded.delivery())?.oauth_start_claim_expires_at).toBeUndefined();
+    // Recording it is not enough — the card in the thread is the only surface
+    // the user has, and nothing else wakes it until the repair sweep.
+    expect(harness.syncedConnectCards).toContain(seeded.widgetId);
   });
 });
 
