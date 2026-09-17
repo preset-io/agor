@@ -820,16 +820,71 @@ only shape that reproduces the sweep's.
 `isMCPSlackConnectCardEnabled` (`db/repositories/mcp-slack-connect-settings.ts`)
 gates the projection, the same way `isMcpRuntimeRecoveryEnabled` gates the
 reactive lane. It reads one app variable, `mcp-slack-connect/card_projection`,
-and is checked in exactly two places: `deliverMcpSlackConnectCard` before
-anything is read or posted, and `loadMCPOAuthConnectBinding` before anything is
-consumed.
+and is checked in three places: `deliverMcpSlackConnectCard` before anything is
+read or posted, `loadMCPOAuthConnectBinding` before anything is consumed, and
+`assertSlackConnectFlowStillAuthorized` before a callback already in the air is
+allowed to persist a grant.
 
-Both ends, not just the first, because the point is to stop the lane from
+The first two, not just the first, because the point is to stop the lane from
 **granting** and not merely from repainting: a card already in a thread carries
 a live sealed link, and an operator turning this off during an incident is
 asking for that link to stop working. The refusal collapses into the lane's one
 generic failure, and nothing is consumed — turning it back on restores the
 existing link rather than leaving a burned one behind.
+
+**The third is new, and it is the difference between that sentence being true
+and being nearly true.** The pre-merge architecture pass found that a link
+redeemed a second before the switch was thrown still completed: the consume had
+already happened, so nothing downstream asked again, and the provider callback
+persisted a grant into a lane an operator had just stopped. The window is one
+provider round-trip — small, and exactly the window an incident is inside. Two
+options were on the table: narrow the documented promise to "stops new starts
+and repainting", or enforce it. Enforced, because the promise is the reason the
+switch exists, the cost is one app-variable read on a path that already re-proves
+five other bindings, and "your kill switch stops new sign-ins but finishes the
+ones in flight" is a sentence nobody wants to discover during an incident. The
+refused callback stamps a durable `oauth_failed_at`, which is the state §7.2's
+one-re-issue rule already knows how to recover from once the switch goes back on.
+
+### The procedure
+
+`/mcp-slack-connect/card` (`services/mcp-slack-connect-control.ts`, registered
+in `register-routes.ts`) is the control surface. Admin for both methods —
+unlike `/mcp-egress/status`, nothing it answers is about the caller's own
+capabilities, so there is no answer a non-admin needs — and tenant-scoped like
+every other route registered through
+`createTenantScopedAuthenticatedRouteRegistrar`.
+
+| Step                         | Action                                                                                                                                   |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Read, for an explicit tenant | `GET /mcp-slack-connect/card` → `{ tenant_id, enabled }`. `tenant_id` is echoed so an operator working through several can prove which.  |
+| Change                       | `PATCH /mcp-slack-connect/card { "enabled": false }`. A non-boolean is refused rather than written.                                      |
+| Verify it took effect        | The PATCH response is a RE-READ through `isMCPSlackConnectCardEnabled` — the same predicate the lane calls — not an echo of the request. |
+| Across affected tenants      | One call per tenant, exactly as `mcp_egress_gateway.mode` is. The setting is an app variable and the lane is a tenant-owned resource.    |
+| Restore                      | `PATCH { "enabled": true }`. Every refusal the switch caused is recoverable; see below.                                                  |
+
+What happens to work stranded while it was off, which is the part a switch is
+useless without:
+
+- **A card that was never posted** keeps its mint marker. The refused-marker
+  reschedule (§7.1.5) moved it off the front of the sweep queue but kept the
+  trigger, so it is delivered within one backoff period of the switch going
+  back on — no more than five minutes, and with no action from the operator —
+  provided the widget is still inside the sweep's 24-hour horizon. Past that it
+  is gone for good and the user has to ask again.
+- **A link that was refused at redemption** was not consumed. The card and its
+  token are exactly as they were, so it simply works again.
+- **A callback refused in flight** consumed its link and recorded
+  `oauth_failed_at`. The card renders `expired` and may be re-offered once with
+  a fresh link while the original clock runs (§7.2); past that, asking again in
+  the thread mints a new widget.
+- **Nothing is stranded on the canvas.** Off is a degraded Slack experience,
+  never a removed feature: the widget still renders a live Connect button and
+  `agor_widgets_request_oauth` still hands the agent a `session_url` to relay.
+
+`mcp-slack-connect-control.test.ts` drives that procedure against a real
+migrated database — read, change, verify, second tenant, restore — so the
+runbook above is executable rather than remembered.
 
 What it does not touch is the fallback. The canvas widget still renders a live
 Connect button, and `agor_widgets_request_oauth` still hands the agent the
@@ -846,9 +901,10 @@ Two known limits, both deliberate:
   That matches `mcp_egress_gateway.mode` exactly and is the reason the switch
   is a setting rather than an env var; if incident response needs one action,
   that is a change to make for both settings at once.
-- There is **no admin UI**. The egress mode has a `PATCH` route; this has only
-  `setMCPSlackConnectCardEnabled`. Adding a surface is worth doing the first
-  time an operator actually reaches for it.
+- There is **no admin UI**. There is now a `PATCH` route, as the egress mode
+  has, and no Settings control in front of it. An incident is worked from an
+  authenticated API call either way; a UI is worth adding the first time
+  somebody who is not comfortable making one has to.
 
 A value nobody recognises leaves the card **on**. This is not fail-closed on
 purpose: an unreadable or mistyped setting should not silently retire an

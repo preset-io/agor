@@ -372,6 +372,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Tenant-scoped rollout and health status; Settings refetches explicitly.',
   },
+  'mcp-slack-connect/card': {
+    audience: 'none',
+    why: 'Admin-only operator switch; the answer belongs to the operator who asked, and the lane reads the setting itself rather than a broadcast.',
+  },
 
   // ---------------------------------------------------------------------------
   // Silent: CRUD services with no realtime consumer. Denying costs nothing

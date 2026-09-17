@@ -1928,6 +1928,47 @@ describe('Slack MCP connect authenticated route', () => {
       )
     ).toBeNull();
   });
+
+  /**
+   * B2 — the kill switch, applied to a flow already in the air.
+   *
+   * §7.1.4 says switching the lane off stops it GRANTING and not merely
+   * repainting. That was true of delivery and of redemption and not of the
+   * window between them: a link redeemed a second before an operator threw the
+   * switch still came back through the provider and persisted a grant, which is
+   * the single outcome someone reaching for a kill switch is trying to stop.
+   */
+  it('refuses a callback for a flow started before the projection was switched off', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, false, harness.user.user_id);
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+    // The widget is still pending and the failure is durable, so turning the
+    // switch back on leaves a card that can be re-offered rather than one
+    // stuck mid-sign-in.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.oauth_failed_at).toEqual(expect.any(String));
+  });
 });
 
 describe('saved-server capability discovery', () => {
