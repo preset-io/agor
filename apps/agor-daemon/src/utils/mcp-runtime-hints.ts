@@ -38,7 +38,7 @@ export function didMcpPrincipalRoleChange(
 /**
  * `TenantScopedDatabase` is accepted as well as the scope-aware handle because
  * a caller with no ambient scope has to open one and pass what it opened —
- * see `GatewayService.readTenantSetting`. This function only forwards to
+ * see `GatewayService.readInTenantScope`. This function only forwards to
  * `getMCPEgressGatewayMode`, which already takes either.
  */
 export async function isMcpRuntimeRecoveryEnabled(
