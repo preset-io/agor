@@ -50,6 +50,24 @@ vi.mock('@agor/core/db', async () => {
   };
 });
 
+// Whether the credential is on file. The card asks the one liveness function
+// (D4); most delivery tests are about cards where it is not, so the default is
+// the real read — which, against the harness's stand-in database handle,
+// answers "no grant" the same way the production read would for a user who has
+// not signed in.
+const grantLiveness = vi.hoisted(() => ({ live: false }));
+vi.mock('./mcp-oauth-grant-liveness.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('./mcp-oauth-grant-liveness.js');
+  return {
+    ...actual,
+    resolveMCPOAuthGrantLiveness: async () => ({
+      live: grantLiveness.live,
+      reason: grantLiveness.live ? 'live' : 'no_grant',
+      refreshable: false,
+    }),
+  };
+});
+
 const freshConnectorSend = vi.fn(async () => '1700000000.000002');
 vi.mock('@agor/core/gateway', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/gateway');
@@ -63,6 +81,7 @@ vi.mock('@agor/core/gateway', async () => {
   };
 });
 
+import { WIDGET_RECLAIM_ABANDONED_AFTER_MS } from '../widgets/submissions.js';
 import { GatewayService } from './gateway.js';
 import {
   MCP_SLACK_CONNECT_MARKER_BACKOFF_MS,
@@ -206,7 +225,7 @@ describe('Slack MCP connect presentation', () => {
     expect(copy.button).toBeUndefined();
   });
 
-  it('offers a button in exactly one state', () => {
+  it('offers a button in exactly two states', () => {
     for (const state of [
       'sign_in_pending',
       'connected',
@@ -214,6 +233,7 @@ describe('Slack MCP connect presentation', () => {
       'expired',
       'cancelled',
       'unavailable',
+      'finish_stalled',
     ] as const) {
       const copy = mcpSlackConnectCardCopy(state, {
         serverName: 'Notion',
@@ -240,6 +260,20 @@ describe('Slack MCP connect presentation', () => {
     // A state that wants a button still renders without one when no link could
     // be minted, rather than emitting an actions block with no destination.
     expect(mcpSlackConnectBlocks(connect, undefined)).toHaveLength(2);
+
+    // The second one, and the reason it is second: it asks for a finish, not a
+    // sign-in, because the sign-in already happened.
+    const finish = mcpSlackConnectCardCopy('finish_required', {
+      serverName: 'Notion',
+      reason: 'Read the roadmap page.',
+      oauthMode: 'per_user',
+    });
+    expect(finish.button).toBe('Finish connecting Notion');
+    expect(finish.text).toMatch(/signed in/i);
+    expect(finish.text).not.toMatch(/sign in through Agor/i);
+    expect(mcpSlackConnectBlocks(finish, 'https://agor.test/ui/connect/mcp#token=x')).toHaveLength(
+      3
+    );
   });
 
   it('says out loud when a sign-in would be workspace-wide', () => {
@@ -274,7 +308,7 @@ describe('Slack MCP connect presentation', () => {
     expect(moved.text).not.toMatch(/Align Slack users/i);
     // No card may imply a connection that did not happen, or leak a provider
     // error into a thread.
-    for (const state of ['expired', 'cancelled', 'unavailable'] as const) {
+    for (const state of ['cancelled', 'unavailable'] as const) {
       const copy = mcpSlackConnectCardCopy(state, {
         serverName: 'Notion',
         reason: 'r',
@@ -283,6 +317,17 @@ describe('Slack MCP connect presentation', () => {
       expect(copy.text).toMatch(/Nothing was connected/i);
       expect(copy.text).not.toMatch(/token|secret|error code/i);
     }
+    // `expired` is the one that may NOT say it: a round-trip that reported
+    // success and left no spendable grant lands here too, and that reader did
+    // connect something. It says what is true of every branch instead.
+    const expired = mcpSlackConnectCardCopy('expired', {
+      serverName: 'Notion',
+      reason: 'r',
+      oauthMode: 'per_user',
+    });
+    expect(expired.text).not.toMatch(/Nothing was connected/i);
+    expect(expired.text).toMatch(/no usable connection/i);
+    expect(expired.text).not.toMatch(/token|secret|error code/i);
   });
 
   it('re-offers a failed sign-in once, and only inside the link it already has', () => {
@@ -544,6 +589,7 @@ function deliveryHarness(options: HarnessOptions = {}) {
 describe('Slack MCP connect durable delivery', () => {
   beforeEach(() => {
     killSwitch.stub = async () => true;
+    grantLiveness.live = false;
   });
 
   const SECRET = 'connect-card-test-master-secret';
@@ -1156,5 +1202,256 @@ describe('Slack MCP connect durable delivery', () => {
       if (previous !== undefined) process.env.AGOR_MASTER_SECRET = previous;
     }
     expect(harness.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * B1 — the card for a sign-in that succeeded and was never finished.
+ *
+ * The provider callback persists the grant; the attach and the agent's wake-up
+ * wait on a browser POST. A thread whose user closed that page used to show
+ * "Sign-in is in progress… this message updates when it lands" forever, with
+ * no button, which is both false and unrecoverable from Slack.
+ */
+describe('Slack MCP connect — finishing an abandoned sign-in', () => {
+  const abandonedClaim = (ageMs: number) => ({
+    token: 'claim-1',
+    action: 'oauth_callback' as const,
+    claimed_at: new Date(NOW - ageMs).toISOString(),
+    claimed_by: OWNER,
+  });
+
+  it('offers a finish once the grant is on file, whatever the link record says', () => {
+    const succeeded = delivery({
+      token_consumed_at: '2026-09-16T12:01:00Z',
+      oauth_succeeded_at: '2026-09-16T12:02:00Z',
+    });
+    expect(
+      mcpSlackConnectRenderedState({ widget: widget(), delivery: succeeded, grantLive: true }, NOW)
+    ).toBe('finish_required');
+    // Without the grant the same record is still a round-trip in flight: the
+    // card follows the credential, not the browser's report of one.
+    expect(
+      mcpSlackConnectRenderedState({ widget: widget(), delivery: succeeded, grantLive: false }, NOW)
+    ).toBe('sign_in_pending');
+  });
+
+  it('checks the link clock before the round-trip outcome, not after', () => {
+    // The ordering bug this fixes: `oauth_succeeded_at` used to be read first,
+    // so a lapsed link with a finished round-trip rendered as a sign-in still
+    // in progress — the one state with neither a button nor an end.
+    const succeeded = delivery({ oauth_succeeded_at: '2026-09-16T12:02:00Z' });
+    const afterExpiry = Date.parse(EXPIRES_AT) + 1;
+    expect(
+      mcpSlackConnectRenderedState({ widget: widget(), delivery: succeeded }, afterExpiry)
+    ).toBe('expired');
+    // …and with the grant actually on file it is a finish that lost its link,
+    // whose answer is to ask again at no cost, not to sign in again.
+    expect(
+      mcpSlackConnectRenderedState(
+        { widget: widget(), delivery: succeeded, grantLive: true },
+        afterExpiry
+      )
+    ).toBe('finish_stalled');
+    const copy = mcpSlackConnectCardCopy('finish_stalled', {
+      serverName: 'Notion',
+      reason: 'r',
+      oauthMode: 'per_user',
+    });
+    expect(copy.button).toBeUndefined();
+    expect(copy.text).toMatch(/will not have to sign in again/i);
+  });
+
+  it('waits for a live resolution claim, then offers the finish once it is abandoned', () => {
+    const live = widget({ status: 'resolving', resolution_claim: abandonedClaim(5_000) });
+    expect(
+      mcpSlackConnectRenderedState({ widget: live, delivery: delivery(), grantLive: true }, NOW)
+    ).toBe('sign_in_pending');
+    // Past the point where `submissions.ts` will take the claim over, the
+    // button does something again — the two rules are the same constant.
+    const abandoned = widget({
+      status: 'resolving',
+      resolution_claim: abandonedClaim(WIDGET_RECLAIM_ABANDONED_AFTER_MS + 1_000),
+    });
+    expect(
+      mcpSlackConnectRenderedState(
+        { widget: abandoned, delivery: delivery(), grantLive: true },
+        NOW
+      )
+    ).toBe('finish_required');
+  });
+
+  it('never offers a finish for a resolved, dismissed or retired card', () => {
+    for (const widgetRow of [
+      widget({ status: 'submitted', result_meta: { attached: true } }),
+      widget({ status: 'dismissed' }),
+    ]) {
+      expect(
+        mcpSlackConnectRenderedState(
+          { widget: widgetRow, delivery: delivery(), grantLive: true },
+          NOW
+        )
+      ).not.toMatch(/^finish/);
+    }
+    expect(
+      mcpSlackConnectRenderedState(
+        {
+          widget: widget(),
+          delivery: delivery({ binding_invalidated_at: '2026-09-16T12:03:00Z' }),
+          grantLive: true,
+        },
+        NOW
+      )
+    ).toBe('unavailable');
+    expect(
+      mcpSlackConnectRenderedState(
+        { widget: widget(), delivery: delivery(), grantLive: true, refusal: 'unaligned' },
+        NOW
+      )
+    ).toBe('unavailable');
+  });
+
+  it('keeps a finish card on the expiry timer and a stalled one off it', () => {
+    expect(mcpSlackConnectExpiryDelay('finish_required', delivery(), NOW)).toBe(
+      Date.parse(EXPIRES_AT) - NOW + 1_000
+    );
+    // Nothing left to age: re-minting a link on a timer would edit the same
+    // Slack row every ten minutes for a day.
+    expect(mcpSlackConnectExpiryDelay('finish_stalled', delivery(), NOW)).toBeUndefined();
+  });
+});
+
+/**
+ * B1 in the thread: the card a user comes back to.
+ *
+ * Driven through the real delivery loop rather than the state function alone,
+ * because the two things that make this recoverable from Slack are the button
+ * and the link behind it — and the link is the part the projection has to
+ * produce without minting a second one.
+ */
+describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => {
+  const SECRET = 'connect-card-test-master-secret';
+  const withSecret = async <T>(work: () => Promise<T>): Promise<T> => {
+    const previous = process.env.AGOR_MASTER_SECRET;
+    process.env.AGOR_MASTER_SECRET = SECRET;
+    try {
+      return await work();
+    } finally {
+      if (previous === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previous;
+    }
+  };
+
+  beforeEach(() => {
+    killSwitch.stub = async () => true;
+    grantLiveness.live = true;
+  });
+
+  /**
+   * A link record on the delivery loop's own clock.
+   *
+   * The presentation tests above pin a fixed `now`; the loop reads the wall
+   * clock, and whether a finish card carries a button turns on whether its
+   * link has lapsed — so these have to be positioned around the real one.
+   */
+  const liveLink = (fields: Partial<MCPSlackConnectDelivery> = {}) => ({
+    issued_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    ...fields,
+  });
+
+  it('edits the dead sign-in card into one that finishes, on the link it already has', async () => {
+    const harness = deliveryHarness({
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_attempt_id: 'attempt-1',
+        oauth_started_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      text: string;
+      metadata?: Record<string, unknown>;
+      blocks: { type: string; elements?: { text?: { text?: string }; url?: string }[] }[];
+    };
+    // The same Slack row, edited — never a second card beside the first.
+    expect(request.metadata).toMatchObject({ slack_update_ts: '1700000000.000002' });
+    expect(request.text).toMatch(/Finish connecting Notion/);
+    expect(request.text).not.toMatch(/sign in through Agor/i);
+    const action = request.blocks.find((block) => block.type === 'actions');
+    expect(action?.elements?.[0]?.text?.text).toBe('Finish connecting Notion');
+    expect(action?.elements?.[0]?.url).toMatch(/#token=/);
+
+    const after = harness.current();
+    expect(after).toMatchObject({ rendered_state: 'finish_required' });
+    // Re-sealed, not re-issued: the record keeps its generation, its one-use
+    // identity and the outcome that says the sign-in already happened.
+    expect(after?.delivery_generation).toBe(1);
+    expect(after?.token_jti).toBe('jti-1');
+    expect(after?.oauth_succeeded_at).toBe('2026-09-16T12:02:00.000Z');
+    expect(after?.token_consumed_at).toBe('2026-09-16T12:01:00.000Z');
+  });
+
+  it('drops the button once the link lapses, and says asking again is free', async () => {
+    const harness = deliveryHarness({
+      delivery: {
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'finish_required',
+        expires_at: '2026-09-16T11:50:00.000Z',
+        token_consumed_at: '2026-09-16T11:41:00.000Z',
+        oauth_succeeded_at: '2026-09-16T11:42:00.000Z',
+      },
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      text: string;
+      blocks: { type: string }[];
+    };
+    expect(request.blocks.some((block) => block.type === 'actions')).toBe(false);
+    expect(request.text).toMatch(/will not have to sign in again/i);
+    expect(harness.current()).toMatchObject({ rendered_state: 'finish_stalled' });
+    // Terminal until someone asks again: nothing re-mints a link on a timer.
+    expect(harness.current()?.next_repair_at).toBeUndefined();
+  });
+
+  it('does not churn the card once it has been repainted as a finish', async () => {
+    const harness = deliveryHarness({
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'finish_required',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('prefers finishing over re-offering a sign-in the user no longer needs', async () => {
+    // A durably failed sign-in may be re-offered once (§7.2) — but not when
+    // the credential is already on file, where a fresh sign-in link would be
+    // both pointless and a second token to reconcile.
+    const harness = deliveryHarness({
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'expired',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_failed_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as { text: string };
+    expect(request.text).toMatch(/Finish connecting Notion/);
+    expect(harness.current()).toMatchObject({
+      rendered_state: 'finish_required',
+      delivery_generation: 1,
+      token_jti: 'jti-1',
+    });
   });
 });

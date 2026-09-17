@@ -319,6 +319,73 @@ export async function resolveSlackConnectBinding(
 }
 
 /**
+ * Rebuild the link for a delivery record that ALREADY has one, without
+ * touching the record.
+ *
+ * The finish card needs a URL and has no business minting a new link: the
+ * user's sign-in is done, the one-use token behind it has already been
+ * consumed doing exactly that, and a re-issue would clear the very
+ * `oauth_succeeded_at` that says so. So this re-seals the claims the live
+ * record still describes — same `delivery_id`, same generation, same `jti`,
+ * same `issued_at`/`expires_at`, which is what `mcpOAuthConnectClaimsMatchDelivery`
+ * compares — and grants strictly less than an issue: nothing is minted,
+ * nothing is invalidated, and the result dies on the original clock.
+ *
+ * Returns `null` once that clock has run out. There is deliberately no
+ * extension: a lapsed finish link is `finish_stalled`, whose answer is to ask
+ * again in the thread, which costs no second sign-in.
+ *
+ * The authority-derived claims (`session_owner_user_id`, the server's
+ * `config_version`) come from the binding proved for THIS call rather than
+ * from whatever they were at issue, because the record does not remember them.
+ * That is the same derivation an issue performs, and the token is not what
+ * authorizes the finish in any case: `/oauth-resolve` re-reads the server, the
+ * mode, the caller's usability and the grant before it resolves anything.
+ */
+export function resealMCPOAuthConnectLink(
+  deps: Pick<MCPOAuthConnectLinkDeps, 'masterSecret' | 'baseUrl'>,
+  binding: Extract<SlackConnectBinding, { ok: true }>,
+  tenantId: string,
+  now = new Date()
+): string | null {
+  const delivery = binding.widget.slack_connect;
+  if (!delivery || !deps.masterSecret) return null;
+  const issuedAt = new Date(delivery.issued_at);
+  const expiresAt = new Date(delivery.expires_at);
+  if (!Number.isFinite(issuedAt.getTime()) || !Number.isFinite(expiresAt.getTime())) return null;
+  if (expiresAt.getTime() <= now.getTime()) return null;
+  const { params, task, slack, authority, message } = binding;
+  const token = issueMCPOAuthConnectToken(
+    {
+      type: 'mcp-oauth-connect',
+      tid: tenantId,
+      sub: task.created_by as UserID,
+      credential_user_id: task.created_by as UserID,
+      slack_user_id: slack.userId,
+      slack_team_id: slack.teamId,
+      gateway_channel_id: slack.gatewayChannelId,
+      gateway_config_generation: authority.channel.provider_config_generation,
+      slack_channel_id: slack.channelId,
+      slack_thread_id: slack.threadId,
+      task_id: task.task_id,
+      session_id: message.session_id as SessionID,
+      session_owner_user_id: authority.session.created_by as UserID,
+      widget_id: binding.widget.widget_id,
+      mcp_server_id: params.mcpServerId as MCPServerID,
+      mcp_server_config_version: authority.server.config_version ?? 1,
+      oauth_mode: params.oauthMode,
+      delivery_id: delivery.delivery_id,
+      delivery_generation: delivery.delivery_generation,
+      jti: delivery.token_jti,
+      expiresAt,
+    },
+    deps.masterSecret,
+    issuedAt
+  );
+  return `${getMcpOAuthConnectUrl(deps.baseUrl)}#token=${encodeURIComponent(token)}`;
+}
+
+/**
  * Issue (or re-issue) the Slack deep link for one pending `oauth` widget.
  *
  * Re-issuing bumps `delivery_generation`, which is compared at redemption, so

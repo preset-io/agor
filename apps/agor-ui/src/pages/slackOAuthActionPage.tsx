@@ -21,6 +21,12 @@
  * Generalizing rather than forking matters most at (3) and (6): a fork would
  * be two places for the activation ordering to rot, and two places to decide
  * what counts as success.
+ *
+ * Steps 4-6 are also reachable WITHOUT 3: a preflight can report that the
+ * provider round-trip already finished and only the lane's own step 6 is
+ * outstanding, which is what happens when the page that started it went away
+ * before it could POST. That arrival runs `finalize` alone — see
+ * `autoFinalize` and `finish` — because the sign-in is not the thing missing.
  */
 
 import type { AgorClient, MCPOAuthStartFailure } from '@agor-live/client';
@@ -41,7 +47,24 @@ export type SlackOAuthActionState =
   /** The browser refused the sign-in window. Distinct from `failed`: see below. */
   | 'blocked'
   | 'failed'
-  | 'unavailable';
+  | 'unavailable'
+  /**
+   * The provider round-trip is DONE and this lane's own finish is not.
+   *
+   * A separate state from `pending` and from `failed`, because it is the only
+   * one whose recovery is "press this, no sign-in needed" — and because both
+   * of the others tell the reader something false about it. It exists at all
+   * because the grant is persisted by the daemon's own callback, while the
+   * steps after it wait on this page: closing the tab in between leaves a
+   * usable credential and an unfinished request.
+   */
+  | 'finalize_required'
+  /** The finish is in flight. */
+  | 'finalizing'
+  /** The finish did not complete. The sign-in is still done; nothing was lost. */
+  | 'finalize_failed'
+  /** The request was replaced by a newer one, or declined. */
+  | 'cancelled';
 
 /** Field on `mcp-servers/oauth-start` that carries this lane's sealed token. */
 export type SlackOAuthStartTokenField = 'slack_recovery_token' | 'connect_token';
@@ -54,22 +77,47 @@ export interface SlackOAuthActionOptions<TPreflight> {
   /** Map the preflight response onto the page's opening state. */
   initialState: (preflight: TPreflight) => SlackOAuthActionState;
   /**
-   * Lane-specific completion, run only after the DURABLE attempt reports
-   * success. Returning false lands on `failed`: the provider round-trip
-   * happened, but this lane's own definition of done did not.
+   * Lane-specific completion, run after the DURABLE attempt reports success —
+   * or, through `finish`, on its own for a round-trip that already finished.
+   * Returning false lands on `finalize_failed`: the provider round-trip
+   * happened, but this lane's own definition of done did not. It must NOT say
+   * "nothing was connected", because by then something was.
    */
   finalize?: (client: AgorClient, preflight: TPreflight) => Promise<boolean>;
+  /**
+   * Should the page run `finalize` as soon as the preflight lands?
+   *
+   * For the arrival this whole recovery exists for — the user returning to a
+   * link whose sign-in already succeeded — the finish needs no decision from
+   * them: they made it at the provider, and the daemon re-reads that grant
+   * before it acts on anything. Asking for a second click would only add a
+   * step that can be abandoned in exactly the same way. The button remains for
+   * when this fails.
+   */
+  autoFinalize?: (preflight: TPreflight) => boolean;
 }
 
 export interface SlackOAuthAction<TPreflight> {
   state: SlackOAuthActionState;
   preflight: TPreflight | null;
   start: () => Promise<void>;
+  /**
+   * Run this lane's finish step on its own, with no provider round-trip.
+   *
+   * The recovery action: idempotent on the daemon side, so pressing it when
+   * the work is already done answers success rather than an error.
+   */
+  finish: () => Promise<void>;
 }
 
 /** States from which pressing the primary action starts a flow. */
 export function slackOAuthActionIsStartable(state: SlackOAuthActionState): boolean {
   return state === 'ready' || state === 'blocked';
+}
+
+/** States from which pressing the primary action finishes one already begun. */
+export function slackOAuthActionIsFinishable(state: SlackOAuthActionState): boolean {
+  return state === 'finalize_required' || state === 'finalize_failed';
 }
 
 function fragmentToken(): string | null {
@@ -80,7 +128,8 @@ function fragmentToken(): string | null {
 export function useSlackOAuthAction<TPreflight>(
   options: SlackOAuthActionOptions<TPreflight>
 ): SlackOAuthAction<TPreflight> {
-  const { client, preflightService, startTokenField, initialState, finalize } = options;
+  const { client, preflightService, startTokenField, initialState, finalize, autoFinalize } =
+    options;
   const token = useMemo(fragmentToken, []);
   const [state, setState] = useState<SlackOAuthActionState>('checking');
   const [preflight, setPreflight] = useState<TPreflight | null>(null);
@@ -97,6 +146,35 @@ export function useSlackOAuthAction<TPreflight>(
   initialStateRef.current = initialState;
   const finalizeRef = useRef(finalize);
   finalizeRef.current = finalize;
+  const autoFinalizeRef = useRef(autoFinalize);
+  autoFinalizeRef.current = autoFinalize;
+  const preflightRef = useRef<TPreflight | null>(null);
+
+  /**
+   * Run the lane's finish step against a preflight we hold, with no provider
+   * round-trip.
+   *
+   * Takes the value rather than reading component state so the preflight
+   * effect can call it in the same tick it received one.
+   */
+  const runFinalize = async (value: TPreflight) => {
+    if (!client || !finalizeRef.current) return;
+    const owner = operationOwner.current;
+    setState('finalizing');
+    let done = false;
+    try {
+      done = await finalizeRef.current(client, value);
+    } catch {
+      done = false;
+    }
+    if (operationOwner.current !== owner) return;
+    setState(done ? 'succeeded' : 'finalize_failed');
+  };
+  // Held in a ref for the same reason the lane callbacks are: the preflight
+  // effect calls it, and making it a dependency would re-run the preflight on
+  // every render.
+  const runFinalizeRef = useRef(runFinalize);
+  runFinalizeRef.current = runFinalize;
 
   useEffect(() => {
     if (token && window.location.hash) {
@@ -124,7 +202,11 @@ export function useSlackOAuthAction<TPreflight>(
         if (cancelled) return;
         const value = result as TPreflight;
         setPreflight(value);
+        preflightRef.current = value;
         setState(initialStateRef.current(value));
+        // The arrival this recovery exists for: the sign-in already succeeded
+        // and only this page's own POST is outstanding.
+        if (autoFinalizeRef.current?.(value)) void runFinalizeRef.current(value);
       })
       .catch(() => !cancelled && setState('unavailable'));
     return () => {
@@ -182,18 +264,32 @@ export function useSlackOAuthAction<TPreflight>(
         setState('failed');
         return;
       }
-      const done = finalizeRef.current
-        ? await finalizeRef.current(client, preflight as TPreflight)
-        : true;
+      if (!finalizeRef.current) {
+        setState('succeeded');
+        return;
+      }
+      // NOT `failed`. The provider round-trip succeeded and the daemon holds
+      // the grant; what did not happen is this lane's own finish, whose
+      // recovery is a button rather than another sign-in.
+      const done = await finalizeRef.current(
+        client,
+        preflightRef.current ?? (preflight as TPreflight)
+      );
       if (!isCurrent()) return;
-      setState(done ? 'succeeded' : 'failed');
+      setState(done ? 'succeeded' : 'finalize_failed');
     } catch {
       popup.close();
       if (isCurrent()) setState('failed');
     }
   };
 
-  return { state, preflight, start };
+  const finish = async () => {
+    const value = preflightRef.current;
+    if (!value || !slackOAuthActionIsFinishable(state)) return;
+    await runFinalize(value);
+  };
+
+  return { state, preflight, start, finish };
 }
 
 export interface SlackOAuthActionShellProps {

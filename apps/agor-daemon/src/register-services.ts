@@ -128,6 +128,7 @@ import type {
   SessionID,
   UserID,
   UUID,
+  WidgetMessageMetadata,
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
@@ -279,6 +280,7 @@ import {
 import {
   gatewaySourceMatchesConnectClaims,
   mutateSlackConnectDelivery,
+  readOAuthConnectWidget,
   readPendingOAuthConnectWidget,
 } from './services/mcp-oauth-connect-delivery.js';
 import {
@@ -296,6 +298,7 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   lockMCPOAuthGrantConfiguration,
 } from './services/mcp-oauth-grant-binding.js';
+import { resolveMCPOAuthGrantLiveness } from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
@@ -308,6 +311,7 @@ import {
   createMCPServersService,
   runWithMCPServerMutationDatabase,
 } from './services/mcp-servers.js';
+import { mcpSlackConnectRenderedState } from './services/mcp-slack-connect-card.js';
 import {
   readSlackMCPOAuthAuthority,
   type SlackMCPOAuthAuthorityRepositories,
@@ -5107,6 +5111,7 @@ export async function registerMCPServices(
   type MCPOAuthConnectBinding = {
     claims: MCPOAuthConnectTokenClaims;
     delivery: MCPSlackConnectDelivery;
+    widget: WidgetMessageMetadata;
     params: OAuthWidgetParams;
     authority: SlackMCPOAuthAuthoritySnapshot;
     oauthContext: MCPSlackOAuthConnectContext;
@@ -5140,7 +5145,22 @@ export async function registerMCPServices(
     rawToken: unknown,
     params: AuthenticatedParams | undefined,
     consume: boolean,
-    attemptId?: MCPOAuthAttemptID
+    attemptId?: MCPOAuthAttemptID,
+    /**
+     * Read a widget that is no longer `pending` as well.
+     *
+     * ONLY the preflight passes this, and the preflight grants nothing: it
+     * answers names and a state. Every other binding this function proves
+     * still runs, and the consume CAS below re-checks `status === 'pending'`
+     * under the row lock, so a resolved widget can be DESCRIBED here and still
+     * cannot be started or consumed.
+     *
+     * It exists because a page that refuses to describe a finished request
+     * tells the person who just finished it that their link is "invalid,
+     * expired, or superseded" — and the whole point of B1 is that returning to
+     * this page has to say which milestone was reached.
+     */
+    options?: { allowResolved?: boolean }
   ): Promise<MCPOAuthConnectBinding> => {
     const genericFailure = 'This MCP connect action is invalid, expired, or superseded.';
     try {
@@ -5172,7 +5192,9 @@ export async function registerMCPServices(
         if (!(await isMCPSlackConnectCardEnabled(db))) throw new Error(genericFailure);
         const messagesRepository = new MessagesRepository(db);
         const message = await messagesRepository.findById(claims.widget_id);
-        const pending = readPendingOAuthConnectWidget(message);
+        const pending = options?.allowResolved
+          ? readOAuthConnectWidget(message)
+          : readPendingOAuthConnectWidget(message);
         if (
           !message ||
           !pending ||
@@ -5245,6 +5267,7 @@ export async function registerMCPServices(
         return {
           claims,
           delivery,
+          widget: pending.widget,
           params: pending.params,
           authority,
           oauthContext: {
@@ -5280,15 +5303,30 @@ export async function registerMCPServices(
   // referrer, and the response carries names and states only.
   app.use('/mcp-oauth-connect', {
     async create(data: { token?: unknown }, params?: AuthenticatedParams) {
-      const binding = await loadMCPOAuthConnectBinding(data?.token, params, false);
+      const binding = await loadMCPOAuthConnectBinding(data?.token, params, false, undefined, {
+        allowResolved: true,
+      });
+      // The page and the Slack card answer from ONE state machine, over the
+      // same durable rows. They used to answer from two, and disagreed exactly
+      // where it mattered: the card kept a finished round-trip in
+      // `sign_in_pending` while this page mapped it straight to "connected",
+      // which was a milestone the widget had not reached and the agent had
+      // certainly not woken for.
+      const grantLive = await runInOAuthTenantScope(db, binding.claims.tid, () =>
+        resolveMCPOAuthGrantLiveness(
+          db,
+          binding.claims.mcp_server_id,
+          binding.claims.credential_user_id
+        )
+      )
+        .then((liveness) => liveness.live)
+        .catch(() => false);
+      const state = mcpSlackConnectRenderedState(
+        { widget: binding.widget, delivery: binding.delivery, grantLive },
+        Date.now()
+      );
       return {
-        state: binding.delivery.oauth_failed_at
-          ? 'failed'
-          : binding.delivery.oauth_succeeded_at
-            ? 'connected'
-            : binding.delivery.oauth_started_at || binding.delivery.token_consumed_at
-              ? 'sign_in_pending'
-              : 'connect_required',
+        state,
         widget_id: binding.claims.widget_id,
         server_name: binding.params.serverName,
         oauth_mode: binding.claims.oauth_mode,

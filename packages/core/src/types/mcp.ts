@@ -1192,10 +1192,23 @@ export interface MCPSlackConnectDelivery {
  * only the last value actually sent, so an unchanged state skips the edit.
  */
 export type MCPSlackConnectRenderedState =
-  /** Pending widget, live unconsumed link — the only state carrying a button. */
+  /** Pending widget, live unconsumed link — the first state carrying a button. */
   | 'connect_required'
   /** The link was consumed and a provider round-trip is in flight. */
   | 'sign_in_pending'
+  /**
+   * The grant landed but the widget is not resolved, and a live link can carry
+   * the user back to finish it. The second, and last, state with a button.
+   *
+   * This exists because the provider callback completes only the first of the
+   * lane's three milestones. Until this state, a sign-in that succeeded while
+   * its browser went away rendered as `sign_in_pending` forever — a card
+   * truthfully describing a round-trip that had in fact finished, with nothing
+   * to press.
+   */
+  | 'finish_required'
+  /** As `finish_required`, but the link lapsed: asking again costs no sign-in. */
+  | 'finish_stalled'
   /** Resolved: the grant landed and the server is attached to the session. */
   | 'connected'
   /** Resolved: the grant landed, but the resolver may not attach to this session. */
