@@ -16,24 +16,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import {
-  ApiOutlined,
-  AppstoreOutlined,
-  ArrowLeftOutlined,
-  BranchesOutlined,
-  CloseOutlined,
-  ControlOutlined,
-  CreditCardOutlined,
-  ExperimentOutlined,
-  FolderOutlined,
-  InfoCircleOutlined,
-  MessageOutlined,
-  RightOutlined,
-  RobotOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-  UserOutlined,
-} from '@ant-design/icons';
+import { ArrowLeftOutlined, CloseOutlined, RightOutlined, UserOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
@@ -56,6 +39,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -68,6 +52,7 @@ import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
+import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
@@ -273,283 +258,72 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, canListUsers]
   );
 
+  // One nav model feeds the desktop sidebar and the mobile index, so they cannot drift apart
+  const settingsNav = useMemo(
+    () =>
+      buildSettingsNav({
+        isAdmin,
+        canSeeSection,
+        counts: {
+          boards: boardById.size,
+          repos: repoById.size,
+          branches: branchById.size,
+          cards: cardById.size,
+          artifacts: artifactById.size,
+          mcp: mcpServerById.size,
+          gateway: gatewayChannelById.size,
+          users: userById.size,
+        },
+      }),
+    [
+      canSeeSection,
+      isAdmin,
+      boardById.size,
+      repoById.size,
+      branchById.size,
+      cardById.size,
+      artifactById.size,
+      mcpServerById.size,
+      gatewayChannelById.size,
+      userById.size,
+    ]
+  );
+
   // Menu items for left sidebar navigation
   const menuItems: MenuProps['items'] = useMemo(
-    () => [
-      {
-        key: 'workspace',
-        label: 'Workspace',
+    () =>
+      settingsNav.map((group) => ({
+        key: group.key,
+        label: group.title,
         type: 'group' as const,
-        children: [
-          {
-            key: 'boards',
-            label: 'Boards',
-            icon: <AppstoreOutlined />,
-          },
-          {
-            key: 'repos',
-            label: 'Repositories',
-            icon: <FolderOutlined />,
-          },
-          {
-            key: 'branches',
-            label: 'Branches',
-            icon: <BranchesOutlined />,
-          },
-          {
-            key: 'teammates',
-            label: 'Teammates',
-            icon: <RobotOutlined />,
-          },
-          {
-            key: 'cards',
-            label: (
-              <span>
-                Cards{' '}
-                <span
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    padding: '0 4px',
-                    borderRadius: 3,
-                    background: token.colorWarningBg,
-                    color: token.colorWarningText,
-                    border: `1px solid ${token.colorWarningBorder}`,
-                    marginLeft: 4,
-                  }}
-                >
-                  Beta
-                </span>
+        children: group.rows.map((row) => ({
+          key: row.section,
+          icon: row.icon,
+          label: row.beta ? (
+            <span>
+              {row.label}{' '}
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  padding: '0 4px',
+                  borderRadius: 3,
+                  background: token.colorWarningBg,
+                  color: token.colorWarningText,
+                  border: `1px solid ${token.colorWarningBorder}`,
+                  marginLeft: 4,
+                }}
+              >
+                Beta
               </span>
-            ),
-            icon: <CreditCardOutlined />,
-          },
-          {
-            key: 'artifacts',
-            label: 'Artifacts',
-            icon: <ExperimentOutlined />,
-          },
-          ...(isAdmin
-            ? [
-                {
-                  key: 'workspace-preferences',
-                  label: 'Preferences',
-                  icon: <ControlOutlined />,
-                },
-              ]
-            : []),
-        ],
-      },
-      {
-        key: 'integrations',
-        label: 'Integrations',
-        type: 'group' as const,
-        children: [
-          ...(canSeeSection('agentic-tools')
-            ? [
-                {
-                  key: 'agentic-tools',
-                  label: 'Agentic Tools',
-                  icon: <ThunderboltOutlined />,
-                },
-              ]
-            : []),
-          {
-            key: 'mcp',
-            label: 'MCP Servers',
-            icon: <ApiOutlined />,
-          },
-          ...(canSeeSection('gateway')
-            ? [
-                {
-                  key: 'gateway',
-                  label: 'Gateway Channels',
-                  icon: <MessageOutlined />,
-                },
-              ]
-            : []),
-        ],
-      },
-      // Rendered only when it has something under it — an "Admin" heading with
-      // an empty body is what a viewer would otherwise get.
-      ...(canSeeSection('groups') || canSeeSection('users')
-        ? [
-            {
-              key: 'admin',
-              label: 'Admin',
-              type: 'group' as const,
-              children: [
-                ...(canSeeSection('groups')
-                  ? [
-                      {
-                        key: 'groups',
-                        label: 'Groups',
-                        icon: <TeamOutlined />,
-                      },
-                    ]
-                  : []),
-                ...(canSeeSection('users')
-                  ? [
-                      {
-                        key: 'users',
-                        label: 'Users',
-                        icon: <TeamOutlined />,
-                      },
-                    ]
-                  : []),
-              ],
-            },
-          ]
-        : []),
-      {
-        key: 'system',
-        label: 'System',
-        type: 'group' as const,
-        children: [
-          {
-            key: 'about',
-            label: 'About',
-            icon: <InfoCircleOutlined />,
-          },
-        ],
-      },
-    ],
-    [canSeeSection, isAdmin, token]
+            </span>
+          ) : (
+            row.label
+          ),
+        })),
+      })),
+    [settingsNav, token]
   );
-
-  // Human labels for the mobile drill-in header. Mirrors the desktop menu.
-  const sectionLabels: Record<SettingsSection, string> = useMemo(
-    () => ({
-      boards: 'Boards',
-      repos: 'Repositories',
-      branches: 'Branches',
-      teammates: 'Teammates',
-      cards: 'Cards',
-      artifacts: 'Artifacts',
-      'workspace-preferences': 'Preferences',
-      mcp: 'MCP servers',
-      'agentic-tools': 'Agentic tools',
-      gateway: 'Gateway channels',
-      groups: 'Groups',
-      users: 'Users',
-      about: 'About Agor',
-    }),
-    []
-  );
-
-  // iOS-style grouped index for the mobile shell. Rows reuse the same sections
-  // the desktop menu exposes (and the same canSeeSection gate); tapping one
-  // drills into the reused section content. Only the nav layer is new.
-  const mobileIndexGroups = useMemo(() => {
-    type Row = { section: SettingsSection; label: string; icon: React.ReactNode; count?: number };
-    const groups: { key: string; title: string; rows: Row[] }[] = [
-      {
-        key: 'workspace',
-        title: 'Workspace',
-        rows: [
-          { section: 'boards', label: 'Boards', icon: <AppstoreOutlined />, count: boardById.size },
-          {
-            section: 'repos',
-            label: 'Repositories',
-            icon: <FolderOutlined />,
-            count: repoById.size,
-          },
-          {
-            section: 'branches',
-            label: 'Branches',
-            icon: <BranchesOutlined />,
-            count: branchById.size,
-          },
-          { section: 'teammates', label: 'Teammates', icon: <RobotOutlined /> },
-          { section: 'cards', label: 'Cards', icon: <CreditCardOutlined />, count: cardById.size },
-          {
-            section: 'artifacts',
-            label: 'Artifacts',
-            icon: <ExperimentOutlined />,
-            count: artifactById.size,
-          },
-          ...(isAdmin
-            ? [
-                {
-                  section: 'workspace-preferences' as const,
-                  label: 'Preferences',
-                  icon: <ControlOutlined />,
-                },
-              ]
-            : []),
-        ],
-      },
-      {
-        key: 'integrations',
-        title: 'Integrations',
-        rows: [
-          ...(canSeeSection('agentic-tools')
-            ? [
-                {
-                  section: 'agentic-tools' as const,
-                  label: 'Agentic tools',
-                  icon: <ThunderboltOutlined />,
-                },
-              ]
-            : []),
-          {
-            section: 'mcp',
-            label: 'MCP servers',
-            icon: <ApiOutlined />,
-            count: mcpServerById.size,
-          },
-          ...(canSeeSection('gateway')
-            ? [
-                {
-                  section: 'gateway' as const,
-                  label: 'Gateway channels',
-                  icon: <MessageOutlined />,
-                  count: gatewayChannelById.size,
-                },
-              ]
-            : []),
-        ],
-      },
-      {
-        key: 'admin',
-        title: 'Members & groups',
-        rows: [
-          ...(canSeeSection('groups')
-            ? [{ section: 'groups' as const, label: 'Groups', icon: <TeamOutlined /> }]
-            : []),
-          ...(canSeeSection('users')
-            ? [
-                {
-                  section: 'users' as const,
-                  label: 'Users',
-                  icon: <TeamOutlined />,
-                  count: userById.size,
-                },
-              ]
-            : []),
-        ],
-      },
-      {
-        key: 'about',
-        title: 'About',
-        rows: [{ section: 'about', label: 'About Agor', icon: <InfoCircleOutlined /> }],
-      },
-    ];
-    return groups
-      .map((group) => ({ ...group, rows: group.rows.filter((row) => canSeeSection(row.section)) }))
-      .filter((group) => group.rows.length > 0);
-  }, [
-    canSeeSection,
-    isAdmin,
-    boardById.size,
-    repoById.size,
-    branchById.size,
-    cardById.size,
-    artifactById.size,
-    mcpServerById.size,
-    gatewayChannelById.size,
-    userById.size,
-  ]);
 
   // Mobile drill state: null = the grouped index. A deep-link opener (e.g. the
   // "Create teammate" flow) seeds straight into its section; the generic entry
@@ -765,24 +539,24 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 icon={<ArrowLeftOutlined />}
                 aria-label="Back"
                 onClick={() => setMobileSection(null)}
-                style={{ minWidth: 44, minHeight: 44 }}
+                style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
               />
             ) : (
-              <div style={{ width: 44 }} />
+              <div style={{ width: MOBILE_TOUCH_TARGET }} />
             )}
             <Typography.Title
               level={5}
               ellipsis
               style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
             >
-              {mobileSection ? sectionLabels[mobileSection] : 'Settings'}
+              {mobileSection ? settingsSectionMobileLabel(mobileSection) : 'Settings'}
             </Typography.Title>
             <Button
               type="text"
               icon={<CloseOutlined />}
               aria-label="Close settings"
               onClick={onClose}
-              style={{ minWidth: 44, minHeight: 44 }}
+              style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
             />
           </Flex>
           <Content
@@ -844,7 +618,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
 
-                {mobileIndexGroups.map((group) => (
+                {settingsNav.map((group) => (
                   <div key={group.key}>
                     <Typography.Text
                       type="secondary"
@@ -855,21 +629,21 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                         letterSpacing: 0.4,
                       }}
                     >
-                      {group.title}
+                      {group.mobileTitle ?? group.title}
                     </Typography.Text>
                     <div style={settingsGroupCardStyle}>
                       {group.rows.map((row, index) => (
                         <button
                           key={row.section}
                           type="button"
-                          aria-label={row.label}
+                          aria-label={row.mobileLabel ?? row.label}
                           onClick={() => drillIntoSection(row.section)}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: token.margin,
                             width: '100%',
-                            minHeight: 44,
+                            minHeight: MOBILE_TOUCH_TARGET,
                             padding: `${token.paddingXS}px ${token.padding}px`,
                             cursor: 'pointer',
                             background: 'none',
@@ -887,7 +661,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                             {row.icon}
                           </span>
                           <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
-                            {row.label}
+                            {row.mobileLabel ?? row.label}
                           </Typography.Text>
                           {row.count !== undefined && (
                             <Typography.Text
