@@ -38,6 +38,8 @@ export type SlackOAuthActionState =
   | 'starting'
   | 'pending'
   | 'succeeded'
+  /** The browser refused the sign-in window. Distinct from `failed`: see below. */
+  | 'blocked'
   | 'failed'
   | 'unavailable';
 
@@ -63,6 +65,11 @@ export interface SlackOAuthAction<TPreflight> {
   state: SlackOAuthActionState;
   preflight: TPreflight | null;
   start: () => Promise<void>;
+}
+
+/** States from which pressing the primary action starts a flow. */
+export function slackOAuthActionIsStartable(state: SlackOAuthActionState): boolean {
+  return state === 'ready' || state === 'blocked';
 }
 
 function fragmentToken(): string | null {
@@ -130,11 +137,18 @@ export function useSlackOAuthAction<TPreflight>(
   }, [client, token, preflightService]);
 
   const start = async () => {
-    if (!client || !token || state !== 'ready') return;
+    if (!client || !token || !slackOAuthActionIsStartable(state)) return;
     // Reserve the popup synchronously while the click still has user activation.
     const popup = openMarketplaceOAuthPopup();
     if (!popup) {
-      setState('failed');
+      // NOT `failed`. Nothing was attempted, and the two states want opposite
+      // advice: `failed` says "ask again", which reproduces a block exactly.
+      // This is also the likeliest outcome on the lane's primary client —
+      // Slack's mobile in-app browser blocks `window.open` — so the page has
+      // to name pop-ups rather than report a connection that "was not
+      // completed". `ready` is kept underneath so the button stays live and a
+      // second tap, after the user allows pop-ups, works.
+      setState('blocked');
       return;
     }
     const owner = operationOwner.current;

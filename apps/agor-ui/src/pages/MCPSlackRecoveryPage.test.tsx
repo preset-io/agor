@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPSlackRecoveryPage } from './MCPSlackRecoveryPage';
 
 const popup = { close: vi.fn(), navigate: vi.fn(() => true), operationId: 'popup-1' };
+const openPopup = vi.hoisted(() => vi.fn());
 vi.mock('@/components/Marketplace/marketplaceOAuthPopup', () => ({
-  openMarketplaceOAuthPopup: () => popup,
+  openMarketplaceOAuthPopup: openPopup,
 }));
 vi.mock('@/utils/mcpOAuthAttempt', () => ({
   waitForMCPOAuthAttempt: vi.fn(async () => ({ status: 'succeeded' })),
@@ -31,7 +32,29 @@ function client(preflight: object, start?: object): AgorClient {
 describe('Slack MCP recovery browser surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    openPopup.mockReturnValue(popup);
     window.location.hash = '#token=signed-token';
+  });
+
+  it('names the pop-up block instead of reporting a failed recovery', async () => {
+    // Shared with the connect lane through `useSlackOAuthAction`: a refused
+    // `window.open` is not a failed attempt, and "try from a new turn" would
+    // reproduce it.
+    openPopup.mockReturnValue(null);
+    render(
+      <MCPSlackRecoveryPage
+        client={client({
+          state: 'reconnect_required',
+          provider_dispatch: 'not_started',
+          expires_at: '2026-09-16T12:10:00.000Z',
+          return_to_slack_url: 'slack://channel?team=T1&id=C1',
+        })}
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to sign-in' }));
+    expect(await screen.findByText('Your browser blocked the sign-in window')).toBeVisible();
+    expect(screen.queryByText('MCP recovery was not completed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue to sign-in' })).toBeVisible();
   });
 
   it('shows ambiguous no-replay guidance without topology or secret prose', async () => {

@@ -24,6 +24,7 @@ import { Alert, Button, Spin, Typography } from 'antd';
 import {
   SlackOAuthActionShell,
   type SlackOAuthActionState,
+  slackOAuthActionIsStartable,
   useSlackOAuthAction,
 } from './slackOAuthActionPage';
 
@@ -94,6 +95,19 @@ export function MCPOAuthConnectPage({ client }: Props) {
         />
       );
     }
+    if (state === 'blocked') {
+      // The one refusal that must not say "ask again": asking again reproduces
+      // it. Slack's mobile in-app browser is where this happens, and it is the
+      // primary client for this link.
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          title="Your browser blocked the sign-in window"
+          description="Allow pop-ups for Agor and tap Continue to sign-in again. If you opened this link inside Slack, opening it in your usual browser also works."
+        />
+      );
+    }
     if (state === 'failed') {
       return (
         <Alert
@@ -156,7 +170,7 @@ export function MCPOAuthConnectPage({ client }: Props) {
       subtitle="Sign in with your current Agor account, then return to the originating Slack thread."
       status={status}
       primaryAction={
-        state === 'ready' ? (
+        slackOAuthActionIsStartable(state) ? (
           <Button type="primary" size="large" onClick={start}>
             Continue to sign-in
           </Button>
