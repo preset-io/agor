@@ -1,14 +1,8 @@
-import type { BoardComment, User } from '@agor-live/client';
-import {
-  artifactFullscreenPath,
-  getTeammateConfig,
-  matchSearchTokens,
-  SEARCHABLE_FIELDS,
-  tokenizeSearchQuery,
-} from '@agor-live/client';
+import type { User } from '@agor-live/client';
+import { artifactFullscreenPath } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, List, Typography, theme } from 'antd';
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -19,10 +13,19 @@ import {
   selectMcpServerById,
   selectSessionById,
 } from '../../store/selectors';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { MIN_QUERY_LENGTH } from '../GlobalSearch/types';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
+import { describeSearchResult } from '../GlobalSearch/describeSearchResult';
+import { searchComments } from '../GlobalSearch/searchComments';
+import {
+  MIN_QUERY_LENGTH,
+  SECTION_LABELS,
+  SECTION_ORDER,
+  type SearchResultItem,
+} from '../GlobalSearch/types';
 import { useGlobalSearch } from '../GlobalSearch/useGlobalSearch';
-import { MOBILE_TOUCH_TARGET, mobileScrollAreaStyle } from './constants';
+import { searchResultKey } from '../GlobalSearch/utils';
+import { mobileScrollAreaStyle } from './constants';
 
 interface MobileSearchPageProps {
   currentUser?: User | null;
@@ -42,10 +45,9 @@ interface Row {
 }
 
 /**
- * Full-screen global search across the workspace. Reuses the desktop search
- * backend: the shared `useGlobalSearch` hook (sessions / branches / teammates /
- * boards / artifacts / MCP) plus the same `@agor/core` matcher + searchable-field
- * registry for comments. Results are grouped by type; tapping one navigates.
+ * Full-screen global search across the workspace. Entity matching, section order,
+ * labels and row titles come from the desktop GlobalSearch module; the layout,
+ * navigation targets, branch board-name subtitle and Comments section are mobile's own.
  */
 export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   currentUser,
@@ -77,99 +79,63 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
     mcpServerById,
   });
 
-  // Comments aren't in the entity hook's buckets; match them with the same
-  // shared tokenizer + registry so this stays one search backend, not a fork.
-  const commentResults = useMemo<BoardComment[]>(() => {
-    const trimmed = deferredQuery.trim();
-    if (trimmed.length < MIN_QUERY_LENGTH) return [];
-    const tokens = tokenizeSearchQuery(trimmed);
-    if (tokens.length === 0) return [];
-    const time = (c: BoardComment) => (c.updated_at ? new Date(c.updated_at).getTime() : 0);
-    return Array.from(commentById.values())
-      .filter((c) => boardById.has(c.board_id)) // never out-render the board views' gate
-      .filter((c) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.comment(c)))
-      .sort((a, b) => time(b) - time(a))
-      .slice(0, COMMENT_LIMIT);
-  }, [deferredQuery, commentById, boardById]);
+  // Comments aren't an entity-search bucket yet; match them with the shared backend.
+  const commentResults = useMemo(
+    () => searchComments({ query: deferredQuery, commentById, boardById, limit: COMMENT_LIMIT }),
+    [deferredQuery, commentById, boardById]
+  );
+
+  // Where a result leads on the mobile shell; what a row says is shared with desktop.
+  const openResult = useCallback(
+    (result: SearchResultItem) => {
+      switch (result.type) {
+        case 'session':
+          return navigate(`/m/session/${result.item.session_id}`);
+        case 'branch':
+        case 'teammate':
+          return onOpenBranch(result.item.branch_id);
+        case 'board':
+          return navigate(`/m/board/${result.item.board_id}`);
+        case 'artifact':
+          return navigate(artifactFullscreenPath(result.item.artifact_id));
+        case 'mcp':
+          return onOpenWorkspaceSettings('mcp');
+      }
+    },
+    [navigate, onOpenBranch, onOpenWorkspaceSettings]
+  );
 
   const sections: { title: string; rows: Row[] }[] = useMemo(() => {
-    const s: { title: string; rows: Row[] }[] = [];
-    if (results.session.length) {
-      s.push({
-        title: 'Sessions',
-        rows: results.session.map((r) => ({
-          key: r.item.session_id,
-          title: getSessionDisplayTitle(r.item, { fallbackChars: 40 }),
-          subtitle: r.parentBranch?.name,
-          onClick: () => navigate(`/m/session/${r.item.session_id}`),
-        })),
-      });
-    }
-    if (results.teammate.length) {
-      s.push({
-        title: 'Teammates',
-        rows: results.teammate.map((r) => ({
-          key: r.item.branch_id,
-          title: getTeammateConfig(r.item)?.displayName ?? r.item.name,
-          onClick: () => onOpenBranch(r.item.branch_id),
-        })),
-      });
-    }
-    if (results.branch.length) {
-      s.push({
-        title: 'Branches',
-        rows: results.branch.map((r) => ({
-          key: r.item.branch_id,
-          title: r.item.name,
-          subtitle: r.item.board_id ? boardById.get(r.item.board_id)?.name : undefined,
-          onClick: () => onOpenBranch(r.item.branch_id),
-        })),
-      });
-    }
-    if (results.board.length) {
-      s.push({
-        title: 'Boards',
-        rows: results.board.map((r) => ({
-          key: r.item.board_id,
-          title: r.item.name,
-          onClick: () => navigate(`/m/board/${r.item.board_id}`),
-        })),
-      });
-    }
-    if (results.artifact.length) {
-      s.push({
-        title: 'Artifacts',
-        rows: results.artifact.map((r) => ({
-          key: r.item.artifact_id,
-          title: r.item.name,
-          subtitle: r.parentBranch?.name,
-          onClick: () => navigate(artifactFullscreenPath(r.item.artifact_id)),
-        })),
-      });
-    }
-    if (results.mcp.length) {
-      s.push({
-        title: 'MCP servers',
-        rows: results.mcp.map((r) => ({
-          key: r.item.mcp_server_id,
-          title: r.item.display_name || r.item.name,
-          onClick: () => onOpenWorkspaceSettings('mcp'),
-        })),
-      });
-    }
-    if (commentResults.length) {
-      s.push({
+    const entitySections = SECTION_ORDER.filter((type) => results[type].length > 0).map((type) => ({
+      title: SECTION_LABELS[type],
+      rows: (results[type] as SearchResultItem[]).map((result) => {
+        const { title, secondary } = describeSearchResult(result);
+        const boardName =
+          result.type === 'branch' && result.item.board_id
+            ? boardById.get(result.item.board_id)?.name
+            : undefined;
+        return {
+          key: searchResultKey(result),
+          title,
+          subtitle: secondary ?? boardName,
+          onClick: () => openResult(result),
+        };
+      }),
+    }));
+    if (commentResults.length === 0) return entitySections;
+    return [
+      ...entitySections,
+      {
         title: 'Comments',
-        rows: commentResults.map((c) => ({
-          key: c.comment_id,
-          title: c.content,
-          subtitle: boardById.get(c.board_id)?.name,
-          onClick: () => navigate(`/m/comments/${c.board_id}`),
+        rows: commentResults.map((comment) => ({
+          key: comment.comment_id,
+          title: comment.content,
+          subtitle: boardById.get(comment.board_id)?.name,
+          onClick: () => navigate(`/m/comments/${comment.board_id}`),
         })),
-      });
-    }
-    return s;
-  }, [results, commentResults, boardById, navigate, onOpenWorkspaceSettings, onOpenBranch]);
+      },
+    ];
+  }, [results, commentResults, boardById, navigate, openResult]);
 
   const showEmpty =
     query.trim().length >= MIN_QUERY_LENGTH && !hasAnyResults && !commentResults.length;
@@ -242,19 +208,16 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
                 </Typography.Text>
               }
               dataSource={section.rows}
+              rowKey="key"
               renderItem={(row) => (
                 <List.Item
-                  role="button"
-                  tabIndex={0}
+                  {...pressableProps(row.onClick)}
                   aria-label={row.title}
-                  onClick={row.onClick}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      row.onClick();
-                    }
+                  style={{
+                    cursor: 'pointer',
+                    paddingInline: token.padding,
+                    minHeight: MOBILE_TOUCH_TARGET,
                   }}
-                  style={{ cursor: 'pointer', paddingInline: token.padding, minHeight: 44 }}
                 >
                   <List.Item.Meta
                     title={
