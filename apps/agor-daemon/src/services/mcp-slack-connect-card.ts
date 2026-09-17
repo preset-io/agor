@@ -285,6 +285,67 @@ export function mcpSlackConnectExpiryDelay(
 }
 
 /**
+ * How long a first-card marker waits after a refusal an administrator can undo.
+ *
+ * Five minutes rather than the sweep's own 30s tick, because none of the
+ * reversible refusals (`unaligned`, `authority_moved`, `no_secret`) changes
+ * without a human doing something, and rather than an hour, because the human
+ * who changes it is usually waiting on the card.
+ */
+export const MCP_SLACK_CONNECT_MARKER_BACKOFF_MS = 5 * 60_000;
+
+/**
+ * The window a mint-time marker is eligible for repair at all, matching the
+ * sweep's own horizon. A marker is stamped at mint and the sweep only reads
+ * the last day of due work, so this is the age at which one silently stopped
+ * being visited before rescheduling existed.
+ */
+export const MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS = 24 * 60 * 60_000;
+
+/**
+ * When the sweep should look again at a first card it just refused to post.
+ *
+ * The marker is the only durable trigger a widget has before a delivery record
+ * exists, and the reversible refusals deliberately keep it: an administrator
+ * can switch `align_slack_users` back on, re-enable a channel, or restore a
+ * role, and the card the user was promised has nothing else to wake it.
+ *
+ * What must NOT be kept is the marker's queue position. The sweep reads the
+ * oldest page of due work, so a marker left at its original, permanently
+ * overdue timestamp sits at the front of that page for as long as the refusal
+ * lasts — and enough of them starve every healthy card behind them of its
+ * first delivery and of every repair. Moving it forward keeps the trigger and
+ * gives up the position.
+ *
+ * Ageing out is preserved exactly rather than traded away: the reschedule is
+ * capped at `requested_at + MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS`, the same
+ * point the sweep's horizon used to drop the row, and past that the marker is
+ * pinned back to its anchor where the horizon excludes it for good. A marker
+ * that keeps refreshing its own due time would otherwise be immortal.
+ *
+ * Returns `undefined` when there is nothing to write.
+ */
+export function mcpSlackConnectRefusedMarkerDueAt(
+  widget: Pick<WidgetMessageMetadata, 'slack_connect_due_at' | 'requested_at'>,
+  now = Date.now()
+): string | undefined {
+  const dueAt = widget.slack_connect_due_at;
+  if (!dueAt) return undefined;
+  const anchorSource = widget.requested_at ?? dueAt;
+  const anchor = new Date(anchorSource).getTime();
+  if (!Number.isFinite(anchor)) return undefined;
+  const anchorIso = new Date(anchor).toISOString();
+  const next = Math.min(
+    now + MCP_SLACK_CONNECT_MARKER_BACKOFF_MS,
+    anchor + MCP_SLACK_CONNECT_MARKER_MAX_AGE_MS
+  );
+  // Past the horizon the marker stays on the row — the refusals it is waiting
+  // on are still reversible — but at an anchor the sweep can no longer see,
+  // which is what it did before this function existed.
+  return next <= now ? anchorIso : new Date(next).toISOString();
+}
+
+/**
  * Cheap guard run against every `messages` event before any repository read.
  *
  * A widget that was never Slack-delivered has no `slack_connect` record and

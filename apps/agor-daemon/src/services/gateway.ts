@@ -33,7 +33,9 @@ import {
   isMCPSlackConnectCardEnabled,
   isPostgresDatabase,
   MCPServerRepository,
+  type MCPSlackConnectDueCursor,
   MessagesRepository,
+  MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
@@ -150,6 +152,7 @@ import {
   mcpSlackConnectDuplicateCardText,
   mcpSlackConnectExpiryDelay,
   mcpSlackConnectMayReissue,
+  mcpSlackConnectRefusedMarkerDueAt,
   mcpSlackConnectRenderedState,
   mcpSlackConnectSharedThreadWarning,
   slackConversationIsDirectMessage,
@@ -223,6 +226,8 @@ const GATEWAY_LISTENER_STOP_TIMEOUT_MS = 5_000;
 const GATEWAY_LISTENER_RETRY_BASE_MS = 5_000;
 const GATEWAY_LISTENER_RETRY_MAX_MS = 5 * 60_000;
 const MCP_SLACK_REPAIR_BATCH = 50;
+/** Connect-lane pages one tenant visit may walk. Bounds what one page can hide. */
+const MCP_SLACK_CONNECT_REPAIR_PAGES = 4;
 const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
 const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
 const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
@@ -247,6 +252,17 @@ type MCPSlackDeliveryFailureReason =
   /** The post or edit itself was refused. */
   | 'slack_write_failed';
 /** Lease one daemon holds while posting or editing one connect card. */
+/** Agor-owned reason a sweep item could not be repaired. Never a provider's. */
+type MCPSlackRepairFailureCategory = 'missing_tenant_scope' | 'unexpected';
+
+interface McpSlackRepairFailureTally {
+  lane: 'recovery' | 'connect';
+  category: MCPSlackRepairFailureCategory;
+  count: number;
+  /** First item that failed this way, for correlation. */
+  entityId: string;
+}
+
 const MCP_SLACK_CONNECT_CLAIM_MS = 30_000;
 /** In-process repaints of a card whose render lost its claim. See §7.1.5. */
 const MCP_SLACK_CONNECT_REPAINT_ATTEMPTS = 2;
@@ -1249,27 +1265,47 @@ export class GatewayService {
       void runWithTenantContext(tenantId, async () => {
         const now = new Date();
         const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
+        // Per-item repair failures, tallied rather than logged one by one:
+        // the two lanes' silent swallows are how four missing tenant scopes
+        // reached a running daemon, and a page of them is not fifty events.
+        const failures = new Map<string, McpSlackRepairFailureTally>();
         const page = await this.taskRepo.findMcpSlackRecoveryNoticePage({
           limit: MCP_SLACK_REPAIR_BATCH,
           now,
           horizon,
         });
         for (const task of page.tasks) {
-          await this.syncMcpSlackRecoveryNotice(task.task_id).catch(() => undefined);
+          await this.syncMcpSlackRecoveryNotice(task.task_id).catch((error) =>
+            this.tallyMcpSlackRepairFailure(failures, 'recovery', task.task_id, error)
+          );
         }
         // The connect lane rides the same sweep, on its own indexed due-work
         // column. One tenant visit repairs both rather than two schedules
         // racing each other for the same Slack rate limit.
-        const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
-          limit: MCP_SLACK_REPAIR_BATCH,
-          now,
-          horizon,
-        });
-        for (const card of cards.messages) {
-          await this.deliverMcpSlackConnectCard(card.message_id as MessageID).catch(
-            () => undefined
-          );
+        //
+        // Paged, because one page is otherwise all a tenant ever sees: any
+        // card the sweep cannot advance stays at the front of the ordering
+        // and hides everything behind it. Rescheduling a refused first-card
+        // marker is the primary fix for that; this bounds what a card the
+        // reschedule does not cover can hide, without giving up the bound
+        // that makes this sweep safe to run every tick.
+        let cursor: MCPSlackConnectDueCursor | undefined;
+        for (let pageIndex = 0; pageIndex < MCP_SLACK_CONNECT_REPAIR_PAGES; pageIndex += 1) {
+          const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
+            limit: MCP_SLACK_REPAIR_BATCH,
+            now,
+            horizon,
+            ...(cursor ? { after: cursor } : {}),
+          });
+          for (const card of cards.messages) {
+            await this.deliverMcpSlackConnectCard(card.message_id as MessageID).catch((error) =>
+              this.tallyMcpSlackRepairFailure(failures, 'connect', card.message_id, error)
+            );
+          }
+          if (cards.messages.length < MCP_SLACK_REPAIR_BATCH || !cards.cursor) break;
+          cursor = cards.cursor;
         }
+        this.reportMcpSlackRepairFailures(failures);
       })
         .catch(() => console.warn('[gateway] MCP Slack recovery bounded repair failed'))
         .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
@@ -1460,6 +1496,56 @@ export class GatewayService {
    * server name, or URL — `context/guidelines/logging.md` prohibits all of
    * them, and the call site already knows the more useful thing anyway.
    */
+  /**
+   * Why the bounded repair sweep could not advance one card or notice.
+   *
+   * Agor's own categories, never the exception. `missing_tenant_scope` is
+   * named on its own because it is the failure this lane has now shipped four
+   * times — a caller holding tenant CONTEXT but no tenant database SCOPE —
+   * and because it is invisible in every other way: it happens before any
+   * delivery is attempted, so the `stranded=true` accounting never sees it.
+   */
+  private classifyMcpSlackRepairFailure(error: unknown): MCPSlackRepairFailureCategory {
+    return error instanceof MissingTenantDatabaseScopeError ? 'missing_tenant_scope' : 'unexpected';
+  }
+
+  private tallyMcpSlackRepairFailure(
+    failures: Map<string, McpSlackRepairFailureTally>,
+    lane: 'recovery' | 'connect',
+    entityId: string,
+    error: unknown
+  ): void {
+    const category = this.classifyMcpSlackRepairFailure(error);
+    const key = `${lane}:${category}`;
+    const existing = failures.get(key);
+    if (existing) existing.count += 1;
+    else failures.set(key, { lane, category, count: 1, entityId });
+  }
+
+  /**
+   * One line per (lane, category) per sweep pass, not one per item.
+   *
+   * A systemic repair failure fails for every row in the page, and a page is
+   * fifty. The count is the story; the first entity id is there so an
+   * operator can look at one. The exception itself never appears —
+   * `context/guidelines/logging.md` — and neither does anything the provider
+   * said.
+   */
+  private reportMcpSlackRepairFailures(failures: Map<string, McpSlackRepairFailureTally>): void {
+    for (const failure of failures.values()) {
+      console.warn(
+        [
+          '[gateway] event=mcp_slack_repair_failed',
+          `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
+          `lane=${failure.lane}`,
+          `reason=${failure.category}`,
+          `count=${failure.count}`,
+          `first_entity_id=${failure.entityId}`,
+        ].join(' ')
+      );
+    }
+  }
+
   private logMcpSlackDeliveryFailure(
     lane: 'recovery' | 'connect',
     reason: MCPSlackDeliveryFailureReason,
@@ -2246,6 +2332,28 @@ export class GatewayService {
   }
 
   /**
+   * Move a refused first-card marker off the front of the sweep queue.
+   *
+   * Same row lock and same inertness rule as `retireMcpSlackConnectDueMarker`:
+   * once a delivery record exists it owns the indexed due column outright and
+   * this field decides nothing. The rule itself is
+   * `mcpSlackConnectRefusedMarkerDueAt`, which keeps the marker's eligibility
+   * window anchored to the mint rather than to the last refusal, so a card
+   * nobody ever unblocks still ages out of the sweep exactly when it used to.
+   */
+  private async rescheduleMcpSlackConnectDueMarker(widgetId: MessageID): Promise<void> {
+    await this.messagesRepo
+      .mutateMetadataLocked(widgetId, (metadata) => {
+        const widget = metadata?.widget;
+        if (!widget?.slack_connect_due_at || widget.slack_connect) return null;
+        const dueAt = mcpSlackConnectRefusedMarkerDueAt(widget);
+        if (!dueAt || dueAt === widget.slack_connect_due_at) return null;
+        return { ...metadata, widget: { ...widget, slack_connect_due_at: dueAt } };
+      })
+      .catch(() => undefined);
+  }
+
+  /**
    * Announce, once per (session, conversation), that this is not a DM.
    *
    * §4.8 allows channels rather than restricting the lane to DMs: credentials
@@ -2326,7 +2434,15 @@ export class GatewayService {
     // every Discord/GitHub/Teams session — has no row here and must not
     // acquire one. B3's session deep link remains their answer.
     if (!widget || !slack) return;
-    if (!delivery && (!binding.ok || !this.recoveryEnvelopeSecret())) return;
+    if (!delivery && (!binding.ok || !this.recoveryEnvelopeSecret())) {
+      // Keep the trigger, give up the queue position. The reversible refusals
+      // are why the marker survives the block above; leaving it at its
+      // original, permanently overdue timestamp is what let fifty of them sit
+      // at the front of every sweep page and starve the healthy cards behind
+      // them of a first delivery and of every repair.
+      await this.rescheduleMcpSlackConnectDueMarker(widgetId);
+      return;
+    }
 
     const now = Date.now();
     const willReissue = binding.ok && mcpSlackConnectMayReissue(widget, delivery, now);

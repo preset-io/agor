@@ -447,6 +447,48 @@ describePostgres('MessagesRepository Slack MCP connect due-work projection', () 
   });
 
   /**
+   * The sweep reads one page at a time, so the ordering has to be resumable.
+   *
+   * Without a cursor, whatever occupies the oldest `limit` rows is all a
+   * tenant ever sees — and this lane has already shipped a card the sweep
+   * could not advance, which is exactly the shape that hides everything
+   * behind it. A keyset over `(due_at, message_id)` is the only resumable
+   * form: two cards can be due at the same millisecond, so a cursor on the
+   * timestamp alone either repeats a row or skips one.
+   */
+  it('resumes the due-work ordering from a cursor without repeating or skipping', async () => {
+    const tenant = `connect-page-${generateId()}`;
+    await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      const tied = new Date(now.getTime() - 60_000).toISOString();
+      const later = new Date(now.getTime() - 30_000).toISOString();
+      const first = await seed(scoped, tied);
+      const second = await seed(scoped, tied);
+      const third = await seed(scoped, later);
+      const all = [first.messageId, second.messageId, third.messageId].sort();
+      const { repository } = first;
+
+      const pageOne = await repository.findMcpSlackConnectDuePage({ now, limit: 2 });
+      expect(pageOne.messages).toHaveLength(2);
+      expect(pageOne.cursor).toBeDefined();
+      const pageTwo = await repository.findMcpSlackConnectDuePage({
+        now,
+        limit: 2,
+        after: pageOne.cursor,
+      });
+
+      const seen = [...pageOne.messages, ...pageTwo.messages].map((message) => message.message_id);
+      // Every row exactly once, and the two tied rows split across the pages
+      // by message id rather than both landing on the first one.
+      expect([...seen].sort()).toEqual(all);
+      expect(seen.at(-1)).toBe(third.messageId);
+      expect(
+        (await repository.findMcpSlackConnectDuePage({ now, limit: 2, after: pageTwo.cursor }))
+          .messages
+      ).toEqual([]);
+    });
+  });
+
+  /**
    * The first card a widget ever gets is the one with no durable trigger
    * anywhere else: `messageMayNeedMcpSlackConnectSync` needs `slack_connect`,
    * and only the link issuer writes that. So the mint-time marker has to

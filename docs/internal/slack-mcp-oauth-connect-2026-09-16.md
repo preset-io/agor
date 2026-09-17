@@ -892,6 +892,36 @@ same state. Bounded in process at `MCP_SLACK_CONNECT_REPAINT_ATTEMPTS`,
 because losing the claim twice means another daemon is still writing the row
 and the sweep already owns the card by then.
 
+**A refused first-card marker held the front of the sweep queue.** The mint
+marker (§7.1.2) is a widget's only durable trigger before a link exists, and
+the projection deliberately KEEPS it for the refusals an administrator can undo
+— `unaligned`, `authority_moved`, `no_secret`. What it also kept was the
+marker's original, permanently overdue timestamp, and the sweep's page is the
+oldest fifty rows of due work with no cursor. Fifty stuck markers therefore
+owned every page: the healthy cards behind them got no first delivery and no
+repair until the blockers changed or aged past the 24-hour horizon.
+
+Two changes, of which the first is the fix:
+
+- `mcpSlackConnectRefusedMarkerDueAt` moves a refused marker forward by five
+  minutes. Ageing out is preserved rather than traded away — the reschedule is
+  capped at `requested_at + 24h`, the same point the horizon used to drop the
+  row, and past that the marker is pinned back to its anchor where the horizon
+  excludes it for good. A marker that refreshed its own due time would
+  otherwise be immortal.
+- `findMcpSlackConnectDuePage` gained a keyset cursor over
+  `(mcp_slack_connect_due_at, message_id)` and the sweep walks up to four
+  pages per tenant visit. This is defence in depth for whatever else might
+  one day fail to advance; the reschedule alone fixes the reported case, and
+  is verified to with the page budget set to one.
+
+Reproduced end-to-end in `gateway-mcp-slack-sweep.test.ts` — fifty widgets on
+an unaligned channel, one healthy widget behind them, real rows and the real
+page query — where it fails on the preceding commit with the healthy card
+never delivered.
+
+**A fifth missing tenant scope, and the silence around it.** See §7.1.6.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers
