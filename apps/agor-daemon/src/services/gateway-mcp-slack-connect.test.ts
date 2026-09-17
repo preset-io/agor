@@ -936,6 +936,109 @@ describe('Slack MCP connect durable delivery', () => {
     });
   });
 
+  /**
+   * The other half of a lost claim: an EDIT that lands last.
+   *
+   * A re-issue edits the one recorded row rather than posting a new one, so
+   * nothing is orphaned — but if the claim lapsed while Slack was being
+   * called, the edit repaints the card that counts with a state a second
+   * claimant has already superseded. The record says `cancelled`; the thread
+   * shows a Connect button. Every later render compares against
+   * `rendered_state`, so the disagreement seals itself in: the no-op
+   * shortcut, the claim CAS and an explicit repair all skip a card whose
+   * recorded state already matches the state that would render now.
+   */
+  it('repaints the card it edited after losing its delivery claim', async () => {
+    let harness!: ReturnType<typeof deliveryHarness>;
+    const sendMessage = vi.fn(async () => {
+      if (sendMessage.mock.calls.length === 1) {
+        // Meanwhile: the lease lapses, the widget is dismissed, and a second
+        // claimant renders the terminal card onto the same row and clears the
+        // repair deadline behind it.
+        harness.patch((_widget, delivery) => ({
+          status: 'dismissed',
+          resolved_at: '2026-09-16T12:05:00.000Z',
+          slack_connect: {
+            ...delivery,
+            delivery_claim: undefined,
+            rendered_state: 'cancelled',
+            rendered_at: '2026-09-16T12:05:00.000Z',
+            next_repair_at: undefined,
+          },
+        }));
+      }
+      return '1700000000.000002';
+    });
+    harness = deliveryHarness({
+      // A durably failed sign-in that may be re-offered once: the render this
+      // delivery is about to perform carries a fresh button.
+      delivery: {
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'expired',
+        oauth_failed_at: '2026-09-16T12:02:00.000Z',
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+      },
+      sendMessage,
+    });
+    await withSecret(() => harness.deliver());
+
+    // The delayed edit really did put a Connect button back in the thread.
+    const late = sendMessage.mock.calls[0]![0] as {
+      metadata?: Record<string, unknown>;
+      blocks: { type: string }[];
+    };
+    expect(late.metadata).toMatchObject({ slack_update_ts: '1700000000.000002' });
+    expect(late.blocks.some((block) => block.type === 'actions')).toBe(true);
+
+    // End state: the thread agrees with the row again. Nothing was orphaned,
+    // so nothing is deleted — the card is repainted in place.
+    const last = sendMessage.mock.calls.at(-1)![0] as {
+      metadata?: Record<string, unknown>;
+      text: string;
+      blocks: { type: string }[];
+    };
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(last.metadata).toMatchObject({ slack_update_ts: '1700000000.000002' });
+    expect(last.blocks.some((block) => block.type === 'actions')).toBe(false);
+    expect(last.text).toMatch(/Nothing was connected/i);
+    expect(harness.deleteMessage).not.toHaveBeenCalled();
+    expect(harness.current()).toMatchObject({
+      slack_message_ts: '1700000000.000002',
+      rendered_state: 'cancelled',
+    });
+  });
+
+  it('leaves the record alone when the winner rendered the same state', async () => {
+    let harness!: ReturnType<typeof deliveryHarness>;
+    const sendMessage = vi.fn(async () => {
+      if (sendMessage.mock.calls.length === 1) {
+        harness.patch((_widget, delivery) => ({
+          slack_connect: {
+            ...delivery,
+            delivery_claim: undefined,
+            rendered_state: 'connected',
+            rendered_at: '2026-09-16T12:05:00.000Z',
+          },
+        }));
+      }
+      return '1700000000.000002';
+    });
+    harness = deliveryHarness({
+      widget: { status: 'submitted', result_meta: { attached: true } },
+      delivery: { slack_message_ts: '1700000000.000002', rendered_state: 'connect_required' },
+      sendMessage,
+    });
+    await withSecret(() => harness.deliver());
+
+    // Two daemons painted the same terminal card. There is nothing to undo,
+    // and a repaint here would be a second edit for no reason.
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(harness.current()).toMatchObject({
+      rendered_state: 'connected',
+      rendered_at: '2026-09-16T12:05:00.000Z',
+    });
+  });
+
   it('edits a duplicate in place when the connector cannot delete', async () => {
     let harness!: ReturnType<typeof deliveryHarness>;
     const sendMessage = vi.fn(async () => {

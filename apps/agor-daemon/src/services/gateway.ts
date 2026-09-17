@@ -248,6 +248,8 @@ type MCPSlackDeliveryFailureReason =
   | 'slack_write_failed';
 /** Lease one daemon holds while posting or editing one connect card. */
 const MCP_SLACK_CONNECT_CLAIM_MS = 30_000;
+/** In-process repaints of a card whose render lost its claim. See §7.1.5. */
+const MCP_SLACK_CONNECT_REPAINT_ATTEMPTS = 2;
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -2291,7 +2293,7 @@ export class GatewayService {
    * crash lost it, and a no-op when the state already rendered is the state
    * that would render now.
    */
-  private async deliverMcpSlackConnectCard(widgetId: MessageID): Promise<void> {
+  private async deliverMcpSlackConnectCard(widgetId: MessageID, attempt = 0): Promise<void> {
     // Operator kill switch, checked before anything is read or posted. Off
     // stops the PROJECTION only: the canvas widget still renders a live
     // Connect button and `agor_widgets_request_oauth` still hands the agent a
@@ -2558,13 +2560,28 @@ export class GatewayService {
         };
       });
       if (!settled.changed) {
-        await this.retireOrphanedMcpSlackConnectCard(connector, slack.threadId, {
-          // An edit reuses the row that is already recorded, so only a fresh
-          // post can orphan one.
-          orphanTs: reconciledMessageTs ? undefined : receipt.messageId,
-          ownedTs: settled.delivery?.slack_message_ts,
-          serverName: binding.params?.serverName ?? 'this MCP server',
-        });
+        // A lost claim has to reconcile whatever this delivery actually did,
+        // and that is two different things. A fresh POST left a second Slack
+        // row nothing durable names, so it is retired. An EDIT reused the row
+        // the record already names and repainted it with a state this daemon
+        // no longer owns — nothing is orphaned, but the thread now shows the
+        // wrong card and `rendered_state` says otherwise, so every later
+        // render (including an explicit repair) skips it as a no-op.
+        const ownedTs = settled.delivery?.slack_message_ts;
+        if (reconciledMessageTs && reconciledMessageTs === ownedTs) {
+          await this.repaintLostMcpSlackConnectRender(
+            widgetId,
+            reconciledMessageTs,
+            state,
+            attempt
+          );
+        } else {
+          await this.retireOrphanedMcpSlackConnectCard(connector, slack.threadId, {
+            orphanTs: reconciledMessageTs ?? receipt.messageId,
+            ownedTs,
+            serverName: binding.params?.serverName ?? 'this MCP server',
+          });
+        }
       }
       const retry = this.mcpSlackConnectRetryTimers.get(widgetId);
       if (retry) clearTimeout(retry);
@@ -2613,6 +2630,47 @@ export class GatewayService {
       });
     } catch {
       console.warn('[gateway] MCP connect duplicate Slack card could not be retired');
+    }
+  }
+
+  /**
+   * Re-render a card this daemon repainted but turned out not to own.
+   *
+   * The counterpart of `retireOrphanedMcpSlackConnectCard`, for the other
+   * thing a lost claim can leave behind. A delivery that EDITED the recorded
+   * row orphans nothing — it wrote over the one card the widget has — but it
+   * wrote a state a second claimant had already superseded. The record then
+   * disagrees with the thread, and because `rendered_state` is exactly what
+   * every later render compares against, the disagreement is self-sealing:
+   * the no-op shortcut, the claim CAS, and an explicit repair all skip a card
+   * whose recorded state already matches the state that would render now.
+   *
+   * So the fix is to stop the record from claiming a render that was undone.
+   * Clearing `rendered_state` costs one extra edit and makes the next render —
+   * this one, immediately, or the sweep after a crash — repaint the card from
+   * the widget row, which is the authority. Fenced on the recorded `ts` so it
+   * can only ever unwind the message this delivery actually wrote to, and a
+   * no-op when the winner rendered the same state this one did.
+   */
+  private async repaintLostMcpSlackConnectRender(
+    widgetId: MessageID,
+    editedTs: string,
+    renderedState: MCPSlackConnectRenderedState,
+    attempt: number
+  ): Promise<void> {
+    const cleared = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
+      if (!latest || latest.slack_message_ts !== editedTs) return null;
+      if (latest.rendered_state === undefined || latest.rendered_state === renderedState) {
+        return null;
+      }
+      const { rendered_state: _state, rendered_at: _at, ...rest } = latest;
+      return { ...rest, next_repair_at: new Date().toISOString() };
+    }).catch(() => undefined);
+    // Bounded in process: losing the claim again means a third daemon is
+    // still writing this row, and `next_repair_at` above already hands the
+    // card to the sweep. Repainting in a loop would just race it harder.
+    if (cleared?.changed && attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
+      await this.deliverMcpSlackConnectCard(widgetId, attempt + 1);
     }
   }
 
