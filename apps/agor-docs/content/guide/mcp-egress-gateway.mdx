@@ -358,6 +358,11 @@ it is not a claim that a currently reachable worker proves every signer safe.
 Clock freshness, boot binding, unsafe-clock refusal, and absolute token/permit
 expiry remain mandatory. An outage never extends the original authorization
 window; new authentication or refresh requiring Cloud remains unavailable.
+Pilot samples also require the original suspend-inclusive `boottime_ms` capture.
+Every use checks kernel boot-time age as well as process-monotonic age and uses
+the larger elapsed bound for UTC projection. A short suspension cannot make UTC
+run behind; a stale pre-suspend sample cannot become fresh through a runtime
+restart. This supplements, rather than replaces, independent UTC evidence.
 
 These controls remain default-off. Local fake-provider tests do not establish
 host clock provenance, enrollment custody, provider approval, or permission to
@@ -374,6 +379,10 @@ or a hardcoded `synchronized: true`. Its closed JSON format is:
 - `boot_id`: Linux boot UUID for the runtime's host;
 - `monotonic_ms`: sample time from the same Linux `CLOCK_MONOTONIC` domain as
   the daemon (`process.hrtime`), including the same time namespace;
+- `boottime_ms`: original suspend-inclusive Linux boot-time capture in that same
+  time namespace. Required for the fresh pilot; optional for legacy inputs. The
+  producer must include capture mismatch and kernel quantization in its error
+  budget and never replace this timestamp when republishing an old sample;
 - `utc_ms`: independently established UTC at that sample time;
 - `local_uncertainty_ms`: a conservative local error bound, including oscillator
   holdover error throughout the next five seconds;

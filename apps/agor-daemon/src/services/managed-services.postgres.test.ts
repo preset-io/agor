@@ -47,6 +47,7 @@ import {
   type OwnedPostgres,
 } from '../../../../packages/core/src/db/test-support/owned-postgres';
 import projection from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
+import * as managedBootTime from '../mcp-egress/managed-boot-time';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes';
 import { type RegisterServicesContext, registerMCPServices } from '../register-services';
 import { createMcpServerWriteAuthorizationHook } from '../utils/mcp-server-authorization';
@@ -110,6 +111,7 @@ describe
     let directory: string;
     let monitor: ReturnType<typeof setInterval>;
     let services: ManagedOAuthServices;
+    let makeServices: () => ReturnType<typeof createManagedOAuthServices>;
     let app: Application;
     let tenant: string;
     let userId: UserID;
@@ -148,6 +150,7 @@ describe
             version: 1,
             boot_id: boot,
             monotonic_ms: Number(process.hrtime.bigint()) / 1e6,
+            ...(freshPilot ? { boottime_ms: managedBootTime.readManagedBootTimeMs() } : {}),
             utc_ms: now,
             local_uncertainty_ms: 1,
             worker_uncertainty_ms: freshPilot?.issuer_uncertainty_ms ?? 1,
@@ -357,7 +360,7 @@ describe
           headers: { 'content-type': 'application/json' },
         });
       });
-      services = (await createManagedOAuthServices({
+      const serviceOptions: Parameters<typeof createManagedOAuthServices>[0] = {
         db,
         config,
         releaseSha: 'a'.repeat(40),
@@ -370,7 +373,9 @@ describe
           providerId: 'cloud',
           issuer: 'https://cloud.example/',
         } as Parameters<typeof createManagedOAuthServices>[0]['externalLaunchProvider'],
-      }))!;
+      };
+      makeServices = () => createManagedOAuthServices(serviceOptions);
+      services = (await makeServices())!;
       expect(services).not.toBeNull();
       tenant = `composition-${randomUUID()}`;
       await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
@@ -630,6 +635,7 @@ describe
       expect(committed).toHaveLength(2);
       const realDate = Date.now.bind(Date);
       const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
+      const realBootTime = managedBootTime.readManagedBootTimeMs;
       let elapsed = 0;
       // Advance both independent test-monitor domains equally. The real clock
       // reader, safety checks, cohort reader and signed permit validator remain in use.
@@ -637,6 +643,9 @@ describe
       const monotonic = vi
         .spyOn(process.hrtime, 'bigint')
         .mockImplementation(() => realMonotonic() + BigInt(elapsed) * 1000000n);
+      const bootTime = vi
+        .spyOn(managedBootTime, 'readManagedBootTimeMs')
+        .mockImplementation(() => realBootTime() + elapsed);
       const assertUse = ({ server, authorization }: (typeof committed)[number]) =>
         invoke(() =>
           services.grantAccess.assertManagedUse({
@@ -697,8 +706,54 @@ describe
       } finally {
         date.mockRestore();
         monotonic.mockRestore();
+        bootTime.mockRestore();
         workerUnavailable = false;
       }
     });
+    if (admissionKind === 'fresh-pilot') {
+      it('denies the first actual managed hop after suspend before the monitor updates, also after restart', async () => {
+        clearInterval(monitor);
+        publish();
+        const resumed = (await makeServices())!;
+        const assertUse = () =>
+          invoke(() =>
+            resumed.grantAccess.assertManagedUse({
+              tenantDb: createTenantScopedDatabaseProxy(owned.db),
+              tenantId: tenant,
+              server: committed[0]!.server,
+              userId,
+              authorization: committed[0]!.authorization,
+            })
+          );
+        try {
+          await assertUse();
+          const before = calls.length;
+          const path = resolve(directory, 'clock.json');
+          const sample = JSON.parse(readFileSync(path, 'utf8'));
+          // Only boot-time age advances: UTC/process-monotonic still look fresh.
+          // This is synthetic suspend evidence, not a real host suspension.
+          sample.boottime_ms -= 60_000;
+          writeFileSync(`${path}.next`, JSON.stringify(sample), { mode: 0o600 });
+          renameSync(`${path}.next`, path);
+          await expect(assertUse()).rejects.toThrow();
+          await expect(
+            invoke(() =>
+              resumed.grantAccess.acquireAuthorization({
+                tenantId: tenant,
+                userId,
+                server: committed[0]!.server,
+                assertCurrent: () => {},
+              })
+            )
+          ).rejects.toThrow();
+          await expect(makeServices()).rejects.toThrow();
+          expect(calls).toHaveLength(before);
+          publish();
+          await expect(assertUse()).rejects.toThrow(); // Unsafe process remains latched.
+        } finally {
+          resumed.stop();
+        }
+      });
+    }
   }
 );

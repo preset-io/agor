@@ -15,6 +15,7 @@ import {
   mcpOAuthParseJson,
 } from '@agor/core/types';
 import { z } from 'zod';
+import { MANAGED_BOOT_TIME_QUANTIZATION_MS, readManagedBootTimeMs } from './managed-boot-time.js';
 import { ManagedAuthorityClock } from './managed-clock.js';
 import { ManagedDeploymentError, readManagedDeploymentFile } from './managed-deployment-files.js';
 
@@ -22,6 +23,8 @@ const ClockHealthSchema = z.strictObject({
   version: z.literal(1),
   boot_id: z.uuid(),
   monotonic_ms: z.number().finite().nonnegative(),
+  /** Original suspend-inclusive capture; mandatory for fresh pilot evidence. */
+  boottime_ms: z.number().finite().nonnegative().optional(),
   utc_ms: z.number().finite().positive(),
   local_uncertainty_ms: z.number().finite().nonnegative(),
   worker_uncertainty_ms: z.number().finite().nonnegative(),
@@ -102,18 +105,29 @@ function loadSenderMaterial(config: AgorConfig, externalLaunchProvider: Identity
         )
       );
       const combined = sample.local_uncertainty_ms + sample.worker_uncertainty_ms;
+      const pilot = settings.fresh_pilot_enrollment_sha256 !== undefined;
       if (
         sample.boot_id !== bootId ||
         combined > MCP_OAUTH_LIMITS.use_clock_allowance_ms ||
-        (settings.fresh_pilot_enrollment_sha256 !== undefined &&
-          sample.worker_uncertainty_ms !== MCP_OAUTH_LIMITS.use_clock_allowance_ms / 2)
+        (pilot &&
+          (sample.worker_uncertainty_ms !== MCP_OAUTH_LIMITS.use_clock_allowance_ms / 2 ||
+            sample.boottime_ms === undefined))
       )
         return null;
+      let elapsedMsUpperBound: number | undefined;
+      if (sample.boottime_ms !== undefined) {
+        const bootNow = readManagedBootTimeMs();
+        if (bootNow < sample.boottime_ms) return null;
+        // Reserve the kernel read's truncation quantum. Never restamp the file:
+        // this also rejects an old pre-suspend sample after consumer restart.
+        elapsedMsUpperBound = bootNow - sample.boottime_ms + MANAGED_BOOT_TIME_QUANTIZATION_MS;
+      }
       return {
         utcMs: sample.utc_ms,
         monotonicMs: sample.monotonic_ms,
         combinedUncertaintyMs: combined,
         safe: true,
+        elapsedMsUpperBound,
       };
     } catch {
       return null;

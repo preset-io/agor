@@ -2,6 +2,74 @@ import { describe, expect, it } from 'vitest';
 import { ManagedAuthorityClock, type ManagedClockSample } from './managed-clock.js';
 
 describe('managed authority clock', () => {
+  it('ages the original sample through suspend even when the process monotonic clock barely advances', () => {
+    let elapsedMsUpperBound = 1;
+    const clock = new ManagedAuthorityClock(
+      () => ({
+        utcMs: 1_000_000,
+        monotonicMs: 0,
+        combinedUncertaintyMs: 1,
+        safe: true,
+        elapsedMsUpperBound,
+      }),
+      () => 1
+    );
+    expect(clock.latestUtcMs()).toBe(1_000_002);
+    elapsedMsUpperBound = 3_000;
+    expect(clock.latestUtcMs()).toBe(1_003_001);
+    elapsedMsUpperBound = 60_000;
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+    elapsedMsUpperBound = 1;
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+  });
+
+  it('rejects a pre-suspend sample after consumer restart instead of granting a new window', () => {
+    const clock = new ManagedAuthorityClock(
+      () => ({
+        utcMs: 1_000_000,
+        monotonicMs: 0,
+        combinedUncertaintyMs: 1,
+        safe: true,
+        elapsedMsUpperBound: 60_000,
+      }),
+      () => 1
+    );
+    expect(() => clock.latestUtcMs()).toThrow('clock safety');
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
+    'rejects an invalid independent elapsed bound: %s',
+    (elapsedMsUpperBound) => {
+      const clock = new ManagedAuthorityClock(
+        () => ({
+          utcMs: 1_000_000,
+          monotonicMs: 0,
+          combinedUncertaintyMs: 1,
+          safe: true,
+          elapsedMsUpperBound,
+        }),
+        () => 1
+      );
+      expect(() => clock.latestUtcMs()).toThrow('clock safety');
+    }
+  );
+
+  it('never uses an elapsed bound to hide a stale or future monotonic sample', () => {
+    for (const monotonicMs of [-6_000, 2]) {
+      const clock = new ManagedAuthorityClock(
+        () => ({
+          utcMs: 1_000_000,
+          monotonicMs,
+          combinedUncertaintyMs: 1,
+          safe: true,
+          elapsedMsUpperBound: 0,
+        }),
+        () => 1
+      );
+      expect(() => clock.latestUtcMs()).toThrow('clock safety');
+    }
+  });
+
   it('ages a cached sample with the independent monotonic clock and refuses stale evidence', () => {
     let now = 0;
     const clock = new ManagedAuthorityClock(

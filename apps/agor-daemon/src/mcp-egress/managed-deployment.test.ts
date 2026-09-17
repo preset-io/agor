@@ -9,6 +9,7 @@ import {
   SYNTHETIC_PILOT_POD_UID,
   syntheticFreshPilotEnrollment,
 } from '../services/test-support/managed-pilot-enrollment.js';
+import { readManagedBootTimeMs } from './managed-boot-time.js';
 import {
   loadManagedOAuthCleanupDeployment,
   loadManagedOAuthDeployment,
@@ -18,6 +19,10 @@ import { readManagedDeploymentFile } from './managed-deployment-files.js';
 vi.mock('./managed-deployment-files.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./managed-deployment-files.js')>();
   return { ...actual, readManagedDeploymentFile: vi.fn() };
+});
+vi.mock('./managed-boot-time.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./managed-boot-time.js')>();
+  return { ...actual, readManagedBootTimeMs: vi.fn(actual.readManagedBootTimeMs) };
 });
 const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicPem = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -78,6 +83,7 @@ function freshPilotFixture() {
     ],
   };
   health.worker_uncertainty_ms = enrollment.issuer_uncertainty_ms;
+  health.boottime_ms = readManagedBootTimeMs();
   return {
     enrollment,
     config: {
@@ -96,8 +102,11 @@ function freshPilotFixture() {
     },
   };
 }
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  const bootTime =
+    await vi.importActual<typeof import('./managed-boot-time.js')>('./managed-boot-time.js');
+  vi.mocked(readManagedBootTimeMs).mockImplementation(bootTime.readManagedBootTimeMs);
   baseMono = nowMono();
   health = {
     version: 1,
@@ -150,6 +159,50 @@ beforeEach(() => {
   });
 });
 describe('managed production deployment loader', () => {
+  it('requires the original suspend-inclusive capture for pilot startup before reading keys', async () => {
+    const pilot = freshPilotFixture();
+    delete health.boottime_ms;
+    await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow(
+      'deployment evidence'
+    );
+    expect(vi.mocked(readManagedDeploymentFile).mock.calls.map(([path]) => path)).not.toContain(
+      '/owned/sender.pem'
+    );
+  });
+
+  it('checks suspend-inclusive age on the first use after resume, including across consumer restart', async () => {
+    const pilot = freshPilotFixture();
+    let bootNow = 100_000;
+    health = { ...health, utc_ms: utc, monotonic_ms: nowMono(), boottime_ms: bootNow };
+    vi.mocked(readManagedBootTimeMs).mockImplementation(() => bootNow);
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    bootNow += 2_000; // Process CLOCK_MONOTONIC barely advances during suspend.
+    expect(loaded.clock.latestUtcMs()).toBeGreaterThanOrEqual(utc + 2_000 + 2_600);
+    bootNow += 60_000;
+    expect(() => loaded.clock.latestUtcMs()).toThrow('clock safety');
+    // Restart cannot turn the same old file into fresh evidence.
+    await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow(
+      'deployment evidence'
+    );
+    bootNow = 100_000;
+    expect(() => loaded.clock.latestUtcMs()).toThrow('clock safety');
+  });
+
+  it.each(['future', 'stale', 'kernel failure'])(
+    'rejects pilot boot-time %s without a fallback',
+    async (kind) => {
+      const pilot = freshPilotFixture();
+      health.boottime_ms = 100_000;
+      vi.mocked(readManagedBootTimeMs).mockImplementation(() => {
+        if (kind === 'kernel failure') throw new Error('synthetic kernel failure');
+        return kind === 'future' ? 99_999 : 105_001;
+      });
+      await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow(
+        'deployment evidence'
+      );
+    }
+  );
+
   it('admits only the pinned fresh lineage and actual protected Pod identity without claiming legacy termination', async () => {
     const pilot = freshPilotFixture();
     const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;

@@ -12,6 +12,13 @@ export interface ManagedClockSample {
   combinedUncertaintyMs: number;
   /** False while synchronizing, after suspend, or with stale health evidence. */
   safe: boolean;
+  /**
+   * Optional independently measured elapsed-time upper bound for the SAME
+   * original sample (for example, suspend-inclusive Linux boot time). It may
+   * only shorten evidence lifetime / advance the conservative UTC bound, never
+   * replace or reset the original monotonic anchor. Not clock-health evidence.
+   */
+  elapsedMsUpperBound?: number;
 }
 
 export class ManagedAuthorityClockError extends Error {
@@ -38,13 +45,18 @@ export class ManagedAuthorityClock {
     const current = this.sample();
     const previous = this.previous;
     const anchor = this.anchor;
-    const age = current ? this.monotonicNow() - current.monotonicMs : Number.NaN;
+    const monotonicAge = current ? this.monotonicNow() - current.monotonicMs : Number.NaN;
+    const elapsedUpper = current?.elapsedMsUpperBound;
+    const age = Math.max(monotonicAge, elapsedUpper ?? monotonicAge);
     if (
       this.unsafe ||
       !current?.safe ||
       !Number.isFinite(current.utcMs) ||
       !Number.isFinite(current.monotonicMs) ||
       !Number.isFinite(current.combinedUncertaintyMs) ||
+      !Number.isFinite(monotonicAge) ||
+      monotonicAge < 0 ||
+      (elapsedUpper !== undefined && (!Number.isFinite(elapsedUpper) || elapsedUpper < 0)) ||
       !Number.isFinite(age) ||
       age < 0 ||
       age > MCP_OAUTH_LIMITS.use_clock_allowance_ms ||
