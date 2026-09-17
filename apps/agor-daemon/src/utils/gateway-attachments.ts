@@ -338,6 +338,15 @@ export async function ingestDiscordInboundImages(args: {
           }),
           pipeline(source, aggregateLimiter),
         ]);
+        if (staged.size === 0) {
+          await store.delete({
+            tenantId: args.tenantId,
+            sessionId: args.sessionId,
+            branchId: args.branchId,
+            ref: staged.ref,
+          });
+          throw new Error('Discord attachment download was empty');
+        }
         actualTotalBytes += staged.size;
         uploads.push(staged);
       } finally {
