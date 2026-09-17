@@ -4,6 +4,7 @@ import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { MOBILE_SHELL_MAX_WIDTH } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
 vi.mock('../AutocompleteTextarea', () => ({
@@ -478,11 +479,12 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
 describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
   afterEach(() => {
     reactive.tasks = [];
+    viewport.isMobile = false;
     vi.restoreAllMocks();
   });
 
   it('sends the canonical task-fenced Stop once and surfaces permission denial without fallback', async () => {
-    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(width);
+    viewport.isMobile = width < MOBILE_SHELL_MAX_WIDTH;
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const taskId = '018f0000-0000-7000-8000-000000000010';
     reactive.tasks = [
@@ -505,6 +507,9 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
       client: { io: stopIo(), service } as unknown as AgorClient,
       activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
     });
+    // Proves the width actually selected the shell, so this cannot quietly run the desktop path twice.
+    const closeLabel = viewport.isMobile ? 'Close' : 'Close panel';
+    expect(screen.getByRole('button', { name: closeLabel })).toBeInTheDocument();
     // Text lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
     // calculation; real-browser QA covers the visible button and touch target.
     const stop = screen.getByText('Stop').closest('button')!;
