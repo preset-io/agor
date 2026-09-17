@@ -2865,6 +2865,78 @@ describe('GatewayService MCP resolution', () => {
       expect(prompt.includes('Bound OAuth')).toBe(warns);
     });
   });
+
+  /**
+   * The fifth instance of the tenant-scope class, on the surface that reads
+   * the grant.
+   *
+   * A Socket Mode listener creating a session carries tenant IDENTITY and no
+   * transaction. Every repository on this service opens its own scope, but
+   * `resolveMCPOAuthGrantLiveness` takes a raw handle and builds its own — so
+   * its first server read threw `Missing tenant database scope` straight into
+   * the loop's catch, and a new Slack thread stopped being told that a server
+   * its channel selected is unavailable. The cases above could not see it:
+   * they hand the service an unguarded database, where an unscoped read
+   * simply succeeds.
+   */
+  it('warns about an unauthenticated server on a caller holding only tenant context', async () => {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    await runMigrations(rawDb);
+    await new UsersRepository(rawDb).create({
+      user_id: user.user_id,
+      email: user.email,
+      name: user.name,
+      role: 'admin',
+    });
+    await new MCPServerRepository(rawDb).create({
+      mcp_server_id: channelMcpId,
+      name: 'unscoped-oauth',
+      display_name: 'Unscoped OAuth',
+      transport: 'http',
+      url: 'https://mcp.example.test/mcp',
+      scope: 'global',
+      source: 'user',
+      enabled: true,
+      auth: { type: 'oauth', oauth_mode: 'per_user' },
+    } as Parameters<MCPServerRepository['create']>[0]);
+
+    // The production guard: an unscoped read throws rather than succeeding.
+    const db = createTenantScopedDatabaseProxy(rawDb, {
+      requireScope: true,
+      label: 'gateway auth warning scope guard',
+    }) as unknown as TenantScopeAwareDatabase;
+    const channel = {
+      ...slackChannel,
+      mcp_server_ids: [channelMcpId],
+    } as unknown as GatewayChannel;
+    const { createUnscoped, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: null,
+      db,
+      connector: {
+        fetchThreadHistory: vi.fn(async () => ({ has_more: false, messages: [] })),
+        sendMessage: vi.fn(async () => '100.000001'),
+      },
+    });
+
+    // Tenant context and nothing else, exactly as the listener enters.
+    await runWithTenantContext('tenant-channel', () =>
+      createUnscoped({
+        channel_key: channel.channel_key,
+        thread_id: 'C123-100.000000',
+        text: 'start',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '100.000000',
+        },
+      })
+    );
+
+    const { prompt } = promptCreate.mock.calls[0]![0] as { prompt: string };
+    expect(prompt).toContain('Unscoped OAuth');
+  });
 });
 
 describe('GatewayService Slack system message routing', () => {

@@ -252,12 +252,12 @@ type MCPSlackDeliveryFailureReason =
   /** The post or edit itself was refused. */
   | 'slack_write_failed';
 /** Lease one daemon holds while posting or editing one connect card. */
-/** Agor-owned reason a sweep item could not be repaired. Never a provider's. */
-type MCPSlackRepairFailureCategory = 'missing_tenant_scope' | 'unexpected';
+/** Agor-owned reason a gateway read failed. Never a provider's, never the exception. */
+type GatewayReadFailureCategory = 'missing_tenant_scope' | 'unexpected';
 
 interface McpSlackRepairFailureTally {
   lane: 'recovery' | 'connect';
-  category: MCPSlackRepairFailureCategory;
+  category: GatewayReadFailureCategory;
   count: number;
   /** First item that failed this way, for correlation. */
   entityId: string;
@@ -1497,15 +1497,15 @@ export class GatewayService {
    * them, and the call site already knows the more useful thing anyway.
    */
   /**
-   * Why the bounded repair sweep could not advance one card or notice.
+   * Why a gateway read failed, in Agor's own words.
    *
-   * Agor's own categories, never the exception. `missing_tenant_scope` is
-   * named on its own because it is the failure this lane has now shipped four
-   * times — a caller holding tenant CONTEXT but no tenant database SCOPE —
-   * and because it is invisible in every other way: it happens before any
-   * delivery is attempted, so the `stranded=true` accounting never sees it.
+   * `missing_tenant_scope` is named on its own because it is the failure this
+   * lane has now shipped five times — a caller holding tenant CONTEXT but no
+   * tenant database SCOPE — and because it is invisible in every other way:
+   * it happens before any delivery is attempted, so the `stranded=true`
+   * delivery accounting never sees it.
    */
-  private classifyMcpSlackRepairFailure(error: unknown): MCPSlackRepairFailureCategory {
+  private classifyGatewayReadFailure(error: unknown): GatewayReadFailureCategory {
     return error instanceof MissingTenantDatabaseScopeError ? 'missing_tenant_scope' : 'unexpected';
   }
 
@@ -1515,7 +1515,7 @@ export class GatewayService {
     entityId: string,
     error: unknown
   ): void {
-    const category = this.classifyMcpSlackRepairFailure(error);
+    const category = this.classifyGatewayReadFailure(error);
     const key = `${lane}:${category}`;
     const existing = failures.get(key);
     if (existing) existing.count += 1;
@@ -1905,32 +1905,34 @@ export class GatewayService {
   }
 
   /**
-   * Read an app-variable-backed setting from a caller that may hold tenant
-   * CONTEXT but no tenant database SCOPE.
+   * Read through a tenant database SCOPE from a caller that may hold only
+   * tenant CONTEXT.
    *
-   * `getMCPEgressGatewayMode` and `isMCPSlackConnectCardEnabled` both reach
-   * `app_variables` through a repository, and a repository resolves its tenant
-   * from a database scope. Every other read in this service goes through a
-   * repository bound with `bindRepositoryToTenantUnitOfWork`, which opens one
-   * per call; these two are free functions and so had nothing to open it.
+   * Every repository field on this service is bound with
+   * `bindRepositoryToTenantUnitOfWork`, which opens a scope per call. What
+   * keeps getting missed is everything else that reaches the database from
+   * here: free functions over `app_variables` (`getMCPEgressGatewayMode`,
+   * `isMCPSlackConnectCardEnabled`) and shared readers that build their own
+   * repositories from a raw handle (`resolveMCPOAuthGrantLiveness`). None of
+   * them has anything to open a scope with, and the callers that reach them —
+   * the bounded repair sweep, and the Socket Mode listener creating a session
+   * — carry tenant identity and no transaction.
    *
-   * That mattered most on the bounded repair sweep, which runs under
-   * `runWithTenantContext` alone: both MCP Slack lanes read a setting on their
-   * first line, so both threw `MissingTenantDatabaseScopeError` into a
-   * `.catch(() => undefined)` and the sweep repaired nothing, silently. Found
-   * by driving a real daemon; no suite saw it, because a suite that stubs the
-   * repositories has no guard to trip.
+   * Against the production guard each throws `MissingTenantDatabaseScopeError`
+   * into a fail-closed catch, which is why this class has now been found five
+   * times and never by a test: a suite that stubs the repositories has no
+   * guard to trip.
    *
    * Entering a scope that is already open is a no-op, so this is also correct
    * for the request-path callers that already have one.
    */
-  private async readTenantSetting<T>(read: (db: TenantScopedDatabase) => Promise<T>): Promise<T> {
+  private async readInTenantScope<T>(read: (db: TenantScopedDatabase) => Promise<T>): Promise<T> {
     return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) => read(scoped));
   }
 
   /** Project authoritative Task recovery into one idempotently editable Slack row. */
   async syncMcpSlackRecoveryNotice(taskId: string): Promise<void> {
-    const { recoveryEnabled, mode } = await this.readTenantSetting(async (db) => ({
+    const { recoveryEnabled, mode } = await this.readInTenantScope(async (db) => ({
       recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
       mode: await getMCPEgressGatewayMode(db),
     }));
@@ -2408,7 +2410,7 @@ export class GatewayService {
     // stops being repainted, and its link stops being redeemable
     // (`loadMCPOAuthConnectBinding`) — matching the recovery lane, which
     // refuses at both ends on `isMcpRuntimeRecoveryEnabled`.
-    if (!(await this.readTenantSetting(isMCPSlackConnectCardEnabled))) return;
+    if (!(await this.readInTenantScope(isMCPSlackConnectCardEnabled))) return;
     const deps = await this.mcpSlackConnectDeps();
     const binding = await resolveSlackConnectBinding(deps, widgetId);
     const widget = binding.widget;
@@ -2873,7 +2875,7 @@ export class GatewayService {
             this.mcpServerRepo.findById(notice.mcp_server_id),
             this.usersRepo.findById(notice.principal_user_id),
             this.usersRepo.findById(notice.credential_user_id),
-            this.readTenantSetting(getMCPEgressGatewayMode),
+            this.readInTenantScope(getMCPEgressGatewayMode),
           ]);
         const attached = (await this.sessionMcpRepo.listServers(task.session_id, true)).some(
           (candidate) => candidate.mcp_server_id === notice.mcp_server_id
@@ -4825,22 +4827,35 @@ export class GatewayService {
         // wrong `live` anywhere that grants something is resolving a widget
         // against a credential nobody re-obtained. Warnings may be optimistic;
         // grants may not. Nothing here attaches, mints, or resolves.
+        //
+        // Read inside a tenant database scope: this listener holds tenant
+        // identity and no transaction, and `resolveMCPOAuthGrantLiveness`
+        // builds its own repositories from the raw handle rather than using
+        // the bound ones. Without the scope its first server read throws
+        // straight into the catch below, and the thread silently stops being
+        // told that a server it selected is unavailable.
         const unauthedMcpNames: string[] = [];
         for (const serverId of gatewayMcpServerIds) {
           try {
             const server = await this.mcpServerRepo.findById(serverId);
             if (server?.auth?.type === 'oauth') {
-              const liveness = await resolveMCPOAuthGrantLiveness(
-                this.db,
-                serverId as MCPServerID,
-                user.user_id as UserID
+              const liveness = await this.readInTenantScope((db) =>
+                resolveMCPOAuthGrantLiveness(db, serverId as MCPServerID, user.user_id as UserID)
               );
               if (!liveness.live && !liveness.refreshable) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }
             }
-          } catch {
-            // Non-fatal — skip auth check for this server
+          } catch (error) {
+            // Non-fatal — the warning is an optimisation on the prompt, never
+            // a gate. Logged rather than swallowed: the last two defects in
+            // this lane were invisible precisely because a read that could
+            // not run left nothing behind.
+            console.warn(
+              `[gateway] event=mcp_auth_warning_check_failed tenant_id=${
+                getCurrentTenantId() ?? '<unknown>'
+              } mcp_server_id=${serverId} reason=${this.classifyGatewayReadFailure(error)}`
+            );
           }
         }
 

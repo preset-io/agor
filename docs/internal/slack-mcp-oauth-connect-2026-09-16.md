@@ -920,7 +920,26 @@ an unaligned channel, one healthy widget behind them, real rows and the real
 page query — where it fails on the preceding commit with the healthy card
 never delivered.
 
-**A fifth missing tenant scope, and the silence around it.** See §7.1.6.
+**The fifth missing tenant scope.** A Socket Mode listener creating a session
+carries tenant IDENTITY and no transaction. Every repository on `GatewayService`
+opens its own scope through `bindRepositoryToTenantUnitOfWork`, but
+`resolveMCPOAuthGrantLiveness` takes a raw handle and builds its own — so the
+gateway's pre-prompt warning threw `Missing tenant database scope` on its first
+server read, straight into a fail-closed catch. A new Slack thread whose
+channel selects an OAuth server the prompting user has no grant for stopped
+being told, in its initial prompt, that the server is unavailable.
+
+Reported as non-blocking and fixed anyway: it is one wrapper, and it is the
+fifth time this class has bitten. `readTenantSetting` is now
+`readInTenantScope`, because the pattern is not about settings — it is about
+everything that reaches the database from a caller holding only tenant
+context. The catch logs an Agor-owned category instead of swallowing, which is
+the same gap §7.1.6 closes on the sweep.
+
+Why no suite saw it, again: the five cases already covering this warning hand
+the service an unguarded database, where an unscoped read simply succeeds. The
+regression test hands it the production guard and enters through
+`runWithTenantContext` alone, the way the listener does.
 
 ### 7.2 Deliberately not built
 
