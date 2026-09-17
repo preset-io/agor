@@ -329,6 +329,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         session_id: 'session-connect-binding' as never,
         mcp_server_id: bound.serverId,
         gateway_channel_id: 'gateway-connect-binding',
+        gateway_config_generation: 7,
+        mcp_server_config_version: 3,
       };
       const attemptId = await startFlow(bound, context, slackConnect);
 
@@ -385,6 +387,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             session_id: 'session-smuggled',
             mcp_server_id: material.mcpServerId,
             gateway_channel_id: 'gateway-smuggled',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
           },
         }),
       ],
@@ -402,6 +406,26 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             session_id: 'session-partial',
             mcp_server_id: material.mcpServerId,
             gateway_channel_id: 'gateway-partial',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
+          },
+        }),
+      ],
+      [
+        // Without these the callback has nothing to compare the workspace
+        // against, and the authority re-read would fall back to comparing the
+        // stored generation to itself — which is what shipped and could never
+        // refuse a revoked flow.
+        'a connect binding that cannot say what authorized it',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          slackConnect: {
+            delivery_id: 'delivery-unversioned',
+            delivery_generation: 2,
+            widget_id: 'widget-unversioned',
+            session_id: 'session-unversioned',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-unversioned',
           },
         }),
       ],
