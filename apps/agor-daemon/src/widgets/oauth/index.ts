@@ -436,6 +436,27 @@ export async function authorizeOAuthWidgetResolve(
 export const oauthWidget: WidgetRegistryEntry<OAuthWidgetParams, never, OAuthWidgetResultMeta> = {
   type: 'oauth',
   resolution: 'daemon_verified',
+  /**
+   * An interrupted resolution of THIS widget may be finished later.
+   *
+   * Stated explicitly rather than inherited, because the generic policy is the
+   * opposite one and is right for the widgets it protects. What makes this
+   * lane different is that the provider callback completes only the FIRST of
+   * three milestones — grant persisted — while the other two (this widget
+   * resolved and the server attached, the agent resumed) depend on a browser
+   * coming back to POST. Returning from consent and closing the tab therefore
+   * used to leave a real, usable credential behind a card that still said
+   * Connect, an agent that never woke, and no path to either except redoing a
+   * sign-in that had already worked.
+   *
+   * The replay is safe by construction, not by hope:
+   * `resolveFromDaemonVerification` re-reads the grant (it decides nothing
+   * from the request), re-attaches through a unique-index upsert, and the
+   * auto-resume Task carries `widgetAutoResumeTaskId`, so a second run of the
+   * whole handler converges on the same three rows. Nothing here talks to the
+   * provider, writes a secret, or restarts anything.
+   */
+  recovery: 'reclaimable',
   schemaVersion: 1,
   paramsSchema: oauthParamsSchema,
   authorizeMint: authorizeOAuthWidgetMint,

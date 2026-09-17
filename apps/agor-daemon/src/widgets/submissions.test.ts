@@ -158,11 +158,18 @@ function makeApp(
 
 function makeFixtures(
   opts: {
-    widgetStatus?: 'pending' | 'submitted' | 'dismissed';
+    widgetStatus?: 'pending' | 'submitted' | 'dismissed' | 'resolving';
     widgetType?: string;
     autoResume?: boolean;
     sessionCreator?: UserID;
     branchOthersCan?: Branch['others_can'];
+    /** A claim someone else took and never finished. */
+    resolutionClaim?: {
+      token: string;
+      action: 'submit' | 'dismiss' | 'oauth_callback';
+      claimed_at: string;
+      claimed_by: UserID;
+    };
   } = {}
 ) {
   const sessionCreator = (opts.sessionCreator ?? 'creator-user-id') as UserID;
@@ -184,6 +191,7 @@ function makeFixtures(
         status: opts.widgetStatus ?? 'pending',
         requested_at: '2026-05-19T00:00:00.000Z',
         ...(opts.autoResume !== undefined ? { auto_resume: opts.autoResume } : {}),
+        ...(opts.resolutionClaim ? { resolution_claim: opts.resolutionClaim } : {}),
       },
     },
   };
@@ -911,7 +919,8 @@ function registerOAuthTestWidget(
       attached: true,
     })
   ),
-  authorizeResolve?: (ctx: unknown, params: unknown) => void | Promise<void>
+  authorizeResolve?: (ctx: unknown, params: unknown) => void | Promise<void>,
+  recovery: 'none' | 'reclaimable' = 'reclaimable'
 ) {
   const entry: WidgetRegistryEntry<
     { names: string[]; reason: string },
@@ -920,6 +929,7 @@ function registerOAuthTestWidget(
   > = {
     type: 'env_vars',
     resolution: 'daemon_verified',
+    recovery,
     schemaVersion: 1,
     paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
     resolveFromDaemonVerification,
@@ -1128,5 +1138,182 @@ describe('resolveWidget — OAuth resolution lane', () => {
     expect((prompt?.data as { prompt?: string } | undefined)?.prompt).toContain(
       'declined to connect'
     );
+  });
+});
+
+/**
+ * B1 — finishing a resolution the browser that started it never finished.
+ *
+ * The provider callback completes one milestone (the grant is persisted); the
+ * widget's own resolution and the auto-resume both wait on a browser coming
+ * back to POST. These cases are the durable half of what makes closing that
+ * page recoverable: a `reclaimable` lane may take over an abandoned claim and
+ * may answer an already-finished resolution with success rather than a
+ * refusal, while every other lane keeps exactly the semantics it had.
+ */
+describe('resolveWidget — interrupted OAuth resolutions', () => {
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+  });
+
+  const deps = (app: unknown, resolutionStore: unknown) => ({
+    app: app as never,
+    resolutionStore: resolutionStore as never,
+    runInTenantDatabaseScope,
+    resolveSessionPromptAuthority: allowPrompt,
+  });
+
+  const abandonedClaim = (ageMs: number) => ({
+    token: 'claim-from-a-dead-browser',
+    action: 'oauth_callback' as const,
+    claimed_at: new Date(Date.now() - ageMs).toISOString(),
+    claimed_by: 'creator-user-id' as UserID,
+  });
+
+  it('finishes a claim the original browser abandoned', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    expect(resolveFromDaemonVerification).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: 'submitted', auto_resume_queued: true });
+    expect(result.already_resolved).toBeUndefined();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('submitted');
+    // The auto-resume is keyed by the widget, so a reclaim converges on the
+    // same Task rather than waking the agent twice.
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    expect((prompt?.data as { idempotencyTaskId?: string } | undefined)?.idempotencyTaskId).toBe(
+      widgetAutoResumeTaskId('widget-msg-1' as MessageID)
+    );
+  });
+
+  it('refuses to steal a claim that is still live', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(5_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.resolution_claim?.token).toBe(
+      'claim-from-a-dead-browser'
+    );
+  });
+
+  it('answers an already-finished resolution with success, not a refusal', async () => {
+    const fixtures = makeFixtures({ widgetStatus: 'submitted' });
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    expect(result).toEqual({
+      widget_id: 'widget-msg-1',
+      status: 'submitted',
+      auto_resume_queued: false,
+      already_resolved: true,
+    });
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('keeps the conservative policy for a daemon-verified lane that did not opt in', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget(undefined, undefined, 'none');
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+  });
+
+  it('keeps the conservative policy for the submit-backed widgets', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: { ...abandonedClaim(10 * 60_000), action: 'submit' },
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { applySubmit } = registerTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(applySubmit).not.toHaveBeenCalled();
+
+    // …and a second submit of an already-submitted widget is still a refusal,
+    // not an idempotent success: a submit body carries an external effect.
+    const submitted = makeApp(makeFixtures({ widgetStatus: 'submitted' }));
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(submitted.app, submitted.resolutionStore)
+      )
+    ).rejects.toThrow(/already submitted/);
+  });
+
+  it('will not dismiss a widget whose OAuth resolution is in flight', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    // The reclaim is per-action: a dismissal is a different decision from the
+    // one the abandoned claim was making, and must not inherit its lease.
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
   });
 });

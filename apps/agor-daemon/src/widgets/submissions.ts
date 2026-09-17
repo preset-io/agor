@@ -9,7 +9,9 @@
  * All three follow the same resolution path:
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
  *   2. Authorize through the canonical session prompt authority resolver.
- *   3. Idempotency: status MUST be 'pending'.
+ *   3. Idempotency: status MUST be 'pending' — unless the widget type declared
+ *      `recovery: 'reclaimable'`, which lets its own lane finish a resolution
+ *      that was interrupted rather than refusing it forever.
  *   4. Durably claim `pending -> resolving` with an opaque token.
  *   5. The sole claimant dispatches to the registry — `applySubmit` for a
  *      submit-resolved widget, `resolveFromDaemonVerification` for an
@@ -48,7 +50,12 @@ import type {
 import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
-import { getWidget, type WidgetDaemonVerifiedEvidence, type WidgetSubmitCtx } from './registry.js';
+import {
+  getWidget,
+  type WidgetDaemonVerifiedEvidence,
+  type WidgetSubmitCtx,
+  widgetRecoveryPolicy,
+} from './registry.js';
 import type { WidgetResolutionStore } from './resolution-store.js';
 
 /**
@@ -100,7 +107,31 @@ export interface WidgetResolutionResult {
   widget_id: MessageID;
   status: 'submitted' | 'dismissed';
   auto_resume_queued: boolean;
+  /**
+   * The widget was already in this terminal state when the request arrived and
+   * nothing was done again.
+   *
+   * Only a `reclaimable` lane can produce it (see
+   * {@link widgetRecoveryPolicy}); every other lane still refuses a repeat
+   * outright. It is what lets a recovery surface say "this is finished"
+   * without the caller having to tell a `Forbidden` that means "you already
+   * succeeded" apart from one that means "you may not".
+   */
+  already_resolved?: boolean;
 }
+
+/**
+ * How long an OAuth resolution claim must be held before another authenticated
+ * attempt may take it over.
+ *
+ * The handler behind that claim performs database reads, an idempotent attach,
+ * and one prompt admission keyed by a durable task id — no provider call, no
+ * secret write — so it either finishes in well under this or the browser that
+ * owned it is gone. Long enough that two browsers racing the same card do not
+ * reclaim from each other; short enough that a user who closed the tab and
+ * came back is not told to wait.
+ */
+export const WIDGET_RECLAIM_ABANDONED_AFTER_MS = 60_000;
 
 /** Terminal status a resolution action lands the widget on. */
 function terminalStatusFor(kind: WidgetResolutionAction['kind']): 'submitted' | 'dismissed' {
@@ -195,16 +226,55 @@ async function doResolveWidget(
     throw new Forbidden(sessionPromptDeniedMessage(authority));
   }
 
+  // The registry entry, read before the idempotency check rather than with
+  // the step-4 dispatch, because the entry is what says whether this lane can
+  // recover an interrupted resolution at all. An unregistered type has no
+  // recovery policy and therefore gets the generic one.
+  const entry = getWidget(widget.widget_type);
+  const recovery = widgetRecoveryPolicy(entry);
+
   // 3. Idempotency: only 'pending' widgets can be resolved.
+  //
+  // A `reclaimable` lane answers two of the non-pending states differently,
+  // and neither is a widening of what may be granted — every question this
+  // path asks is still asked, of the same caller, against state read now.
+  //
+  //  - `submitted`: the work this request asks for is done. The generic lane
+  //    calls that a conflict because a second submit would be a second
+  //    external effect; here there is no effect and no payload, so the honest
+  //    answer to "finish connecting" is that it is finished. Reporting
+  //    `Forbidden` instead is what made a recovery surface indistinguishable
+  //    from a refusal.
+  //  - `resolving` with an abandoned claim: see
+  //    {@link WIDGET_RECLAIM_ABANDONED_AFTER_MS}. Taking it over is the only
+  //    way a widget whose resolver died between the claim and the completion
+  //    can ever reach a terminal state.
   if (widget.status !== 'pending') {
-    throw new Forbidden(
-      `Widget ${widgetId} is already ${widget.status}; cannot ${action.kind} again.`
-    );
+    const finished = recovery === 'reclaimable' && widget.status === 'submitted';
+    if (finished) {
+      return {
+        widget_id: widget.widget_id,
+        status: 'submitted',
+        auto_resume_queued: false,
+        already_resolved: true,
+      };
+    }
+    // `already_present` is deliberately not included: that status is minted
+    // terminal by a short-circuit that never offered a button, so no recovery
+    // surface can reach it, and answering "submitted" for it would report a
+    // resolution that never happened.
+    const reclaimable =
+      recovery === 'reclaimable' &&
+      widget.status === 'resolving' &&
+      widget.resolution_claim?.action === action.kind;
+    if (!reclaimable) {
+      throw new Forbidden(
+        `Widget ${widgetId} is already ${widget.status}; cannot ${action.kind} again.`
+      );
+    }
   }
 
-  // 4. Dispatch to the registry. Unknown widget types fail loudly — the
-  //    client should know the daemon doesn't speak this widget type.
-  const entry = getWidget(widget.widget_type);
+  // 4. Dispatch to the entry read above.
   // (We tolerate a missing registry entry for the dismiss path because
   // dismissal needs no side-effect — but we still need the entry for the
   // dismissed-prompt builder. If no entry exists, fall back to a generic
@@ -281,12 +351,28 @@ async function doResolveWidget(
   // No DB transaction remains open while the registry handler, prompt
   // admission, or any other external/service work runs.
   const claimToken = generateId();
-  const claim = await deps.resolutionStore.claim(widget.widget_id, {
-    token: claimToken,
-    action: action.kind,
-    claimedAt: new Date().toISOString(),
-    claimedBy: caller.user_id,
-  });
+  const claim = await deps.resolutionStore.claim(
+    widget.widget_id,
+    {
+      token: claimToken,
+      action: action.kind,
+      claimedAt: new Date().toISOString(),
+      claimedBy: caller.user_id,
+    },
+    // Passed only for a lane that declared its handler replay-safe, and the
+    // store still decides: a claim younger than the cutoff is refused here
+    // exactly as an unreclaimable one is, which is what keeps two browsers
+    // racing the same card from stealing from each other.
+    recovery === 'reclaimable'
+      ? { action: action.kind, afterMs: WIDGET_RECLAIM_ABANDONED_AFTER_MS }
+      : undefined
+  );
+  if (claim.outcome === 'claimed' && claim.reclaimed) {
+    console.warn(
+      `[widgets] event=widget_resolution_reclaimed widget_id=${widget.widget_id} ` +
+        `type=${widget.widget_type} action=${action.kind} by=${caller.user_id}`
+    );
+  }
   if (claim.outcome !== 'claimed') {
     const status = claim.message.metadata?.widget?.status ?? 'unavailable';
     throw new Forbidden(`Widget ${widgetId} is already ${status}; cannot ${action.kind} again.`);
