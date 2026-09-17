@@ -163,6 +163,7 @@ export class ReactiveSessionHandle {
   // replay them over that snapshot so a late stale response cannot erase a
   // message that was already observed live (or resurrect a removed one).
   private readonly messageFetches = new Map<number, number>();
+  private readonly streamingAtMessageFetch = new Map<number, ReactiveStreamingMessagesById>();
   private readonly messageMutations: MessageMutation[] = [];
   // Loading and unloading are user-visible cache membership decisions, not
   // Message mutations. Track them separately so a reconnect resync cannot
@@ -350,6 +351,11 @@ export class ReactiveSessionHandle {
           ...prev,
           messagesByTask: nextByTask,
           loadedTaskIds: nextLoaded,
+          streamingMessages: this.reconcilePersistedStreams(
+            prev.streamingMessages,
+            new Map([[taskId, committed]]),
+            fetchToken
+          ),
           lastSyncedAt: new Date().toISOString(),
         };
       });
@@ -364,6 +370,10 @@ export class ReactiveSessionHandle {
   private beginMessageFetch(): number {
     this.messageFetchTokenSequence += 1;
     this.messageFetches.set(this.messageFetchTokenSequence, this.messageMutationSequence);
+    this.streamingAtMessageFetch.set(
+      this.messageFetchTokenSequence,
+      this.stateSnapshot.streamingMessages
+    );
     return this.messageFetchTokenSequence;
   }
 
@@ -390,8 +400,39 @@ export class ReactiveSessionHandle {
     return sortMessagesByIndex([...byId.values()]);
   }
 
+  private reconcilePersistedStreams(
+    streaming: ReactiveStreamingMessagesById,
+    messagesByTask: ReactiveMessagesByTask,
+    fetchToken: number | null
+  ): ReactiveStreamingMessagesById {
+    const atFetch = fetchToken === null ? undefined : this.streamingAtMessageFetch.get(fetchToken);
+    if (!atFetch || streaming.size === 0) return streaming;
+    let next = streaming;
+    for (const [taskId, messages] of messagesByTask) {
+      for (const message of messages) {
+        const current = streaming.get(message.message_id);
+        // A persisted row supersedes only the stream observed before the fetch.
+        // New chunks/starts/thinking events may be newer than the DB snapshot.
+        // Match the existing handle and task boundary, not just the message ID.
+        if (
+          current &&
+          current === atFetch.get(message.message_id) &&
+          this.matchesSession(message.session_id) &&
+          this.matchesSession(current.session_id) &&
+          message.task_id === taskId &&
+          (!current.task_id || current.task_id === taskId)
+        ) {
+          if (next === streaming) next = new Map(streaming);
+          next.delete(message.message_id);
+        }
+      }
+    }
+    return next;
+  }
+
   private cancelMessageFetch(fetchToken: number): void {
     this.messageFetches.delete(fetchToken);
+    this.streamingAtMessageFetch.delete(fetchToken);
     if (this.messageFetches.size === 0) {
       this.messageMutations.length = 0;
       return;
@@ -549,7 +590,7 @@ export class ReactiveSessionHandle {
     queueResult: QueueFindResult;
     messageFetchToken: number | null;
     eagerMessageSnapshot: Message[] | null;
-    lazyMessageSnapshot: { taskId: string; messages: Message[] } | null;
+    lazyMessageSnapshot: { taskId: string; messages: Message[]; cacheSequence: number } | null;
   }): ReactiveSessionState {
     const sessionChanged = this.sessionMutationSequence > args.sessionFetchSequence;
     if (sessionChanged && args.previous.session === null && args.previous.terminal) {
@@ -559,8 +600,9 @@ export class ReactiveSessionHandle {
     const reconciledTasks = this.reconcileTaskFetch(args.taskFetchToken, args.taskSnapshot);
     const tasks = orderTasksBySession(reconciledTasks, session?.tasks);
 
-    let messagesByTask = new Map<string, Message[]>();
-    let loadedTaskIds = new Set<string>();
+    let messagesByTask = new Map(args.previous.messagesByTask);
+    let loadedTaskIds = new Set(args.previous.loadedTaskIds);
+    const fetchedMessagesByTask = new Map<string, Message[]>();
     if (args.eagerMessageSnapshot) {
       const messages =
         args.messageFetchToken === null
@@ -572,7 +614,12 @@ export class ReactiveSessionHandle {
             );
       messagesByTask = groupMessagesByTask(messages);
       loadedTaskIds = new Set(messagesByTask.keys());
-    } else if (args.lazyMessageSnapshot) {
+      for (const [taskId, messages] of messagesByTask) fetchedMessagesByTask.set(taskId, messages);
+    } else if (
+      args.lazyMessageSnapshot &&
+      (this.messageCacheMutationsByTask.get(args.lazyMessageSnapshot.taskId) ?? 0) ===
+        args.lazyMessageSnapshot.cacheSequence
+    ) {
       const { taskId, messages: snapshot } = args.lazyMessageSnapshot;
       const messages =
         args.messageFetchToken === null
@@ -583,6 +630,7 @@ export class ReactiveSessionHandle {
               (message) => message.task_id === taskId && this.matchesSession(message.session_id)
             );
       messagesByTask.set(taskId, messages);
+      fetchedMessagesByTask.set(taskId, messages);
       loadedTaskIds.add(taskId);
     }
 
@@ -606,7 +654,14 @@ export class ReactiveSessionHandle {
       loadedTaskIds,
       // Repair task_id on any stream initialized from a chunk that arrived
       // before Tasks were hydrated (task_id was undefined then).
-      streamingMessages: restampStreamingTaskIds(args.previous.streamingMessages, tasks),
+      streamingMessages: restampStreamingTaskIds(
+        this.reconcilePersistedStreams(
+          args.previous.streamingMessages,
+          new Map([...fetchedMessagesByTask].filter(([taskId]) => liveTaskIds.has(taskId))),
+          args.messageFetchToken
+        ),
+        tasks
+      ),
       queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
       loading: false,
       error: null,
@@ -637,7 +692,11 @@ export class ReactiveSessionHandle {
       // the final state commit below.
       const provisionalTasks = this.reconcileTaskFetch(taskFetchToken, taskSnapshot);
       let eagerMessageSnapshot: Message[] | null = null;
-      let lazyMessageSnapshot: { taskId: string; messages: Message[] } | null = null;
+      let lazyMessageSnapshot: {
+        taskId: string;
+        messages: Message[];
+        cacheSequence: number;
+      } | null = null;
 
       if (this.options.taskHydration === 'eager') {
         messageFetchToken = this.beginMessageFetch();
@@ -653,8 +712,15 @@ export class ReactiveSessionHandle {
         if (latestTask) {
           messageFetchToken = this.beginMessageFetch();
           try {
+            // Like resync, bootstrap must not reverse a load/unload decision
+            // made while its automatic latest-Task fetch was pending.
+            const cacheSequence = this.messageCacheMutationsByTask.get(latestTask.task_id) ?? 0;
             const latestMessages = await this.fetchTaskMessagesAtHighWater(latestTask.task_id);
-            lazyMessageSnapshot = { taskId: latestTask.task_id, messages: latestMessages };
+            lazyMessageSnapshot = {
+              taskId: latestTask.task_id,
+              messages: latestMessages,
+              cacheSequence,
+            };
           } catch {
             this.cancelMessageFetch(messageFetchToken);
             messageFetchToken = null;
@@ -1300,6 +1366,7 @@ export class ReactiveSessionHandle {
 
         let messagesByTask = prev.messagesByTask;
         let loadedTaskIds = prev.loadedTaskIds;
+        const fetchedMessagesByTask = new Map<string, Message[]>();
         if (eagerMessageSnapshot) {
           const messages =
             messageFetchToken === null
@@ -1308,6 +1375,8 @@ export class ReactiveSessionHandle {
                   this.matchesSession(message.session_id)
                 );
           messagesByTask = groupMessagesByTask(messages);
+          for (const [taskId, taskMessages] of messagesByTask)
+            fetchedMessagesByTask.set(taskId, taskMessages);
           loadedTaskIds = new Set(messagesByTask.keys());
         } else if (lazyMessageSnapshots) {
           // Start from commit-time cache membership. Buckets loaded while the
@@ -1331,6 +1400,7 @@ export class ReactiveSessionHandle {
                       message.task_id === taskId && this.matchesSession(message.session_id)
                   )
             );
+            fetchedMessagesByTask.set(taskId, refreshedByTask.get(taskId)!);
             refreshedTaskIds.add(taskId);
           }
           messagesByTask = refreshedByTask;
@@ -1355,7 +1425,14 @@ export class ReactiveSessionHandle {
           queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
           messagesByTask,
           loadedTaskIds,
-          streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
+          streamingMessages: restampStreamingTaskIds(
+            this.reconcilePersistedStreams(
+              prev.streamingMessages,
+              new Map([...fetchedMessagesByTask].filter(([taskId]) => liveTaskIds.has(taskId))),
+              messageFetchToken
+            ),
+            tasks
+          ),
           error: null,
           terminal: false,
           lastSyncedAt: new Date().toISOString(),

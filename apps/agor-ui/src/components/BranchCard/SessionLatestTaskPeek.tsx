@@ -32,6 +32,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const { onPermissionDecision, onSendPrompt } = useAppActions();
     const connectionDisabled = useConnectionDisabled();
     const containerRef = useRef<HTMLDivElement>(null);
+    const pendingScrollFrameRef = useRef<number | null>(null);
     const userScrolledUpRef = useRef(false);
     const userScrollIntentRef = useRef(false);
     const initialMessagesScrollDoneForTaskRef = useRef<string | null>(null);
@@ -75,9 +76,31 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }, []);
 
+    const cancelAutoScroll = useCallback(() => {
+      if (pendingScrollFrameRef.current === null) return;
+      cancelAnimationFrame(pendingScrollFrameRef.current);
+      pendingScrollFrameRef.current = null;
+    }, []);
+
     const scheduleAutoScroll = useCallback(() => {
-      requestAnimationFrame(scrollToBottom);
-    }, [scrollToBottom]);
+      if (!enabled || document.hidden || pendingScrollFrameRef.current !== null) return;
+      pendingScrollFrameRef.current = requestAnimationFrame(() => {
+        pendingScrollFrameRef.current = null;
+        if (!document.hidden && !userScrolledUpRef.current) scrollToBottom();
+      });
+    }, [enabled, scrollToBottom]);
+
+    useEffect(() => {
+      const onVisibilityChange = () => {
+        if (document.hidden) cancelAutoScroll();
+        else if (!userScrolledUpRef.current) scheduleAutoScroll();
+      };
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      return () => {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        cancelAutoScroll();
+      };
+    }, [cancelAutoScroll, scheduleAutoScroll]);
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: reset the scroll lock when the displayed task changes
     useEffect(() => {

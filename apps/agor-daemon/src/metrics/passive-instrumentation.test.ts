@@ -2,11 +2,12 @@ import { EventEmitter } from 'node:events';
 import type { TaskDispatchClaimResult } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { HookContext, Task } from '@agor/core/types';
-import type express from 'express';
+import express from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import type { Application } from '../declarations.js';
 import { createFeathersMetricsHook } from './feathers.js';
 import { createHttpMetricsMiddleware, normalizedHttpRoute } from './http.js';
+import type { DaemonOperationalMetrics, ExternalRequestTransport } from './operational.js';
 import {
   recordDispatchClaim,
   recordExecutorConnected,
@@ -47,6 +48,28 @@ class RecordingMetrics implements DaemonMetrics {
   }
 }
 
+class RecordingOperationalMetrics implements DaemonOperationalMetrics {
+  readonly enabled = true;
+  readonly begun: ExternalRequestTransport[] = [];
+  readonly finished: ExternalRequestTransport[] = [];
+
+  start(): void {}
+  stop(): void {}
+  beginExternalRequest(transport: ExternalRequestTransport): () => void {
+    this.begun.push(transport);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      this.finished.push(transport);
+    };
+  }
+  recordSocketClientConnection(): (reason: string) => void {
+    return () => undefined;
+  }
+  recordSocketAuthenticationFailure(): void {}
+}
+
 describe('Feathers metrics hook', () => {
   it('counts and times only externally provided service calls', async () => {
     const metrics = new RecordingMetrics();
@@ -81,14 +104,15 @@ describe('Feathers metrics hook', () => {
 
   it('records bounded error status and rethrows', async () => {
     const metrics = new RecordingMetrics();
-    const hook = createFeathersMetricsHook(metrics);
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const hook = createFeathersMetricsHook(metrics, { operationalMetrics });
     const failure = Object.assign(new Error('nope'), { code: 403 });
     await expect(
       hook(
         {
           path: 'branches',
           method: 'patch',
-          params: { provider: 'rest' },
+          params: { provider: 'socketio' },
         } as unknown as HookContext,
         async () => {
           throw failure;
@@ -96,6 +120,8 @@ describe('Feathers metrics hook', () => {
       )
     ).rejects.toBe(failure);
     expect(metrics.calls[0]?.tags).toMatchObject({ outcome: 'error', status_code: 403 });
+    expect(operationalMetrics.begun).toEqual(['socketio']);
+    expect(operationalMetrics.finished).toEqual(['socketio']);
   });
 
   it('preserves MCP as a distinct low-cardinality transport', async () => {
@@ -142,7 +168,8 @@ describe('Feathers metrics hook', () => {
 
   it('records only the outer request when internal fan-out preserves provider', async () => {
     const metrics = new RecordingMetrics();
-    const hook = createFeathersMetricsHook(metrics);
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const hook = createFeathersMetricsHook(metrics, { operationalMetrics });
     const innerNext = vi.fn(async () => undefined);
     const serviceApp = feathers();
     serviceApp.use('sessions', {
@@ -172,6 +199,38 @@ describe('Feathers metrics hook', () => {
       method: 'patch',
       transport: 'socketio',
     });
+    expect(operationalMetrics.begun).toEqual(['socketio']);
+    expect(operationalMetrics.finished).toEqual(['socketio']);
+  });
+
+  it('tracks pending Socket.IO calls but excludes REST from the disjoint in-flight surface', async () => {
+    const metrics = new RecordingMetrics();
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const hook = createFeathersMetricsHook(metrics, { operationalMetrics });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const socketCall = hook(
+      {
+        path: 'sessions',
+        method: 'find',
+        params: { provider: 'socketio' },
+      } as unknown as HookContext,
+      () => pending
+    );
+    expect(operationalMetrics.begun).toEqual(['socketio']);
+    expect(operationalMetrics.finished).toEqual([]);
+    release();
+    await socketCall;
+
+    await hook(
+      { path: 'sessions', method: 'find', params: { provider: 'rest' } } as unknown as HookContext,
+      async () => undefined
+    );
+    expect(operationalMetrics.begun).toEqual(['socketio']);
+    expect(operationalMetrics.finished).toEqual(['socketio']);
   });
 });
 
@@ -311,7 +370,12 @@ describe('HTTP metrics middleware', () => {
 
   it('records final HTTP status, outcome, method, normalized route and duration', () => {
     const metrics = new RecordingMetrics();
-    const middleware = createHttpMetricsMiddleware(app, metrics);
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const trackedApp = {
+      ...app,
+      get: (name: string) => (name === 'daemonOperationalMetrics' ? operationalMetrics : undefined),
+    } as unknown as Application;
+    const middleware = createHttpMetricsMiddleware(trackedApp, metrics);
     const request = {
       method: 'GET',
       path: '/sessions/private-id',
@@ -339,6 +403,77 @@ describe('HTTP metrics middleware', () => {
     });
     expect(metrics.calls[1]?.name).toBe('http.request.duration_ms');
     expect(metrics.calls[1]?.value).toBeGreaterThanOrEqual(0);
+    expect(operationalMetrics.begun).toEqual(['http']);
+    expect(operationalMetrics.finished).toEqual(['http']);
+  });
+
+  it('finishes HTTP in-flight state once on abort', () => {
+    const metrics = new RecordingMetrics();
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const trackedApp = {
+      ...app,
+      get: (name: string) => (name === 'daemonOperationalMetrics' ? operationalMetrics : undefined),
+    } as unknown as Application;
+    const middleware = createHttpMetricsMiddleware(trackedApp, metrics);
+    const abortedResponse = Object.assign(new EventEmitter(), {
+      statusCode: 200,
+      writableFinished: false,
+    }) as unknown as express.Response;
+    middleware(
+      { method: 'GET', path: '/sessions' } as unknown as express.Request,
+      abortedResponse,
+      vi.fn()
+    );
+    abortedResponse.emit('close');
+    abortedResponse.emit('finish');
+
+    expect(operationalMetrics.begun).toEqual(['http']);
+    expect(operationalMetrics.finished).toEqual(['http']);
+    expect(metrics.calls[0]?.tags?.outcome).toBe('aborted');
+  });
+
+  it('settles downstream synchronous Express errors on response finish, not next()', async () => {
+    const metrics = new RecordingMetrics();
+    const operationalMetrics = new RecordingOperationalMetrics();
+    const get = vi.fn(() => operationalMetrics);
+    const trackedApp = { ...app, get } as unknown as Application;
+    const serverApp = express();
+    serverApp.use(createHttpMetricsMiddleware(trackedApp, metrics));
+    expect(get).toHaveBeenCalledExactlyOnceWith('daemonOperationalMetrics');
+    serverApp.get('/failure', () => {
+      throw new Error('downstream failed');
+    });
+    const pendingAtErrorHandler: number[] = [];
+    const errorHandler: express.ErrorRequestHandler = (_error, _request, response, _next) => {
+      pendingAtErrorHandler.push(
+        operationalMetrics.begun.length - operationalMetrics.finished.length
+      );
+      response.status(500).end();
+    };
+    serverApp.use(errorHandler);
+    const server = serverApp.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP address');
+      for (let index = 0; index < 2; index++) {
+        const response = await fetch(`http://127.0.0.1:${address.port}/failure`);
+        expect(response.status).toBe(500);
+        await response.text();
+      }
+      expect(pendingAtErrorHandler).toEqual([1, 1]);
+      expect(get).toHaveBeenCalledOnce();
+      expect(operationalMetrics.begun).toEqual(['http', 'http']);
+      expect(operationalMetrics.finished).toEqual(['http', 'http']);
+      expect(metrics.calls.filter((call) => call.name === 'http.requests')).toEqual([
+        expect.objectContaining({ tags: expect.objectContaining({ outcome: 'server_error' }) }),
+        expect.objectContaining({ tags: expect.objectContaining({ outcome: 'server_error' }) }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
   });
 
   it('skips code-defined static path prefixes', () => {
