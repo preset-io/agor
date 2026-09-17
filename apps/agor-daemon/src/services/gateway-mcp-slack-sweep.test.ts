@@ -26,6 +26,7 @@ import {
   generateId,
   MCPServerRepository,
   MessagesRepository,
+  MissingTenantDatabaseScopeError,
   RepoRepository,
   runMigrations,
   runWithTenantContext,
@@ -348,6 +349,52 @@ describe('Slack MCP connect bounded repair sweep', () => {
       rendered_state: 'connect_required',
       delivery_generation: 1,
     });
+  }, 30_000);
+
+  /**
+   * The silence the architecture pass asked about.
+   *
+   * Both lanes' per-item repair used to be `.catch(() => undefined)`, which is
+   * how four missing tenant scopes reached a running daemon: the failure
+   * happens BEFORE any delivery is attempted, so the `stranded=true` delivery
+   * accounting never sees it either. One bounded line per (lane, category) per
+   * pass — never the exception, never anything the provider said.
+   */
+  it('reports the per-item repair failures it used to swallow', async () => {
+    const harness = await createSweepHarness();
+    for (let i = 0; i < 2; i += 1) {
+      await harness.seedWidget({
+        channelId: harness.aligned.id,
+        slackChannelId: 'C500',
+        requestedAt: new Date(Date.now() - 60_000 - i).toISOString(),
+      });
+    }
+    (harness.service as unknown as Record<string, unknown>).deliverMcpSlackConnectCard =
+      async () => {
+        throw new MissingTenantDatabaseScopeError('messages');
+      };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await harness.sweep();
+      const line = warn.mock.calls
+        .map((call) => call[0])
+        .find(
+          (value): value is string =>
+            typeof value === 'string' && value.includes('event=mcp_slack_repair_failed')
+        );
+      expect(line).toBeDefined();
+      expect(line).toContain('tenant_id=default');
+      expect(line).toContain('lane=connect');
+      expect(line).toContain('reason=missing_tenant_scope');
+      // Tallied, not one line per row: a systemic failure fails for the whole
+      // page, and the count is the story.
+      expect(line).toContain('count=2');
+      expect(line).toContain('first_entity_id=');
+      expect(line).not.toMatch(/Missing tenant database scope|Error|C500/);
+      expect(sent.messages).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
   }, 30_000);
 
   it('does not post a second card on the next sweep', async () => {

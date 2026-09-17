@@ -941,6 +941,45 @@ the service an unguarded database, where an unscoped read simply succeeds. The
 regression test hands it the production guard and enters through
 `runWithTenantContext` alone, the way the listener does.
 
+### 7.1.6 Closing the silence around both lanes
+
+The architecture pass asked why the last two scope defects were invisible. Two
+answers, both now addressed.
+
+**They happened before delivery-failure accounting.** `stranded=true` describes
+a card Slack refused six times; a card whose repair threw before any Slack call
+was made has no attempt, no backoff and no log at all, because both lanes'
+per-item repair was `.catch(() => undefined)`. The sweep now tallies those
+failures and reports one bounded line per (lane, category) per pass —
+tenant, lane, count, the first entity id, and an Agor-owned category, never the
+exception and never anything a provider said. `missing_tenant_scope` is named
+on its own because it is the class that has now bitten five times.
+
+**The fixtures could not see them.** Three things changed:
+
+- The two Slack lanes' integration fixtures no longer opt into the production
+  scope guard one test at a time. `createSlackLaneHarness` sets
+  `requireTenantScope` unconditionally, so a new case in either lane cannot
+  forget it.
+- The §7.1.2 restart drive is automated. `gateway-mcp-slack-sweep.test.ts`
+  starts from a widget carrying only its mint marker, in a real migrated
+  database with real repositories and the guard armed, and reaches the real
+  settings, repository and connector boundaries through
+  `refreshChannelState` — the entry point a daemon start actually calls.
+- The delivery contract is written once for both lanes.
+  `gateway-mcp-slack-delivery-contract.test.ts` states lease loss (post and
+  edit) and send/commit ambiguity as cases both lanes must satisfy.
+
+That last one found the divergence it was written to find. §7.1.1 taught the
+connect lane to retire a post that lost its claim; the recovery lane never
+learned it, and neither lane reconciled an EDIT that lost its claim. Both now
+share `retireOrphanedSlackCard` and both repaint a render they no longer own.
+
+What this is NOT is the delivery-engine extraction: the two lanes still own
+their own claim, mint, render and settle loops over their own records. Pinning
+the contract in a test first is what makes that extraction checkable when it
+happens.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers
