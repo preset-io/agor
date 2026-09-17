@@ -425,3 +425,121 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     });
   });
 });
+
+describePostgres('MessagesRepository Slack MCP connect due-work projection', () => {
+  let db: Database;
+  beforeAll(async () => {
+    db = createDatabase({ url: postgresUrl!, dialect: 'postgresql' });
+    await initializeDatabase(db);
+  });
+
+  /**
+   * The indexed column and the JSON it projects must never disagree, and the
+   * bounded sweep must never reach into another tenant. Both are properties of
+   * real SQL against a real schema — the exact shape a `:memory:` unit test
+   * cannot see, which is how the two worst bugs in this lane were found.
+   */
+  it('mirrors the repair time out of the widget metadata and keeps the sweep tenant-local', async () => {
+    const tenantA = `connect-due-a-${generateId()}`;
+    const tenantB = `connect-due-b-${generateId()}`;
+    const now = new Date('2026-09-16T12:00:00.000Z');
+    const seed = async (scoped: Database, dueAt: string | undefined) => {
+      const owner = await new UsersRepository(scoped).create({
+        email: `connect-due-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const repo = await new RepoRepository(scoped).create({
+        slug: `connect-due-${generateId()}`,
+        name: 'Connect due',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/connect-due.git',
+        local_path: `/tmp/connect-due-${generateId()}`,
+        default_branch: 'main',
+      });
+      const branch = await new BranchRepository(scoped).create({
+        repo_id: repo.repo_id,
+        name: 'connect-due',
+        path: `/tmp/connect-due-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: Math.floor(Math.random() * 1_000_000),
+        created_by: owner.user_id as UUID,
+      });
+      const session = await new SessionRepository(scoped).create({
+        branch_id: branch.branch_id,
+        title: 'connect-due',
+        created_by: owner.user_id as UUID,
+      });
+      const repository = new MessagesRepository(scoped);
+      const created = await repository.create({
+        message_id: generateId(),
+        session_id: session.session_id,
+        type: 'widget_request',
+        role: MessageRole.SYSTEM,
+        index: 0,
+        timestamp: now.toISOString(),
+        content_preview: 'Widget: oauth (Notion)',
+        content: 'Connect "Notion"',
+      });
+      if (dueAt) {
+        await repository.mutateMetadataLocked(created.message_id, () => ({
+          widget: {
+            widget_type: 'oauth',
+            widget_id: created.message_id,
+            schema_version: 1,
+            status: 'pending',
+            requested_at: now.toISOString(),
+            params: {},
+            slack_connect: {
+              delivery_id: 'delivery-1',
+              delivery_generation: 1,
+              token_jti: 'jti-1',
+              issued_at: now.toISOString(),
+              expires_at: new Date(now.getTime() + 600_000).toISOString(),
+              next_repair_at: dueAt,
+            },
+          },
+        }));
+      }
+      return { repository, messageId: created.message_id };
+    };
+
+    let dueId: Message['message_id'] | undefined;
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      const due = await seed(scoped, new Date(now.getTime() - 60_000).toISOString());
+      dueId = due.messageId;
+      // Not yet due.
+      await seed(scoped, new Date(now.getTime() + 60_000).toISOString());
+      // Abandoned long before the horizon; the sweep must not carry it forever.
+      await seed(scoped, new Date(now.getTime() - 48 * 60 * 60_000).toISOString());
+      // Never Slack-delivered at all: the overwhelming majority of rows.
+      await seed(scoped, undefined);
+
+      const page = await due.repository.findMcpSlackConnectDuePage({ now });
+      expect(page.messages.map((message) => message.message_id)).toEqual([dueId]);
+
+      // Clearing the repair time clears the column in the same write, so the
+      // sweep cannot keep finding a card that has nothing left to do.
+      await due.repository.mutateMetadataLocked(dueId!, (metadata) => ({
+        ...metadata,
+        widget: {
+          ...metadata!.widget!,
+          slack_connect: { ...metadata!.widget!.slack_connect!, next_repair_at: undefined },
+        },
+      }));
+      expect((await due.repository.findMcpSlackConnectDuePage({ now })).messages).toEqual([]);
+    });
+
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      await seed(scoped, new Date(now.getTime() - 60_000).toISOString());
+      const page = await new MessagesRepository(scoped).findMcpSlackConnectDuePage({ now });
+      expect(page.messages.map((message) => message.message_id)).not.toContain(dueId);
+      expect(page.messages).toHaveLength(1);
+    });
+
+    await expect(
+      runWithTenantDatabaseScope(db, tenantA, async (scoped) =>
+        new MessagesRepository(scoped).findMcpSlackConnectDuePage({ limit: 0 })
+      )
+    ).rejects.toThrow(/between 1 and 100/);
+  });
+});
