@@ -1524,6 +1524,7 @@ describe('Slack MCP connect authenticated route', () => {
     if (!issued) throw new Error('Expected a connect link');
     return {
       widgetId,
+      channelId: channel.id,
       token: decodeURIComponent(issued.url.split('#token=')[1]),
       widgetStatus: async () =>
         (await messages.findById(widgetId))?.metadata?.widget?.status ?? 'missing',
@@ -1690,6 +1691,97 @@ describe('Slack MCP connect authenticated route', () => {
     // Recording it is not enough — the card in the thread is the only surface
     // the user has, and nothing else wakes it until the repair sweep.
     expect(harness.syncedConnectCards).toContain(seeded.widgetId);
+  });
+
+  /**
+   * The callback must refuse a flow the channel has since revoked.
+   *
+   * The sealed link pins `gateway_config_generation`, and rotating the bot
+   * token moves it — that is the whole point of the pin. Re-reading the
+   * channel at callback time and passing its CURRENT generation as the
+   * expected one compares the channel to itself and can never refuse, so an
+   * obsolete flow completed and persisted a grant. The expected generation has
+   * to be the one that authorized this flow.
+   */
+  it('refuses a callback whose gateway configuration generation was revoked', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const channels = new GatewayChannelRepository(harness.rawDb);
+    const before = await channels.findById(seeded.channelId);
+    await channels.update(seeded.channelId, {
+      config: { ...before?.config, bot_token: 'xoxb-rotated-after-issue' },
+    });
+    expect((await channels.findById(seeded.channelId))?.provider_config_generation).toBe(
+      (before?.provider_config_generation ?? 0) + 1
+    );
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+    expect(await seeded.widgetStatus()).toBe('pending');
+  });
+
+  /**
+   * The same fence, reached from the projection's side.
+   *
+   * `binding_invalidated_at` is terminal (§7.2): the card has already been
+   * repainted to say no link can be offered here. A flow that is still in
+   * flight when that happens must not be allowed to finish either, or the
+   * thread shows a retired card beside a grant it says was never made.
+   */
+  it('refuses a callback whose card was retired mid-flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        slack_connect: {
+          ...metadata!.widget!.slack_connect!,
+          binding_invalidated_at: new Date().toISOString(),
+        },
+      },
+    }));
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
   });
 });
 

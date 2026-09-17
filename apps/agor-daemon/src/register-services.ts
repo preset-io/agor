@@ -3332,6 +3332,10 @@ export async function registerMCPServices(
           current.oauth_attempt_id === pendingFlow.attemptId &&
           current.token_consumed_at &&
           !current.oauth_failed_at &&
+          // Terminal by design (§7.2): the projection records that the
+          // channel, alignment, or server moved under this card, and a card
+          // that may no longer offer a link may not complete one either.
+          !current.binding_invalidated_at &&
           widget.status === 'pending' &&
           widget.widget_type === 'oauth' &&
           message.session_id === connect.session_id
@@ -3350,15 +3354,15 @@ export async function registerMCPServices(
               credentialUserId: userId as UserID,
               sessionId: connect.session_id,
               gatewayChannelId: connect.gateway_channel_id,
-              gatewayConfigGeneration: await new GatewayChannelRepository(db)
-                .findById(connect.gateway_channel_id)
-                .then((channel) => channel?.provider_config_generation ?? -1),
+              // Sealed at redemption, never re-read: the authority read
+              // refuses when the STORED version differs from the expected
+              // one, so passing today's stored value would compare it to
+              // itself and admit a flow the workspace has since revoked.
+              gatewayConfigGeneration: connect.gateway_config_generation,
               slackChannelId: source.slack_channel_id,
               slackThreadId: source.thread_id,
               mcpServerId: connect.mcp_server_id,
-              mcpServerConfigVersion: await new MCPServerRepository(db)
-                .findById(connect.mcp_server_id)
-                .then((server) => server?.config_version ?? -1),
+              mcpServerConfigVersion: connect.mcp_server_config_version,
             })
           : null;
       if (
@@ -5243,6 +5247,12 @@ export async function registerMCPServices(
             session_id: claims.session_id,
             mcp_server_id: claims.mcp_server_id,
             gateway_channel_id: claims.gateway_channel_id,
+            // Carried, not re-read. These are the versions this redemption
+            // just proved the workspace still agrees with; the callback has
+            // nothing else to compare against, and comparing the stored value
+            // to itself is the same as not comparing at all.
+            gateway_config_generation: claims.gateway_config_generation,
+            mcp_server_config_version: claims.mcp_server_config_version,
           },
         };
       });
