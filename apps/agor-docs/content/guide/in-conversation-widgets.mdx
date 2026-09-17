@@ -120,27 +120,37 @@ If you are allowed to prompt the session but not to change its MCP servers, the 
 
 ### If you asked from Slack
 
-Ask in a Slack thread and the card comes to you: Agor posts a **Connect _Notion_** button into the same thread, and edits that one message in place as the request moves on — signing in, connected, expired, cancelled, or replaced by a newer request. There is never a second button beside a stale one.
+Ask in a Slack thread and the card comes to you: Agor posts a **Connect _Notion_** button into the same thread, and edits that one message in place as the request moves on — signing in, connected, expired, cancelled, or replaced by a newer request. One widget, one Slack message, edited rather than replaced. Slack delivery is [at least once](./message-gateway.mdx#recovering-mcp-sign-in-from-slack), so a provider outage or a crash at the send/commit boundary can briefly leave a second copy; Agor reconciles it by editing or deleting the duplicate, and a newer request retires the earlier card. Every copy carries the same expiring, single-use, user-bound link, so a stale one grants nothing.
 
 Tapping it opens an Agor page that checks the link is still live and that **you** are the person it was issued for, then runs the same browser sign-in the canvas card runs. The link is one-use and short-lived; when it lapses, the card in the thread says so rather than leaving a button that fails. Nothing about the tap grants anything on its own — the sign-in still has to complete in a browser, and Agor still re-reads the stored grant before it believes it.
 
 If your browser blocks the sign-in window — Slack's in-app browser on a phone commonly does — the page says so and the button stays live: allow pop-ups and tap again, or open the link in your usual browser.
 
-The agent is also handed a link to the Agor session and told to relay it. That is the fallback, and it always works: open it, click **Connect**, come back. You will see it if the card could not be posted, if an administrator has turned the Slack card off, or if you asked from a thread Agor is not configured to write into.
+The agent is also handed a link to the Agor session and told to relay it. That is the fallback you will see if the card could not be posted, if an administrator has turned the Slack card off, or if you asked from a thread Agor is not configured to write into. It is not a guarantee: it needs Agor's configured URL to be reachable from your browser, you to be signed in to Agor with permission to prompt that session, and pop-ups allowed for the sign-in window. When one of those does not hold, connect from the [MCP Catalog](./mcp-servers.mdx) in Agor instead.
 
-### If you asked from Discord, GitHub, or Teams
+### If you asked from Discord or GitHub
 
 The card renders in the Agor transcript, which is not where you are, and Agor does not post a card into these threads. The agent is handed a link to the session and told to relay it — open it, click **Connect**, and come back.
 
+### If you asked from Teams
+
+The agent refuses, in the thread, and there is no setting that changes it. Teams has no way to map its senders to Agor accounts, so a sign-in started there would save the credential under the channel's own account — see below. Connect from the Agor canvas instead.
+
+### If the sign-in worked but the connection did not finish
+
+Signing in is not the last step. Agor stores the grant, then attaches the server to the session and wakes the assistant — and those last two wait on the page you signed in from. Close the tab or lose the connection in between and the sign-in is still saved; the request just is not finished.
+
+You do not have to sign in again. The card in the thread becomes **Finish connecting _Notion_** and the canvas card does the same; either finishes it in one tap. If the link has lapsed by then, ask again in the thread and Agor completes it without a second sign-in. **Nothing you did is lost, and Agor never tells you nothing was connected when the only missing step is its own.**
+
 ### What fails closed, on every platform
 
-If the gateway channel does not map platform users to Agor accounts, every message in it runs as one shared account, so a sign-in started there would mint a credential the whole channel could drive: the agent refuses and names the setting to turn on, and the Slack card says the same thing in the thread if alignment is switched off after the card was posted. A card retired that way stays retired — re-enabling the setting does not make a weeks-old button clickable; ask again and you get a fresh one.
+If the gateway channel does not map platform users to Agor accounts, every message in it runs as one shared account, so a sign-in started there would mint a credential the whole channel could drive: the agent refuses and names the setting to turn on, and the Slack card says the same thing in the thread if alignment is switched off after the card was posted. Slack, Discord, GitHub, and Shortcut each have that setting; Teams has none, so it is refused outright and the refusal says so rather than naming a switch that does not exist. A card retired that way stays retired — re-enabling the setting does not make a weeks-old button clickable; ask again and you get a fresh one.
 
 The connection is always looked up and stored under **the person who is actually prompting** — never the session's owner. In a shared Slack channel (as opposed to a DM) Agor says so once in the thread, because what a connected account returns becomes readable by everyone in it.
 
 ### Already connected
 
-If you already hold a usable connection, no button appears. Agor attaches the server and resumes the agent immediately. A second request for the same server retires the earlier card rather than stacking a second button beside it.
+If you already hold a usable connection, no button appears. Agor attaches the server and resumes the agent immediately. A second request for the same server retires the earlier card rather than stacking a second button beside it — best effort over the recent transcript rather than a guarantee about every card a long conversation ever produced, and an older card that is missed grants nothing when tapped.
 
 ---
 

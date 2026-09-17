@@ -82,6 +82,24 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  * Everything else is presentational. Nothing here is secret — see §5.1 of the
  * widgets design doc.
  */
+/**
+ * Upper bound on the disclosure carried onto a widget row.
+ *
+ * Generous rather than tight, and the difference matters: this field is the
+ * CONSENT. §5.4 justifies an agent satisfying `acknowledged_disclosure` on a
+ * human's behalf precisely because the text then travels onto the widget and
+ * is rendered above the Connect button, so the person reads it before the only
+ * moment anything is granted. A bound that silently shortened it would take
+ * that justification away one sentence at a time — quietly, since the tail of
+ * a paragraph is exactly where "and can delete" tends to live.
+ *
+ * So the bound exists only to stop an unbounded blob reaching a message row,
+ * and a catalog entry that exceeds it is REFUSED before anything is installed
+ * rather than trimmed to fit (`mcp/tools/widgets.ts`). The longest reviewed
+ * entry today is 808 characters.
+ */
+export const OAUTH_PERMISSION_DISCLOSURE_MAX = 4_000;
+
 export const oauthParamsSchema = z
   .object({
     mcpServerId: z
@@ -109,7 +127,7 @@ export const oauthParamsSchema = z
       .describe('Reverse-DNS catalog identity, when this server came from the MCP Catalog.'),
     permissionDisclosure: z
       .string()
-      .max(1000)
+      .max(OAUTH_PERMISSION_DISCLOSURE_MAX)
       .optional()
       .describe('The catalog entry’s plain-language statement of what connecting grants.'),
   })

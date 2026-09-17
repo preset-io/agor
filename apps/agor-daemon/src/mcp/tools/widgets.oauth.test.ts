@@ -410,13 +410,16 @@ describe('agor_widgets_request_oauth — catalog install', () => {
 });
 
 describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an install', () => {
-  it('clamps an over-long permission disclosure instead of installing then failing', async () => {
-    // The install is the first durable effect. A disclosure longer than
-    // `oauthParamsSchema`'s 1000 used to leave an installed server row behind
-    // and then throw out of the tool. The longest entry in today's curated.yaml
-    // is 808 chars, so this is a curation slip away.
+  it('carries a long permission disclosure through whole', async () => {
+    // The disclosure is the consent: §5.4 lets an agent satisfy
+    // `acknowledged_disclosure` on a human's behalf precisely because this text
+    // then reaches the human above the Connect button. It used to be silently
+    // clipped to 1000 characters, which is the one thing that must not happen
+    // to it — the tail of a permissions paragraph is where "and can delete"
+    // lives. The longest reviewed entry today is 808 characters.
+    const long = `${'x'.repeat(1_400)} and can delete them.`;
     const { app, calls } = makeApp({
-      catalogEntry: { ...NOTION_ENTRY, permission_disclosure: 'x'.repeat(1400) },
+      catalogEntry: { ...NOTION_ENTRY, permission_disclosure: long },
     });
     const tools = registerAndCapture({ app });
 
@@ -425,13 +428,27 @@ describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an i
     });
 
     expect(payload(result).status).toBe('requested');
-    const disclosure = appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure;
-    expect(disclosure).toHaveLength(1000);
-    expect(disclosure.endsWith('…')).toBe(true);
-    // The install still ran, and it acknowledged the entry's REAL text.
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure).toBe(long);
     const connect = calls.find((c) => c.service === 'mcp-catalog/connect');
     const connectArgs = connect?.args[0] as { acknowledged_disclosure: string } | undefined;
-    expect(connectArgs?.acknowledged_disclosure).toBe('x'.repeat(1400));
+    expect(connectArgs?.acknowledged_disclosure).toBe(long);
+  });
+
+  it('refuses an unshowable disclosure BEFORE installing, rather than shortening it', async () => {
+    // Past the bound the answer is a refusal, for the same reason: an entry
+    // nobody can connect is a curation bug someone fixes, while a disclosure
+    // missing its last sentence is one nobody notices. Refused early, so the
+    // refusal still costs no orphaned server row.
+    const { app, calls } = makeApp({
+      catalogEntry: { ...NOTION_ENTRY, permission_disclosure: 'x'.repeat(4_001) },
+    });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    ).rejects.toThrow(/will not shorten what you are agreeing to/);
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeUndefined();
+    expect(appendStub).not.toHaveBeenCalled();
   });
 
   it('refuses an over-long catalog entry name BEFORE installing anything', async () => {
