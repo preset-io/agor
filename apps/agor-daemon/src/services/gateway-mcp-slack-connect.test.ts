@@ -335,6 +335,8 @@ interface HarnessOptions {
   claimMetadataFlag?: ReturnType<typeof vi.fn>;
   conversationType?: string;
   slackChannelId?: string;
+  /** `'none'` stands in for a canvas (or non-Slack gateway) host task. */
+  taskSource?: 'slack' | 'none';
 }
 
 function deliveryHarness(options: HarnessOptions = {}) {
@@ -388,19 +390,22 @@ function deliveryHarness(options: HarnessOptions = {}) {
           task_id: 'task-1',
           session_id: SESSION_ID,
           created_by: OWNER,
-          metadata: {
-            gateway_task_source: {
-              gateway_channel_id: 'gateway-1',
-              channel_type: 'slack',
-              thread_id: THREAD,
-              provider_user_id: 'U123',
-              slack_team_id: 'T123',
-              slack_channel_id: options.slackChannelId ?? 'C123',
-              // Default to a DM so a test that counts sends is counting cards.
-              // The shared-thread notice has its own tests below.
-              slack_conversation_type: options.conversationType ?? 'im',
-            },
-          },
+          metadata:
+            options.taskSource === 'none'
+              ? {}
+              : {
+                  gateway_task_source: {
+                    gateway_channel_id: 'gateway-1',
+                    channel_type: 'slack',
+                    thread_id: THREAD,
+                    provider_user_id: 'U123',
+                    slack_team_id: 'T123',
+                    slack_channel_id: options.slackChannelId ?? 'C123',
+                    // Default to a DM so a test that counts sends is counting cards.
+                    // The shared-thread notice has its own tests below.
+                    slack_conversation_type: options.conversationType ?? 'im',
+                  },
+                },
         }) as unknown as Task,
     },
     sessionRepo: {
@@ -441,6 +446,7 @@ function deliveryHarness(options: HarnessOptions = {}) {
     claimMetadataFlag,
     current: () => message.metadata?.widget?.slack_connect,
     widgetState: () => message.metadata?.widget?.status,
+    dueMarker: () => message.metadata?.widget?.slack_connect_due_at,
     /** Stand in for a second daemon writing the same row mid-delivery. */
     patch: (
       mutate: (
@@ -565,6 +571,72 @@ describe('Slack MCP connect durable delivery', () => {
     await withSecret(() => harness.deliver());
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.current()).toBeUndefined();
+  });
+
+  /**
+   * The mint-time marker is the widget's only durable trigger before a link
+   * exists, so it is stamped from the session's origin — the Task's own
+   * `gateway_task_source` is stripped from every `provider`-carrying read. The
+   * projection is therefore the first thing that can tell a Slack widget from
+   * one it will never post for, and it has to say so durably or the sweep
+   * carries the row for a whole horizon.
+   */
+  it('retires the mint marker for a host task that is not a Slack thread', async () => {
+    const harness = deliveryHarness({
+      delivery: null,
+      taskSource: 'none',
+      widget: { slack_connect_due_at: '2026-09-16T11:59:00.000Z' },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.dueMarker()).toBeUndefined();
+    expect(harness.current()).toBeUndefined();
+  });
+
+  it('retires the mint marker for a widget that resolved before its first card', async () => {
+    const harness = deliveryHarness({
+      delivery: null,
+      widget: {
+        status: 'submitted',
+        result_meta: { attached: true },
+        slack_connect_due_at: '2026-09-16T11:59:00.000Z',
+      },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.dueMarker()).toBeUndefined();
+  });
+
+  it('keeps the mint marker for a refusal an administrator can undo', async () => {
+    // Alignment can be switched back on, and the card the user was promised
+    // has no other durable trigger. Dropping the marker here would make the
+    // widget's Slack face unrecoverable.
+    const harness = deliveryHarness({
+      delivery: null,
+      channel: { config: { align_slack_users: false } },
+      widget: { slack_connect_due_at: '2026-09-16T11:59:00.000Z' },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.dueMarker()).toBe('2026-09-16T11:59:00.000Z');
+  });
+
+  it('hands the due column to the delivery record once a link is issued', async () => {
+    const harness = deliveryHarness({
+      delivery: null,
+      widget: { slack_connect_due_at: '2026-09-16T11:59:00.000Z' },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.current()?.next_repair_at).toEqual(expect.any(String));
+    // Left in place rather than cleared: `slack_connect` now decides the
+    // indexed column outright, so the marker beneath it is inert either way
+    // and one fewer write happens on the hot path.
+    expect(harness.dueMarker()).toBe('2026-09-16T11:59:00.000Z');
   });
 
   it('renders once and then leaves a steady card alone', async () => {

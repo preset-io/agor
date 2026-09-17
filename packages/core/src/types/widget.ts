@@ -109,4 +109,22 @@ export interface WidgetMessageMetadata<
    * ever shown on the canvas.
    */
   slack_connect?: MCPSlackConnectDelivery;
+  /**
+   * The instant the sweep should first look at a Slack-sourced `oauth` widget
+   * that has NOT yet been issued a connect link.
+   *
+   * Stamped at mint, before any link exists, and the only durable trigger the
+   * widget's FIRST Slack card has. Everything else in the lane keys off
+   * `slack_connect`, which `issueMCPOAuthConnectLink` is what creates: without
+   * this, a restart — or any throw before that first issue commits — would
+   * permanently orphan the card, silently, after the user was told to expect
+   * one. The in-process `setImmediate` at mint is an optimization on top of
+   * this, not the trigger.
+   *
+   * Superseded the moment `slack_connect` exists: from then on that record's
+   * `next_repair_at` alone decides when the card is due, so a delivery that
+   * reaches a steady state is not re-swept forever. Both projections land in
+   * the indexed `messages.mcp_slack_connect_due_at` column.
+   */
+  slack_connect_due_at?: string;
 }

@@ -160,6 +160,15 @@ async function mintWidgetMessage(
     contentPreview: string;
     status: WidgetMessageMetadata['status'];
     autoResume: boolean;
+    /**
+     * Stamp the durable "this widget owes a gateway card" marker.
+     *
+     * Only meaningful while the row is `pending`, and only for a widget whose
+     * session came from a gateway thread. The projection is Slack-only today
+     * and clears the marker on its first visit for anything it can never post
+     * — see `GatewayService.deliverMcpSlackConnectCard`.
+     */
+    gatewayCard?: boolean;
   }
 ): Promise<MessageID> {
   await authorizeWidgetMint(
@@ -194,6 +203,13 @@ async function mintWidgetMessage(
           ...(terminal ? { resolved_at: requestedAt } : {}),
           auto_resume: input.autoResume,
           widget_id: widgetId,
+          // Written in the SAME row insert as the widget, so the repair sweep
+          // owns the first card from instant zero. Without it the only trigger
+          // is `queueMcpSlackConnectCard`'s in-process defer, and a restart —
+          // or any throw before the first `issueMCPOAuthConnectLink` commits —
+          // orphans the widget's gateway face permanently and silently, after
+          // the user was told to expect a card.
+          ...(input.gatewayCard && !terminal ? { slack_connect_due_at: requestedAt } : {}),
         } satisfies WidgetMessageMetadata,
       },
     })
@@ -225,8 +241,9 @@ async function mintWidgetMessage(
  *
  * The gateway decides whether there is a thread at all — this tool does not
  * know and should not learn. Silent on every failure for the same reason the
- * store hook is: the widget is minted either way, and the repair sweep owns
- * the card that did not post.
+ * store hook is: the widget row already carries `slack_connect_due_at`, so the
+ * bounded repair sweep owns the card whether or not this defer ever runs. This
+ * is the latency optimization on top of that, not the trigger.
  */
 function queueMcpSlackConnectCard(ctx: McpContext, widgetId: MessageID): void {
   try {
@@ -782,14 +799,21 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         contentPreview: `Widget: oauth (${serverName})`,
         status: 'pending',
         autoResume: true,
+        // Widest signal available at the seam: the Task's own
+        // `gateway_task_source` is stripped from every `provider`-carrying
+        // read (`mcp-recovery-redaction.ts`), so the session's origin is what
+        // this side can see. Deliberately not narrowed to Slack here — the
+        // projection is the thing that knows which platforms it serves, and
+        // it retires the marker on its first look at one it cannot post.
+        gatewayCard: isGatewaySession(session),
       });
 
       // A Slack-originated request also gets a tappable card in the thread it
       // was asked in. Fire-and-forget, after the mint has committed: the card
-      // is a projection of the widget row, so a projection that never runs
-      // costs a card the bounded repair sweep will post, not a lost widget.
-      // Every other platform — and the canvas — is served by the deep link
-      // below, which stays regardless.
+      // is a projection of the widget row, and the row was minted carrying
+      // `slack_connect_due_at`, so a projection that never runs costs latency
+      // — the bounded repair sweep still posts it. Every other platform — and
+      // the canvas — is served by the deep link below, which stays regardless.
       queueMcpSlackConnectCard(ctx, widgetId);
 
       // The card renders in the Agor transcript, which a gateway user is not

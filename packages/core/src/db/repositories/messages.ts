@@ -66,12 +66,23 @@ export class MessageIdentifierIntegrityError extends Error {
 /**
  * The indexed due-work projection of a message's widget delivery record.
  *
- * Only a Slack-delivered `oauth` widget ever sets one. Kept beside the
- * mutation that writes it so there is exactly one place the column's meaning
- * is decided.
+ * Only a Slack-delivered `oauth` widget ever sets one. Kept beside the writes
+ * that use it — `create` and `mutateMetadataLocked` — so there is exactly one
+ * place the column's meaning is decided.
+ *
+ * Two sources, in strict precedence. A delivery record owns the column
+ * outright once it exists, because it is the thing that knows when the card
+ * is next due (and `undefined` there means "nothing to do", which must clear
+ * the column rather than fall back). Before it exists there is no record to
+ * ask, so a Slack-sourced mint stamps `slack_connect_due_at` and the sweep
+ * owns the first card from instant zero instead of depending on one
+ * in-process callback surviving.
  */
 function mcpSlackConnectDueAt(metadata: Message['metadata']): Date | null {
-  const dueAt = metadata?.widget?.slack_connect?.next_repair_at;
+  const widget = metadata?.widget;
+  const dueAt = widget?.slack_connect
+    ? widget.slack_connect.next_repair_at
+    : widget?.slack_connect_due_at;
   if (!dueAt) return null;
   const parsed = new Date(dueAt);
   return Number.isFinite(parsed.getTime()) ? parsed : null;
@@ -218,6 +229,13 @@ export class MessagesRepository {
       content_preview: contentPreview,
       parent_tool_use_id: message.parent_tool_use_id || null,
       data,
+      // Projected from the SANITIZED payload rather than from `message`, for
+      // the same reason the locked mutation projects from what it writes: the
+      // catch above can substitute an omission placeholder, and the column
+      // must never name a repair time the stored JSON does not carry.
+      mcp_slack_connect_due_at: mcpSlackConnectDueAt(
+        (data as { metadata?: Message['metadata'] }).metadata
+      ),
     };
   }
 
