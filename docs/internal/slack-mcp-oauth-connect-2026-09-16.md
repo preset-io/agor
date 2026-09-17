@@ -2,11 +2,11 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                                                                                                                                   |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                        |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                              |
-| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.2). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1; three defects found by the gating review and fixed, §7.1.1. |
+| Section               | State                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                                                                                             |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                                                                                                   |
+| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.4). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1 and again in §7.1.2; three defects found by the gating review and fixed (§7.1.1), one more found by the pre-merge drive (§7.1.3). |
 
 Numbering warning for anyone reading commit messages against this file: the
 branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
@@ -770,7 +770,52 @@ provider also rejects a fabricated authorization code. The discriminating
 observation is whether the authorization-code exchange started at all — before
 the fix it did.
 
-### 7.1.2 The operator kill switch
+### 7.1.2 The pre-merge real-stack drive
+
+§7.1's drive was repeated for the paths the pre-merge pass touched, in the same
+shape — a real daemon (`tsx src/main.ts`), an isolated `HOME`, a migrated
+SQLite database, and **Slack's API and only Slack's API replaced** at
+`WebClient.prototype.apiCall`.
+
+| Case                                 | Result                                                                                                                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Widget carrying ONLY the mint marker | Seeded from a separate process, so no in-process defer ever existed. The sweep found it and posted one card — sealed token in the fragment — plus the one-time shared-thread notice. |
+| Repeat sweep ticks                   | No second post. The delivery record's `next_repair_at` had taken the indexed column over, and the due page was empty.                                                                |
+| Kill switch off                      | Nothing posted, nothing minted, widget left `pending`.                                                                                                                               |
+| Kill switch back on                  | Card posted.                                                                                                                                                                         |
+
+The first row is what found §7.1.2 below: on the first attempt the daemon
+posted nothing, logged nothing, and left the widget untouched.
+
+### 7.1.3 The fourth missing tenant scope
+
+Recorded because it is the same class the gating review found three times
+(§7.1.1), it was found the same way, and it was not found by any suite.
+
+The bounded repair sweep runs under `runWithTenantContext` and nothing else:
+tenant CONTEXT, not a tenant database SCOPE. Every repository in
+`GatewayService` opens its own through `bindRepositoryToTenantUnitOfWork` — but
+the app-variable settings each lane reads on its first line are free functions
+with nothing to open one, so each threw `MissingTenantDatabaseScopeError`
+straight into the sweep's `.catch(() => undefined)`.
+
+- `deliverMcpSlackConnectCard`'s kill-switch read (new, below) — so the durable
+  first-card trigger delivered nothing.
+- `syncMcpSlackRecoveryNotice`'s `isMcpRuntimeRecoveryEnabled` and
+  `getMCPEgressGatewayMode` — **pre-existing**. The recovery lane's repair
+  sweep has never repaired a notice.
+
+`GatewayService.readTenantSetting` opens a short scope for these reads; every
+caller goes through it, including the request-path one that already has a
+scope, because entering an open scope is a no-op and the alternative is one
+site deciding it is special.
+
+What the suites could not see is worth stating: **a test that stubs every
+repository has no guard to trip.** The two regression tests hand the service a
+real scope-guarded handle while leaving the repositories stubbed, which is the
+only shape that reproduces the sweep's.
+
+### 7.1.4 The operator kill switch
 
 `isMCPSlackConnectCardEnabled` (`db/repositories/mcp-slack-connect-settings.ts`)
 gates the projection, the same way `isMcpRuntimeRecoveryEnabled` gates the
