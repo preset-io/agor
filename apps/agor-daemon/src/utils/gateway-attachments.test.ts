@@ -56,6 +56,32 @@ function makeDiscordFile(overrides: Partial<InboundFile> = {}): InboundFile {
   };
 }
 
+async function listLocalStoreArtifacts(root: string): Promise<string[]> {
+  const artifacts: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(child);
+      } else {
+        artifacts.push(path.relative(root, child).split(path.sep).join('/'));
+      }
+    }
+  }
+  await visit(root);
+  return artifacts.sort();
+}
+
+function expectedLocalStoreArtifacts(refs: readonly string[]): string[] {
+  return refs
+    .flatMap((ref) => {
+      const prefix = path.join('objects', ref.slice(4, 6), ref);
+      return [`${prefix}.data`, `${prefix}.json`];
+    })
+    .map((artifact) => artifact.split(path.sep).join('/'))
+    .sort();
+}
+
 describe('isAllowedSlackFileUrl', () => {
   it('allows https URLs on slack.com and its subdomains', () => {
     expect(isAllowedSlackFileUrl('https://files.slack.com/files-pri/T1-F1/download/a.png')).toBe(
@@ -626,7 +652,7 @@ describe('ingestDiscordInboundImages', () => {
     expect(result.uploads[0]).toMatchObject({ mimeType, size: bytes.byteLength });
   });
 
-  it('makes the MIME-based admission limit explicit for corrupt or empty bodies', async () => {
+  it('rejects empty image downloads, cleans them, and continues with a valid image', async () => {
     const emptyBody = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.close();
@@ -652,11 +678,18 @@ describe('ingestDiscordInboundImages', () => {
       store,
     });
 
-    // This narrow ingress policy checks provider MIME, size, and transport
-    // safety. It does not decode image bytes; image usability is established
-    // by the real executor-consumption proof, not this staging unit test.
-    expect(result.failed).toBe(0);
-    expect(result.uploads.map((upload) => upload.size)).toEqual([3, 0]);
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '777777777777777777_corrupt.png',
+      mimeType: 'image/png',
+      size: 3,
+    });
+    const artifacts = await listLocalStoreArtifacts(uploadDir);
+    expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+    expect(artifacts).toEqual(
+      expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
+    );
   });
 
   it('fails closed for unsafe URLs, expired responses, and non-image bodies', async () => {
@@ -775,10 +808,10 @@ describe('ingestDiscordInboundImages', () => {
     expect(result.failed).toBe(1);
     expect(result.uploads).toHaveLength(1);
     expect(result.uploads[0].name).toBe('888888888888888888_second.png');
-    const entries = await fs.readdir(uploadDir, { recursive: true });
-    expect(entries.some((entry) => /\.(?:partial|data|json)$/.test(String(entry)))).toBe(true);
-    expect(entries.some((entry) => /first\.png|777777777777777777/.test(String(entry)))).toBe(
-      false
+    const artifacts = await listLocalStoreArtifacts(uploadDir);
+    expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+    expect(artifacts).toEqual(
+      expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
     );
   });
 
@@ -860,9 +893,10 @@ describe('ingestDiscordInboundImages', () => {
       expect(result.uploads).toHaveLength(1);
       expect(result.uploads[0].name).toBe('888888888888888888_next.png');
       expect(cancelled).toBe(true);
-      const entries = await fs.readdir(uploadDir, { recursive: true });
-      expect(entries.some((entry) => /trickling|777777777777777777/.test(String(entry)))).toBe(
-        false
+      const artifacts = await listLocalStoreArtifacts(uploadDir);
+      expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+      expect(artifacts).toEqual(
+        expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
       );
     } finally {
       vi.useRealTimers();
