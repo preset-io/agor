@@ -2,11 +2,11 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| §3 — the widget lane  | **Implemented.**                                                                                                                   |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                         |
-| §7 — Slack projection | **Implemented.** Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1. |
+| Section               | State                                                                                                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                                                               |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                     |
+| §7 — Slack projection | **Implemented.** Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1; three defects found by the gating review and fixed, §7.1.1. |
 
 Numbering warning for anyone reading commit messages against this file: the
 branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
@@ -358,7 +358,9 @@ month ago and clicked today grants exactly what it would grant if minted today,
 by exactly the person clicking it. The residue is a stale button in a
 scrolled-back transcript, and the common way a card goes stale is already
 handled: a second request for the same (session, server) supersedes the first
-(§3.4.7), as does either short-circuit.
+(§3.4.7), as does either short-circuit. One case supersede cannot reach — a
+post that outlived its delivery lease and left a second, unrecorded Slack row —
+is handled separately; see §7.1.1.
 
 What building it would cost, weighed against that:
 
@@ -656,6 +658,83 @@ edited it instead of posting again.
 
 Every suite above this stubs the connector, which is why none of them saw it —
 the same shape as D5 and the tenant-scope bug.
+
+### 7.1.1 What the gating review found, and what changed
+
+A correctness review run on a different model family blocked merge on three
+defects. All three are fixed; each is worth recording because two of them
+changed a contract this document states.
+
+**The third missing tenant scope in this lane.** `/mcp-servers/oauth-start` is
+on `TENANT_IDENTITY_ONLY_SERVICE_PATHS` — it must not hold an HTTP-long
+transaction across provider I/O — so nothing upstream arms a tenant database
+scope for it, and the binding loader's own scope has closed by the time the
+start lease renews, the failure marker writes, or `oauth_started_at` is
+stamped. Against the production guard each of those threw, and the handler
+reported it as an ordinary start failure: a valid request burned the one-use
+link, made zero provider calls, and left no `oauth_failed_at` for the card to
+render. The fix is structural rather than three more wrappers — the two
+repositories are bound to short tenant units of work
+(`bindRepositoryToTenantUnitOfWork`, the seam `GatewayService` already uses for
+every deferred writer), with the tenant pinned from the request rather than
+read from ambient identity. `loadSlackRecoveryBinding` opened no scope at all
+and is now wrapped like its connect counterpart; the recovery lane's own
+`oauth-start` path had the identical defect.
+
+The failure marker's swallow was separately wrong and is separately fixed. It
+still cannot throw — every caller is already reporting an earlier failure — but
+it logs, and a marked failure now wakes the card instead of waiting for the
+repair sweep. A burned token with no recorded outcome is unrecoverable from
+Slack, because the card is the only affordance the thread has.
+
+**The callback compared the channel to itself.** Callback authorization passed
+the channel's _current_ `provider_config_generation` as the expected one, and
+re-read the server's `config_version` the same way — checks that can never
+fail. Rotating the gateway token mid-flow moved the generation 1 → 2 and the
+provider callback still returned 200 and persisted the grant.
+
+**Contract change:** `MCPSlackOAuthConnectContext` now carries
+`gateway_config_generation` and `mcp_server_config_version`, sealed from the
+connect token at redemption, and the pending-flow envelope requires them. The
+recovery lane already kept both on its durable notice; this makes the connect
+lane say the same thing. An envelope that cannot name what authorized its flow
+is refused rather than opened. The preceding fence also now honours
+`binding_invalidated_at`, which §7.2 makes terminal: a card already repainted
+to say no link can be offered must not let an in-flight flow finish behind it.
+
+**A delivery lease can outlive its post.** The `delivery_claim` is a 30s lease,
+so a stalled first post can return after a second claimant took the expired
+claim, posted the row that counts, and released it. Completion treated an
+absent claim as consent — recording the _other_ card's `slack_message_ts`,
+dropping its own receipt, and overwriting the state the winner had just
+rendered — leaving two messages for one widget, of which repair only ever edits
+one. The stalled post's live Connect button stayed in the thread permanently.
+Completion now requires the claim to still be its own, and a delivery that
+finds it is not the owner retires the message it posted: deleted where the
+connector can, otherwise edited to a buttonless card pointing at the
+authoritative row.
+
+That is the stale card **D7** accepted on the grounds that supersede handles
+it, in the one case supersede cannot see — the orphaned row is not in the
+record. D7's conclusion stands, but its reasoning now depends on this
+reconciliation as well as on supersede.
+
+**How they were verified.** A regression test per defect, each failing on the
+preceding commit: the two scope cases and the two callback-refusal cases use
+the integration harness's opt-in `requireTenantScope` (the guard the earlier
+suites lacked, and the reason three scope defects reached a running daemon),
+and the two orphan cases use the delivery harness. Then the same real-stack
+shape as §7.1 — a real daemon, an isolated home, only Slack's API replaced —
+this time driving `/mcp-servers/oauth-start` through **real discovery and
+Dynamic Client Registration against `mcp.notion.com`**, which §7.1 had not
+done. Run against the pre-fix tree it reproduces all three; against this one
+every case passes.
+
+One thing that run showed and a unit test would not: a non-200 from the
+callback is not by itself evidence of an authority refusal, because the
+provider also rejects a fabricated authorization code. The discriminating
+observation is whether the authorization-code exchange started at all — before
+the fix it did.
 
 ### 7.2 Deliberately not built
 
