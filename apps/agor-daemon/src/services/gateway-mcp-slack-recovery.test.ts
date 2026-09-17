@@ -1,4 +1,10 @@
-import { runWithTenantContext } from '@agor/core/db';
+import {
+  createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
+  getMCPEgressGatewayMode,
+  runMigrations,
+  runWithTenantContext,
+} from '@agor/core/db';
 import type { MCPSlackRecoveryNotice, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -296,6 +302,36 @@ describe('Slack MCP recovery durable delivery', () => {
       rendered_state: 'expired_or_superseded',
     });
     expect(harness.current()?.next_repair_at).toBeUndefined();
+  });
+
+  /**
+   * The bounded repair sweep holds tenant CONTEXT and no tenant database
+   * SCOPE. `syncMcpSlackRecoveryNotice` reads two app-variable settings on its
+   * first line, and neither goes through a repository bound to a tenant unit
+   * of work — so against the production guard both threw
+   * `MissingTenantDatabaseScopeError` into the sweep's `.catch(() =>
+   * undefined)`, and this lane's repair path has never repaired anything.
+   *
+   * A missing task is enough to prove it: the settings are read BEFORE the
+   * task lookup, so the call either gets past them or it does not.
+   */
+  it('reads its settings inside a scope, on a caller that holds only tenant context', async () => {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    await runMigrations(rawDb);
+    const guarded = createTenantScopedDatabaseProxy(rawDb, {
+      requireScope: true,
+      label: 'recovery notice scope guard',
+    });
+    await expect(getMCPEgressGatewayMode(guarded)).rejects.toThrow(/tenant database scope/i);
+
+    const service = new GatewayService(guarded as never, {} as never);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      taskRepo: { findById: async () => null },
+    });
+    await expect(
+      runWithTenantContext('tenant-a', () => service.syncMcpSlackRecoveryNotice('missing-task'))
+    ).resolves.toBeUndefined();
+    await service.stopListeners();
   });
 
   it('retries a terminal projection within a durable window after browser expiry', async () => {
