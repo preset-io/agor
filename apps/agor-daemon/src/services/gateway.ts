@@ -44,6 +44,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -1815,10 +1816,36 @@ export class GatewayService {
     this.mcpSlackOAuthStartClaimTimers.set(notice.notice_id, timer);
   }
 
+  /**
+   * Read an app-variable-backed setting from a caller that may hold tenant
+   * CONTEXT but no tenant database SCOPE.
+   *
+   * `getMCPEgressGatewayMode` and `isMCPSlackConnectCardEnabled` both reach
+   * `app_variables` through a repository, and a repository resolves its tenant
+   * from a database scope. Every other read in this service goes through a
+   * repository bound with `bindRepositoryToTenantUnitOfWork`, which opens one
+   * per call; these two are free functions and so had nothing to open it.
+   *
+   * That mattered most on the bounded repair sweep, which runs under
+   * `runWithTenantContext` alone: both MCP Slack lanes read a setting on their
+   * first line, so both threw `MissingTenantDatabaseScopeError` into a
+   * `.catch(() => undefined)` and the sweep repaired nothing, silently. Found
+   * by driving a real daemon; no suite saw it, because a suite that stubs the
+   * repositories has no guard to trip.
+   *
+   * Entering a scope that is already open is a no-op, so this is also correct
+   * for the request-path callers that already have one.
+   */
+  private async readTenantSetting<T>(read: (db: TenantScopedDatabase) => Promise<T>): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) => read(scoped));
+  }
+
   /** Project authoritative Task recovery into one idempotently editable Slack row. */
   async syncMcpSlackRecoveryNotice(taskId: string): Promise<void> {
-    const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(this.db);
-    const mode = await getMCPEgressGatewayMode(this.db);
+    const { recoveryEnabled, mode } = await this.readTenantSetting(async (db) => ({
+      recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
+      mode: await getMCPEgressGatewayMode(db),
+    }));
     const task = await this.taskRepo.findById(taskId);
     if (!task) return;
     const recovery = task.metadata?.mcp_recovery;
@@ -2271,7 +2298,7 @@ export class GatewayService {
     // stops being repainted, and its link stops being redeemable
     // (`loadMCPOAuthConnectBinding`) — matching the recovery lane, which
     // refuses at both ends on `isMcpRuntimeRecoveryEnabled`.
-    if (!(await isMCPSlackConnectCardEnabled(this.db))) return;
+    if (!(await this.readTenantSetting(isMCPSlackConnectCardEnabled))) return;
     const deps = await this.mcpSlackConnectDeps();
     const binding = await resolveSlackConnectBinding(deps, widgetId);
     const widget = binding.widget;
@@ -2672,7 +2699,7 @@ export class GatewayService {
             this.mcpServerRepo.findById(notice.mcp_server_id),
             this.usersRepo.findById(notice.principal_user_id),
             this.usersRepo.findById(notice.credential_user_id),
-            getMCPEgressGatewayMode(this.db),
+            this.readTenantSetting(getMCPEgressGatewayMode),
           ]);
         const attached = (await this.sessionMcpRepo.listServers(task.session_id, true)).some(
           (candidate) => candidate.mcp_server_id === notice.mcp_server_id

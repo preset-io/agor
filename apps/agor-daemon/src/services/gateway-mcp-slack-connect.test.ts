@@ -8,7 +8,13 @@
  * asked to be visible rather than silent, so each is pinned here directly.
  */
 
-import { runWithTenantContext } from '@agor/core/db';
+import {
+  createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
+  isMCPSlackConnectCardEnabled,
+  runMigrations,
+  runWithTenantContext,
+} from '@agor/core/db';
 import type {
   GatewayChannel,
   MCPServer,
@@ -29,13 +35,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // through a freshly constructed connector rather than the process-local
 // listener, whose token may predate the change. Constructing one needs real
 // credentials, so the test supplies a stand-in and asserts which one was used.
-// The operator kill switch reads one app variable. The projection tests care
-// about what the switch DOES, not about the read; the real read is driven end
-// to end in `register-services.oauth-sqlite.integration.test.ts`.
-const cardProjectionEnabled = vi.hoisted(() => vi.fn(async () => true));
+// The operator kill switch reads one app variable. Most projection tests care
+// about what the switch DOES, not about the read, so the predicate is replaced
+// by `killSwitch.stub` — EXCEPT in the scope-guard test at the bottom of this
+// file, which clears the stub and drives the real read against a real
+// scope-guarded database.
+const killSwitch = vi.hoisted(() => ({ stub: null as null | (() => Promise<boolean>) }));
 vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/db');
-  return { ...actual, isMCPSlackConnectCardEnabled: cardProjectionEnabled };
+  const real = actual.isMCPSlackConnectCardEnabled as (db: unknown) => Promise<boolean>;
+  return {
+    ...actual,
+    isMCPSlackConnectCardEnabled: (db: unknown) => (killSwitch.stub ?? (() => real(db)))(),
+  };
 });
 
 const freshConnectorSend = vi.fn(async () => '1700000000.000002');
@@ -346,6 +358,14 @@ interface HarnessOptions {
   slackChannelId?: string;
   /** `'none'` stands in for a canvas (or non-Slack gateway) host task. */
   taskSource?: 'slack' | 'none';
+  /**
+   * Real, scope-guarded database handle for `this.db`.
+   *
+   * Every repository here is a stub, so nothing in this file trips the tenant
+   * database scope guard by default — which is exactly why the guard has to be
+   * handed in explicitly for the one read that is NOT a repository.
+   */
+  db?: unknown;
 }
 
 function deliveryHarness(options: HarnessOptions = {}) {
@@ -378,7 +398,7 @@ function deliveryHarness(options: HarnessOptions = {}) {
   };
   const claimMetadataFlag = options.claimMetadataFlag ?? vi.fn(async () => true);
 
-  const service = new GatewayService({ run: vi.fn() } as never, {} as never);
+  const service = new GatewayService((options.db ?? { run: vi.fn() }) as never, {} as never);
   Object.assign(service as unknown as Record<string, unknown>, {
     messagesRepo: {
       findById: async (id: MessageID) => (id === WIDGET_ID ? message : null),
@@ -484,7 +504,9 @@ function deliveryHarness(options: HarnessOptions = {}) {
 }
 
 describe('Slack MCP connect durable delivery', () => {
-  beforeEach(() => cardProjectionEnabled.mockResolvedValue(true));
+  beforeEach(() => {
+    killSwitch.stub = async () => true;
+  });
 
   const SECRET = 'connect-card-test-master-secret';
   const withSecret = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -657,7 +679,7 @@ describe('Slack MCP connect durable delivery', () => {
    * config change rather than a revert.
    */
   it('posts nothing at all when the card projection is switched off', async () => {
-    cardProjectionEnabled.mockResolvedValue(false);
+    killSwitch.stub = async () => false;
     const harness = deliveryHarness({ delivery: null });
     await withSecret(() => harness.deliver());
 
@@ -668,7 +690,7 @@ describe('Slack MCP connect durable delivery', () => {
   });
 
   it('stops repainting a card that is already in the thread', async () => {
-    cardProjectionEnabled.mockResolvedValue(false);
+    killSwitch.stub = async () => false;
     const harness = deliveryHarness({
       widget: { status: 'submitted', result_meta: { attached: true } },
       delivery: { slack_message_ts: '1700000000.000002', rendered_state: 'connect_required' },
@@ -677,6 +699,43 @@ describe('Slack MCP connect durable delivery', () => {
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.current()?.rendered_state).toBe('connect_required');
+  });
+
+  /**
+   * The bounded repair sweep runs under `runWithTenantContext` and nothing
+   * else: it holds tenant CONTEXT, not a tenant database SCOPE. Every
+   * repository in this service opens its own through
+   * `bindRepositoryToTenantUnitOfWork`, but the two app-variable settings both
+   * MCP Slack lanes read on their first line are free functions with nothing
+   * to open one — so against the production guard they threw
+   * `MissingTenantDatabaseScopeError` straight into the sweep's
+   * `.catch(() => undefined)`, and the sweep repaired nothing, silently.
+   *
+   * Every other test in this file stubs the repositories, which is exactly why
+   * none of them could see it. This one hands the service a real guarded
+   * handle and clears the kill-switch stub, so the read that broke is the read
+   * under test.
+   */
+  it('reads its settings inside a scope, on a caller that holds only tenant context', async () => {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    await runMigrations(rawDb);
+    const guarded = createTenantScopedDatabaseProxy(rawDb, {
+      requireScope: true,
+      label: 'connect card scope guard',
+    });
+    killSwitch.stub = null;
+    // The bare read is what used to run here. Pinned so this test fails if the
+    // guard is ever relaxed, rather than only if the fix is reverted.
+    await expect(isMCPSlackConnectCardEnabled(guarded as never)).rejects.toThrow(
+      /tenant database scope/i
+    );
+
+    const harness = deliveryHarness({ delivery: null, db: guarded });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).toHaveBeenCalled();
+    expect(harness.current()?.rendered_state).toBe('connect_required');
+    await harness.service.stopListeners();
   });
 
   it('renders once and then leaves a steady card alone', async () => {
