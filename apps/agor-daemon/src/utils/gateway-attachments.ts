@@ -321,23 +321,26 @@ export async function ingestDiscordInboundImages(args: {
         aggregateLimiter.destroy(reason);
       };
       controller.signal.addEventListener('abort', onAbort, { once: true });
+      let stagePromise: Promise<UploadMetadata> | undefined;
+      let sourcePipelinePromise: Promise<void> | undefined;
       try {
-        const [staged] = await Promise.all([
-          store.stage({
-            owner: {
-              tenantId: args.tenantId,
-              sessionId: args.sessionId,
-              branchId: args.branchId,
-              createdBy: args.createdBy,
-            },
-            name: `${file.id}_${file.name}`,
-            mimeType: contentType,
-            provenance: 'gateway-discord',
-            body: aggregateLimiter,
-            sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
-          }),
-          pipeline(source, aggregateLimiter),
-        ]);
+        const currentStagePromise = store.stage({
+          owner: {
+            tenantId: args.tenantId,
+            sessionId: args.sessionId,
+            branchId: args.branchId,
+            createdBy: args.createdBy,
+          },
+          name: `${file.id}_${file.name}`,
+          mimeType: contentType,
+          provenance: 'gateway-discord',
+          body: aggregateLimiter,
+          sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
+        });
+        stagePromise = currentStagePromise;
+        const currentSourcePipelinePromise = pipeline(source, aggregateLimiter);
+        sourcePipelinePromise = currentSourcePipelinePromise;
+        const [staged] = await Promise.all([currentStagePromise, currentSourcePipelinePromise]);
         if (staged.size === 0) {
           await store.delete({
             tenantId: args.tenantId,
@@ -349,6 +352,16 @@ export async function ingestDiscordInboundImages(args: {
         }
         actualTotalBytes += staged.size;
         uploads.push(staged);
+      } catch (error) {
+        const reason = error instanceof Error ? error : new Error(String(error));
+        source.destroy(reason);
+        aggregateLimiter.destroy(reason);
+        await Promise.allSettled(
+          [stagePromise, sourcePipelinePromise].filter(
+            (promise): promise is Promise<UploadMetadata> | Promise<void> => promise !== undefined
+          )
+        );
+        throw error;
       } finally {
         controller.signal.removeEventListener('abort', onAbort);
         source.destroy();

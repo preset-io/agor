@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
-import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
+import type { SessionID, TenantID, UploadRef, UploadStagingStore } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
@@ -80,6 +80,31 @@ function expectedLocalStoreArtifacts(refs: readonly string[]): string[] {
     })
     .map((artifact) => artifact.split(path.sep).join('/'))
     .sort();
+}
+
+function makeDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function storeWithStage(
+  base: LocalUploadStagingStore,
+  stage: UploadStagingStore['stage']
+): UploadStagingStore {
+  return {
+    stage,
+    inspect: base.inspect.bind(base),
+    read: base.read.bind(base),
+    consume: base.consume.bind(base),
+    delete: base.delete.bind(base),
+    cleanupExpired: base.cleanupExpired.bind(base),
+  };
 }
 
 describe('isAllowedSlackFileUrl', () => {
@@ -660,15 +685,15 @@ describe('ingestDiscordInboundImages', () => {
     });
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(makeImageResponse(new Uint8Array([1, 2, 3])))
       .mockResolvedValueOnce(
         new Response(emptyBody, { status: 200, headers: { 'content-type': 'image/jpeg' } })
-      );
+      )
+      .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
 
     const result = await ingestDiscordInboundImages({
       files: [
-        makeDiscordFile({ name: 'corrupt.png' }),
-        makeDiscordFile({ id: '888888888888888888', name: 'empty.jpg', mimetype: 'image/jpeg' }),
+        makeDiscordFile({ name: 'empty.jpg', mimetype: 'image/jpeg' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
       ],
       fetchImpl: fetchImpl as unknown as typeof fetch,
       tenantId,
@@ -681,15 +706,152 @@ describe('ingestDiscordInboundImages', () => {
     expect(result.failed).toBe(1);
     expect(result.uploads).toHaveLength(1);
     expect(result.uploads[0]).toMatchObject({
-      name: '777777777777777777_corrupt.png',
+      name: '888888888888888888_second.png',
       mimeType: 'image/png',
-      size: 3,
+      size: VALID_PNG.byteLength,
     });
     const artifacts = await listLocalStoreArtifacts(uploadDir);
     expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
     expect(artifacts).toEqual(
       expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
     );
+    const dataArtifacts = artifacts.filter((artifact) => artifact.endsWith('.data'));
+    expect(dataArtifacts).toHaveLength(1);
+    expect(await fs.stat(path.join(uploadDir, dataArtifacts[0]!))).toMatchObject({
+      size: VALID_PNG.byteLength,
+    });
+  });
+
+  it('joins deferred failed staging cleanup before continuing to the next attachment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const events: string[] = [];
+    const stageStarted = makeDeferred<void>();
+    const cleanupStarted = makeDeferred<void>();
+    const cleanupFinished = makeDeferred<void>();
+    let firstBodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let stageCalls = 0;
+    const firstBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        firstBodyController = controller;
+        controller.enqueue(VALID_PNG.subarray(0, 4));
+      },
+    });
+    const controlledStore = storeWithStage(store, async (input) => {
+      stageCalls++;
+      if (stageCalls > 1) {
+        events.push('second-stage-started');
+        return store.stage(input);
+      }
+
+      events.push('stage-started');
+      stageStarted.resolve();
+      let cleanupObserved = false;
+      const observeCleanup = () => {
+        if (cleanupObserved) return;
+        cleanupObserved = true;
+        events.push('cleanup-started');
+        cleanupStarted.resolve();
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          channel.port2.close();
+          events.push('cleanup-finished');
+          cleanupFinished.resolve();
+        };
+        channel.port2.postMessage(undefined);
+      };
+      input.body.once('error', observeCleanup);
+      input.body.once('close', observeCleanup);
+      await cleanupFinished.promise;
+      events.push('stage-settled');
+      throw new Error('controlled staging failure');
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(firstBody, { status: 200, headers: { 'content-type': 'image/png' } })
+      )
+      .mockImplementationOnce(async () => {
+        events.push('second-fetch-started');
+        await cleanupFinished.promise;
+        return makeImageResponse(VALID_PNG);
+      });
+
+    const resultPromise = ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ name: 'first.png' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store: controlledStore,
+    });
+
+    await stageStarted.promise;
+    expect(firstBodyController).toBeDefined();
+    firstBodyController!.error(new Error('controlled CDN reset'));
+    await cleanupStarted.promise;
+
+    const result = await resultPromise;
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '888888888888888888_second.png',
+      size: VALID_PNG.byteLength,
+    });
+    expect(events.indexOf('stage-settled')).toBeLessThan(events.indexOf('second-fetch-started'));
+    expect(events.indexOf('cleanup-finished')).toBeLessThan(events.indexOf('second-fetch-started'));
+  });
+
+  it('tears down an open source when staging fails first and continues', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let stageCalls = 0;
+    let sourceCancelled = false;
+    const openBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        sourceCancelled = true;
+      },
+    });
+    const controlledStore = storeWithStage(store, async (input) => {
+      stageCalls++;
+      if (stageCalls === 1) throw new Error('controlled stage-first failure');
+      return store.stage(input);
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(openBody, { status: 200, headers: { 'content-type': 'image/png' } })
+      )
+      .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ name: 'first.png' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store: controlledStore,
+    });
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '888888888888888888_second.png',
+      size: VALID_PNG.byteLength,
+    });
+    expect(stageCalls).toBe(2);
+    expect(sourceCancelled).toBe(true);
   });
 
   it('fails closed for unsafe URLs, expired responses, and non-image bodies', async () => {
