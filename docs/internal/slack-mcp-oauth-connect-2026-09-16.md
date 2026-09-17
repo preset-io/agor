@@ -405,14 +405,20 @@ no provider-side account identity for an MCP grant (`UserMCPOAuthToken` carries
 none), so there is nothing truthful to put in it. §7 may fill it if the
 landing page learns one. It is not derived from anything.
 
-`oauthParamsSchema` is `.strict()`, and the pending path runs
-`oauthParamsSchema.parse` on the params it mints, so no extra field reaches the
-widget row through it. The claim is path-specific: the `already_present`
-short-circuit builds its params with `satisfies OAuthWidgetParams`, which is a
-compile-time check and strips nothing at runtime. Nothing is smuggled there
-either — every field is a literal or a daemon-read value, and the tool's own
-input schema is a `z.strictObject` — but the guarantee on that path comes from
-the daemon constructing the object, not from the schema.
+`oauthParamsSchema` is `.strict()`, and `mintWidgetMessage` runs the registered
+type's `paramsSchema.parse` at the seam (`parseWidgetMintParams`) before the
+row is written, so no extra field reaches a widget row through any mint path.
+
+That used to be path-specific and is worth recording, because the shape of the
+gap is the same one §3.3.1 is about. The pending path parsed its own params;
+the `already_present` short-circuit built them with `satisfies
+OAuthWidgetParams`, which is a compile-time check that strips nothing and
+narrows nothing at runtime — so `.strict()` held on one of this type's two
+mint paths. Nothing was smuggled through the other (every field there is a
+literal or a daemon-read value, and the tool's own input schema is a
+`z.strictObject`), but the guarantee came from the caller rather than from the
+type. Moving the parse onto the seam makes it uniform across all three widget
+types and every future mint path, exactly as the mint gate already was.
 
 ### 5.2 Role floors
 

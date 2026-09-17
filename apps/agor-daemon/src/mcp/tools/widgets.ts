@@ -67,7 +67,11 @@ import {
 } from '../../widgets/gateway-token/index.js';
 import type { OAuthWidgetParams } from '../../widgets/oauth/index.js';
 import { oauthParamsSchema } from '../../widgets/oauth/index.js';
-import { authorizeWidgetMint, type WidgetMintCtx } from '../../widgets/registry.js';
+import {
+  authorizeWidgetMint,
+  parseWidgetMintParams,
+  type WidgetMintCtx,
+} from '../../widgets/registry.js';
 import {
   WIDGET_RESOLUTION_STORE_KEY,
   type WidgetResolutionStore,
@@ -145,10 +149,11 @@ function widgetMintCtx(ctx: McpContext, sessionId: SessionID): WidgetMintCtx {
  *     `startup.ts`). Non-fatal: the widget still renders via the task_id
  *     lookup.
  *
- * It is also where a widget type's own `authorizeMint` gate runs. Putting the
- * gate on the seam every mint passes through — rather than at each call site —
- * is what stops a future minting path (stage 3's Slack projection, a new tool)
- * from silently skipping a precondition it never knew about.
+ * It is also where a widget type's own `paramsSchema` and `authorizeMint` gate
+ * run. Putting both on the seam every mint passes through — rather than at
+ * each call site — is what stops a future minting path from silently skipping
+ * a precondition, or freezing an unvalidated `params` blob onto a row three
+ * surfaces render from.
  */
 async function mintWidgetMessage(
   ctx: McpContext,
@@ -171,10 +176,11 @@ async function mintWidgetMessage(
     gatewayCard?: boolean;
   }
 ): Promise<MessageID> {
+  const params = parseWidgetMintParams(input.widgetType as WidgetType, input.params);
   await authorizeWidgetMint(
     input.widgetType as WidgetType,
     widgetMintCtx(ctx, input.sessionId),
-    input.params
+    params
   );
   const requestedAt = new Date().toISOString();
   const terminal = input.status !== 'pending';
@@ -197,7 +203,7 @@ async function mintWidgetMessage(
         widget: {
           widget_type: input.widgetType,
           schema_version: 1,
-          params: input.params,
+          params,
           status: input.status,
           requested_at: requestedAt,
           ...(terminal ? { resolved_at: requestedAt } : {}),
