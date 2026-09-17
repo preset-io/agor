@@ -73,6 +73,36 @@ function fixture() {
 }
 
 describe('worker co-issued managed use authorization', () => {
+  it.each(['before final hop', 'during durable validation'] as const)(
+    'rejects original signed expiry crossed by a short suspend %s, even while evidence is fresh',
+    async (stage) => {
+      const { input } = fixture();
+      let elapsedMsUpperBound = 0;
+      const clock = new ManagedAuthorityClock(
+        () => ({
+          utcMs: input.expected.expires_at - 6_000,
+          monotonicMs: 0,
+          combinedUncertaintyMs: 5_000,
+          safe: true,
+          elapsedMsUpperBound,
+        }),
+        () => 0
+      );
+      const exact = { ...input, clock };
+      await expect(verifyManagedUseAuthorization(exact)).resolves.toEqual(input.expected);
+      if (stage === 'before final hop') elapsedMsUpperBound = 2_000;
+      else
+        exact.assertNotInvalidated = async () => {
+          elapsedMsUpperBound = 2_000;
+        };
+      // Two seconds is inside the five-second health window. Its elapsed UTC
+      // must still count against the ORIGINAL artifact before a sender can use it.
+      await expect(verifyManagedUseAuthorization(exact)).rejects.toMatchObject({
+        code: 'managed_authority_expired',
+      });
+    }
+  );
+
   it.each([120_000, 2 * 60 * 60_000])(
     'uses the original minimum deadline for a %i ms provider token, including after restart',
     async (tokenLifetime) => {
