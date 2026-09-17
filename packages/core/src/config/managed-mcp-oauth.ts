@@ -26,6 +26,7 @@ export const MANAGED_MCP_OAUTH_CONFIG_KEYS = [
   'cell_evidence_path',
   'clock_health_path',
   'contract_sha256',
+  'fresh_pilot_enrollment_sha256',
 ] as const satisfies readonly (keyof AgorManagedMCPOAuthSettings)[];
 
 /** Syntax only. Valid configuration does not attest a compatible admitted cell cohort. */
@@ -111,9 +112,20 @@ export function validateManagedMCPOAuthConfig(
   if (value.contract_sha256 !== undefined && !/^[a-f0-9]{64}$/.test(value.contract_sha256)) {
     throw new Error('Managed MCP OAuth requires an exact SHA-256 contract manifest');
   }
+  if (
+    value.fresh_pilot_enrollment_sha256 !== undefined &&
+    (typeof value.fresh_pilot_enrollment_sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(value.fresh_pilot_enrollment_sha256) ||
+      value.environment !== 'staging' ||
+      value.region !== 'us-west-2')
+  ) {
+    throw new Error('Managed MCP OAuth fresh pilot requires an exact staging us-west-2 enrollment');
+  }
   if (value.enabled || value.revocation) {
     for (const key of MANAGED_MCP_OAUTH_CONFIG_KEYS.filter(
-      (key) => !(MANAGED_MCP_OAUTH_FLAGS as readonly string[]).includes(key)
+      (key) =>
+        key !== 'fresh_pilot_enrollment_sha256' &&
+        !(MANAGED_MCP_OAUTH_FLAGS as readonly string[]).includes(key)
     )) {
       if (!value[key]) throw new Error(`Managed MCP OAuth vending or cleanup requires ${key}`);
     }

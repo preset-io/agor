@@ -2,8 +2,13 @@ import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { type AgorConfig, MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256 } from '@agor/core/config';
 import { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
+import { mcpOAuthFreshPilotEnrollmentDigest } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import {
+  SYNTHETIC_PILOT_POD_UID,
+  syntheticFreshPilotEnrollment,
+} from '../services/test-support/managed-pilot-enrollment.js';
 import {
   loadManagedOAuthCleanupDeployment,
   loadManagedOAuthDeployment,
@@ -52,6 +57,45 @@ let evidence: Record<string, unknown>;
 let keyring: Record<string, unknown>;
 let baseMono: number;
 const nowMono = () => Number(process.hrtime.bigint()) / 1_000_000;
+
+function freshPilotFixture() {
+  const enrollment = syntheticFreshPilotEnrollment(config);
+  const podUid = SYNTHETIC_PILOT_POD_UID;
+  evidence = {
+    ...evidence,
+    pre_gateway_executors_terminated: false,
+    fresh_pilot: enrollment,
+    replicas: [
+      {
+        replica_id: podUid,
+        release_sha: options.releaseSha,
+        protocol_version: 1,
+        binding_version: 1,
+        enforcement_version: 1,
+        schema_digest: options.schemaDigest,
+        gateway_mode: 'enforced',
+      },
+    ],
+  };
+  health.worker_uncertainty_ms = enrollment.issuer_uncertainty_ms;
+  return {
+    enrollment,
+    config: {
+      ...config,
+      managed_mcp_oauth: {
+        ...config.managed_mcp_oauth,
+        fresh_pilot_enrollment_sha256: mcpOAuthFreshPilotEnrollmentDigest(enrollment),
+      },
+    },
+    options: {
+      ...options,
+      replicaId: podUid,
+      podUid,
+      podNamespace: enrollment.namespace,
+      runtimeConfigDigest: enrollment.runtime_config_digest,
+    },
+  };
+}
 beforeEach(() => {
   vi.clearAllMocks();
   baseMono = nowMono();
@@ -106,6 +150,95 @@ beforeEach(() => {
   });
 });
 describe('managed production deployment loader', () => {
+  it('admits only the pinned fresh lineage and actual protected Pod identity without claiming legacy termination', async () => {
+    const pilot = freshPilotFixture();
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    expect(loaded.getEvidence().pre_gateway_executors_terminated).toBe(false);
+    expect(loaded.getEvidence().fresh_pilot).toEqual(pilot.enrollment);
+    expect(Object.isFrozen(loaded.getEvidence().fresh_pilot)).toBe(true);
+    expect(loaded.clock.latestUtcMs()).toBeGreaterThanOrEqual(utc + 2600);
+    evidence = { ...evidence, valid_until: utc + 90_000 };
+    expect(loaded.getEvidence().valid_until).toBe(utc + 90_000);
+  });
+
+  it.each([
+    { podUid: undefined },
+    { podUid: 'reusable-hostname' },
+    { podNamespace: undefined },
+    { podNamespace: 'foreign-namespace' },
+    { replicaId: 'other-diagnostic-label' },
+    { runtimeConfigDigest: undefined },
+    { runtimeConfigDigest: '9'.repeat(64) },
+  ])('rejects pilot identity substitution or diagnostic fallback: %j', async (change) => {
+    const pilot = freshPilotFixture();
+    await expect(
+      loadManagedOAuthDeployment(pilot.config, { ...pilot.options, ...change })
+    ).rejects.toThrow('unavailable or unsafe');
+  });
+
+  it('rejects caller-style freshness, missing deployment pin, and legacy fallback on a pinned pilot', async () => {
+    const legacy = structuredClone(evidence);
+    const pilot = freshPilotFixture();
+    await expect(loadManagedOAuthDeployment(config, pilot.options)).rejects.toThrow();
+    evidence = { ...legacy, fresh: true };
+    await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow();
+    evidence = legacy;
+    await expect(loadManagedOAuthDeployment(pilot.config, options)).rejects.toThrow();
+  });
+
+  it.each([
+    ['enrollment_id', '77777777-7777-4777-8777-777777777777'],
+    ['cell_birth_id', '77777777-7777-4777-8777-777777777777'],
+    ['database_birth_id', '77777777-7777-4777-8777-777777777777'],
+    ['namespace_uid', '77777777-7777-4777-8777-777777777777'],
+    ['admission_policy_uid', '77777777-7777-4777-8777-777777777777'],
+    ['admission_policy_digest', '9'.repeat(64)],
+    ['runtime_image', `registry.example/old@sha256:${'9'.repeat(64)}`],
+    ['worker_image', `registry.example/old@sha256:${'9'.repeat(64)}`],
+    ['executor_image', `registry.example/old@sha256:${'9'.repeat(64)}`],
+    ['runtime_config_digest', '9'.repeat(64)],
+    ['worker_config_digest', '9'.repeat(64)],
+    ['database_binding_digest', '9'.repeat(64)],
+    ['source_policy_digest', '9'.repeat(64)],
+  ])(
+    'latches closed when admitted pilot %s changes, even if restored later',
+    async (field, value) => {
+      const pilot = freshPilotFixture();
+      const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+      evidence = { ...evidence, fresh_pilot: { ...pilot.enrollment, [field]: value } };
+      expect(() => loaded.getEvidence()).toThrow();
+      evidence = { ...evidence, fresh_pilot: pilot.enrollment };
+      expect(() => loaded.getEvidence()).toThrow();
+    }
+  );
+
+  it('does not downgrade an admitted pilot to legacy termination evidence', async () => {
+    const pilot = freshPilotFixture();
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    evidence = { ...evidence, fresh_pilot: undefined, pre_gateway_executors_terminated: true };
+    expect(() => loaded.getEvidence()).toThrow();
+    evidence = {
+      ...evidence,
+      fresh_pilot: pilot.enrollment,
+      pre_gateway_executors_terminated: false,
+    };
+    expect(() => loaded.getEvidence()).toThrow();
+  });
+
+  it.each([0, 1, 2499, 2501])(
+    'refuses a pilot monitor substituting the admitted issuer cap with %i',
+    async (cap) => {
+      const pilot = freshPilotFixture();
+      health.worker_uncertainty_ms = cap;
+      await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow();
+      expect(readManagedDeploymentFile).not.toHaveBeenCalledWith(
+        '/owned/sender.pem',
+        expect.anything(),
+        expect.anything()
+      );
+    }
+  );
+
   it('is off before any key/clock/evidence access', async () => {
     expect(await loadManagedOAuthDeployment({}, options)).toBeNull();
     expect(

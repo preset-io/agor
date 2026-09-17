@@ -26,6 +26,36 @@ const configured: AgorManagedMCPOAuthSettings = {
 };
 
 describe('managed OAuth deployment configuration', () => {
+  it('accepts only a staging us-west-2 immutable pilot pin, never an enrollment flag', () => {
+    expect(() =>
+      validateManagedMCPOAuthConfig({
+        ...configured,
+        fresh_pilot_enrollment_sha256: 'b'.repeat(64),
+      })
+    ).not.toThrow();
+    for (const value of [true, '', 'fresh', 'B'.repeat(64), 'b'.repeat(63), `${'b'.repeat(64)} `]) {
+      expect(() =>
+        validateManagedMCPOAuthConfig({
+          ...configured,
+          fresh_pilot_enrollment_sha256: value,
+        } as AgorManagedMCPOAuthSettings)
+      ).toThrow('fresh pilot requires');
+    }
+    for (const environment of ['production', undefined] as const) {
+      expect(() =>
+        validateManagedMCPOAuthConfig({
+          ...configured,
+          environment,
+          fresh_pilot_enrollment_sha256: 'b'.repeat(64),
+        })
+      ).toThrow('fresh pilot requires');
+    }
+    const pinned = { ...configured, enabled: false, fresh_pilot_enrollment_sha256: 'b'.repeat(64) };
+    for (const flag of MANAGED_MCP_OAUTH_FLAGS.filter((flag) => flag !== 'enabled')) {
+      expect(managedMCPOAuthOperationEnabled({ managed_mcp_oauth: pinned }, flag)).toBe(false);
+    }
+  });
+
   it('requires full wiring for cleanup independently of vending', () => {
     expect(() => validateManagedMCPOAuthConfig({ enabled: false, revocation: true })).toThrow();
     expect(() =>

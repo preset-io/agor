@@ -863,6 +863,108 @@ export const McpOAuthAuthorityResponseSchema = z.strictObject({
 });
 export type McpOAuthAuthorityRequest = z.infer<typeof McpOAuthAuthorityRequestSchema>;
 
+/** Fresh first-activation pilot provenance. Values are independently bound to
+ * Cloud birth records and immutable admission, NOT caller-supplied freshness.
+ * No claim that a termination action occurred is made for an empty lineage. */
+export const McpOAuthFreshPilotEnrollmentSchema = z.strictObject({
+  version: z.literal(1),
+  environment: z.literal('staging'),
+  region: z.literal('us-west-2'),
+  enrollment_id: z.string().uuid(),
+  cell_birth_id: z.string().uuid(),
+  database_birth_id: z.string().uuid(),
+  namespace: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/),
+  namespace_uid: z.string().uuid(),
+  admission_policy_uid: z.string().uuid(),
+  admission_policy_digest: McpOAuthDigestSchema,
+  runtime_image: z
+    .string()
+    .max(512)
+    .regex(/^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
+  worker_image: z
+    .string()
+    .max(512)
+    .regex(/^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
+  executor_image: z
+    .string()
+    .max(512)
+    .regex(/^[A-Za-z0-9./:_-]+@sha256:[a-f0-9]{64}$/),
+  runtime_config_digest: McpOAuthDigestSchema,
+  worker_config_digest: McpOAuthDigestSchema,
+  database_binding_digest: McpOAuthDigestSchema,
+  source_policy_digest: McpOAuthDigestSchema,
+  issuer_uncertainty_ms: z.literal(2500),
+});
+export type McpOAuthFreshPilotEnrollment = z.infer<typeof McpOAuthFreshPilotEnrollmentSchema>;
+
+/** Canonical JSON for pilot artifact digests: recursively sort object keys by
+ * ECMAScript code-unit order, preserve arrays and string bytes, encode finite
+ * numbers with JSON.stringify. Only plain JSON data is accepted; never omit an
+ * undefined/function/symbol value as JSON.stringify ordinarily would. */
+function pilotCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string')
+    return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (Object.keys(value).length !== value.length) throw new Error('Invalid pilot JSON');
+    return `[${value.map(pilotCanonicalJson).join(',')}]`;
+  }
+  if (
+    value &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
+    if (Reflect.ownKeys(value).length !== Object.keys(value).length)
+      throw new Error('Invalid pilot JSON');
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => {
+        const d = Object.getOwnPropertyDescriptor(value, key);
+        if (!d || !('value' in d)) throw new Error('Invalid pilot JSON');
+        return `${JSON.stringify(key)}:${pilotCanonicalJson(d.value)}`;
+      })
+      .join(',')}}`;
+  }
+  throw new Error('Invalid pilot JSON');
+}
+/** Domain-separated U32BE length-prefix hash of the complete strict enrollment.
+ * Parsing validates but does not authorize any of its provenance claims. */
+export function mcpOAuthFreshPilotEnrollmentDigest(value: unknown): string {
+  return mcpOAuthSha256(
+    mcpOAuthLengthPrefix([
+      'agor-mcp-oauth-fresh-pilot-enrollment-v1',
+      pilotCanonicalJson(McpOAuthFreshPilotEnrollmentSchema.parse(value)),
+    ])
+  );
+}
+/** Hash the complete raw validated immutable startup JSON configuration, omitting ONLY
+ * managed_mcp_oauth.fresh_pilot_enrollment_sha256 to break its self-reference.
+ * No other redaction/defaulting/projection is allowed here. Capture BEFORE
+ * environment expansion, defaults, discovered packages or boot-generated IDs.
+ * This is the entire parsed source document, not a hand-picked YAML subset.
+ * Admission separately binds every environment value/SecretRef, mount and image
+ * and forbids mutable overrides. Never hash/expose runtime-expanded secrets. */
+export function mcpOAuthFreshPilotRuntimeConfigDigest(value: unknown): string {
+  const canonical = pilotCanonicalJson(value);
+  const projected = JSON.parse(canonical) as Record<string, unknown>;
+  if (!projected || Array.isArray(projected) || typeof projected !== 'object')
+    throw new Error('Invalid pilot config');
+  const managed = projected.managed_mcp_oauth;
+  if (!managed || Array.isArray(managed) || typeof managed !== 'object')
+    throw new Error('Invalid pilot config');
+  const fields = managed as Record<string, unknown>;
+  if (Object.hasOwn(fields, 'fresh_pilot_enrollment_sha256')) {
+    McpOAuthDigestSchema.parse(fields.fresh_pilot_enrollment_sha256);
+    delete fields.fresh_pilot_enrollment_sha256;
+  }
+  return mcpOAuthSha256(
+    mcpOAuthLengthPrefix([
+      'agor-mcp-oauth-fresh-pilot-runtime-config-v1',
+      pilotCanonicalJson(projected),
+    ])
+  );
+}
+
 /** Nonsecret, externally attested cohort evidence. Cell flags/version strings are insufficient. */
 export const McpOAuthCellEvidenceSchema = z
   .strictObject({
@@ -889,7 +991,8 @@ export const McpOAuthCellEvidenceSchema = z
       .min(1)
       .max(100),
     expected_replica_count: z.number().int().min(1).max(100),
-    pre_gateway_executors_terminated: z.literal(true),
+    pre_gateway_executors_terminated: z.boolean(),
+    fresh_pilot: McpOAuthFreshPilotEnrollmentSchema.optional(),
     attestation_digest: McpOAuthDigestSchema,
     approval_reference: McpOAuthIdSchema,
     observed_at: McpOAuthTimeSchema,
@@ -897,6 +1000,10 @@ export const McpOAuthCellEvidenceSchema = z
   })
   .refine(
     (value) =>
+      (value.fresh_pilot
+        ? value.pre_gateway_executors_terminated === false &&
+          value.replicas.every((replica) => z.string().uuid().safeParse(replica.replica_id).success)
+        : value.pre_gateway_executors_terminated === true) &&
       value.replicas.length === value.expected_replica_count &&
       new Set(value.replicas.map((replica) => replica.replica_id)).size === value.replicas.length &&
       value.replicas.every(

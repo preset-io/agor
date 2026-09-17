@@ -43,6 +43,10 @@ export async function createManagedOAuthServices(input: {
   config: AgorConfig;
   releaseSha: string;
   replicaId: string;
+  /** Deployment-injected downward-API identity, not request/session metadata. */
+  podUid?: string;
+  podNamespace?: string;
+  runtimeConfigDigest?: string;
   externalLaunchProvider: ResolvedExternalLaunchProvider;
 }) {
   if (input.config.managed_mcp_oauth?.enabled !== true) return null;
@@ -61,6 +65,9 @@ export async function createManagedOAuthServices(input: {
     releaseSha: input.releaseSha,
     schemaDigest,
     replicaId: input.replicaId,
+    podUid: input.podUid,
+    podNamespace: input.podNamespace,
+    runtimeConfigDigest: input.runtimeConfigDigest,
     externalLaunchProvider: input.externalLaunchProvider,
   });
   if (!deployment) return null;

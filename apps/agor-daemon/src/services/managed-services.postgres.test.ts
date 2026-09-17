@@ -30,9 +30,11 @@ import {
   MCP_OAUTH_ROUTES,
   type MCPCatalogEntry,
   type MCPServer,
+  type McpOAuthFreshPilotEnrollment,
   type McpOAuthOwner,
   McpOAuthSenderClaimsSchema,
   mcpOAuthEgressAudience,
+  mcpOAuthFreshPilotEnrollmentDigest,
   mcpOAuthReceiptAudience,
   mcpOAuthSha256,
   type UserID,
@@ -52,6 +54,10 @@ import {
   createManagedOAuthServices,
   type ManagedOAuthServices,
 } from './mcp-oauth-managed-composition';
+import {
+  SYNTHETIC_PILOT_POD_UID,
+  syntheticFreshPilotEnrollment,
+} from './test-support/managed-pilot-enrollment';
 
 // This sandbox mounts / as unmapped uid 65534. Normalize ONLY that test mount's
 // owner observation; retain the real deployment reader's path/mode/size/key checks.
@@ -95,9 +101,11 @@ const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const incarnation = projection.valid.capabilities.recovery_incarnation;
 const issuer = 'https://worker.example/';
 
-describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
-  'registered managed production composition on owned nonowner PostgreSQL',
-  () => {
+describe
+  .skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')
+  .each(['legacy', 'fresh-pilot'] as const)(
+  'registered managed production composition on owned nonowner PostgreSQL: %s',
+  (admissionKind) => {
     let owned: OwnedPostgres;
     let directory: string;
     let monitor: ReturnType<typeof setInterval>;
@@ -107,6 +115,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
     let userId: UserID;
     let otherId: UserID;
     let config: AgorConfig;
+    let freshPilot: McpOAuthFreshPilotEnrollment | undefined;
     let callbackReady = false;
     let workerUnavailable = false;
     let publish: () => void;
@@ -141,7 +150,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
             monotonic_ms: Number(process.hrtime.bigint()) / 1e6,
             utc_ms: now,
             local_uncertainty_ms: 1,
-            worker_uncertainty_ms: 1,
+            worker_uncertainty_ms: freshPilot?.issuer_uncertainty_ms ?? 1,
             synchronized: true,
           })
         );
@@ -158,7 +167,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
             enforcement_version: 1,
             replicas: [
               {
-                replica_id: 'replica',
+                replica_id: freshPilot ? SYNTHETIC_PILOT_POD_UID : 'replica',
                 release_sha: 'a'.repeat(40),
                 schema_digest: digest,
                 protocol_version: 1,
@@ -168,7 +177,8 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
               },
             ],
             expected_replica_count: 1,
-            pre_gateway_executors_terminated: true,
+            pre_gateway_executors_terminated: !freshPilot,
+            ...(freshPilot ? { fresh_pilot: freshPilot } : {}),
             attestation_digest: 'c'.repeat(64),
             approval_reference: 'synthetic-only',
             observed_at: now - 1,
@@ -176,8 +186,6 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           })
         );
       };
-      publish();
-      monitor = setInterval(publish, 100);
       write('sender.pem', pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString());
       write(
         'keys.json',
@@ -214,6 +222,15 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           contract_sha256: MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256,
         },
       };
+      if (admissionKind === 'fresh-pilot') {
+        // Declared TEST operator provenance only; real loader/files, actual
+        // schema/role, composition, repositories and signed-use checks remain.
+        freshPilot = syntheticFreshPilotEnrollment(config);
+        config.managed_mcp_oauth!.fresh_pilot_enrollment_sha256 =
+          mcpOAuthFreshPilotEnrollmentDigest(freshPilot);
+      }
+      publish();
+      monitor = setInterval(publish, 100);
       vi.mocked(safeOutboundFetch).mockImplementation(async (url, options) => {
         await options?.assertCurrent?.();
         const target = new URL(String(url));
@@ -344,7 +361,10 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
         db,
         config,
         releaseSha: 'a'.repeat(40),
-        replicaId: 'replica',
+        replicaId: freshPilot ? SYNTHETIC_PILOT_POD_UID : 'replica',
+        podUid: freshPilot ? SYNTHETIC_PILOT_POD_UID : undefined,
+        podNamespace: freshPilot?.namespace,
+        runtimeConfigDigest: freshPilot?.runtime_config_digest,
         externalLaunchProvider: {
           enabled: true,
           providerId: 'cloud',

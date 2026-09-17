@@ -11,6 +11,7 @@ import {
   MCP_OAUTH_LIMITS,
   McpOAuthCellEvidenceSchema,
   McpOAuthIdSchema,
+  mcpOAuthFreshPilotEnrollmentDigest,
   mcpOAuthParseJson,
 } from '@agor/core/types';
 import { z } from 'zod';
@@ -101,7 +102,12 @@ function loadSenderMaterial(config: AgorConfig, externalLaunchProvider: Identity
         )
       );
       const combined = sample.local_uncertainty_ms + sample.worker_uncertainty_ms;
-      if (sample.boot_id !== bootId || combined > MCP_OAUTH_LIMITS.use_clock_allowance_ms)
+      if (
+        sample.boot_id !== bootId ||
+        combined > MCP_OAUTH_LIMITS.use_clock_allowance_ms ||
+        (settings.fresh_pilot_enrollment_sha256 !== undefined &&
+          sample.worker_uncertainty_ms !== MCP_OAUTH_LIMITS.use_clock_allowance_ms / 2)
+      )
         return null;
       return {
         utcMs: sample.utc_ms,
@@ -183,6 +189,11 @@ export async function loadManagedOAuthDeployment(
     releaseSha: string;
     schemaDigest: string;
     replicaId: string;
+    /** Must come from the admission-protected downward API, never a hostname fallback. */
+    podUid?: string;
+    podNamespace?: string;
+    /** Hash captured from the validated startup configuration at the trusted entrypoint. */
+    runtimeConfigDigest?: string;
     /** The daemon's already resolved, retained external-launch provider. */
     externalLaunchProvider: Pick<
       ResolvedExternalLaunchProvider,
@@ -206,6 +217,15 @@ export async function loadManagedOAuthDeployment(
     )
       throw new Error();
     McpOAuthIdSchema.parse(options.replicaId);
+    if (
+      settings.fresh_pilot_enrollment_sha256 !== undefined &&
+      (!z.uuid().safeParse(options.podUid).success ||
+        options.replicaId !== options.podUid ||
+        typeof options.podNamespace !== 'string' ||
+        !options.podNamespace ||
+        !/^[a-f0-9]{64}$/.test(options.runtimeConfigDigest ?? ''))
+    )
+      throw new Error();
     const { identity, clock, sender } = loadSenderMaterial(config, options.externalLaunchProvider);
     const rawKeys = KeyringSchema.parse(
       mcpOAuthParseJson(
@@ -239,6 +259,10 @@ export async function loadManagedOAuthDeployment(
       releaseSha: options.releaseSha,
       schemaDigest: options.schemaDigest,
       replicaId: options.replicaId,
+      pilotDigest: settings.fresh_pilot_enrollment_sha256,
+      podUid: options.podUid,
+      podNamespace: options.podNamespace,
+      runtimeConfigDigest: options.runtimeConfigDigest,
     });
     let cohortIdentity: string | undefined;
     let cohortChanged = false;
@@ -256,7 +280,17 @@ export async function loadManagedOAuthDeployment(
           evidence.cell_id !== expected.cellId ||
           evidence.release_sha !== expected.releaseSha ||
           evidence.schema_digest !== expected.schemaDigest ||
-          !evidence.replicas.some((replica) => replica.replica_id === expected.replicaId)
+          !evidence.replicas.some((replica) => replica.replica_id === expected.replicaId) ||
+          // The pin is deployment-owned. A syntactically valid file is not
+          // enrollment proof and cannot opt a legacy cell into the pilot.
+          Boolean(evidence.fresh_pilot) !== Boolean(expected.pilotDigest) ||
+          (evidence.fresh_pilot &&
+            (mcpOAuthFreshPilotEnrollmentDigest(evidence.fresh_pilot) !== expected.pilotDigest ||
+              evidence.fresh_pilot.environment !== settings.environment ||
+              evidence.fresh_pilot.region !== settings.region ||
+              evidence.fresh_pilot.namespace !== expected.podNamespace ||
+              evidence.fresh_pilot.runtime_config_digest !== expected.runtimeConfigDigest ||
+              expected.podUid !== expected.replicaId))
         ) {
           cohortChanged = true;
           throw new Error();
@@ -269,6 +303,7 @@ export async function loadManagedOAuthDeployment(
           evidence.release_sha,
           evidence.schema_digest,
           evidence.replicas.map((replica) => replica.replica_id).sort(),
+          evidence.fresh_pilot ? mcpOAuthFreshPilotEnrollmentDigest(evidence.fresh_pilot) : null,
         ]);
         if (cohortIdentity !== undefined && cohortIdentity !== identity) {
           cohortChanged = true;
@@ -277,6 +312,7 @@ export async function loadManagedOAuthDeployment(
         cohortIdentity ??= identity;
         for (const replica of evidence.replicas) Object.freeze(replica);
         Object.freeze(evidence.replicas);
+        if (evidence.fresh_pilot) Object.freeze(evidence.fresh_pilot);
         return Object.freeze(evidence);
       } catch {
         throw new ManagedDeploymentError();

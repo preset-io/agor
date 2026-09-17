@@ -35,6 +35,8 @@ export interface AgorManagedMCPOAuthSettings {
   clock_health_path?: string;
   /** Exact reviewed companion contract artifact, not main/latest. */
   contract_sha256?: string;
+  /** Immutable fresh-cell enrollment pin installed by the deployment authority, not a freshness flag. */
+  fresh_pilot_enrollment_sha256?: string;
 }
 
 /** Deployment-owned agentic-tool package selection. */

@@ -74,6 +74,7 @@ import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
+import { captureManagedOAuthPilotStartup } from './mcp-egress/managed-pilot-startup.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import {
   createDaemonMetrics,
@@ -204,6 +205,10 @@ async function startDaemonWithOwnedMetrics(
   // Programmatic startup must cross the same untrusted config boundary as
   // YAML before environment projection reads nested scalar values.
   assertValidRawConfig(config);
+  const managedOAuthPilotStartup = captureManagedOAuthPilotStartup(config, {
+    AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
+    AGOR_POD_NAMESPACE: process.env.AGOR_POD_NAMESPACE,
+  });
 
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
@@ -856,6 +861,7 @@ async function startDaemonWithOwnedMetrics(
       config: effectiveConfig,
       releaseSha: DAEMON_BUILD_INFO.sha,
       replicaId: distributedWorkIdentity.instanceId,
+      ...managedOAuthPilotStartup,
       externalLaunchProvider,
     })) ?? undefined;
   const services = await registerServices({

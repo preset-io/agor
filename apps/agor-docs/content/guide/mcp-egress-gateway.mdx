@@ -295,6 +295,7 @@ managed_mcp_oauth:
   cell_evidence_path: /run/agor-evidence/cell.json
   clock_health_path: /run/agor-clock/health.json
   # contract_sha256: exact source_sha256 from the reviewed source-pin.json
+  # fresh_pilot_enrollment_sha256: deployment-installed immutable enrollment digest
 ```
 
 The sender key is a workload RS256 key, **not a provider credential**. Its
@@ -311,12 +312,57 @@ lifetime; keyring rotation requires a coordinated restart.
 
 The cohort file must match canonical `McpOAuthCellEvidenceSchema`, including
 all expected replicas, the local release/schema/replica identity, enforced
-mediation, independent pre-gateway-executor termination evidence, approval
-reference and attestation digest. A reviewed deployment attestor must refresh
+mediation, approval reference and attestation digest. The legacy admission path
+requires independent pre-gateway-executor termination evidence. A reviewed deployment attestor must refresh
 it before its at-most-120-second validity expires. The getter reads fresh
 attestation, but does not silently accept a different cell authority epoch,
 recovery incarnation or replica cohort after startup. Reinitialization requires
 a new coordinated admission. An expired/missing/mixed cohort fails closed.
+
+### Dedicated fresh-cell sandbox pilot
+
+The fresh-cell path is restricted to **staging in `us-west-2`**, and does not
+authorize adopting an existing cell, restored database, namespace, or executor
+cohort. It is not a production rollout or a legacy migration shortcut.
+
+Its `fresh_pilot` evidence binds independently established cell/database birth
+identities, namespace UID, immutable admission policy, compatible runtime,
+worker and executor images, configuration/database bindings, and clock source
+policy. `fresh_pilot_enrollment_sha256` pins the entire canonical enrollment in
+deployment-owned configuration. Neither this digest alone nor a caller's
+`fresh: true` is enrollment proof. The trusted producer must establish the
+underlying provenance and enforce admission **before credential-bearing
+workloads run**. Operators must not construct a healthy evidence file by hand.
+The runtime configuration digest covers the complete validated, parsed source
+configuration before environment/default expansion, omitting only the
+enrollment-pin field to avoid a hash self-reference. The runtime captures it
+before injecting secrets or generating per-boot diagnostic IDs. Admission must
+separately pin **all** environment values, SecretRefs, mounts, and images; a
+matching configuration-file digest alone does not establish those bindings.
+The observer does not receive daemon master/JWT secrets to compute this hash.
+
+The runtime compares the enrollment to the protected downward-API values
+`AGOR_DAEMON_INSTANCE_ID` (Pod UID, including single-replica deployments) and
+`AGOR_POD_NAMESPACE` (namespace name). A hostname fallback is not accepted for
+the pilot. Missing or mismatched pins, a changed birth/image/configuration or
+policy binding, a foreign Pod/namespace, and fallback to legacy evidence are
+refused. The pilot declares `pre_gateway_executors_terminated: false`: its
+independently proven fresh lineage is not a claim that old executors were
+terminated. A changed admitted enrollment latches refusal until a coordinated
+restart and fresh admission.
+
+Pilot clock evidence reserves the admitted **2,500 ms issuer uncertainty cap**
+and must fit local uncertainty within the remaining combined 5,000 ms budget.
+This requires enforcement for every signing key accepted by that enrollment;
+it is not a claim that a currently reachable worker proves every signer safe.
+Clock freshness, boot binding, unsafe-clock refusal, and absolute token/permit
+expiry remain mandatory. An outage never extends the original authorization
+window; new authentication or refresh requiring Cloud remains unavailable.
+
+These controls remain default-off. Local fake-provider tests do not establish
+host clock provenance, enrollment custody, provider approval, or permission to
+activate a real sandbox. General production and legacy-migration prerequisites
+remain separate.
 
 ### Independent clock-monitor input
 
