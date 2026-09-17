@@ -238,6 +238,24 @@ describe('actual paired provider browser and registered runtime', () => {
     async (providerName) => {
       for (const entry of catalog) {
         const readiness = await runtime.read('mcp-catalog/readiness', entry.name);
+        if (!readiness.managed_oauth?.available) {
+          // Closed stage labels only: retain cold-start failures without logging
+          // tokens, response bodies, operator files or arbitrary exception text.
+          // These are read-only checks, not a refresh/retry or clock-latch reset.
+          const checks = [
+            ['clock', () => runtime.services.deployment.clock.latestUtcMs()],
+            ['cohort', () => runtime.services.deployment.getEvidence()],
+            ['capabilities', () => runtime.services.registry.capabilities()],
+          ] as const;
+          for (const [stage, check] of checks) {
+            try {
+              check();
+            } catch {
+              throw new Error(`Paired readiness denied at ${stage}`);
+            }
+          }
+          throw new Error('Paired readiness denied at registered subject/profile admission');
+        }
         expect(readiness.managed_oauth?.available).toBe(true);
       }
       const context = await browser.newContext({ storageState: authenticatedState });
