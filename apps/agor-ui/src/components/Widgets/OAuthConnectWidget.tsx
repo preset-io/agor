@@ -18,6 +18,14 @@
  * there", not "the button didn't work". The widget stays pending on failure
  * and the user can press Connect again.
  *
+ * Steps 1-3 are skipped entirely when the user is already signed in to this
+ * server: the card offers **Finish connecting**, which is the POST on its own.
+ * That case is not rare and not only a shortcut — the grant is persisted by
+ * the daemon's callback while the resolution waits on a POST from whichever
+ * page ran the flow, so a reload, a closed tab, or a sign-in completed in
+ * Slack leaves exactly this state. Before it, the only way forward was a full
+ * re-authorization of an account that was already connected.
+ *
  * No secret ever touches this component. The provider redirects to the
  * daemon's own callback; the popup's only job is to be the window the user
  * signs in to.
@@ -45,6 +53,8 @@ import {
   type MarketplaceOAuthPopup,
   openMarketplaceOAuthPopup,
 } from '@/components/Marketplace/marketplaceOAuthPopup';
+import { useAgorStore } from '@/store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
@@ -107,7 +117,10 @@ const TerminalLine: React.FC<{
   );
 };
 
-type ConnectState = 'idle' | 'starting' | 'pending' | 'connected' | 'declined';
+type ConnectState = 'idle' | 'starting' | 'pending' | 'finishing' | 'connected' | 'declined';
+
+/** States where a second press must do nothing. */
+const busyStates = new Set<ConnectState>(['starting', 'pending', 'finishing']);
 
 interface PendingCardProps {
   widgetId: string;
@@ -120,6 +133,23 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   const { showSuccess, showError } = useThemedMessage();
   const [state, setState] = useState<ConnectState>('idle');
   const [failure, setFailure] = useState<string | null>(null);
+  // Has this user already signed in to this server?
+  //
+  // The same last-observed snapshot the rest of the UI reads
+  // (`/mcp-servers/oauth-status`), and deliberately only a HINT: it decides
+  // which button this card offers, never what happens when it is pressed. The
+  // daemon re-reads the grant before it resolves anything, and `finishFailed`
+  // below drops the card back to an ordinary Connect if it turns out the
+  // snapshot was stale.
+  //
+  // It matters because the grant can land without this widget ever resolving:
+  // the provider callback persists it and the resolution waits on a POST from
+  // whichever page ran the flow. A reload in between — or a browser closed
+  // after consent — used to leave this card offering a full re-authorization
+  // as the only way forward.
+  const authenticatedServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+  const [finishFailed, setFinishFailed] = useState(false);
+  const canFinish = !finishFailed && authenticatedServerIds.has(params.mcpServerId);
 
   // Latest-click-wins. A second Connect invalidates the first click's popup and
   // poll so a stale attempt cannot resolve the widget behind a newer one.
@@ -136,6 +166,40 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
     },
     []
   );
+
+  /**
+   * Resolve the widget with no provider round-trip at all.
+   *
+   * Idempotent on the daemon side: it re-reads the grant, attaches, and queues
+   * the auto-resume under a durable task id, and answers success for a widget
+   * that some other surface already finished. So pressing this twice, or
+   * pressing it after the Slack page finished the same request, converges
+   * rather than duplicating.
+   */
+  const finish = async () => {
+    if (busyStates.has(state) || !client) return;
+    const owner = ++operationOwner.current;
+    setFailure(null);
+    setState('finishing');
+    try {
+      const resolved = (await client
+        .service(`widgets/${encodeURIComponent(widgetId)}/oauth-resolve`)
+        .create({})) as { status?: string };
+      if (operationOwner.current !== owner) return;
+      setState('connected');
+      if (resolved.status === 'submitted') showSuccess(`Connected ${params.serverName}`);
+    } catch {
+      if (operationOwner.current !== owner) return;
+      // The snapshot said there was a grant and the daemon disagrees — it may
+      // have been revoked, or it may belong to someone else. Fall back to the
+      // ordinary sign-in rather than leaving a button that cannot work.
+      setFinishFailed(true);
+      setState('idle');
+      setFailure(
+        `Agor could not finish connecting "${params.serverName}". Sign in again to continue.`
+      );
+    }
+  };
 
   const connect = async () => {
     if (state === 'starting' || state === 'pending' || state === 'connected') return;
@@ -211,7 +275,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   };
 
   const decline = async () => {
-    if (!client || state === 'starting' || state === 'pending' || state === 'connected') return;
+    if (!client || busyStates.has(state) || state === 'connected') return;
     try {
       await client.service(`widgets/${encodeURIComponent(widgetId)}/dismiss`).create({});
       setState('declined');
@@ -244,7 +308,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
     );
   }
 
-  const busy = state === 'starting' || state === 'pending';
+  const busy = busyStates.has(state);
   // What a screen reader is told, separately from what the card shows.
   //
   // Nothing about this flow is synchronous: the user clicks, a popup opens, a
@@ -260,7 +324,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       ? `Opening the sign-in window for ${params.serverName}.`
       : state === 'pending'
         ? `Sign-in to ${params.serverName} is pending. Finish signing in in the provider window.`
-        : '';
+        : state === 'finishing'
+          ? `Finishing the connection to ${params.serverName}.`
+          : '';
   return (
     <Card
       size="small"
@@ -325,6 +391,16 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
           />
         ) : null}
 
+        {canFinish && state !== 'pending' ? (
+          <Alert
+            role="presentation"
+            type="info"
+            showIcon
+            title="You are already signed in"
+            description={`Agor has your ${params.serverName} sign-in. It only has to attach it to this session and continue — no second sign-in.`}
+          />
+        ) : null}
+
         {failure ? (
           <Alert
             role="presentation"
@@ -339,9 +415,15 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
           <Button size="small" onClick={decline} disabled={busy}>
             Not now
           </Button>
-          <Button size="small" type="primary" onClick={connect} loading={busy}>
-            {failure ? 'Try again' : 'Connect'}
-          </Button>
+          {canFinish ? (
+            <Button size="small" type="primary" onClick={finish} loading={busy}>
+              Finish connecting
+            </Button>
+          ) : (
+            <Button size="small" type="primary" onClick={connect} loading={busy}>
+              {failure ? 'Try again' : 'Connect'}
+            </Button>
+          )}
         </Space>
       </Space>
     </Card>
