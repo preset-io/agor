@@ -184,6 +184,22 @@ export function mcpSlackConnectCardCopy(
 }
 
 /**
+ * What a duplicate card says once it is no longer the card.
+ *
+ * A post that outlives its delivery lease can land beside the row that won,
+ * leaving two messages for one widget. The words have to hold whatever the
+ * widget did next — connected, cancelled, still waiting — so they describe
+ * only this message's own standing and point at the row that is authoritative.
+ * Used only where the message cannot be deleted outright.
+ */
+export function mcpSlackConnectDuplicateCardText(serverName: string): string {
+  return (
+    `*Connect ${serverName}*\nThis is a duplicate message and is no longer in use. ` +
+    'See the other Agor message in this thread for the current status.'
+  );
+}
+
+/**
  * The one-time notice that this is not a DM.
  *
  * §4.8 allows channels rather than restricting the lane to DMs, because
