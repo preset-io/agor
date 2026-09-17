@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPOAuthConnectPage } from './MCPOAuthConnectPage';
 
 const popup = { close: vi.fn(), navigate: vi.fn(() => true), operationId: 'popup-1' };
+const openPopup = vi.hoisted(() => vi.fn());
 vi.mock('@/components/Marketplace/marketplaceOAuthPopup', () => ({
-  openMarketplaceOAuthPopup: () => popup,
+  openMarketplaceOAuthPopup: openPopup,
 }));
 const waitForAttempt = vi.hoisted(() => vi.fn(async () => ({ status: 'succeeded' })));
 vi.mock('@/utils/mcpOAuthAttempt', () => ({ waitForMCPOAuthAttempt: waitForAttempt }));
@@ -51,6 +52,7 @@ function client(
 describe('Slack MCP connect browser surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    openPopup.mockReturnValue(popup);
     waitForAttempt.mockResolvedValue({ status: 'succeeded' });
     window.location.hash = '#token=signed-connect-token';
   });
@@ -142,6 +144,32 @@ describe('Slack MCP connect browser surface', () => {
     });
     expect(popup.navigate).not.toHaveBeenCalled();
     expect(screen.getByText('This connect action is unavailable')).toBeVisible();
+  });
+
+  it('names the pop-up block instead of reporting a failed connection', async () => {
+    // Slack's mobile in-app browser is the primary client for this link and is
+    // exactly where `window.open` is refused. "Return to Slack and ask again"
+    // would reproduce the block; the button has to stay live and the copy has
+    // to name pop-ups.
+    openPopup.mockReturnValue(null);
+    const { agor, resolveCalls } = client(PREFLIGHT);
+    render(<MCPOAuthConnectPage client={agor} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to sign-in' }));
+
+    expect(await screen.findByText('Your browser blocked the sign-in window')).toBeVisible();
+    expect(screen.queryByText('The connection was not completed')).toBeNull();
+    expect(resolveCalls).toEqual([]);
+
+    // Still startable: allowing pop-ups and tapping again must work.
+    openPopup.mockReturnValue(popup);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to sign-in' }));
+    await waitFor(() =>
+      expect(popup.navigate).toHaveBeenCalledWith(
+        'https://provider.example/authorize',
+        expect.any(Function)
+      )
+    );
+    expect(await screen.findByText('Notion is connected')).toBeVisible();
   });
 
   it('fails closed for an expired, used, superseded, or mismatched action', async () => {

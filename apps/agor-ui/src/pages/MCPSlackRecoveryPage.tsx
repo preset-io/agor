@@ -3,6 +3,7 @@ import { Alert, Button, Spin } from 'antd';
 import {
   SlackOAuthActionShell,
   type SlackOAuthActionState,
+  slackOAuthActionIsStartable,
   useSlackOAuthAction,
 } from './slackOAuthActionPage';
 
@@ -47,6 +48,16 @@ export function MCPSlackRecoveryPage({ client }: Props) {
           showIcon
           title="This recovery action is unavailable"
           description="It may have expired, been used already, or no longer match your Agor account. Return to Slack and send a new message if recovery is still needed."
+        />
+      );
+    }
+    if (state === 'blocked') {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          title="Your browser blocked the sign-in window"
+          description="Allow pop-ups for Agor and tap Continue to sign-in again. If you opened this link inside Slack, opening it in your usual browser also works."
         />
       );
     }
@@ -95,7 +106,7 @@ export function MCPSlackRecoveryPage({ client }: Props) {
       subtitle="Sign in with your current Agor account, then return to the originating Slack thread."
       status={status}
       primaryAction={
-        state === 'ready' ? (
+        slackOAuthActionIsStartable(state) ? (
           <Button type="primary" size="large" onClick={start}>
             Continue to sign-in
           </Button>
