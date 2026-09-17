@@ -2,6 +2,7 @@ import type { AgorClient, Branch, Session, SpawnConfig, User } from '@agor-live/
 import { Empty, List, Segmented, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { isOwnActiveSession, sortSessions } from '../../utils/sessionSearch';
 import { BranchSessionSections } from '../BranchCard';
 import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
@@ -61,10 +62,10 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
     canScopeAssistant && searchParams.get('scope') === 'assistant' ? 'assistant' : 'yours';
 
   const yourSessions = useMemo(() => {
-    const userId = currentUser?.user_id;
-    return Array.from(sessionById.values())
-      .filter((s) => !s.archived && (!userId || s.created_by === userId))
-      .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''));
+    const own = Array.from(sessionById.values()).filter((s) =>
+      isOwnActiveSession(s, currentUser?.user_id)
+    );
+    return sortSessions(own, 'recent');
   }, [sessionById, currentUser?.user_id]);
 
   const assistantSessions = useMemo(

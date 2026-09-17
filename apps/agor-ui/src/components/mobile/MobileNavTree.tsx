@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Branch, Session, User } from '@agor-live/client';
+import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BulbOutlined,
@@ -30,7 +30,6 @@ interface MobileNavTreeProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onLogout?: () => void;
-  currentUser?: User | null;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -42,7 +41,6 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onLogout,
-  currentUser,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();

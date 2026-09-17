@@ -15,9 +15,12 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  makeUnreadCommentCountSelector,
   selectArtifactById,
   selectBoardById,
   selectBoardObjectsByBoardId,
@@ -29,6 +32,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -36,7 +40,6 @@ import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/available
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
-import { resolveAskPrimaryTarget } from './askPrimary';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHomePage } from './MobileHomePage';
@@ -46,12 +49,14 @@ import { MobileSearchPage } from './MobileSearchPage';
 import { MobileSessionsPage } from './MobileSessionsPage';
 import { type MobileTab, MobileTabBar } from './MobileTabBar';
 import { SessionPage } from './SessionPage';
+import { useMobileBack } from './useMobileBack';
 
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
-  /** Authentication generation, forwarded to the reused Marketplace catalog. */
+  /** Authentication generation; scopes caller-bound lookups and in-flight session creation. */
   authGeneration: number;
+  isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   /** Shared post-onboarding banners (e.g. "AI not connected"); shown above the shell content. */
   topBanner?: React.ReactNode;
   onSendPrompt?: (
@@ -69,6 +74,7 @@ interface MobileAppProps {
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -91,6 +97,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
   authGeneration,
+  isAuthenticationGenerationCurrent,
   topBanner,
   onSendPrompt,
   onCreateSession,
@@ -100,6 +107,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateSession,
   onDeleteSession,
   onUpdateSessionMcpServers,
+  onUpdateSessionEnvSelections,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -116,6 +124,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const goBackFromComments = useMobileBack('/m');
   const { connected, connecting } = useConnectionState();
   const reducedMotion = usePrefersReducedMotion();
   // Self-subscribe to the entity maps this surface drills into. The subscription
@@ -136,7 +145,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const [moreOpen, setMoreOpen] = useState(false);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
-  const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
     tab: BranchModalTab;
@@ -144,25 +152,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const selectedBranch = branchEditor ? (branchById.get(branchEditor.branchId) ?? null) : null;
   const selectedRepo = selectedBranch ? (repoById.get(selectedBranch.repo_id) ?? null) : null;
 
-  // Resolve the caller's primary assistant so the center Ask action can show its
-  // emoji and continue/start its session. Re-resolves when the caller changes.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: caller change deliberately re-resolves the caller-scoped primary teammate
-  useEffect(() => {
-    if (!client) return;
-    let cancelled = false;
-    client
-      .service('users')
-      .getPrimaryTeammate()
-      .then((branch) => {
-        if (!cancelled) setPrimaryBranch(branch);
-      })
-      .catch(() => {
-        if (!cancelled) setPrimaryBranch(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, user?.user_id]);
+  // The caller's primary assistant: Home shows its name and emoji, and Ask starts its session.
+  const {
+    branch: resolvedPrimaryBranch,
+    current: primaryBranchIsCurrent,
+    setBranch: setPrimaryBranch,
+    refresh: refreshPrimaryBranch,
+  } = usePrimaryTeammate(client, user?.user_id, authGeneration);
+  // A held branch that is not the current caller's settled answer may be a previous caller's, so it is never an Ask target.
+  const primaryBranch = primaryBranchIsCurrent ? resolvedPrimaryBranch : null;
+  const primaryTeammateName = primaryBranch
+    ? getTeammateConfig(primaryBranch)?.displayName
+    : undefined;
+  // One guard for both create flows: the newest creation owns navigation, so an older one settling late cannot yank the user away.
+  const sessionCreationGuard = useIdentityGuardedAsync([user?.user_id, authGeneration]);
 
   // Track the board in view so the Board / Comments tabs have a target even from
   // the Sessions tab. Falls back to the user's main board, then any board.
@@ -194,72 +197,58 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         : 'home';
 
   const sessionsBadge = useMemo(() => {
-    const userId = user?.user_id;
     let count = 0;
     for (const session of sessionById.values()) {
-      if (session.archived) continue;
-      if (userId && session.created_by !== userId) continue;
+      if (!isOwnActiveSession(session, user?.user_id)) continue;
       if (getSessionStatusTone(session.status) === 'processing') count++;
     }
     return count;
   }, [sessionById, user?.user_id]);
 
-  const commentsBadge = useMemo(() => {
-    if (!effectiveBoardId) return 0;
-    let count = 0;
-    for (const comment of commentById.values()) {
-      if (comment.board_id === effectiveBoardId && !comment.resolved && !comment.parent_comment_id)
-        count++;
-    }
-    return count;
-  }, [commentById, effectiveBoardId]);
-
-  // Always start a FRESH session on the primary branch and land in the
-  // full-screen composer; every Ask tap creates a new one (never continues).
-  const startPrimarySession = useCallback(
-    async (branch: Branch) => {
-      const target = resolveAskPrimaryTarget(branch);
-      if (target.kind !== 'create') return; // a real branch never resolves to 'pick'
-      const tool = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
-      const result = await onCreateSession(
-        buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
-        target.boardId
-      );
-      if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
-    },
-    [navigate, user, agenticToolSettings, onCreateSession]
+  const commentsBadge = useAgorStore(
+    useMemo(() => makeUnreadCommentCountSelector(effectiveBoardId), [effectiveBoardId])
   );
 
-  // Create a session on any branch with a chosen agent, then open its composer.
-  const createSessionOnBranch = useCallback(
-    async (branchId: string, agent: string) => {
-      const branch = branchById.get(branchId);
-      setNewSessionBranchId(null);
-      const result = await onCreateSession(
-        buildNewSessionConfig({
-          user,
-          tool: agent as AgenticToolName,
-          branch: branch ?? { branch_id: branchId },
-          initialPrompt: '',
-        }),
-        branch?.board_id ?? ''
+  // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
+  const createAndOpenSession = useCallback(
+    async (
+      branch: { branch_id: string } & Pick<Branch, 'board_id' | 'mcp_server_ids'>,
+      tool: AgenticToolName
+    ) => {
+      const operationGeneration = authGeneration;
+      const result = await sessionCreationGuard.run(() =>
+        onCreateSession(
+          buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
+          branch.board_id ?? ''
+        )
       );
+      if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return;
       if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
     },
-    [branchById, onCreateSession, navigate, user]
+    [
+      navigate,
+      user,
+      onCreateSession,
+      sessionCreationGuard,
+      authGeneration,
+      isAuthenticationGenerationCurrent,
+    ]
+  );
+
+  // Every Ask tap creates a new session on the primary branch (never continues one).
+  const startPrimarySession = useCallback(
+    (branch: Branch) =>
+      createAndOpenSession(
+        branch,
+        resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS)
+      ),
+    [createAndOpenSession, user, agenticToolSettings]
   );
 
   const askPrimaryAssistant = useCallback(async () => {
     if (!client) return;
-    let branch = primaryBranch;
-    if (!branch) {
-      try {
-        branch = await client.service('users').getPrimaryTeammate();
-        if (branch) setPrimaryBranch(branch);
-      } catch {
-        branch = null;
-      }
-    }
+    const branch = primaryBranch ?? (await refreshPrimaryBranch());
+    if (branch === undefined) return;
     // No primary (or a transient resolve failure): open the mobile-native
     // picker — never fall through to the desktop Settings modal.
     if (!branch) {
@@ -267,7 +256,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       return;
     }
     await startPrimarySession(branch);
-  }, [client, primaryBranch, startPrimarySession]);
+  }, [client, primaryBranch, refreshPrimaryBranch, startPrimarySession]);
 
   const handleTabSelect = useCallback(
     (tab: MobileTab) => {
@@ -353,9 +342,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 boardById={boardById}
                 currentUser={user}
                 onAsk={() => void askPrimaryAssistant()}
-                primaryTeammateName={
-                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
-                }
+                primaryTeammateName={primaryTeammateName}
                 primaryTeammateEmoji={
                   primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined
                 }
@@ -381,9 +368,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 currentUser={user}
                 client={client}
                 primaryBranch={primaryBranch}
-                primaryTeammateName={
-                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
-                }
+                primaryTeammateName={primaryTeammateName}
                 onForkSession={onForkSession}
                 onSpawnSession={onSpawnSession}
                 onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
@@ -437,9 +422,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
                 onGiveFirstTask={() => void askPrimaryAssistant()}
-                firstTaskAssistantName={
-                  primaryBranch ? getTeammateConfig(primaryBranch)?.displayName : undefined
-                }
+                firstTaskAssistantName={primaryTeammateName}
                 commentsBadge={commentsBadge}
                 onOpenComments={openComments}
               />
@@ -460,6 +443,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onUpdateSession={onUpdateSession}
                 onDeleteSession={onDeleteSession}
                 onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+                onUpdateSessionEnvSelections={onUpdateSessionEnvSelections}
                 onOpenBranch={(branchId, tab = 'general') => setBranchEditor({ branchId, tab })}
                 onOpenAgenticToolSettings={onOpenAgenticToolSettings}
               />
@@ -475,7 +459,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 branchById={branchById}
                 userById={userById}
                 currentUser={user}
-                onBack={() => (location.key !== 'default' ? navigate(-1) : navigate('/m'))}
+                onBack={goBackFromComments}
                 onSendComment={onSendComment}
                 onReplyComment={onReplyComment}
                 onResolveComment={onResolveComment}
@@ -508,8 +492,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           Pick the teammate to message from the Ask button. You can change it later in Settings.
         </Typography.Paragraph>
         <PrimaryTeammatePicker
+          key={`${user?.user_id ?? 'anonymous'}:${authGeneration}`}
           client={client}
           currentUserId={user?.user_id}
+          authenticationGeneration={authGeneration}
           compact
           onPicked={(branch) => {
             setPrimaryBranch(branch);
@@ -542,7 +528,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           agents={AVAILABLE_AGENTS}
           selectedAgentId={null}
           onSelect={(agent) => {
-            if (newSessionBranchId) void createSessionOnBranch(newSessionBranchId, agent);
+            if (!newSessionBranchId) return;
+            const branch = branchById.get(newSessionBranchId) ?? { branch_id: newSessionBranchId };
+            setNewSessionBranchId(null);
+            void createAndOpenSession(branch, agent as AgenticToolName);
           }}
           columns={2}
           size="small"
@@ -560,7 +549,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onOpenUserSettings={onOpenUserSettings}
         onLogout={onLogout}
-        currentUser={user}
       />
 
       <BranchModal

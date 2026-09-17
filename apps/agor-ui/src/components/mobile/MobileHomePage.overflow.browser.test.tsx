@@ -52,6 +52,31 @@ function scrollingNodes(root: HTMLElement): string[] {
   return bad;
 }
 
+// Mimic the shell: a fixed-size flex column, NOT an overflow:hidden clip.
+function renderHomeAt(width: number): HTMLElement {
+  const { container } = render(
+    <ConfigProvider theme={{ token: { motion: false } }}>
+      <MemoryRouter>
+        <div
+          style={{ width, height: 800, display: 'flex', flexDirection: 'column' }}
+          data-testid="viewport"
+        >
+          <MobileHomePage
+            sessionById={sessionById}
+            branchById={branchById}
+            boardById={boardById}
+            currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
+            onAsk={vi.fn()}
+            primaryTeammateName="Fable"
+            primaryTeammateEmoji="🤖"
+          />
+        </div>
+      </MemoryRouter>
+    </ConfigProvider>
+  );
+  return container.querySelector<HTMLElement>('[data-testid="viewport"]')!;
+}
+
 describe('MobileHomePage horizontal fit', () => {
   for (const width of [360, 390, 430, 540, 640, 667, 720, 760, 820]) {
     it(`does not overflow at ${width}px`, () => {
@@ -72,28 +97,7 @@ describe('MobileHomePage horizontal fit', () => {
           ],
         ]),
       } as never);
-      // Mimic the shell: a fixed-size flex column, NOT an overflow:hidden clip.
-      const { container } = render(
-        <ConfigProvider theme={{ token: { motion: false } }}>
-          <MemoryRouter>
-            <div
-              style={{ width, height: 800, display: 'flex', flexDirection: 'column' }}
-              data-testid="viewport"
-            >
-              <MobileHomePage
-                sessionById={sessionById}
-                branchById={branchById}
-                boardById={boardById}
-                currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
-                onAsk={vi.fn()}
-                primaryTeammateName="Fable"
-                primaryTeammateEmoji="🤖"
-              />
-            </div>
-          </MemoryRouter>
-        </ConfigProvider>
-      );
-      const viewport = container.querySelector<HTMLElement>('[data-testid="viewport"]')!;
+      const viewport = renderHomeAt(width);
       const bad = scrollingNodes(viewport);
       expect(bad, `scroll overflow at ${width}px:\n${bad.join('\n')}`).toEqual([]);
 
@@ -113,27 +117,7 @@ describe('MobileHomePage horizontal fit', () => {
   for (const width of [360, 390, 430]) {
     it(`aligns every card's content to one left edge at ${width}px`, () => {
       agorStore.getState().reset();
-      const { container } = render(
-        <ConfigProvider theme={{ token: { motion: false } }}>
-          <MemoryRouter>
-            <div
-              style={{ width, height: 800, display: 'flex', flexDirection: 'column' }}
-              data-testid="viewport"
-            >
-              <MobileHomePage
-                sessionById={sessionById}
-                branchById={branchById}
-                boardById={boardById}
-                currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
-                onAsk={vi.fn()}
-                primaryTeammateName="Fable"
-                primaryTeammateEmoji="🤖"
-              />
-            </div>
-          </MemoryRouter>
-        </ConfigProvider>
-      );
-      const viewport = container.querySelector<HTMLElement>('[data-testid="viewport"]')!;
+      const viewport = renderHomeAt(width);
       const cards = Array.from(viewport.querySelectorAll<HTMLElement>('.ant-card'));
       expect(cards.length).toBeGreaterThan(1);
 

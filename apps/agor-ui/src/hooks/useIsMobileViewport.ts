@@ -1,9 +1,12 @@
 import { useSyncExternalStore } from 'react';
-import { isMobileViewport, MOBILE_SHELL_MEDIA_QUERY } from '../utils/deviceDetection';
-import { subscribeToMediaQuery } from './useMediaQuery';
+import { isMobileViewport } from '../utils/deviceDetection';
 
-const subscribe = (onChange: () => void) =>
-  subscribeToMediaQuery(MOBILE_SHELL_MEDIA_QUERY, onChange);
+// Subscribes to `resize` because the snapshot reads `innerWidth`; a media query can disagree with it at fractional widths.
+function subscribe(onChange: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener('resize', onChange);
+  return () => window.removeEventListener('resize', onChange);
+}
 
 /**
  * Reactive companion to `isMobileViewport()`: `true` while the viewport is

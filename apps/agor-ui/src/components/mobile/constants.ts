@@ -15,3 +15,11 @@ export const mobileScrollAreaStyle: CSSProperties = {
   overflowY: 'auto',
   overflowX: 'hidden',
 };
+
+/** Root style for a mobile page: fills the shell's content area and stacks its header above its scroll region. */
+export const mobilePageStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+};

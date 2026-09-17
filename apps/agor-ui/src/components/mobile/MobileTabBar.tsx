@@ -38,8 +38,6 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   sessionsBadge,
 }) => {
   const { token } = theme.useToken();
-  const askActive = activeTab === 'ask';
-  const askSize = TOUCH_TARGET;
 
   const leftTabs: TabDef[] = [
     { key: 'home', label: 'Home', icon: <HomeOutlined />, badge: sessionsBadge },
@@ -138,12 +136,11 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
             type="primary"
             shape="circle"
             aria-label="Ask your primary assistant"
-            aria-current={askActive ? 'page' : undefined}
             onClick={() => onSelect('ask')}
             icon={<EditOutlined style={{ color: token.colorTextLightSolid }} />}
             style={{
-              width: askSize,
-              height: askSize,
+              width: TOUCH_TARGET,
+              height: TOUCH_TARGET,
               boxShadow: 'none',
               display: 'flex',
               alignItems: 'center',

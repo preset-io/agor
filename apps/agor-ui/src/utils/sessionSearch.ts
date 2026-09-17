@@ -162,6 +162,11 @@ export function getMatchSnippet(text: string, query: string, contextLen = 60): s
   return `${prefix}${text.slice(start, end)}${suffix}`;
 }
 
+/** Whether a session is unarchived and created by `userId` (any creator when no user is given). */
+export function isOwnActiveSession(session: Session, userId?: string): boolean {
+  return !session.archived && (!userId || session.created_by === userId);
+}
+
 export function sortSessions(sessions: Session[], sort: SessionSort): Session[] {
   const copy = [...sessions];
 

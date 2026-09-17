@@ -1,4 +1,4 @@
-import type { Board, User } from '@agor-live/client';
+import type { Board } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,7 +35,6 @@ describe('MobileNavTree settings navigation', () => {
           branchById={new Map()}
           sessionsByBranch={new Map()}
           commentById={new Map()}
-          currentUser={{ role: 'admin' } as User}
           onOpenWorkspaceSettings={onOpenWorkspaceSettings}
           onOpenUserSettings={vi.fn()}
           onNavigate={onNavigate}

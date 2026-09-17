@@ -53,8 +53,21 @@ describe('MobileHomePage', () => {
     renderHome({ sessionById, boardById });
 
     expect(screen.getByText('Recent work')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All sessions' })).toBeInTheDocument();
     fireEvent.click(screen.getByText('Delivery'));
     expect(screen.getByText('board view')).toBeInTheDocument();
+  });
+
+  it('opens the full session list from the All sessions link', () => {
+    const sessionById = new Map<string, Session>([
+      [
+        's1',
+        { session_id: 's1', title: 'Recent work', status: 'idle', created_by: 'u1' } as Session,
+      ],
+    ]);
+    renderHome({ sessionById });
+    fireEvent.click(screen.getByRole('button', { name: 'All sessions' }));
+    expect(screen.getByText('all sessions')).toBeInTheDocument();
   });
 
   it('opens the assistant session list from the hero body while Ask stays compose', () => {
