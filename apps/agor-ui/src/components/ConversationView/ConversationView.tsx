@@ -21,7 +21,7 @@ import type {
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
@@ -174,6 +174,40 @@ export const ConversationView = React.memo<ConversationViewProps>(
       initial: 'instant',
       resize: 'instant',
     });
+
+    // The hook observes content growth, not changes to the scroll viewport.
+    // A queue/composer resize changes only the latter. Reconcile through the
+    // same bottom lock so a scrolled-up reader is never pulled away.
+    const viewportObserverRef = useRef<ResizeObserver | null>(null);
+    const setScrollViewport = useCallback(
+      (element: HTMLDivElement | null) => {
+        viewportObserverRef.current?.disconnect();
+        scrollRef(element);
+        if (!element) return;
+        let height = element.clientHeight;
+        const observer = new ResizeObserver(() => {
+          const nextHeight = element.clientHeight;
+          if (nextHeight === height) return;
+          const difference = nextHeight - height;
+          height = nextHeight;
+          // Share the hook's resize guard: growing the viewport can make the
+          // browser clamp scrollTop upward before its deferred scroll handler.
+          // That is layout, not a reader escaping the bottom lock.
+          state.resizeDifference = difference;
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              if (state.resizeDifference === difference) state.resizeDifference = 0;
+            }, 1);
+          });
+          if (state.isAtBottom && !state.escapedFromLock) {
+            scrollToBottom({ animation: 'instant' });
+          }
+        });
+        observer.observe(element);
+        viewportObserverRef.current = observer;
+      },
+      [scrollRef, scrollToBottom, state]
+    );
 
     // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
@@ -471,7 +505,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     return (
       <div
-        ref={scrollRef}
+        ref={setScrollViewport}
         data-testid="conversation-scroll-container"
         style={{
           flex: 1,

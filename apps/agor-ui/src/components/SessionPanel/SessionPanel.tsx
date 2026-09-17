@@ -1793,7 +1793,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             flex: 1,
             // If chrome + composer cannot fit on a short viewport, scroll the
             // body rather than crushing the transcript and queue to slivers.
-            minHeight: queuedTasks.length > 0 ? 'min(360px, 70dvh)' : 0,
+            minHeight: queuedTasks.length > 0 ? 360 : 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
