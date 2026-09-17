@@ -1,4 +1,5 @@
 import type {
+  AgenticToolName,
   AgorClient,
   Branch,
   BranchArchiveOrDeleteOptions,
@@ -7,7 +8,7 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
+import { getTeammateConfig } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -29,6 +30,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
@@ -218,13 +220,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     async (branch: Branch) => {
       const target = resolveAskPrimaryTarget(branch);
       if (target.kind !== 'create') return; // a real branch never resolves to 'pick'
-      const agent = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
+      const tool = resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS);
       const result = await onCreateSession(
-        {
-          branch_id: target.branchId,
-          agent: agent ?? DEFAULT_AGENTIC_TOOL_NAME,
-          initialPrompt: '',
-        },
+        buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
         target.boardId
       );
       if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
@@ -235,15 +233,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   // Create a session on any branch with a chosen agent, then open its composer.
   const createSessionOnBranch = useCallback(
     async (branchId: string, agent: string) => {
-      const boardId = branchById.get(branchId)?.board_id ?? '';
+      const branch = branchById.get(branchId);
       setNewSessionBranchId(null);
       const result = await onCreateSession(
-        { branch_id: branchId, agent, initialPrompt: '' },
-        boardId
+        buildNewSessionConfig({
+          user,
+          tool: agent as AgenticToolName,
+          branch: branch ?? { branch_id: branchId },
+          initialPrompt: '',
+        }),
+        branch?.board_id ?? ''
       );
       if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
     },
-    [branchById, onCreateSession, navigate]
+    [branchById, onCreateSession, navigate, user]
   );
 
   const askPrimaryAssistant = useCallback(async () => {

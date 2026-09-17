@@ -1,7 +1,9 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
 vi.mock('./MobileBoardPage', () => ({
@@ -145,5 +147,39 @@ describe('MobileApp branch actions', () => {
   it('hides the banner on the full-screen session view (its composer owns credentials)', () => {
     renderMobileApp('/m/session/session-1', { topBanner: <div>AI not connected</div> });
     expect(screen.queryByText('AI not connected')).not.toBeInTheDocument();
+  });
+
+  it('starts Ask sessions with the caller saved agent defaults, like desktop quick compose', async () => {
+    const onCreateSession = vi.fn(async () => null);
+    const primary = { branch_id: 'branch-p', board_id: 'board-1', mcp_server_ids: ['branch-mcp'] };
+    const client = { service: () => ({ getPrimaryTeammate: async () => primary }) };
+    // No primary-tool preference, so the caller resolves to the default tool.
+    const user = {
+      user_id: 'user-1',
+      default_mcp_server_ids: ['user-mcp'],
+      default_agentic_config: {
+        [DEFAULT_AGENTIC_TOOL_NAME]: {
+          permissionMode: 'acceptEdits',
+          modelConfig: { model: 'saved-model' },
+        },
+      },
+    };
+    renderMobileApp('/m', { client, user, onCreateSession });
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0]).toEqual([
+      expect.objectContaining({
+        branch_id: 'branch-p',
+        agent: DEFAULT_AGENTIC_TOOL_NAME,
+        permissionMode: 'acceptEdits',
+        modelConfig: { model: 'saved-model' },
+        mcpServerIds: ['branch-mcp'],
+        agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      }),
+      'board-1',
+    ]);
   });
 });
