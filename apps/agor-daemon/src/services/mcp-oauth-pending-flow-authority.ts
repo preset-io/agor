@@ -133,7 +133,13 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
         typeof material.slackConnect.widget_id === 'string' &&
         typeof material.slackConnect.session_id === 'string' &&
         typeof material.slackConnect.mcp_server_id === 'string' &&
-        typeof material.slackConnect.gateway_channel_id === 'string')
+        typeof material.slackConnect.gateway_channel_id === 'string' &&
+        // The two versions the callback's authority re-read compares against.
+        // Required, not optional: an envelope without them leaves the callback
+        // with nothing to compare, and the version this daemon writes is the
+        // only one that can carry them.
+        Number.isSafeInteger(material.slackConnect.gateway_config_generation) &&
+        Number.isSafeInteger(material.slackConnect.mcp_server_config_version))
   );
 }
 

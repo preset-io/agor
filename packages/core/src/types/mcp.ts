@@ -1215,6 +1215,20 @@ export interface MCPSlackOAuthConnectContext {
   session_id: SessionID;
   mcp_server_id: MCPServerID;
   gateway_channel_id: string;
+  /**
+   * The channel and server versions that AUTHORIZED this flow, carried from
+   * the sealed connect token at redemption.
+   *
+   * They are here rather than re-read at callback time because the authority
+   * re-read compares an expected version against the stored one: handing it
+   * whatever is stored now compares the channel to itself and can never
+   * refuse, so a token rotation or a server edit mid-flow would complete and
+   * persist a grant against a configuration nobody authorized. The recovery
+   * lane carries the same two values on its durable notice for the same
+   * reason.
+   */
+  gateway_config_generation: number;
+  mcp_server_config_version: number;
 }
 
 // ============================================================================
