@@ -138,7 +138,9 @@ both directions:
 - OAuth-resolved via `/submit` → would resolve on a client's say-so.
 
 `WidgetResolutionClaim.action` widened to `'submit' | 'dismiss' | 'oauth_callback'`
-so a recovery reader can tell which lane owned an abandoned claim.
+so a recovery reader can tell which lane owned an abandoned claim. Since the
+architecture pass that reader is the resolver itself — see **D8**, which is the
+one place this lane's resolution semantics differ from the submit-backed ones.
 
 ### 3.2 The resolution handler
 
@@ -382,7 +384,13 @@ month ago and clicked today grants exactly what it would grant if minted today,
 by exactly the person clicking it. The residue is a stale button in a
 scrolled-back transcript, and the common way a card goes stale is already
 handled: a second request for the same (session, server) supersedes the first
-(§3.4.7), as does either short-circuit. One case supersede cannot reach — a
+(§3.4.7), as does either short-circuit. "Handled" is bounded, not absolute —
+the supersede sweep reads the newest `OAUTH_SUPERSEDE_SCAN_LIMIT` (200) widget
+messages of the session, so a pending card further back than that survives a
+re-ask. That bound is deliberate (a pending card older than 200 widget messages
+is not one anybody is about to click) and it is only a presentation bound: an
+older card that is missed grants nothing when tapped, because every question is
+re-asked at resolve. One case supersede cannot reach — a
 post that outlived its delivery lease and left a second, unrecorded Slack row —
 is handled separately; see §7.1.1.
 
@@ -411,6 +419,56 @@ a pending widget gaining any authority that is NOT re-derived at resolve (which
 would make the card itself a credential), or transcripts accumulating enough
 abandoned cards to be a usability problem in their own right. Neither is true
 today.
+
+**D8 — Only this lane may finish a resolution somebody else abandoned.** The
+feature has three milestones — the provider grant persisted, the widget
+resolved and the server attached, the auto-resume admitted — and **only the
+first is completed by the OAuth callback.** The other two depend on the
+original browser POSTing `/oauth-resolve`. So returning from consent and
+closing the page, reloading it, or simply losing that last request left a valid
+credential behind a `pending` card, a Slack card still offering Connect, and an
+agent that never woke. Worse, an interrupted resolution could land in
+`resolving` with a claim the store deliberately never reclaims, at which point
+nothing in the system could ever finish the widget.
+
+The generic policy is right for the widgets it protects and wrong here.
+`applySubmit` writes env vars and restarts connectors, so replaying one on a
+claim of unknown outcome can duplicate a secret write — which is why
+`resolution-store.ts` treats an abandoned claim as a diagnosis rather than a
+lease. `resolveFromDaemonVerification` has no such effect to duplicate: the
+grant read decides nothing from the request, the attach is a unique-index
+upsert, and the auto-resume Task is keyed by `widgetAutoResumeTaskId`.
+
+So the policy is **declared, per widget type, on the registry entry**
+(`recovery: 'reclaimable'`) rather than inferred from the resolution kind —
+`daemon_verified` says how an outcome is established, not that a handler is
+replay-safe — and it changes exactly two answers for that lane:
+
+- an `already`-`submitted` widget answers success (`already_resolved: true`)
+  instead of `Forbidden`, so a recovery surface can tell "you already finished"
+  apart from "you may not";
+- a `resolving` claim taken by the same action and held longer than
+  `WIDGET_RECLAIM_ABANDONED_AFTER_MS` (60s) is taken over, logged, and finished.
+
+Nothing is widened. Every question the resolve path asks — prompt authority, the
+role floor, gateway identity, the pinned destination, a live grant — is still
+asked, of the caller doing the recovering, against state read now. A claim
+younger than the cutoff is refused exactly as before, so two browsers racing one
+card cannot steal from each other, and `dismiss` cannot inherit an OAuth claim's
+lease.
+
+The user-facing half is a **finish**, never a second sign-in: `finish_required`
+/ `finish_stalled` on the Slack card, `finalize_required` on the landing page
+(which runs it on arrival, since the user already decided at the provider), and
+a **Finish connecting** button on the canvas card driven by the same
+`/mcp-servers/oauth-status` snapshot the rest of the UI reads. All three are
+hints about which button to show; the daemon still decides.
+
+What this is NOT is automatic completion. Nothing sweeps for grants that landed
+behind unresolved widgets and finishes them unattended — that would make the
+attach and the agent's wake-up happen with nobody present, which is a different
+decision from letting the person who signed in press a button. D1's "attach
+after a browser-bound human action" survives intact.
 
 ---
 
@@ -530,6 +588,18 @@ Why it is nonetheless the right trade here:
 - The disclosure travels onto the widget (`params.permissionDisclosure`) and is
   rendered, expanded, above the Connect button. The user reads it before the only
   moment anything is actually granted.
+
+  **Whole.** It used to be clamped to 1000 characters with an ellipsis, on the
+  reasoning that a catalog-owned field should degrade rather than block a
+  connect. That reasoning is right for a display name and wrong for this field,
+  because this field IS the consent this whole section is an argument about —
+  and the tail of a permissions paragraph is where "and can delete them" tends
+  to live. An entry longer than `OAUTH_PERMISSION_DISCLOSURE_MAX` (4000, against
+  a longest reviewed entry of 808) is now refused before anything is installed,
+  with a message that says Agor will not shorten what you are agreeing to. An
+  entry nobody can connect is a curation bug somebody fixes; a disclosure
+  missing its last sentence is one nobody notices.
+
 - Pinning `mcp_server_id` at mint is what lets `/oauth-resolve` accept **no**
   caller-supplied destination at all. Deferring the install to the click would
   mean the resolve endpoint taking a server id from the browser, which is a
@@ -609,7 +679,8 @@ This gives the widget a Slack face. Three pieces, all built.
 | Card meaning (states, copy, blocks, wake-up) | `services/mcp-slack-connect-card.ts`                    |
 | Post/update projection, claims, repair sweep | `services/gateway.ts`                                   |
 | Indexed due-work column + migration 0111     | `packages/core/src/db/repositories/messages.ts`         |
-| Landing page                                 | `apps/agor-ui/src/pages/MCPOAuthConnectPage.tsx`        |
+| Landing page + the finish recovery           | `apps/agor-ui/src/pages/MCPOAuthConnectPage.tsx`        |
+| Operator control for the kill switch         | `services/mcp-slack-connect-control.ts`                 |
 | Preflight + redemption routes                | `apps/agor-daemon/src/register-services.ts`             |
 
 The reactive lane was the template, and most of it was reusable:
@@ -1081,6 +1152,19 @@ guard, and it fails on the preceding commit.
   `oauth_failed_at`, so another human attempt is required before another.
 - **No widget-level TTL.** Still D7, and §7's own `expires_at` is the one clock
   the card reflects.
+- **The refused-marker backoff is flat, not growing.** `mcpSlackConnectRefusedMarkerDueAt`
+  moves a blocked first-card marker forward by a fixed five minutes, because
+  the marker is a bare ISO timestamp with nowhere to keep an attempt count.
+  Accepted as a limit rather than fixed, and the arithmetic is why: a refused
+  visit costs one binding read and makes **no Slack call**, the sweep's page
+  budget already bounds per-pass work, and the 24-hour horizon bounds a
+  marker's whole life at ~288 visits. Growing backoff would trade that for a
+  durable counter, a second field on the widget row, and a slower recovery for
+  the case the reschedule exists to serve — an administrator flipping
+  `align_slack_users` back on while the user waits. Two things reopen it: a
+  refused visit acquiring any network call or provider cost, or the 24-hour
+  horizon being lifted, either of which makes the flat rate a real load rather
+  than a rounding error.
 - **Personal API keys cannot reach `/mcp-oauth-connect`.** Both it and the
   pre-existing `/mcp-slack-recovery` are registered outside
   `TENANT_OWNED_SERVICE_PATHS`, so nothing arms a tenant scope for the API-key

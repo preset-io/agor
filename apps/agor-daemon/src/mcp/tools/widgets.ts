@@ -65,8 +65,11 @@ import {
   gatewayTokenParamsSchema,
   isSupportedGatewayTokenChannelType,
 } from '../../widgets/gateway-token/index.js';
-import type { OAuthWidgetParams } from '../../widgets/oauth/index.js';
-import { oauthParamsSchema } from '../../widgets/oauth/index.js';
+import {
+  OAUTH_PERMISSION_DISCLOSURE_MAX,
+  type OAuthWidgetParams,
+  oauthParamsSchema,
+} from '../../widgets/oauth/index.js';
 import {
   authorizeWidgetMint,
   parseWidgetMintParams,
@@ -295,15 +298,15 @@ async function queueWidgetAutoResume(
 const SERVER_NAME_MAX = 200;
 const REASON_MAX = 200;
 const CATALOG_ENTRY_NAME_MAX = 200;
-const PERMISSION_DISCLOSURE_MAX = 1000;
 
 /**
- * Clamp a string the DAEMON or the CATALOG owns to what the widget schema
- * accepts, with an ellipsis so a reader can see it was cut.
+ * Clamp a DISPLAY string the daemon composes to what the widget schema accepts,
+ * with an ellipsis so a reader can see it was cut.
  *
- * Only for fields the agent did not supply. An over-long value from an agent is
- * a refusal (its own schema says so); an over-long value from a checked-in
- * catalog file is a curation slip that should not stop a user connecting.
+ * Only for fields whose job is to be read at a glance — a server's display
+ * name, the one-line reason. Never for the permission disclosure: that one is
+ * the consent, and losing its tail is losing the part of it a reader would most
+ * want. See {@link OAUTH_PERMISSION_DISCLOSURE_MAX} and §5.4.
  */
 function clampToSchemaMax(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
@@ -399,20 +402,30 @@ async function installCatalogOAuthServer(
   }
   // Everything the widget row will carry from this entry is checked BEFORE the
   // install, because the install is the first durable effect: an entry whose
-  // disclosure exceeded `oauthParamsSchema`'s limit used to leave an installed
-  // server row behind and then fail the tool. The disclosure is prose the
-  // catalog owns, so it is clamped rather than refused — losing its tail is
-  // better than refusing to connect over it. The entry NAME is an identity and
-  // cannot be clamped without corrupting it, so an over-long one refuses, here,
-  // where refusing still costs nothing.
+  // fields exceed `oauthParamsSchema`'s limits used to leave an installed
+  // server row behind and then fail the tool. Both checks refuse rather than
+  // trim, here, where refusing still costs nothing:
+  //
+  //  - the entry NAME is an identity and cannot be shortened without
+  //    corrupting it;
+  //  - the DISCLOSURE is the consent. §5.4's whole argument for letting an
+  //    agent satisfy `acknowledged_disclosure` is that this text then reaches
+  //    the human above the Connect button, so quietly discarding its tail
+  //    would hollow out the one protection that argument rests on. An entry
+  //    nobody can connect is a curation bug someone fixes; a disclosure with
+  //    its last sentence missing is one nobody ever notices.
   if (entry.name.length > CATALOG_ENTRY_NAME_MAX) {
     throw new Error(
       `Catalog entry name "${entry.name}" is too long for a connect request; report this entry.`
     );
   }
-  const permissionDisclosure = entry.permission_disclosure
-    ? clampToSchemaMax(entry.permission_disclosure, PERMISSION_DISCLOSURE_MAX)
-    : undefined;
+  if ((entry.permission_disclosure?.length ?? 0) > OAUTH_PERMISSION_DISCLOSURE_MAX) {
+    throw new Error(
+      `"${catalogDisplayName(entry)}" has a permission disclosure too long to show before ` +
+        `connecting, and Agor will not shorten what you are agreeing to; report this entry.`
+    );
+  }
+  const permissionDisclosure = entry.permission_disclosure || undefined;
 
   // Caller params verbatim — in particular, KEEP `provider`. Connect stamps
   // catalog provenance only for a transport-bearing caller:
