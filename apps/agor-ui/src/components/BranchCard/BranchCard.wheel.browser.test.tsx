@@ -118,6 +118,14 @@ async function mount(count: number, scheduled = false, notes?: string) {
     ? (screen.getByRole('button', { name: 'Open session Conversation 0' }).closest('.nowheel')!
         .firstElementChild as HTMLElement)
     : view.container.querySelector<HTMLElement>('.ant-tree-list-holder')!;
+  await waitFor(() => {
+    expect(scroller.clientHeight).toBeGreaterThan(0);
+    if (!scheduled) expect(scroller.clientHeight).toBeLessThanOrEqual(400);
+    if (!scheduled) {
+      expect(scroller.firstElementChild!.clientHeight > scroller.clientHeight).toBe(count > 2);
+      expect(scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth);
+    }
+  });
   return { ...view, flow: flow!, scroller, onNodeDragStop };
 }
 
@@ -187,17 +195,94 @@ it.each([2, 100])(
   }
 );
 
-it.each([2, 100])('pans the canvas over a %s-session tree without scrolling it', async (count) => {
-  const { flow, scroller } = await mount(count);
-  const before = flow.getViewport();
-  await act(async () =>
-    userEvent.wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), {
-      delta: { y: 150 },
-    })
+it.each([2, 100])(
+  'scrolls an overflowing %s-session tree and otherwise pans the canvas',
+  async (count) => {
+    const { flow, scroller } = await mount(count);
+    const before = flow.getViewport();
+    await act(async () =>
+      userEvent.wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), {
+        delta: { y: 150 },
+      })
+    );
+    if (count === 100) {
+      await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(0));
+      expect(flow.getViewport()).toEqual(before);
+      const top = scroller.scrollTop;
+      // Match markdown's region-based convention, not per-axis board chaining.
+      await settle();
+      await act(async () => userEvent.wheel(scroller, { delta: { x: 80, y: 0 } }));
+      await settle();
+      expect(flow.getViewport()).toEqual(before);
+      expect(scroller.scrollTop).toBe(top);
+    } else {
+      await waitFor(() => expect(flow.getViewport().y).not.toBe(before.y));
+      expect(flow.getZoom()).toBe(before.zoom);
+      expect(scroller.scrollTop).toBe(0);
+    }
+  }
+);
+
+it('remeasures loaded sessions, nested wheel targets, and tree expansion at the current scale', async () => {
+  const { flow, container } = await mount(40);
+  const initial = flow.getViewport();
+  const sessions: Session[] = flow.getNodes()[0].data.sessions;
+  const setSessions = async (next: Session[]) => {
+    await act(async () => {
+      flow.setNodes((nodes) =>
+        nodes.map((node) => ({
+          ...node,
+          data: { ...node.data, sessions: next },
+        }))
+      );
+      flow.setViewport(initial);
+    });
+    await waitFor(() => expect(flow.getViewport()).toEqual(initial));
+  };
+  const holder = () => container.querySelector<HTMLElement>('.ant-tree-list-holder')!;
+  const gesture = async (overflow: boolean) => {
+    // Retry layout assertions, not the wheel: virtual measurements can settle later.
+    await waitFor(() =>
+      expect(holder().firstElementChild!.clientHeight > holder().clientHeight).toBe(overflow)
+    );
+    const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+    const before = flow.getViewport();
+    await act(async () => userEvent.wheel(row.querySelector('span')!, { delta: { x: 12, y: 80 } }));
+    if (overflow) {
+      await waitFor(() => expect(holder().scrollTop).toBeGreaterThan(0));
+      expect(flow.getViewport()).toEqual(before);
+    } else {
+      await waitFor(() => expect(flow.getViewport().y).not.toBe(before.y));
+      expect(flow.getViewport().x).not.toBe(before.x);
+      expect(holder().scrollTop).toBe(0);
+    }
+  };
+  await setSessions(sessions.slice(0, 2));
+  await gesture(false);
+  await setSessions(sessions);
+  await gesture(true);
+  await setSessions(sessions.slice(0, 2));
+  await gesture(false);
+  await setSessions(
+    sessions.map((session, index) => ({
+      ...session,
+      genealogy: {
+        children: [],
+        ...(index > 0 ? { parent_session_id: sessions[0].session_id } : {}),
+      },
+    }))
   );
-  await waitFor(() => expect(flow.getViewport().y).not.toBe(before.y));
-  expect(flow.getZoom()).toBe(before.zoom);
-  expect(scroller.scrollTop).toBe(0);
+  await act(async () =>
+    userEvent.click(await screen.findByRole('button', { name: 'Collapse Conversation 0' }))
+  );
+  await gesture(false);
+  await act(async () => flow.setViewport({ ...initial, zoom: 0.55 }));
+  await waitFor(() => expect(flow.getZoom()).toBe(0.55));
+  await act(async () =>
+    userEvent.click(screen.getByRole('button', { name: 'Expand Conversation 0' }))
+  );
+  await gesture(true);
+  expect(onSessionClick).not.toHaveBeenCalled();
 });
 
 it('pans and zooms the canvas over scheduled lists while preserving pagination', async () => {
@@ -236,8 +321,8 @@ it.each([6, 40])(
     const more = await screen.findByRole('button', { name: 'See more' });
     const viewport = document.getElementById(more.getAttribute('aria-controls')!)!;
     const initialViewport = flow.getViewport();
-    wheel(viewport, { deltaY: 30 });
-    expect(flow.getViewport().y).not.toBe(initialViewport.y);
+    await act(async () => userEvent.wheel(viewport, { delta: { y: 30 } }));
+    await waitFor(() => expect(flow.getViewport().y).not.toBe(initialViewport.y));
     expect(viewport.scrollTop).toBe(0);
     await act(async () => flow.setViewport(initialViewport));
     await act(async () => userEvent.click(more));
@@ -312,16 +397,26 @@ it('keeps pinch at both scroll edges and canvas zoom limits from escaping to bro
       fireEvent.scroll(scroller);
     });
     await settle();
+    // The virtual spacer is refined as tail rows mount. Retry setting the end
+    // until current dimensions prove we are actually at the boundary.
+    if (scrollTop > 0) {
+      await waitFor(async () => {
+        scroller.scrollTop = scroller.scrollHeight;
+        fireEvent.scroll(scroller);
+        await settle();
+        expect(scroller.scrollTop + scroller.clientHeight).toBe(scroller.scrollHeight);
+      });
+    }
     const top = scroller.scrollTop;
     expect(wheel(scroller, { ctrlKey: true, deltaY }).defaultPrevented).toBe(true);
     await settle();
     expect(flow.getZoom()).toBe(zoom);
     expect(scroller.scrollTop).toBe(top);
-    // No modifier: pan the canvas even at a tree scroll edge.
+    // Like overflowing markdown, tree edges do not hand the gesture to the board.
     const beforePan = flow.getViewport();
-    wheel(scroller, { deltaY });
+    await act(async () => userEvent.wheel(scroller, { delta: { y: deltaY } }));
     await settle();
-    expect(flow.getViewport().y).not.toBe(beforePan.y);
+    expect(flow.getViewport()).toEqual(beforePan);
     expect(scroller.scrollTop).toBe(top);
     expect(flow.getZoom()).toBe(zoom);
   }
