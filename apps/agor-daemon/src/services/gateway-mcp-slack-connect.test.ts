@@ -710,6 +710,56 @@ describe('Slack MCP connect durable delivery', () => {
     await harness.service.stopListeners();
   });
 
+  /**
+   * After six failures inside fifteen minutes the card is permanently
+   * stranded: nothing reschedules it, and the thread keeps whatever it last
+   * rendered. That outcome has to be distinguishable in the log from an
+   * ordinary retry, or an operator finds out from the user.
+   */
+  it('reports a stranded card at error level, with the ids needed to find it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const retrying = deliveryHarness({
+        delivery: { slack_message_ts: '1700000000.000002', rendered_state: 'connect_required' },
+        widget: { status: 'dismissed' },
+        sendMessage: vi.fn(async () => Promise.reject(new Error('channel_not_found'))),
+      });
+      await withSecret(() => retrying.deliver());
+      expect(error).not.toHaveBeenCalled();
+      expect(warn.mock.calls.at(-1)?.[0]).toContain('retrying=true');
+      expect(warn.mock.calls.at(-1)?.[0]).toContain('stranded=false');
+      await retrying.service.stopListeners();
+
+      const stranded = deliveryHarness({
+        delivery: {
+          slack_message_ts: '1700000000.000002',
+          rendered_state: 'connect_required',
+          delivery_attempt_count: 5,
+          delivery_retry_until: new Date(Date.now() + 60_000).toISOString(),
+        },
+        widget: { status: 'dismissed' },
+        sendMessage: vi.fn(async () => Promise.reject(new Error('channel_not_found'))),
+      });
+      await withSecret(() => stranded.deliver());
+
+      const line = error.mock.calls.at(-1)?.[0] as string;
+      expect(line).toContain('event=mcp_slack_connect_delivery_failed');
+      expect(line).toContain(`widget_id=${WIDGET_ID}`);
+      expect(line).toContain('tenant_id=tenant-a');
+      expect(line).toContain('reason=slack_write_failed');
+      expect(line).toContain('attempt=6/6');
+      expect(line).toContain('stranded=true');
+      // The exception is never in it: `context/guidelines/logging.md` forbids
+      // provider errors and messages, and the reason field is Agor's own.
+      expect(line).not.toMatch(/channel_not_found|Error|C123|1700000000/);
+      await stranded.service.stopListeners();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it('refuses to deliver through a connector whose channel config moved', async () => {
     freshConnectorSend.mockClear();
     const harness = deliveryHarness({

@@ -229,6 +229,22 @@ const MCP_SLACK_ACTIVE_BACKSTOP_MS = 60_000;
 const MCP_SLACK_DELIVERY_RETRY_WINDOW_MS = 15 * 60_000;
 const MCP_SLACK_DELIVERY_MAX_ATTEMPTS = 6;
 const MCP_SLACK_DELIVERY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
+
+/**
+ * Why one Slack delivery attempt failed, in Agor's own words.
+ *
+ * Chosen at the call site, never derived from the thrown value: an exception
+ * from `@slack/web-api` carries a provider error code and often a message, and
+ * `context/guidelines/logging.md` prohibits logging either. The call site
+ * distinguishes the three cases an operator would act on differently anyway.
+ */
+type MCPSlackDeliveryFailureReason =
+  /** No connector could be constructed for the channel's stored credentials. */
+  | 'connector_unavailable'
+  /** The connector was built but could not identify its own Slack app. */
+  | 'app_identity_unavailable'
+  /** The post or edit itself was refused. */
+  | 'slack_write_failed';
 /** Lease one daemon holds while posting or editing one connect card. */
 const MCP_SLACK_CONNECT_CLAIM_MS = 30_000;
 
@@ -1428,10 +1444,47 @@ export class GatewayService {
     };
   }
 
+  /**
+   * Report one failed Slack delivery attempt, and say when a card is stranded.
+   *
+   * Both MCP Slack lanes exhaust after `MCP_SLACK_DELIVERY_MAX_ATTEMPTS`
+   * inside a 15-minute window, after which the card is permanently stranded
+   * and no sweep revisits it. That is the one outcome an operator has to be
+   * able to see, so it is an `error` with a `stranded=true` field rather than
+   * another indistinguishable `warn`.
+   *
+   * Everything logged is Agor-owned: the operation, the entity ids needed to
+   * correlate, the attempt count, and a `reason` this daemon chose at the call
+   * site. No exception, message, provider error code, thread id, channel id,
+   * server name, or URL — `context/guidelines/logging.md` prohibits all of
+   * them, and the call site already knows the more useful thing anyway.
+   */
+  private logMcpSlackDeliveryFailure(
+    lane: 'recovery' | 'connect',
+    reason: MCPSlackDeliveryFailureReason,
+    ids: Record<string, string | undefined>,
+    attempt: number | undefined,
+    retrying: boolean
+  ): void {
+    const stranded = !retrying && (attempt ?? 0) >= MCP_SLACK_DELIVERY_MAX_ATTEMPTS;
+    const fields = [
+      `event=mcp_slack_${lane}_delivery_failed`,
+      `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
+      ...Object.entries(ids).map(([key, value]) => `${key}=${value ?? '<unknown>'}`),
+      `reason=${reason}`,
+      `attempt=${attempt ?? '<unknown>'}/${MCP_SLACK_DELIVERY_MAX_ATTEMPTS}`,
+      `retrying=${retrying}`,
+      `stranded=${stranded}`,
+    ].join(' ');
+    if (stranded) console.error(`[gateway] ${fields}`);
+    else console.warn(`[gateway] ${fields}`);
+  }
+
   private async recordMcpSlackDeliveryFailure(
     taskId: string,
     noticeId: string,
-    claimId: string
+    claimId: string,
+    reason: MCPSlackDeliveryFailureReason
   ): Promise<void> {
     const failed = await this.taskRepo
       .mutateMCPSlackRecoveryNotice(taskId, (current) =>
@@ -1440,13 +1493,20 @@ export class GatewayService {
           : null
       )
       .catch(() => undefined);
-    console.warn('[gateway] MCP recovery Slack delivery failed');
     const failedNotice = failed?.task.metadata?.mcp_slack_recovery_notice;
-    if (failed?.changed && failedNotice?.delivery_next_retry_at) {
+    const retrying = !!failed?.changed && !!failedNotice?.delivery_next_retry_at;
+    this.logMcpSlackDeliveryFailure(
+      'recovery',
+      reason,
+      { task_id: taskId, notice_id: noticeId },
+      failedNotice?.delivery_attempt_count,
+      retrying
+    );
+    if (retrying) {
       this.scheduleMcpSlackDeliveryRetry(
         taskId,
         noticeId,
-        Math.max(100, new Date(failedNotice.delivery_next_retry_at).getTime() - Date.now())
+        Math.max(100, new Date(failedNotice!.delivery_next_retry_at!).getTime() - Date.now())
       );
     }
   }
@@ -1546,7 +1606,12 @@ export class GatewayService {
           ? getConnector('slack', channel.config)
           : (this.getActiveListener(channel.id) ?? getConnector('slack', channel.config));
     } catch {
-      await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+      await this.recordMcpSlackDeliveryFailure(
+        task.task_id,
+        notice.notice_id,
+        claimId,
+        'connector_unavailable'
+      );
       return;
     }
     if (channel.provider_config_generation !== notice.gateway_config_generation) {
@@ -1554,7 +1619,12 @@ export class GatewayService {
       try {
         currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
       } catch {
-        await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+        await this.recordMcpSlackDeliveryFailure(
+          task.task_id,
+          notice.notice_id,
+          claimId,
+          'app_identity_unavailable'
+        );
         return;
       }
       if (
@@ -1666,7 +1736,12 @@ export class GatewayService {
       if (retry) clearTimeout(retry);
       this.mcpSlackDeliveryRetryTimers.delete(notice.notice_id);
     } catch {
-      await this.recordMcpSlackDeliveryFailure(task.task_id, notice.notice_id, claimId);
+      await this.recordMcpSlackDeliveryFailure(
+        task.task_id,
+        notice.notice_id,
+        claimId,
+        'slack_write_failed'
+      );
     }
   }
 
@@ -2059,18 +2134,26 @@ export class GatewayService {
 
   private async recordMcpSlackConnectDeliveryFailure(
     widgetId: MessageID,
-    claimId: string
+    claimId: string,
+    reason: MCPSlackDeliveryFailureReason
   ): Promise<void> {
     const failed = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
       current?.delivery_claim?.claim_id === claimId
         ? this.mcpSlackConnectFailedDelivery(current)
         : null
     ).catch(() => undefined);
-    console.warn('[gateway] MCP connect Slack delivery failed');
-    if (failed?.changed && failed.delivery?.delivery_next_retry_at) {
+    const retrying = !!failed?.changed && !!failed.delivery?.delivery_next_retry_at;
+    this.logMcpSlackDeliveryFailure(
+      'connect',
+      reason,
+      { widget_id: widgetId },
+      failed?.delivery?.delivery_attempt_count,
+      retrying
+    );
+    if (retrying) {
       this.scheduleMcpSlackConnectRetry(
         widgetId,
-        Math.max(100, new Date(failed.delivery.delivery_next_retry_at).getTime() - Date.now())
+        Math.max(100, new Date(failed!.delivery!.delivery_next_retry_at!).getTime() - Date.now())
       );
     }
   }
@@ -2341,7 +2424,7 @@ export class GatewayService {
         ? (this.getActiveListener(channel.id) ?? getConnector('slack', channel.config))
         : getConnector('slack', channel.config);
     } catch {
-      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'connector_unavailable');
       return;
     }
     if (!generationCurrent) {
@@ -2349,7 +2432,11 @@ export class GatewayService {
       try {
         currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
       } catch {
-        await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+        await this.recordMcpSlackConnectDeliveryFailure(
+          widgetId,
+          claimId,
+          'app_identity_unavailable'
+        );
         return;
       }
       if (
@@ -2456,7 +2543,7 @@ export class GatewayService {
       if (retry) clearTimeout(retry);
       this.mcpSlackConnectRetryTimers.delete(widgetId);
     } catch {
-      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId);
+      await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'slack_write_failed');
     }
   }
 
