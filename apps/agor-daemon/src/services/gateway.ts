@@ -30,6 +30,7 @@ import {
   getHiddenTenantId,
   getMCPEgressGatewayMode,
   isDatabaseUniqueConstraintError,
+  isMCPSlackConnectCardEnabled,
   isPostgresDatabase,
   MCPServerRepository,
   MessagesRepository,
@@ -2179,6 +2180,15 @@ export class GatewayService {
    * that would render now.
    */
   private async deliverMcpSlackConnectCard(widgetId: MessageID): Promise<void> {
+    // Operator kill switch, checked before anything is read or posted. Off
+    // stops the PROJECTION only: the canvas widget still renders a live
+    // Connect button and `agor_widgets_request_oauth` still hands the agent a
+    // `session_url` to relay, which is what makes turning the card off a
+    // degradation rather than a removal. A card already in a thread simply
+    // stops being repainted, and its link stops being redeemable
+    // (`loadMCPOAuthConnectBinding`) — matching the recovery lane, which
+    // refuses at both ends on `isMcpRuntimeRecoveryEnabled`.
+    if (!(await isMCPSlackConnectCardEnabled(this.db))) return;
     const deps = await this.mcpSlackConnectDeps();
     const binding = await resolveSlackConnectBinding(deps, widgetId);
     const widget = binding.widget;

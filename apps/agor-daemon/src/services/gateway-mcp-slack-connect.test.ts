@@ -23,12 +23,21 @@ import type {
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A channel whose `provider_config_generation` moved is deliberately delivered
 // through a freshly constructed connector rather than the process-local
 // listener, whose token may predate the change. Constructing one needs real
 // credentials, so the test supplies a stand-in and asserts which one was used.
+// The operator kill switch reads one app variable. The projection tests care
+// about what the switch DOES, not about the read; the real read is driven end
+// to end in `register-services.oauth-sqlite.integration.test.ts`.
+const cardProjectionEnabled = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('@agor/core/db', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('@agor/core/db');
+  return { ...actual, isMCPSlackConnectCardEnabled: cardProjectionEnabled };
+});
+
 const freshConnectorSend = vi.fn(async () => '1700000000.000002');
 vi.mock('@agor/core/gateway', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/gateway');
@@ -475,6 +484,8 @@ function deliveryHarness(options: HarnessOptions = {}) {
 }
 
 describe('Slack MCP connect durable delivery', () => {
+  beforeEach(() => cardProjectionEnabled.mockResolvedValue(true));
+
   const SECRET = 'connect-card-test-master-secret';
   const withSecret = async <T>(work: () => Promise<T>): Promise<T> => {
     const previous = process.env.AGOR_MASTER_SECRET;
@@ -637,6 +648,35 @@ describe('Slack MCP connect durable delivery', () => {
     // indexed column outright, so the marker beneath it is inert either way
     // and one fewer write happens on the hot path.
     expect(harness.dueMarker()).toBe('2026-09-16T11:59:00.000Z');
+  });
+
+  /**
+   * Off disables the PROJECTION and nothing else. The canvas widget still
+   * renders a live Connect button, and `agor_widgets_request_oauth` still
+   * returns the `session_url` the agent relays — which is what makes this a
+   * config change rather than a revert.
+   */
+  it('posts nothing at all when the card projection is switched off', async () => {
+    cardProjectionEnabled.mockResolvedValue(false);
+    const harness = deliveryHarness({ delivery: null });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    // No link was minted either: a switched-off lane must not leave a sealed
+    // token behind that redemption would then have to refuse.
+    expect(harness.current()).toBeUndefined();
+  });
+
+  it('stops repainting a card that is already in the thread', async () => {
+    cardProjectionEnabled.mockResolvedValue(false);
+    const harness = deliveryHarness({
+      widget: { status: 'submitted', result_meta: { attached: true } },
+      delivery: { slack_message_ts: '1700000000.000002', rendered_state: 'connect_required' },
+    });
+    await withSecret(() => harness.deliver());
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.current()?.rendered_state).toBe('connect_required');
   });
 
   it('renders once and then leaves a steady card alone', async () => {
