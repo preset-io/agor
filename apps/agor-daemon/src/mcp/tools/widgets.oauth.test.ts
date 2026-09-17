@@ -291,6 +291,24 @@ describe('agor_widgets_request_oauth — destination selection', () => {
     }
   });
 
+  it('validates params at the seam on the short-circuit path too, not just the pending one', async () => {
+    // The `already_present` branch builds its params with `satisfies
+    // OAuthWidgetParams` — a compile-time check that strips nothing and
+    // narrows nothing at runtime. A server row whose `oauth_mode` is not one
+    // of the two the schema allows used to be frozen onto the widget row
+    // verbatim; the seam's `paramsSchema.parse` now refuses it.
+    livenessStub.mockResolvedValue({ live: true });
+    const { app } = makeApp({
+      server: { ...OAUTH_SERVER, auth: { type: 'oauth', oauth_mode: 'nonsense' } },
+    });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    ).rejects.toThrow();
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
   it('mints a pending widget pinned to an existing OAuth server', async () => {
     const { app, calls } = makeApp();
     const tools = registerAndCapture({ app });

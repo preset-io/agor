@@ -306,6 +306,38 @@ export async function authorizeWidgetMint(
   await entry.authorizeMint?.(ctx, params);
 }
 
+/**
+ * Validate the params a mint is about to freeze onto a widget row, and return
+ * what the schema accepted.
+ *
+ * `authorizeWidgetMint` answers "may this be created"; this answers "is this
+ * the shape the type declared". They are separate calls because the gate also
+ * runs EARLY, before a destination is resolved, with no params to validate —
+ * and because a caller that skipped this one would write an unvalidated
+ * `params` blob into a row three surfaces render from.
+ *
+ * Running it at the seam rather than at each tool makes the guarantee uniform.
+ * Every call site happens to parse already, but "happens to" is the whole
+ * problem: the `oauth` lane's `already_present` short-circuit builds its
+ * params with `satisfies OAuthWidgetParams`, which is a compile-time check
+ * that strips nothing at runtime, so `.strict()` was enforced on one of that
+ * type's two mint paths and not the other.
+ *
+ * The parsed value is returned, not discarded: a `.strict()` schema refuses an
+ * unknown key and a plain object schema strips it, and the row should record
+ * whichever the type asked for.
+ */
+export function parseWidgetMintParams(type: WidgetType, params: unknown): unknown {
+  const entry = widgetRegistry.get(type);
+  if (!entry) {
+    throw new Error(
+      `Widget type '${type}' is not registered on this daemon; refusing to mint it. ` +
+        `Widget types register at boot via registerAllWidgets().`
+    );
+  }
+  return entry.paramsSchema.parse(params);
+}
+
 /** All registered widget types (for diagnostics / tests). */
 export function listWidgetTypes(): WidgetType[] {
   return Array.from(widgetRegistry.keys());
