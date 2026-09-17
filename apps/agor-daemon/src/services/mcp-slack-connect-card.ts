@@ -12,6 +12,7 @@
  * than that one. See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
  */
 
+import type { SlackAgorMessageMetadataEventType } from '@agor/core/gateway';
 import type {
   MCPOAuthMode,
   MCPSlackConnectDelivery,
@@ -29,8 +30,13 @@ const BUTTON_TEXT_MAX = 75;
 /**
  * Metadata `event_type` for the card, so a daemon that crashed after sending
  * but before recording the `ts` can find its own row instead of posting twice.
+ *
+ * Typed against the connector's own allowlist, not merely written to match it:
+ * `sendMessage` drops a metadata request whose `event_type` it does not
+ * recognise, so a value only this file knew would post the card bare and leave
+ * `findMessageByMetadata` permanently unable to match it. Typecheck now says so.
  */
-export const MCP_SLACK_CONNECT_EVENT_TYPE = 'agor_mcp_connect';
+export const MCP_SLACK_CONNECT_EVENT_TYPE: SlackAgorMessageMetadataEventType = 'agor_mcp_connect';
 
 /** Thread-map metadata key for the once-per-conversation shared-thread notice. */
 export const MCP_SLACK_CONNECT_SHARED_WARNING_KEY = 'mcp_connect_shared_thread_warned_at';

@@ -30,6 +30,7 @@ import {
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   markdownToSlackPayload,
+  SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
   SlackConnector,
   wrapTablesInCodeBlocks,
 } from './slack';
@@ -1060,6 +1061,59 @@ describe('SlackConnector.sendMessage', () => {
     ]);
     expect(posts[0]).not.toHaveProperty('client_msg_id');
     expect(updates[0]).not.toHaveProperty('metadata');
+  });
+
+  it('stamps every Agor lane it can reconcile, and refuses metadata it cannot', async () => {
+    // The connect lane posts under its own `event_type`, and
+    // `findMessageByMetadata` matches on exactly that value. A stamp that only
+    // recognised the recovery lane would post the connect card bare, so a
+    // daemon that crashed between the post and recording its `ts` would post a
+    // second card with a second live Connect button rather than finding the
+    // first. Found by driving the real projection, not by a unit test.
+    const posts: Array<{ metadata?: unknown }> = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        postMessage: async (args: unknown) => {
+          posts.push(args as { metadata?: unknown });
+          return { ok: true, ts: '1700000000.000009' };
+        },
+      },
+    };
+
+    const post = (eventType: string, deliveryId: unknown) =>
+      connector.sendMessage({
+        threadId: 'C123-1700000000.000000',
+        text: 'Connect Notion',
+        metadata: {
+          slack_message_metadata: {
+            event_type: eventType,
+            event_payload: { delivery_id: deliveryId },
+          },
+        },
+      });
+
+    await post('agor_mcp_connect', 'delivery-connect');
+    await post('agor_mcp_recovery', 'delivery-recovery');
+    // Not an Agor lane, so Slack never sees it: the allowlist exists because
+    // the metadata request comes from a caller and Slack rejects unknown shapes.
+    await post('something_else', 'delivery-3');
+    // An Agor lane with an unusable payload is still dropped.
+    await post('agor_mcp_connect', 42);
+    await post('agor_mcp_connect', 'd'.repeat(129));
+
+    expect(posts.map((p) => p.metadata)).toEqual([
+      { event_type: 'agor_mcp_connect', event_payload: { delivery_id: 'delivery-connect' } },
+      { event_type: 'agor_mcp_recovery', event_payload: { delivery_id: 'delivery-recovery' } },
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    // Whatever a lane stamps must be a value the reconciliation read can name.
+    expect([...SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES]).toEqual([
+      'agor_mcp_recovery',
+      'agor_mcp_connect',
+    ]);
   });
 
   it('reconciles one bounded ambiguous post by durable Slack metadata', async () => {

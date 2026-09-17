@@ -67,6 +67,31 @@ const MAX_TABLES_PER_MESSAGE = 1;
 // Slack rejects `chat.postMessage` with more than 50 blocks; if we'd exceed
 // this we drop the blocks payload entirely and let `text` carry the message.
 const MAX_BLOCKS_PER_MESSAGE = 50;
+/**
+ * Message-metadata `event_type` values Agor stamps on its own Slack posts.
+ *
+ * Slack only returns `metadata` on messages that carried it, so this is the
+ * one handle a daemon has on a row it posted but crashed before recording —
+ * `findMessageByMetadata` looks the row up by exactly these values. The list
+ * is an allowlist rather than a passthrough because `sendMessage` accepts its
+ * metadata request from a caller and Slack rejects unknown shapes outright;
+ * every lane that reconciles a posted row must therefore be named here, or its
+ * post goes out bare and its reconciliation can never match.
+ */
+export const SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES = [
+  /** Reactive lane: a mediated MCP call was rejected with `needs_reauth`. */
+  'agor_mcp_recovery',
+  /** Intent-initiated lane: an agent-requested MCP OAuth connect card. */
+  'agor_mcp_connect',
+] as const;
+
+export type SlackAgorMessageMetadataEventType =
+  (typeof SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES)[number];
+
+const SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET: ReadonlySet<string> = new Set(
+  SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES
+);
+
 // Slack error codes that indicate the `blocks` payload was malformed/rejected,
 // where retrying with text-only is the right fallback.
 const BLOCK_PAYLOAD_ERRORS = new Set([
@@ -1402,12 +1427,14 @@ export class SlackConnector implements GatewayConnector {
     const requestedMessageMetadata = req.metadata?.slack_message_metadata as
       | { event_type?: unknown; event_payload?: { delivery_id?: unknown } }
       | undefined;
+    const requestedEventType = requestedMessageMetadata?.event_type;
     const messageMetadata =
-      requestedMessageMetadata?.event_type === 'agor_mcp_recovery' &&
-      typeof requestedMessageMetadata.event_payload?.delivery_id === 'string' &&
+      typeof requestedEventType === 'string' &&
+      SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET.has(requestedEventType) &&
+      typeof requestedMessageMetadata?.event_payload?.delivery_id === 'string' &&
       requestedMessageMetadata.event_payload.delivery_id.length <= 128
         ? {
-            event_type: 'agor_mcp_recovery',
+            event_type: requestedEventType,
             event_payload: {
               delivery_id: requestedMessageMetadata.event_payload.delivery_id,
             },
