@@ -32,6 +32,7 @@ import {
   and,
   BoardRepository,
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
   enqueueAfterTenantDatabaseCommit,
@@ -4955,118 +4956,128 @@ export async function registerMCPServices(
       ) {
         throw new Error(genericFailure);
       }
-      const taskRepo = new TaskRepository(db);
-      const task = await taskRepo.findById(claims.task_id);
-      const notice = task?.metadata?.mcp_slack_recovery_notice;
-      const recovery = task?.metadata?.mcp_recovery;
-      const source = task?.metadata?.gateway_task_source;
-      if (
-        !task ||
-        !notice ||
-        !mcpSlackRecoveryClaimsMatchNotice(claims, notice, tenantId) ||
-        task.session_id !== claims.session_id ||
-        task.created_by !== callerId ||
-        ![TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
-          task.status as never
-        ) ||
-        !recovery ||
-        recovery.code !== 'oauth_reauth_required' ||
-        recovery.status !== 'action_required' ||
-        recovery.action !== 'reauthenticate' ||
-        recovery.generation !== claims.recovery_generation ||
-        recovery.request_id !== claims.recovery_request_id ||
-        recovery.mcp_server_id !== claims.mcp_server_id ||
-        source?.gateway_channel_id !== claims.gateway_channel_id ||
-        source.channel_type !== 'slack' ||
-        source.thread_id !== claims.slack_thread_id ||
-        source.provider_user_id !== claims.slack_user_id ||
-        source.slack_team_id !== claims.slack_team_id ||
-        source.slack_channel_id !== claims.slack_channel_id
-      ) {
-        throw new Error(genericFailure);
-      }
-      // Shared with the connect lane. Only the lane-specific predicates below
-      // differ; the channel/thread/server/user authority is one implementation
-      // so neither lane can quietly drop a check the other keeps.
-      const [authority, mode] = await Promise.all([
-        readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
-          principalUserId: claims.sub,
-          credentialUserId: claims.credential_user_id,
-          sessionId: claims.session_id,
-          gatewayChannelId: claims.gateway_channel_id,
-          gatewayConfigGeneration: claims.gateway_config_generation,
-          slackChannelId: claims.slack_channel_id,
-          slackThreadId: claims.slack_thread_id,
-          mcpServerId: claims.mcp_server_id,
-          mcpServerConfigVersion: claims.mcp_server_config_version,
-        }),
-        getMCPEgressGatewayMode(db),
-      ]);
-      const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(db);
-      const attached = await new SessionMCPServerRepository(db)
-        .listServers(claims.session_id, true)
-        .then((servers) =>
-          servers.some((candidate) => candidate.mcp_server_id === claims.mcp_server_id)
-        );
-      if (
-        !authority ||
-        authority.session.created_by !== claims.credential_user_id ||
-        !attached ||
-        !recoveryEnabled ||
-        (mode !== 'compatibility' && mode !== 'enforced')
-      ) {
-        throw new Error(genericFailure);
-      }
-      if (consume) {
-        const consumedAt = new Date();
-        const consumed = await taskRepo.mutateMCPSlackRecoveryNotice(
-          task.task_id,
-          (current, lockedTask) => {
-            const lockedRecovery = lockedTask.metadata?.mcp_recovery;
-            if (
-              !current ||
-              !mcpSlackRecoveryClaimsMatchNotice(claims, current, tenantId) ||
-              current.token_consumed_at ||
-              new Date(current.expires_at).getTime() <= consumedAt.getTime() ||
-              !lockedRecovery ||
-              lockedRecovery.code !== 'oauth_reauth_required' ||
-              lockedRecovery.status !== 'action_required' ||
-              lockedRecovery.generation !== claims.recovery_generation ||
-              lockedRecovery.request_id !== claims.recovery_request_id ||
-              lockedRecovery.mcp_server_id !== claims.mcp_server_id
-            ) {
-              return null;
+      // Every read and the consume CAS below run inside one tenant database
+      // scope, opened here for the same reason the connect lane opens its
+      // own: `/mcp-slack-recovery` and `/mcp-servers/oauth-start` are both
+      // registered outside `TENANT_OWNED_SERVICE_PATHS`, so nothing upstream
+      // arms a scope for them, and against the production guard the very
+      // first repository read throws — which this lane reports as its single
+      // generic refusal, so a valid link looks revoked. Entering a scope that
+      // is already open is a no-op.
+      return await runInOAuthTenantScope(db, tenantId, async () => {
+        const taskRepo = new TaskRepository(db);
+        const task = await taskRepo.findById(claims.task_id);
+        const notice = task?.metadata?.mcp_slack_recovery_notice;
+        const recovery = task?.metadata?.mcp_recovery;
+        const source = task?.metadata?.gateway_task_source;
+        if (
+          !task ||
+          !notice ||
+          !mcpSlackRecoveryClaimsMatchNotice(claims, notice, tenantId) ||
+          task.session_id !== claims.session_id ||
+          task.created_by !== callerId ||
+          ![TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
+            task.status as never
+          ) ||
+          !recovery ||
+          recovery.code !== 'oauth_reauth_required' ||
+          recovery.status !== 'action_required' ||
+          recovery.action !== 'reauthenticate' ||
+          recovery.generation !== claims.recovery_generation ||
+          recovery.request_id !== claims.recovery_request_id ||
+          recovery.mcp_server_id !== claims.mcp_server_id ||
+          source?.gateway_channel_id !== claims.gateway_channel_id ||
+          source.channel_type !== 'slack' ||
+          source.thread_id !== claims.slack_thread_id ||
+          source.provider_user_id !== claims.slack_user_id ||
+          source.slack_team_id !== claims.slack_team_id ||
+          source.slack_channel_id !== claims.slack_channel_id
+        ) {
+          throw new Error(genericFailure);
+        }
+        // Shared with the connect lane. Only the lane-specific predicates below
+        // differ; the channel/thread/server/user authority is one implementation
+        // so neither lane can quietly drop a check the other keeps.
+        const [authority, mode] = await Promise.all([
+          readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+            principalUserId: claims.sub,
+            credentialUserId: claims.credential_user_id,
+            sessionId: claims.session_id,
+            gatewayChannelId: claims.gateway_channel_id,
+            gatewayConfigGeneration: claims.gateway_config_generation,
+            slackChannelId: claims.slack_channel_id,
+            slackThreadId: claims.slack_thread_id,
+            mcpServerId: claims.mcp_server_id,
+            mcpServerConfigVersion: claims.mcp_server_config_version,
+          }),
+          getMCPEgressGatewayMode(db),
+        ]);
+        const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(db);
+        const attached = await new SessionMCPServerRepository(db)
+          .listServers(claims.session_id, true)
+          .then((servers) =>
+            servers.some((candidate) => candidate.mcp_server_id === claims.mcp_server_id)
+          );
+        if (
+          !authority ||
+          authority.session.created_by !== claims.credential_user_id ||
+          !attached ||
+          !recoveryEnabled ||
+          (mode !== 'compatibility' && mode !== 'enforced')
+        ) {
+          throw new Error(genericFailure);
+        }
+        if (consume) {
+          const consumedAt = new Date();
+          const consumed = await taskRepo.mutateMCPSlackRecoveryNotice(
+            task.task_id,
+            (current, lockedTask) => {
+              const lockedRecovery = lockedTask.metadata?.mcp_recovery;
+              if (
+                !current ||
+                !mcpSlackRecoveryClaimsMatchNotice(claims, current, tenantId) ||
+                current.token_consumed_at ||
+                new Date(current.expires_at).getTime() <= consumedAt.getTime() ||
+                !lockedRecovery ||
+                lockedRecovery.code !== 'oauth_reauth_required' ||
+                lockedRecovery.status !== 'action_required' ||
+                lockedRecovery.generation !== claims.recovery_generation ||
+                lockedRecovery.request_id !== claims.recovery_request_id ||
+                lockedRecovery.mcp_server_id !== claims.mcp_server_id
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                token_consumed_at: consumedAt.toISOString(),
+                ...(attemptId
+                  ? {
+                      oauth_attempt_id: attemptId,
+                      oauth_start_claimed_at: consumedAt.toISOString(),
+                      oauth_start_claim_expires_at: new Date(
+                        consumedAt.getTime() + 30_000
+                      ).toISOString(),
+                      next_repair_at: new Date(consumedAt.getTime() + 30_000).toISOString(),
+                    }
+                  : { next_repair_at: consumedAt.toISOString() }),
+              };
             }
-            return {
-              ...current,
-              token_consumed_at: consumedAt.toISOString(),
-              ...(attemptId
-                ? {
-                    oauth_attempt_id: attemptId,
-                    oauth_start_claimed_at: consumedAt.toISOString(),
-                    oauth_start_claim_expires_at: new Date(
-                      consumedAt.getTime() + 30_000
-                    ).toISOString(),
-                    next_repair_at: new Date(consumedAt.getTime() + 30_000).toISOString(),
-                  }
-                : { next_repair_at: consumedAt.toISOString() }),
-            };
-          }
-        );
-        if (!consumed.changed) throw new Error(genericFailure);
-      }
-      return {
-        claims,
-        notice,
-        oauthContext: {
-          notice_id: notice.notice_id,
-          task_id: notice.task_id,
-          session_id: notice.session_id,
-          mcp_server_id: notice.mcp_server_id,
-          recovery_generation: notice.recovery_generation,
-          recovery_request_id: notice.recovery_request_id,
-        },
-      };
+          );
+          if (!consumed.changed) throw new Error(genericFailure);
+        }
+        return {
+          claims,
+          notice,
+          oauthContext: {
+            notice_id: notice.notice_id,
+            task_id: notice.task_id,
+            session_id: notice.session_id,
+            mcp_server_id: notice.mcp_server_id,
+            recovery_generation: notice.recovery_generation,
+            recovery_request_id: notice.recovery_request_id,
+          },
+        };
+      });
     } catch {
       throw new Forbidden(genericFailure);
     }
@@ -5317,6 +5328,42 @@ export async function registerMCPServices(
         data.slack_recovery_token || data.connect_token
           ? (generateId() as MCPOAuthAttemptID)
           : undefined;
+      /**
+       * Durable state for the two Slack redemption lanes, on short tenant
+       * units of work.
+       *
+       * This endpoint is on `TENANT_IDENTITY_ONLY_SERVICE_PATHS`: it carries
+       * tenant identity for the whole request and must never hold an HTTP-long
+       * transaction across provider I/O, so nothing upstream arms a tenant
+       * database scope for it. Both lanes then reach durable state from three
+       * places that are not the request body — the 10s lease renewal timer,
+       * the failure marker, and the post-discovery `oauth_started_at` stamp —
+       * and the binding loader's own scope has closed before any of them runs.
+       *
+       * Binding the repositories makes the scope a property of the handle
+       * rather than of each call site, which is the same seam `GatewayService`
+       * uses for every one of its deferred writers. A touch added to this
+       * handler later is scoped by construction instead of by remembering a
+       * wrapper — and it picks up the per-tenant write gate, which a deferred
+       * writer never gets from the request hook chain.
+       *
+       * The tenant is pinned rather than read from ambient identity: the
+       * request's own tenant is what the binding loaders verify the sealed
+       * claims against (`mcpOAuthConnectClaimsMatchCaller`), so it is the
+       * strongest value available, and the renewal timer fires on a callback
+       * whose identity is re-entered separately.
+       */
+      const slackLaneTenantId = tenantIdFromParams(params);
+      const slackLaneMessages = bindRepositoryToTenantUnitOfWork(
+        db,
+        new MessagesRepository(db),
+        slackLaneTenantId
+      );
+      const slackLaneTasks = bindRepositoryToTenantUnitOfWork(
+        db,
+        new TaskRepository(db),
+        slackLaneTenantId
+      );
       const stopSlackStartLeaseRenewal = (): void => {
         if (slackStartLeaseTimer) clearInterval(slackStartLeaseTimer);
         slackStartLeaseTimer = undefined;
@@ -5327,7 +5374,7 @@ export async function registerMCPServices(
           throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
         }
         const now = new Date();
-        const renewed = await new TaskRepository(db).mutateMCPSlackRecoveryNotice(
+        const renewed = await slackLaneTasks.mutateMCPSlackRecoveryNotice(
           binding.notice.task_id,
           (current) => {
             if (
@@ -5371,7 +5418,7 @@ export async function registerMCPServices(
         }
         const now = new Date();
         const renewed = await mutateSlackConnectDelivery(
-          new MessagesRepository(db),
+          slackLaneMessages,
           binding.claims.widget_id,
           (current, widget) => {
             if (
@@ -5400,11 +5447,26 @@ export async function registerMCPServices(
           throw new Conflict('This MCP connect action was superseded before sign-in opened.');
         }
       };
+      /**
+       * Record that this attempt's sign-in never opened.
+       *
+       * The one-use token is already spent by the time anything can call this,
+       * so the delivery record is the only thing that can tell the card — and
+       * the user — that the link is gone. A burned token with no
+       * `oauth_failed_at` renders as a live Connect button that can never work
+       * again, which is unrecoverable from Slack: the card offers the only
+       * affordance the thread has.
+       *
+       * So the write is best effort but never silent. It cannot throw — every
+       * caller is already handling an earlier failure, and replacing that
+       * diagnosis with this one would hide the actual cause — but a failure
+       * here is an operator-visible degraded outcome, not a nothing.
+       */
       const markConnectStartFailed = async (): Promise<void> => {
         const binding = connectBinding;
         if (!binding) return;
-        await mutateSlackConnectDelivery(
-          new MessagesRepository(db),
+        const failed = await mutateSlackConnectDelivery(
+          slackLaneMessages,
           binding.claims.widget_id,
           (current) =>
             current?.delivery_id === binding.delivery.delivery_id &&
@@ -5414,16 +5476,40 @@ export async function registerMCPServices(
                   ...current,
                   oauth_failed_at: new Date().toISOString(),
                   oauth_start_claim_expires_at: undefined,
+                  next_repair_at: new Date().toISOString(),
                 }
               : null
-        ).catch(() => undefined);
+        ).catch(() => {
+          console.warn(
+            '[OAuth Start] event=mcp_slack_connect_failure_unrecorded lane=connect ' +
+              'outcome=delivery_write_failed'
+          );
+          return undefined;
+        });
+        if (!failed?.changed) return;
+        // `mutateSlackConnectDelivery` deliberately emits no service event, so
+        // the projection has to be told; otherwise the thread keeps its live
+        // button until the repair sweep next looks at the row. The whole call
+        // is guarded, not just its promise: this runs while an earlier failure
+        // is being reported, and a gateway that cannot repaint must not become
+        // the error the caller sees.
+        try {
+          const gateway = app.service('gateway') as unknown as {
+            syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
+          };
+          await gateway.syncMcpSlackConnectCard(binding.claims.widget_id);
+        } catch {
+          console.warn(
+            '[OAuth Start] event=mcp_slack_connect_card_unwoken lane=connect outcome=sync_failed'
+          );
+        }
       };
       const markSlackRecoveryStartFailed = async (): Promise<void> => {
         stopSlackStartLeaseRenewal();
         await markConnectStartFailed();
         const binding = slackRecoveryBinding;
         if (!binding) return;
-        const failed = await new TaskRepository(db)
+        const failed = await slackLaneTasks
           .mutateMCPSlackRecoveryNotice(binding.notice.task_id, (current) =>
             current?.notice_id === binding.notice.notice_id &&
             current.oauth_attempt_id === reservedSlackAttemptId
@@ -5435,7 +5521,13 @@ export async function registerMCPServices(
                 }
               : null
           )
-          .catch(() => null);
+          .catch(() => {
+            console.warn(
+              '[OAuth Start] event=mcp_slack_connect_failure_unrecorded lane=recovery ' +
+                'outcome=notice_write_failed'
+            );
+            return null;
+          });
         if (failed?.changed) {
           const gateway = app.service('gateway') as unknown as {
             syncMcpSlackRecoveryNoticeAfterCommit(taskId: string, params?: unknown): void;
@@ -5758,7 +5850,7 @@ export async function registerMCPServices(
             throw new Conflict('This MCP connect action was superseded before sign-in opened.');
           }
           const opened = await mutateSlackConnectDelivery(
-            new MessagesRepository(db),
+            slackLaneMessages,
             connectBinding.claims.widget_id,
             (current, widget) => {
               const openedAt = new Date();
@@ -5813,7 +5905,7 @@ export async function registerMCPServices(
           if (result.attemptId !== reservedSlackAttemptId) {
             throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
           }
-          const opened = await new TaskRepository(db).mutateMCPSlackRecoveryNotice(
+          const opened = await slackLaneTasks.mutateMCPSlackRecoveryNotice(
             slackRecoveryBinding.notice.task_id,
             (current) => {
               const openedAt = new Date();
