@@ -1028,6 +1028,20 @@ export function taskMayNeedMcpSlackRecoverySync(task: unknown): boolean {
   );
 }
 
+/**
+ * What a recovery notice says once it turns out to be a duplicate.
+ *
+ * The connect lane's `mcpSlackConnectDuplicateCardText`, in this lane's words.
+ * Used only where the connector cannot delete its own message: the point is to
+ * take the button away and point at the row that is authoritative.
+ */
+export function mcpSlackRecoveryDuplicateNoticeText(): string {
+  return (
+    '*MCP recovery*\nThis is a duplicate message and is no longer in use. ' +
+    'See the other Agor message in this thread for the current status.'
+  );
+}
+
 export function mcpSlackRecoveryMessageCopy(
   state: MCPSlackRecoveryRenderedState,
   dispatch: MCPSlackRecoveryNotice['provider_dispatch']
@@ -1600,7 +1614,7 @@ export class GatewayService {
     }
   }
 
-  private async deliverMcpSlackRecoveryNotice(task: Task): Promise<void> {
+  private async deliverMcpSlackRecoveryNotice(task: Task, attempt = 0): Promise<void> {
     const initial = task.metadata?.mcp_slack_recovery_notice;
     if (!initial) return;
     const state = mcpSlackRecoveryRenderedState(task, initial);
@@ -1807,7 +1821,7 @@ export class GatewayService {
       });
       const receipt = normalizeSendReceipt(sent);
       const renderedAt = new Date();
-      await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+      const settled = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
         current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
           ? {
               ...current,
@@ -1821,6 +1835,32 @@ export class GatewayService {
             }
           : null
       );
+      if (!settled.changed) {
+        // The same lease, the same two outcomes as the connect lane. This one
+        // fenced its receipt from the start and then did nothing about what it
+        // had already written to Slack: a post that lost the claim left a
+        // second notice with a live Reconnect button that nothing would ever
+        // edit, and an edit that lost it repainted the recorded row with a
+        // superseded state that `rendered_state` then made permanent.
+        const owned = settled.task.metadata?.mcp_slack_recovery_notice;
+        const ownedTs = owned?.notice_id === notice.notice_id ? owned.slack_message_ts : undefined;
+        if (reconciledMessageTs && reconciledMessageTs === ownedTs) {
+          await this.repaintLostMcpSlackRecoveryRender(
+            task.task_id,
+            notice.notice_id,
+            reconciledMessageTs,
+            state,
+            attempt
+          );
+        } else {
+          await this.retireOrphanedSlackCard(connector, notice.slack_thread_id, {
+            lane: 'recovery',
+            orphanTs: reconciledMessageTs ?? receipt.messageId,
+            ownedTs,
+            text: mcpSlackRecoveryDuplicateNoticeText(),
+          });
+        }
+      }
       const retry = this.mcpSlackDeliveryRetryTimers.get(notice.notice_id);
       if (retry) clearTimeout(retry);
       this.mcpSlackDeliveryRetryTimers.delete(notice.notice_id);
@@ -1831,6 +1871,34 @@ export class GatewayService {
         claimId,
         'slack_write_failed'
       );
+    }
+  }
+
+  /**
+   * Re-render a recovery notice this daemon repainted but turned out not to
+   * own. The connect lane's `repaintLostMcpSlackConnectRender`, on the other
+   * lane's record; see that one for why clearing `rendered_state` is the fix
+   * rather than an extra edit.
+   */
+  private async repaintLostMcpSlackRecoveryRender(
+    taskId: string,
+    noticeId: string,
+    editedTs: string,
+    renderedState: MCPSlackRecoveryRenderedState,
+    attempt: number
+  ): Promise<void> {
+    const cleared = await this.taskRepo
+      .mutateMCPSlackRecoveryNotice(taskId, (current) => {
+        if (current?.notice_id !== noticeId || current.slack_message_ts !== editedTs) return null;
+        if (current.rendered_state === undefined || current.rendered_state === renderedState) {
+          return null;
+        }
+        const { rendered_state: _state, rendered_at: _at, ...rest } = current;
+        return { ...rest, next_repair_at: new Date().toISOString() };
+      })
+      .catch(() => undefined);
+    if (cleared?.changed && attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
+      await this.deliverMcpSlackRecoveryNotice(cleared.task, attempt + 1);
     }
   }
 
@@ -2694,10 +2762,11 @@ export class GatewayService {
             attempt
           );
         } else {
-          await this.retireOrphanedMcpSlackConnectCard(connector, slack.threadId, {
+          await this.retireOrphanedSlackCard(connector, slack.threadId, {
+            lane: 'connect',
             orphanTs: reconciledMessageTs ?? receipt.messageId,
             ownedTs,
-            serverName: binding.params?.serverName ?? 'this MCP server',
+            text: mcpSlackConnectDuplicateCardText(binding.params?.serverName ?? 'this MCP server'),
           });
         }
       }
@@ -2710,36 +2779,37 @@ export class GatewayService {
   }
 
   /**
-   * Retire a card this daemon posted but turned out not to own.
+   * Retire a Slack row this daemon posted but turned out not to own.
    *
-   * The delivery claim is a lease. A post that outlives it can land after
-   * another claimant has already posted the row the record points at, and this
-   * one's receipt then belongs to a second Slack message nothing durable
-   * names. Repair only ever edits the recorded `ts`, so an orphan left alone
-   * keeps whatever it was last rendered with — including a live Connect button
-   * — permanently. D7 accepted a stale card on the grounds that supersede
+   * Shared by both MCP Slack lanes, because the lease is the same lease and
+   * the mistake is the same mistake. A post that outlives its claim can land
+   * after another claimant has already posted the row the record points at,
+   * and this one's receipt then belongs to a second Slack message nothing
+   * durable names. Repair only ever edits the recorded `ts`, so an orphan left
+   * alone keeps whatever it was last rendered with — including a live button —
+   * permanently. D7 accepted a stale card on the grounds that supersede
    * handles it; this is the case supersede cannot see, because the row is not
    * in the record.
    *
-   * Deleting is the honest outcome: there is one card per widget and this is
-   * not it. A connector that cannot delete gets an edit instead, which at
-   * least takes the button away and points at the row that is authoritative.
-   * Best effort throughout — the owned card is already correct, and failing
-   * the delivery over a duplicate would only schedule another one.
+   * Deleting is the honest outcome: there is one card per widget (or per
+   * notice) and this is not it. A connector that cannot delete gets an edit
+   * instead, which at least takes the button away and points at the row that
+   * is authoritative. Best effort throughout — the owned card is already
+   * correct, and failing the delivery over a duplicate would only schedule
+   * another one.
    */
-  private async retireOrphanedMcpSlackConnectCard(
+  private async retireOrphanedSlackCard(
     connector: GatewayConnector,
     threadId: string,
-    orphan: { orphanTs?: string; ownedTs?: string; serverName: string }
+    orphan: { orphanTs?: string; ownedTs?: string; text: string; lane: 'recovery' | 'connect' }
   ): Promise<void> {
-    const { orphanTs, ownedTs } = orphan;
+    const { orphanTs, ownedTs, text } = orphan;
     if (!orphanTs || orphanTs === ownedTs) return;
     try {
       if (connector.deleteMessage) {
         await connector.deleteMessage({ threadId, messageId: orphanTs });
         return;
       }
-      const text = mcpSlackConnectDuplicateCardText(orphan.serverName);
       await connector.sendMessage({
         threadId,
         text,
@@ -2747,7 +2817,7 @@ export class GatewayService {
         metadata: { slack_update_ts: orphanTs },
       });
     } catch {
-      console.warn('[gateway] MCP connect duplicate Slack card could not be retired');
+      console.warn(`[gateway] MCP ${orphan.lane} duplicate Slack card could not be retired`);
     }
   }
 

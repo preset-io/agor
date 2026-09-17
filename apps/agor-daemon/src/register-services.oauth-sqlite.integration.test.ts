@@ -482,6 +482,12 @@ async function createHarness(
      * service performs outside a tenant scope throws instead of silently
      * succeeding, which is what a `:memory:` SQLite database would otherwise
      * let through.
+     *
+     * The two MCP Slack lanes no longer opt in one test at a time — they go
+     * through `createSlackLaneHarness`, which sets this unconditionally. Five
+     * scope defects have shipped on those lanes and none of them was visible
+     * without the guard, so leaving it to each new test to remember is the
+     * gap rather than a default.
      */
     requireTenantScope?: boolean;
   } = {}
@@ -1270,11 +1276,27 @@ afterEach(async () => {
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
 });
 
+/**
+ * Both Slack MCP lanes, always with the daemon's tenant database scope guard.
+ *
+ * Mandatory rather than opt-in. Five tenant-scope defects have now reached a
+ * running daemon on these two lanes, every one of them invisible to a fixture
+ * that lets an unscoped read succeed — and the option below is exactly the
+ * kind of thing a new test forgets to pass. A lane whose fixtures cannot be
+ * built without the guard cannot regrow that gap.
+ */
+async function createSlackLaneHarness(
+  provider: TestProvider,
+  options: Omit<Parameters<typeof createHarness>[2], 'requireTenantScope'> = {}
+) {
+  return createHarness(provider, undefined, { ...options, requireTenantScope: true });
+}
+
 describe('Slack MCP recovery authenticated route', () => {
   it('preflights, consumes once, and propagates the exact reserved OAuth attempt', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1336,7 +1358,7 @@ describe('Slack MCP recovery authenticated route', () => {
   it('starts a recovery sign-in with the tenant scope guard armed', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
 
@@ -1360,7 +1382,7 @@ describe('Slack MCP recovery authenticated route', () => {
   it('fails closed after preflight when the Agor principal is revoked', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1377,7 +1399,7 @@ describe('Slack MCP recovery authenticated route', () => {
   it('projects provider success as superseded when authority changes during exchange', async () => {
     const provider = await createTestProvider({ holdToken: true });
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1544,7 +1566,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('preflights a live link for the user it was issued to', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
 
@@ -1590,7 +1612,7 @@ describe('Slack MCP connect authenticated route', () => {
   ])('refuses %s and leaves the widget pending', async (_name, mutate) => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
     const attempt = await mutate(harness, seeded.token);
@@ -1615,7 +1637,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('refuses a live link once the Slack card projection is switched off', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
 
@@ -1657,7 +1679,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('refuses an expired link and leaves the widget pending', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     // Minted a minute past its own maximum lifetime: the sealed claims and the
     // stored delivery still agree, so expiry is the only thing left to refuse.
@@ -1686,7 +1708,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('starts the provider flow for a live link, with the scope guard armed', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
 
@@ -1727,7 +1749,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('marks a consumed link failed when the start cannot proceed', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
     // Take the provider away without touching the server row, whose
@@ -1764,7 +1786,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('refuses a callback whose gateway configuration generation was revoked', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
 
@@ -1808,7 +1830,7 @@ describe('Slack MCP connect authenticated route', () => {
   it('refuses a callback whose card was retired mid-flow', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedConnect(harness);
 
