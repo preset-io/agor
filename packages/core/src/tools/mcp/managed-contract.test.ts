@@ -11,12 +11,14 @@ import {
   McpOAuthCancelReservationResponseSchema,
   McpOAuthCancelResponseSchema,
   McpOAuthCapabilitiesSchema,
+  McpOAuthCellEvidenceSchema,
   McpOAuthClaimSchema,
   McpOAuthCleanupAuthoritySchema,
   McpOAuthCleanupResponseSchema,
   McpOAuthCloseResponseSchema,
   McpOAuthEpochSchema,
   McpOAuthExchangeRequestSchema,
+  McpOAuthFreshPilotEnrollmentSchema,
   McpOAuthJwsHeaderSchema,
   McpOAuthOperationResponseSchema,
   McpOAuthOwnerSchema,
@@ -29,6 +31,8 @@ import {
   McpOAuthTokensSchema,
   McpOAuthUseClaimsSchema,
   mcpOAuthClaimIsLive,
+  mcpOAuthFreshPilotEnrollmentDigest,
+  mcpOAuthFreshPilotRuntimeConfigDigest,
   mcpOAuthLengthPrefix,
   mcpOAuthOwnerBytes,
   mcpOAuthParseJson,
@@ -37,6 +41,8 @@ import {
 } from '../../types/mcp-managed-oauth-contract';
 import cleanupFixtures from './__fixtures__/managed-v1/cleanup-reservations.json';
 import cleanupManifest from './__fixtures__/managed-v1/cleanup-reservations.manifest.json';
+import pilotFixtures from './__fixtures__/managed-v1/fresh-pilot.json';
+import pilotManifest from './__fixtures__/managed-v1/fresh-pilot.manifest.json';
 import vectors from './__fixtures__/managed-v1/hash-vectors.json';
 import invalid from './__fixtures__/managed-v1/invalid.json';
 import manifest from './__fixtures__/managed-v1/manifest.json';
@@ -57,6 +63,70 @@ const schemas: Record<string, ZodType> = {
   receipt_claims: McpOAuthReceiptClaimsSchema,
   succeeded: McpOAuthOperationResponseSchema,
 };
+describe('fresh pilot canonical fixture shape (not enrollment authority)', () => {
+  it('pins exact additive producer bytes without changing original manifests', () => {
+    expect(
+      mcpOAuthSha256(
+        readFileSync(
+          new URL('./__fixtures__/managed-v1/fresh-pilot.manifest.json', import.meta.url)
+        )
+      )
+    ).toBe(sourcePin.fresh_pilot_manifest_sha256);
+    for (const [name, hash] of Object.entries(pilotManifest.sha256))
+      expect(
+        mcpOAuthSha256(readFileSync(new URL(`./__fixtures__/managed-v1/${name}`, import.meta.url)))
+      ).toBe(hash);
+    expect(McpOAuthFreshPilotEnrollmentSchema.parse(pilotFixtures.enrollment)).toEqual(
+      pilotFixtures.enrollment
+    );
+    expect(McpOAuthCellEvidenceSchema.parse(pilotFixtures.cohort)).toEqual(pilotFixtures.cohort);
+  });
+
+  it('never turns a fresh birth shape into a claim of old-executor termination', () => {
+    expect(
+      McpOAuthCellEvidenceSchema.safeParse({
+        ...pilotFixtures.cohort,
+        pre_gateway_executors_terminated: true,
+      }).success
+    ).toBe(false);
+    const { fresh_pilot: _pilot, ...withoutEnrollment } = pilotFixtures.cohort;
+    expect(McpOAuthCellEvidenceSchema.safeParse(withoutEnrollment).success).toBe(false);
+    expect(
+      McpOAuthCellEvidenceSchema.safeParse({
+        ...withoutEnrollment,
+        pre_gateway_executors_terminated: true,
+      }).success
+    ).toBe(true);
+  });
+
+  it('binds every strict enrollment field with the producer canonical hash', () => {
+    const reversed = Object.fromEntries(Object.entries(pilotFixtures.enrollment).reverse());
+    expect(mcpOAuthFreshPilotEnrollmentDigest(reversed)).toBe(
+      mcpOAuthFreshPilotEnrollmentDigest(pilotFixtures.enrollment)
+    );
+    expect(
+      mcpOAuthFreshPilotEnrollmentDigest({ ...pilotFixtures.enrollment, namespace: 'another-cell' })
+    ).not.toBe(mcpOAuthFreshPilotEnrollmentDigest(pilotFixtures.enrollment));
+    expect(() =>
+      mcpOAuthFreshPilotEnrollmentDigest({ ...pilotFixtures.enrollment, fresh: true })
+    ).toThrow();
+  });
+
+  it('refuses lossy arrays and never invokes a configuration accessor to hash it', () => {
+    let invoked = false;
+    const accessor = Object.defineProperty([1], '0', {
+      get: () => {
+        invoked = true;
+        return 1;
+      },
+    });
+    const extra = Object.assign([1], { extra: true });
+    const symbol = Object.assign([1], { [Symbol('hidden')]: true });
+    for (const values of [Array(1), accessor, extra, symbol])
+      expect(() => mcpOAuthFreshPilotRuntimeConfigDigest({ values })).toThrow();
+    expect(invoked).toBe(false);
+  });
+});
 describe('managed OAuth nonvending reservation contract', () => {
   const parsers: Record<string, ZodType> = {
     cancel_reservation: McpOAuthCancelReservationRequestSchema,

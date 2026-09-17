@@ -906,8 +906,14 @@ function pilotCanonicalJson(value: unknown): string {
     return JSON.stringify(value);
   if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
   if (Array.isArray(value)) {
-    if (Object.keys(value).length !== value.length) throw new Error('Invalid pilot JSON');
-    return `[${value.map(pilotCanonicalJson).join(',')}]`;
+    if (Reflect.ownKeys(value).length !== value.length + 1) throw new Error('Invalid pilot JSON');
+    const items: string[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const d = Object.getOwnPropertyDescriptor(value, String(i));
+      if (!d || !('value' in d)) throw new Error('Invalid pilot JSON');
+      items.push(pilotCanonicalJson(d.value));
+    }
+    return `[${items.join(',')}]`;
   }
   if (
     value &&
