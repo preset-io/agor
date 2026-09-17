@@ -39,14 +39,20 @@ export function redactMcpRecoveryTopology(task: Task): Task {
  *
  * Same rule as `stripMcpSlackRecoveryNotice`, applied to the widget message
  * that carries the connect lane's durable record. The record is deliberately
- * routing-free, but it is still daemon-owned lifecycle state — a one-use
- * identity, an issue epoch, and a provider-attempt lease — that no transcript
- * viewer has any use for, and stage 3 will add the Slack message coordinates
- * to it. Strip it now so that addition cannot leak by default.
+ * routing-free of the *binding* — every authority the redemption checks is
+ * re-read from its own row — but it is daemon-owned lifecycle state: a one-use
+ * identity, an issue epoch, a provider-attempt lease, and now the Slack
+ * message coordinates the Block Kit projection edits in place. None of that is
+ * anything a transcript viewer has a use for.
+ *
+ * `slack_connect_due_at` goes with it. It exists before any delivery record
+ * does — it is the mint-time marker that puts a widget on the repair sweep —
+ * so stripping only `slack_connect` would publish the one field that is set
+ * exactly when the card has not been posted yet.
  */
 export function stripWidgetSlackConnectDelivery(message: Message): Message {
   const widget = message.metadata?.widget;
-  if (!widget?.slack_connect) return message;
-  const { slack_connect: _slackConnect, ...rest } = widget;
+  if (!widget?.slack_connect && !widget?.slack_connect_due_at) return message;
+  const { slack_connect: _slackConnect, slack_connect_due_at: _dueAt, ...rest } = widget;
   return { ...message, metadata: { ...message.metadata, widget: rest } };
 }

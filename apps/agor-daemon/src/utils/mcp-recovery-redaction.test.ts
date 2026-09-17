@@ -113,6 +113,29 @@ describe('stripWidgetSlackConnectDelivery', () => {
     expect(JSON.stringify(stripped)).not.toMatch(/delivery-secret|jti-secret|attempt-secret/);
   });
 
+  it('drops the mint-time sweep marker too, which outlives no delivery record', () => {
+    // Set exactly when the card has NOT been posted yet, so stripping only
+    // `slack_connect` would publish the one lifecycle field that is present
+    // in the window the rest of the record is absent.
+    const message = {
+      message_id: 'widget-3',
+      type: 'widget_request',
+      metadata: {
+        widget: {
+          widget_type: 'oauth',
+          widget_id: 'widget-3',
+          status: 'pending',
+          params: { serverName: 'Notion', mcpServerId: 'server-1' },
+          slack_connect_due_at: '2026-09-16T11:59:00.000Z',
+        },
+      },
+    } as unknown as Message;
+
+    const stripped = stripWidgetSlackConnectDelivery(message);
+    expect(stripped.metadata?.widget?.slack_connect_due_at).toBeUndefined();
+    expect(stripped.metadata?.widget?.status).toBe('pending');
+  });
+
   it('returns an untouched message when there is no delivery record', () => {
     const message = {
       message_id: 'widget-2',

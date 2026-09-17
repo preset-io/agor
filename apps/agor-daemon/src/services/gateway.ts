@@ -2115,6 +2115,26 @@ export class GatewayService {
   }
 
   /**
+   * Drop the mint-time "owes a card" marker, once the lane knows it will never
+   * post one.
+   *
+   * Writes through the same row lock every other widget-metadata mutation
+   * uses, and clears `slack_connect_due_at` only while no delivery record
+   * exists — once one does, that record owns the indexed due column outright
+   * and this field is already inert.
+   */
+  private async retireMcpSlackConnectDueMarker(widgetId: MessageID): Promise<void> {
+    await this.messagesRepo
+      .mutateMetadataLocked(widgetId, (metadata) => {
+        const widget = metadata?.widget;
+        if (!widget?.slack_connect_due_at || widget.slack_connect) return null;
+        const { slack_connect_due_at: _dueAt, ...rest } = widget;
+        return { ...metadata, widget: rest };
+      })
+      .catch(() => undefined);
+  }
+
+  /**
    * Announce, once per (session, conversation), that this is not a DM.
    *
    * §4.8 allows channels rather than restricting the lane to DMs: credentials
@@ -2165,11 +2185,27 @@ export class GatewayService {
     const binding = await resolveSlackConnectBinding(deps, widgetId);
     const widget = binding.widget;
     const slack = binding.slack;
+    const delivery = widget?.slack_connect;
+    // A mint-time marker (`slack_connect_due_at`) puts a widget on this sweep
+    // before any delivery record exists. Retire it on the first look at a
+    // widget this lane can never post for, so a Discord/GitHub/Teams mint —
+    // or a card that resolved before it was ever issued — costs one visit
+    // rather than a day of them. Only the PERMANENT refusals qualify:
+    // `no_secret`, `unaligned` and `authority_moved` can all be undone by an
+    // administrator, and dropping the marker for those would take away the
+    // durable trigger for a card that becomes postable later.
+    if (
+      !delivery &&
+      widget?.slack_connect_due_at &&
+      !binding.ok &&
+      (binding.reason === 'not_slack' || binding.reason === 'not_connectable')
+    ) {
+      await this.retireMcpSlackConnectDueMarker(widgetId);
+    }
     // A widget that was never Slack-delivered — the whole canvas case, and
     // every Discord/GitHub/Teams session — has no row here and must not
     // acquire one. B3's session deep link remains their answer.
     if (!widget || !slack) return;
-    const delivery = widget.slack_connect;
     if (!delivery && (!binding.ok || !this.recoveryEnvelopeSecret())) return;
 
     const now = Date.now();

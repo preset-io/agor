@@ -688,6 +688,47 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     expect(result.relay_to_user).toContain('Notion');
   });
 
+  /**
+   * The card projection's own trigger is an in-process defer. A restart, or
+   * any throw before the first link commits, would otherwise orphan the
+   * widget's Slack face silently — after the user was told a card is coming.
+   */
+  it('stamps the durable card marker on a gateway mint, in the same row insert', async () => {
+    const { app } = makeApp({
+      ...gatewaySession('slack'),
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: true } },
+    });
+    const tools = registerAndCapture({ app, sessionId: 'sess-1' });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(appendStub.mock.calls[0][0].metadata.widget.slack_connect_due_at).toEqual(
+      expect.any(String)
+    );
+  });
+
+  it('leaves a canvas mint off the sweep entirely', async () => {
+    const { app } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(appendStub.mock.calls[0][0].metadata.widget.slack_connect_due_at).toBeUndefined();
+  });
+
+  it('never marks a terminal short-circuit row, which has no card to owe', async () => {
+    livenessStub.mockResolvedValue({ live: true });
+    const { app } = makeApp({
+      ...gatewaySession('slack'),
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: true } },
+    });
+    const tools = registerAndCapture({ app, sessionId: 'sess-1' });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    );
+    expect(result.status).toBe('already_present');
+    expect(appendStub.mock.calls[0][0].metadata.widget.slack_connect_due_at).toBeUndefined();
+  });
+
   it('says nothing about a link on the canvas, where the card is already visible', async () => {
     const { app } = makeApp();
     const tools = registerAndCapture({ app });

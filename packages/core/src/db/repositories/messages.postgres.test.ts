@@ -433,6 +433,93 @@ describePostgres('MessagesRepository Slack MCP connect due-work projection', () 
     await initializeDatabase(db);
   });
 
+  const now = new Date('2026-09-16T12:00:00.000Z');
+
+  /** One pending `oauth` widget in its own session, owned by its own user. */
+  const seed = async (
+    scoped: Database,
+    dueAt: string | undefined,
+    options: { atCreate?: boolean } = {}
+  ) => {
+    const owner = await new UsersRepository(scoped).create({
+      email: `connect-due-${generateId()}@example.invalid`,
+      role: 'member',
+    });
+    const repo = await new RepoRepository(scoped).create({
+      slug: `connect-due-${generateId()}`,
+      name: 'Connect due',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/connect-due.git',
+      local_path: `/tmp/connect-due-${generateId()}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(scoped).create({
+      repo_id: repo.repo_id,
+      name: 'connect-due',
+      path: `/tmp/connect-due-${generateId()}`,
+      ref: 'main',
+      branch_unique_id: Math.floor(Math.random() * 1_000_000),
+      created_by: owner.user_id as UUID,
+    });
+    const session = await new SessionRepository(scoped).create({
+      branch_id: branch.branch_id,
+      title: 'connect-due',
+      created_by: owner.user_id as UUID,
+    });
+    const repository = new MessagesRepository(scoped);
+    const messageId = generateId();
+    const created = await repository.create({
+      message_id: messageId,
+      session_id: session.session_id,
+      type: 'widget_request',
+      role: MessageRole.SYSTEM,
+      index: 0,
+      timestamp: now.toISOString(),
+      content_preview: 'Widget: oauth (Notion)',
+      content: 'Connect "Notion"',
+      // The mint-time marker: no link has been issued yet, so there is no
+      // delivery record to carry a repair time. It has to be projected out
+      // of the INSERT itself or the widget's first card has no durable
+      // trigger at all.
+      ...(options.atCreate && dueAt
+        ? {
+            metadata: {
+              widget: {
+                widget_type: 'oauth',
+                widget_id: messageId,
+                schema_version: 1,
+                status: 'pending',
+                requested_at: now.toISOString(),
+                params: {},
+                slack_connect_due_at: dueAt,
+              },
+            },
+          }
+        : {}),
+    });
+    if (dueAt && !options.atCreate) {
+      await repository.mutateMetadataLocked(created.message_id, () => ({
+        widget: {
+          widget_type: 'oauth',
+          widget_id: created.message_id,
+          schema_version: 1,
+          status: 'pending',
+          requested_at: now.toISOString(),
+          params: {},
+          slack_connect: {
+            delivery_id: 'delivery-1',
+            delivery_generation: 1,
+            token_jti: 'jti-1',
+            issued_at: now.toISOString(),
+            expires_at: new Date(now.getTime() + 600_000).toISOString(),
+            next_repair_at: dueAt,
+          },
+        },
+      }));
+    }
+    return { repository, messageId: created.message_id };
+  };
+
   /**
    * The indexed column and the JSON it projects must never disagree, and the
    * bounded sweep must never reach into another tenant. Both are properties of
@@ -442,67 +529,6 @@ describePostgres('MessagesRepository Slack MCP connect due-work projection', () 
   it('mirrors the repair time out of the widget metadata and keeps the sweep tenant-local', async () => {
     const tenantA = `connect-due-a-${generateId()}`;
     const tenantB = `connect-due-b-${generateId()}`;
-    const now = new Date('2026-09-16T12:00:00.000Z');
-    const seed = async (scoped: Database, dueAt: string | undefined) => {
-      const owner = await new UsersRepository(scoped).create({
-        email: `connect-due-${generateId()}@example.invalid`,
-        role: 'member',
-      });
-      const repo = await new RepoRepository(scoped).create({
-        slug: `connect-due-${generateId()}`,
-        name: 'Connect due',
-        repo_type: 'remote',
-        remote_url: 'https://example.invalid/connect-due.git',
-        local_path: `/tmp/connect-due-${generateId()}`,
-        default_branch: 'main',
-      });
-      const branch = await new BranchRepository(scoped).create({
-        repo_id: repo.repo_id,
-        name: 'connect-due',
-        path: `/tmp/connect-due-${generateId()}`,
-        ref: 'main',
-        branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        created_by: owner.user_id as UUID,
-      });
-      const session = await new SessionRepository(scoped).create({
-        branch_id: branch.branch_id,
-        title: 'connect-due',
-        created_by: owner.user_id as UUID,
-      });
-      const repository = new MessagesRepository(scoped);
-      const created = await repository.create({
-        message_id: generateId(),
-        session_id: session.session_id,
-        type: 'widget_request',
-        role: MessageRole.SYSTEM,
-        index: 0,
-        timestamp: now.toISOString(),
-        content_preview: 'Widget: oauth (Notion)',
-        content: 'Connect "Notion"',
-      });
-      if (dueAt) {
-        await repository.mutateMetadataLocked(created.message_id, () => ({
-          widget: {
-            widget_type: 'oauth',
-            widget_id: created.message_id,
-            schema_version: 1,
-            status: 'pending',
-            requested_at: now.toISOString(),
-            params: {},
-            slack_connect: {
-              delivery_id: 'delivery-1',
-              delivery_generation: 1,
-              token_jti: 'jti-1',
-              issued_at: now.toISOString(),
-              expires_at: new Date(now.getTime() + 600_000).toISOString(),
-              next_repair_at: dueAt,
-            },
-          },
-        }));
-      }
-      return { repository, messageId: created.message_id };
-    };
-
     let dueId: Message['message_id'] | undefined;
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const due = await seed(scoped, new Date(now.getTime() - 60_000).toISOString());
@@ -541,5 +567,44 @@ describePostgres('MessagesRepository Slack MCP connect due-work projection', () 
         new MessagesRepository(scoped).findMcpSlackConnectDuePage({ limit: 0 })
       )
     ).rejects.toThrow(/between 1 and 100/);
+  });
+
+  /**
+   * The first card a widget ever gets is the one with no durable trigger
+   * anywhere else: `messageMayNeedMcpSlackConnectSync` needs `slack_connect`,
+   * and only the link issuer writes that. So the mint-time marker has to
+   * survive the INSERT, and the delivery record has to take it over the moment
+   * it exists — otherwise a card that reached a steady state would be swept
+   * until the horizon aged it out.
+   */
+  it('sweeps a widget minted with the marker, and hands the column to the delivery record', async () => {
+    const tenant = `connect-mint-${generateId()}`;
+    const now = new Date('2026-09-16T12:00:00.000Z');
+    const dueAt = new Date(now.getTime() - 60_000).toISOString();
+
+    await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      const minted = await seed(scoped, dueAt, { atCreate: true });
+      const { repository, messageId } = minted;
+      expect((await repository.findMcpSlackConnectDuePage({ now })).messages).toHaveLength(1);
+
+      // An issued link takes the column over completely: its own
+      // `next_repair_at` decides, and the mint marker beneath it is inert.
+      await repository.mutateMetadataLocked(messageId, (metadata) => ({
+        ...metadata,
+        widget: {
+          ...metadata!.widget!,
+          slack_connect: {
+            delivery_id: 'delivery-1',
+            delivery_generation: 1,
+            token_jti: 'jti-1',
+            issued_at: now.toISOString(),
+            expires_at: new Date(now.getTime() + 600_000).toISOString(),
+          },
+        },
+      }));
+      const settled = await repository.findById(messageId);
+      expect(settled?.metadata?.widget?.slack_connect_due_at).toBe(dueAt);
+      expect((await repository.findMcpSlackConnectDuePage({ now })).messages).toEqual([]);
+    });
   });
 });
