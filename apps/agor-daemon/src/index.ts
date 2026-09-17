@@ -1,3 +1,5 @@
+import { createManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
+import { createManagedOAuthMaintenanceServices } from './services/mcp-oauth-managed-maintenance-composition.js';
 /**
  * Agor Daemon
  *
@@ -66,11 +68,13 @@ import {
 import { buildGitConfigParameters } from '@agor/core/git/pure';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
 import type { HookContext, User } from '@agor/core/types';
+import { MCP_OAUTH_RUNTIME_RETURN_PATH } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
+import { captureManagedOAuthPilotStartup } from './mcp-egress/managed-pilot-startup.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import {
   createDaemonMetrics,
@@ -84,6 +88,7 @@ import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
+import { managedOAuthLanding } from './services/mcp-oauth-managed-landing.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
@@ -200,6 +205,10 @@ async function startDaemonWithOwnedMetrics(
   // Programmatic startup must cross the same untrusted config boundary as
   // YAML before environment projection reads nested scalar values.
   assertValidRawConfig(config);
+  const managedOAuthPilotStartup = captureManagedOAuthPilotStartup(config, {
+    AGOR_DAEMON_INSTANCE_ID: process.env.AGOR_DAEMON_INSTANCE_ID,
+    AGOR_POD_NAMESPACE: process.env.AGOR_POD_NAMESPACE,
+  });
 
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
@@ -674,6 +683,9 @@ async function startDaemonWithOwnedMetrics(
     }
   }
 
+  // Managed return tickets remain fragment-only and land on the fixed same-origin UI route.
+  app.use(MCP_OAUTH_RUNTIME_RETURN_PATH, managedOAuthLanding as never);
+
   // OAuth callback middleware stub — handler is wired by registerServices()
   const appRecord = app as unknown as Record<string, unknown>;
   app.use('/mcp-servers/oauth-callback', ((
@@ -843,7 +855,19 @@ async function startDaemonWithOwnedMetrics(
   // --------------------------------------------------------------------------
   // Phase 1: Register services
   // --------------------------------------------------------------------------
+  const mcpManagedOAuthServices =
+    (await createManagedOAuthServices({
+      db,
+      config: effectiveConfig,
+      releaseSha: DAEMON_BUILD_INFO.sha,
+      replicaId: distributedWorkIdentity.instanceId,
+      ...managedOAuthPilotStartup,
+      externalLaunchProvider,
+    })) ?? undefined;
   const services = await registerServices({
+    mcpManagedOAuthServices,
+    mcpManagedOAuthRuntime: mcpManagedOAuthServices?.runtime,
+    mcpOAuthPendingFlowAuthority: mcpManagedOAuthServices?.flows,
     db,
     app,
     config: effectiveConfig,
@@ -882,6 +906,7 @@ async function startDaemonWithOwnedMetrics(
   // Phase 3: Register routes (auth, REST, tier hooks, error handler)
   // --------------------------------------------------------------------------
   await registerRoutes({
+    mcpManagedOAuthServices,
     db,
     app,
     config: effectiveConfig,
@@ -918,10 +943,28 @@ async function startDaemonWithOwnedMetrics(
   // --------------------------------------------------------------------------
   assertRealtimePublishPolicyCoverage(app);
 
+  const mcpManagedOAuthMaintenance = await createManagedOAuthMaintenanceServices({
+    db,
+    config: effectiveConfig,
+    externalLaunchProvider,
+    active: mcpManagedOAuthServices,
+    metrics,
+  });
+
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)
   // --------------------------------------------------------------------------
   await startup({
+    mcpManagedOAuthServices: {
+      start() {
+        mcpManagedOAuthServices?.start();
+        mcpManagedOAuthMaintenance?.start();
+      },
+      async stop() {
+        mcpManagedOAuthServices?.stop();
+        await mcpManagedOAuthMaintenance?.stop();
+      },
+    },
     app,
     db,
     config: effectiveConfig,

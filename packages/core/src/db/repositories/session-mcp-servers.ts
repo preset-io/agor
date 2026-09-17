@@ -263,6 +263,9 @@ export class SessionMCPServerRepository {
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          // Persist the distinction even when the replacement inserts no links.
+          // The marker and complete selection commit or roll back together.
+          await new SessionRepository(tx).update(sessionId, { mcp_selection_explicit: true });
           await deleteFrom(tx, sessionMcpServers)
             .where(eq(sessionMcpServers.session_id, sessionId))
             .run();

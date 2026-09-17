@@ -1,0 +1,10 @@
+{
+  "repository": "preset-io/agor-cloud",
+  "commit": "d9ba1843c9ea42a31239ac38c503026898873d81",
+  "source_path": "packages/contracts/src/mcp-oauth-v1.ts",
+  "source_sha256": "0acec42735af21c51aa2fee8ff7beb6ecfd4ee7a8b89189469cea73c7b47d950",
+  "manifest_sha256": "adfdb192f988a4e0c86ecde3fdbcacce16b255681cdef8da66a70ebf02c2b46d",
+  "projection_manifest_sha256": "90b4e8f835ccc0cac4700d490df37c1ea11c6ac334ea3ca57f9656f7bb6dc3d1",
+  "cleanup_manifest_sha256": "d9c51d391bca1d29f5c7ba6cbc56ba1f2225b2d6b44e4ed5c2b68ca93c1f777b",
+  "fresh_pilot_manifest_sha256": "14436877774d6b5849abea7ce9b7bed740bcd6e74d49bae7bf1e1321e0f4fbdb"
+}

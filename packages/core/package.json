@@ -358,6 +358,12 @@
       "import": "./dist/tools/mcp/oauth-mcp-transport.js",
       "require": "./dist/tools/mcp/oauth-mcp-transport.cjs"
     },
+    "./tools/mcp/managed-oauth-client": {
+      "source": "./src/tools/mcp/managed-oauth-client.ts",
+      "types": "./dist/tools/mcp/managed-oauth-client.d.ts",
+      "import": "./dist/tools/mcp/managed-oauth-client.js",
+      "require": "./dist/tools/mcp/managed-oauth-client.cjs"
+    },
     "./tools/mcp/oauth-refresh": {
       "source": "./src/tools/mcp/oauth-refresh.ts",
       "types": "./dist/tools/mcp/oauth-refresh.d.ts",
@@ -526,6 +532,7 @@
     "@feathersjs/socketio-client": "^5.0.50",
     "@feathersjs/typebox": "^5.0.50",
     "@libsql/client": "^0.17.4",
+    "@noble/hashes": "2.4.0",
     "@slack/socket-mode": "^2.0.7",
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",

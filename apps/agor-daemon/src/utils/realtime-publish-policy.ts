@@ -285,6 +285,10 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'claude-auth/logout': { audience: 'none', why: 'Credential control plane.' },
   'mcp-servers/oauth-start': { audience: 'none', why: 'OAuth control plane.' },
+  'mcp-servers/oauth-managed-return': {
+    audience: 'none',
+    why: 'One caller managed OAuth navigation correlation; never a shared event.',
+  },
   'mcp-servers/oauth-browser-reservations': {
     audience: 'none',
     why: 'Returns a caller/socket-bound one-shot browser capability.',

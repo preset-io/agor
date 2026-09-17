@@ -1,3 +1,16 @@
+import {
+  type MCPManagedOAuthGrantMetadata,
+  MCPManagedOAuthGrantMetadataSchema,
+  type MCPManagedOAuthTokenCommit,
+  managedOAuthLocalGeneration,
+} from '../../types/mcp-managed-oauth';
+import {
+  type McpOAuthOperationResponse,
+  McpOAuthOperationResponseSchema,
+} from '../../types/mcp-managed-oauth-contract';
+import { lockMCPManagedSubject, lockTenantAuthoritySubject } from './authority-primitives';
+import { assertManagedOAuthTokenCommit } from './mcp-managed-oauth-receipt';
+import { MCPOAuthPendingFlowRepository } from './mcp-oauth-pending-flows';
 /**
  * MCP OAuth Token Repository
  *
@@ -59,6 +72,10 @@ export interface UserMCPOAuthToken {
   refresh_success_generation: number;
   refresh_claim_id?: string;
   refresh_claimed_at?: Date;
+  credential_origin?: 'direct' | 'cloud_managed_v1';
+  managed_metadata?: MCPManagedOAuthGrantMetadata;
+  managed_operation_id?: string;
+  oauth_token_endpoint_auth_method?: 'client_secret_basic' | 'client_secret_post';
   created_at: Date;
   updated_at?: Date;
 }
@@ -83,6 +100,7 @@ export type MCPOAuthGrantAuthorityRecord = Pick<
   | 'oauth_authorization_endpoint'
   | 'oauth_token_endpoint'
   | 'oauth_redirect_uri'
+  | 'oauth_token_endpoint_auth_method'
 >;
 
 type MCPOAuthGrantAuthorityRow = Pick<
@@ -100,6 +118,7 @@ type MCPOAuthGrantAuthorityRow = Pick<
   | 'oauth_authorization_endpoint'
   | 'oauth_token_endpoint'
   | 'oauth_redirect_uri'
+  | 'oauth_token_endpoint_auth_method'
 >;
 
 /** Status authority excludes access and refresh token plaintext. */
@@ -155,6 +174,8 @@ export interface SaveTokenInput {
     tokenEndpoint: string;
     redirectUri: string;
   };
+  managed?: MCPManagedOAuthTokenCommit;
+  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
 }
 
 export type MCPOAuthRefreshClaimResult =
@@ -174,6 +195,21 @@ export interface MCPOAuthRefreshVersion {
   refreshGeneration: number;
 }
 
+// Architecture §8 permits a fresh operation only after certified no-send/non-
+// consumption. D0 provides no retry_after_ms for admission/client failures: use
+// a conservative 30s local throttle, not a broker retry instruction or permission
+// to bypass a profile pause. Every later operation still needs fresh admission.
+const MANAGED_REFRESH_ADMISSION_BACKOFF_MS = 30_000;
+
+// Only a locked, exact-version DB backoff observation can mint this proof. A
+// structural copy, serialized result, or caller-created `observed` is not proof.
+const managedDeferredClaims = new WeakMap<object, Readonly<MCPOAuthRefreshVersion>>();
+export function getManagedOAuthDeferredClaim(
+  result: MCPOAuthRefreshClaimResult
+): Readonly<MCPOAuthRefreshVersion> | undefined {
+  return managedDeferredClaims.get(result);
+}
+
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
@@ -184,7 +220,7 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function grantSecretBinding(
+export function grantSecretBinding(
   tenantId: string,
   userId: UserID | null,
   serverId: MCPServerID,
@@ -220,6 +256,14 @@ async function rowToToken(
     );
   };
   return {
+    credential_origin: raw.credential_origin as 'direct' | 'cloud_managed_v1',
+    managed_metadata:
+      raw.managed_metadata == null
+        ? undefined
+        : MCPManagedOAuthGrantMetadataSchema.parse(raw.managed_metadata),
+    managed_operation_id: raw.managed_operation_id ? String(raw.managed_operation_id) : undefined,
+    oauth_token_endpoint_auth_method:
+      raw.oauth_token_endpoint_auth_method as UserMCPOAuthToken['oauth_token_endpoint_auth_method'],
     user_id: userId,
     granted_by_user_id: row.granted_by_user_id as UserID,
     mcp_server_id: serverId,
@@ -350,6 +394,8 @@ export class UserMCPOAuthTokenRepository {
       oauth_authorization_endpoint: stringValue(row.oauth_authorization_endpoint),
       oauth_token_endpoint: stringValue(row.oauth_token_endpoint),
       oauth_redirect_uri: stringValue(row.oauth_redirect_uri),
+      oauth_token_endpoint_auth_method:
+        row.oauth_token_endpoint_auth_method as UserMCPOAuthToken['oauth_token_endpoint_auth_method'],
     };
   }
 
@@ -440,6 +486,7 @@ export class UserMCPOAuthTokenRepository {
         oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
         oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
         oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+        oauth_token_endpoint_auth_method: userMcpOauthTokens.oauth_token_endpoint_auth_method,
         refresh_status: userMcpOauthTokens.refresh_status,
         refresh_generation: userMcpOauthTokens.refresh_generation,
         refresh_success_generation: userMcpOauthTokens.refresh_success_generation,
@@ -496,6 +543,8 @@ export class UserMCPOAuthTokenRepository {
         oauth_authorization_endpoint: stringValue(row.oauth_authorization_endpoint),
         oauth_token_endpoint: stringValue(row.oauth_token_endpoint),
         oauth_redirect_uri: stringValue(row.oauth_redirect_uri),
+        oauth_token_endpoint_auth_method:
+          row.oauth_token_endpoint_auth_method as UserMCPOAuthToken['oauth_token_endpoint_auth_method'],
         refresh_status:
           row.refresh_status === 'refreshing' || row.refresh_status === 'ambiguous'
             ? row.refresh_status
@@ -563,6 +612,28 @@ export class UserMCPOAuthTokenRepository {
       const now = new Date();
       const tenantId = this.tenantId();
       const consenterId = grantedByUserId ?? userId;
+      if (input.managed) {
+        if (!this.postgres || !userId || input.clientSecret || input.grantBinding?.version !== 5)
+          throw new RepositoryError('Managed grants require bound PostgreSQL per-user authority');
+        assertManagedOAuthTokenCommit(input.managed, {
+          tenantId: tenantId!,
+          userId,
+          serverId,
+          generation: input.grantBinding.generation,
+          fingerprint: input.grantBinding.fingerprint,
+          accessToken: input.accessToken,
+          refreshToken: input.refreshToken,
+          expiresAt: input.expiresAt,
+        });
+        if (
+          input.managed.metadata.claim.kind !== 'exchange' ||
+          input.managed.metadata.claim.refresh_generation !== '0' ||
+          input.managed.metadata.claim.refresh_success_generation !== '0' ||
+          input.managed.expected_sequence !== '0'
+        )
+          throw new RepositoryError('New managed grant requires its exchange claim');
+      } else if (input.grantBinding?.version === 5)
+        throw new RepositoryError('Managed binding requires its receipt');
       if (!consenterId || (userId !== null && consenterId !== userId)) {
         throw new RepositoryError('MCP OAuth grant requires its trusted consenting user');
       }
@@ -593,6 +664,14 @@ export class UserMCPOAuthTokenRepository {
         // FK cascades reach grants; it must never acquire our advisory locks.
         // Taking this before any token row write avoids user/child-row inversion
         // for a callback racing hard deletion. A committed deletion fails closed.
+        if (input.managed)
+          await lockMCPManagedSubject(
+            this.db,
+            tenantId!,
+            consenterId!,
+            input.managed.metadata.owner.cloud_user_subject,
+            input.managed.metadata.owner.cell_id
+          );
         const principal = await executeRaw(
           this.db,
           sql`SELECT user_id FROM ${users}
@@ -616,6 +695,32 @@ export class UserMCPOAuthTokenRepository {
       // below. Do not decide insert/update from a preceding read: concurrent
       // first-time callbacks may both observe an empty subject.
       const existing = this.postgres || !binding ? await this.getToken(userId, serverId) : null;
+      if (input.managed) {
+        const m = input.managed.metadata;
+        const locked = rowsOf(
+          await executeRaw(
+            this.db,
+            sql`SELECT attempt_id FROM public.mcp_oauth_pending_flows
+          WHERE tenant_id=${tenantId} AND attempt_id=${m.owner.attempt_id} FOR UPDATE`
+          )
+        );
+        if (locked.length !== 1) throw new RepositoryError('Managed exchange no longer exists');
+        const live = rowsOf(
+          await executeRaw(
+            this.db,
+            sql`SELECT attempt_id FROM public.mcp_oauth_pending_flows
+          WHERE tenant_id=${tenantId} AND attempt_id=${m.owner.attempt_id} AND user_id=${userId} AND mcp_server_id=${serverId}
+            AND credential_origin='cloud_managed_v1' AND managed_transaction_id=${m.transaction_id}
+            AND grant_generation=${binding!.generation} AND config_fingerprint=${binding!.fingerprint}
+            AND managed_metadata->'owner'=${JSON.stringify(m.owner)}::jsonb AND managed_operation_id=${m.operation_id}
+            AND status='exchanging' AND is_current=true AND exchange_claim_id=${m.claim.claim_id}
+            AND exchange_started_at=to_timestamp(${m.claim.claimed_at}/1000.0)
+            AND exchange_started_at>clock_timestamp()-interval '2 minutes'`
+          )
+        );
+        if (live.length !== 1)
+          throw new RepositoryError('Managed exchange claim expired or changed');
+      }
       const generation = binding?.generation ?? existing?.grant_generation ?? 0;
       if (binding && (!Number.isSafeInteger(binding.generation) || binding.generation <= 0)) {
         throw new RepositoryError('MCP OAuth grant generation is invalid');
@@ -649,6 +754,11 @@ export class UserMCPOAuthTokenRepository {
             oauth_authorization_endpoint: binding.authorizationEndpoint,
             oauth_token_endpoint: binding.tokenEndpoint,
             oauth_redirect_uri: binding.redirectUri,
+            credential_origin: input.managed ? 'cloud_managed_v1' : 'direct',
+            managed_metadata: input.managed?.metadata ?? null,
+            managed_operation_id: null,
+            managed_refresh_not_before: null,
+            oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? null,
             refresh_status: 'idle' as const,
             refresh_generation: 0,
             refresh_success_generation: 0,
@@ -674,6 +784,9 @@ export class UserMCPOAuthTokenRepository {
         oauth_client_secret:
           boundReplacement?.oauth_client_secret ??
           seal(input.clientSecret, 'client-secret', 'client-secret'),
+        credential_origin: input.managed ? 'cloud_managed_v1' : 'direct',
+        managed_metadata: input.managed?.metadata,
+        oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod,
         grant_generation: generation,
         grant_binding_version: binding?.version,
         grant_binding_fingerprint: binding?.fingerprint,
@@ -750,6 +863,9 @@ export class UserMCPOAuthTokenRepository {
                         ),
                       }
                     : {}),
+                  ...(input.tokenEndpointAuthMethod != null
+                    ? { oauth_token_endpoint_auth_method: input.tokenEndpointAuthMethod }
+                    : {}),
                   ...(input.tokenEndpoint != null
                     ? { oauth_token_endpoint: input.tokenEndpoint }
                     : {}),
@@ -774,6 +890,21 @@ export class UserMCPOAuthTokenRepository {
         await insert(this.db, userMcpOauthTokens).values(newToken).run();
 
         console.log('[MCP OAuth Grant] grant_saved category=new');
+      }
+      if (input.managed) {
+        const m = input.managed.metadata;
+        if (
+          !(await new MCPOAuthPendingFlowRepository(this.db).finish(
+            tenantId!,
+            m.owner.attempt_id as import('../../types').MCPOAuthAttemptID,
+            m.claim.claim_id,
+            'succeeded'
+          ))
+        ) {
+          throw new RepositoryError(
+            'Managed exchange completion expired; transaction must roll back'
+          );
+        }
       }
     } catch (error) {
       throw new RepositoryError(
@@ -817,7 +948,12 @@ export class UserMCPOAuthTokenRepository {
     userId: UserID | null,
     serverId: MCPServerID,
     expected: MCPOAuthRefreshVersion,
-    input: { accessToken: string; refreshToken?: string; expiresAt: Date | null }
+    input: {
+      accessToken: string;
+      refreshToken?: string;
+      expiresAt: Date | null;
+      managed?: MCPManagedOAuthTokenCommit;
+    }
   ): Promise<boolean> {
     if (this.postgres) {
       throw new RepositoryError('Standalone refresh completion is only available on SQLite');
@@ -864,6 +1000,45 @@ export class UserMCPOAuthTokenRepository {
     if (!this.postgres) {
       return { outcome: 'observed', token: await this.getToken(userId, serverId) };
     }
+    const observed = await this.getToken(userId, serverId);
+    if (observed?.credential_origin === 'cloud_managed_v1') {
+      if (!userId) throw new RepositoryError('Managed refresh requires a member');
+      await lockMCPManagedSubject(
+        this.db,
+        this.tenantId()!,
+        userId,
+        observed.managed_metadata!.owner.cloud_user_subject,
+        observed.managed_metadata!.owner.cell_id
+      );
+      await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+      const deferred = rowsOf(
+        await executeRaw(
+          this.db,
+          sql`SELECT * FROM public.user_mcp_oauth_tokens
+          WHERE tenant_id=${this.tenantId()!} AND user_id=${userId} AND mcp_server_id=${serverId}
+            AND credential_origin='cloud_managed_v1' AND refresh_status='idle'
+            AND grant_generation=${expected.grantGeneration}
+            AND refresh_generation=${expected.refreshGeneration}
+            AND grant_binding_fingerprint IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}
+            AND refresh_claim_id IS NULL AND managed_operation_id IS NULL
+            AND oauth_refresh_token IS NOT NULL
+            AND managed_refresh_not_before>clock_timestamp()`
+        )
+      )[0];
+      if (deferred) {
+        const token = await this.mapRow(deferred as unknown as UserMCPOAuthTokenRow);
+        const result: MCPOAuthRefreshClaimResult = { outcome: 'observed', token };
+        managedDeferredClaims.set(
+          result,
+          Object.freeze({
+            grantGeneration: token.grant_generation,
+            refreshGeneration: token.refresh_generation,
+            grantBindingFingerprint: token.grant_binding_fingerprint,
+          })
+        );
+        return result;
+      }
+    }
     const claimId = randomUUID();
     const userPredicate = userId === null ? sql`user_id IS NULL` : sql`user_id = ${userId}`;
     try {
@@ -888,14 +1063,18 @@ export class UserMCPOAuthTokenRepository {
           SET refresh_status = 'refreshing',
               refresh_generation = refresh_generation + 1,
               refresh_claim_id = ${claimId},
-              refresh_claimed_at = CURRENT_TIMESTAMP,
+              managed_operation_id = CASE WHEN credential_origin='cloud_managed_v1' THEN ${claimId} ELSE NULL END,
+              refresh_claimed_at = CASE WHEN credential_origin='cloud_managed_v1' THEN date_trunc('milliseconds',clock_timestamp()) ELSE CURRENT_TIMESTAMP END,
               updated_at = CURRENT_TIMESTAMP
           WHERE mcp_server_id = ${serverId}
             AND ${userPredicate}
             AND grant_generation = ${expected.grantGeneration}
             AND grant_binding_fingerprint IS NOT DISTINCT FROM ${expected.grantBindingFingerprint ?? null}
             AND refresh_generation = ${expected.refreshGeneration}
+            AND credential_origin = ${observed?.credential_origin ?? 'direct'}
             AND refresh_status = 'idle'
+            AND (credential_origin<>'cloud_managed_v1' OR managed_refresh_not_before IS NULL
+              OR managed_refresh_not_before<=clock_timestamp())
             AND oauth_refresh_token IS NOT NULL
           RETURNING *
         `
@@ -921,11 +1100,56 @@ export class UserMCPOAuthTokenRepository {
     userId: UserID | null,
     serverId: MCPServerID,
     claim: { claimId: string; refreshGeneration: number; grantGeneration: number },
-    input: { accessToken: string; refreshToken?: string; expiresAt: Date | null }
+    input: {
+      accessToken: string;
+      refreshToken?: string;
+      expiresAt: Date | null;
+      managed?: MCPManagedOAuthTokenCommit;
+    }
   ): Promise<boolean> {
     if (!this.postgres) throw new RepositoryError('Durable refresh completion requires PostgreSQL');
     const tenantId = this.tenantId()!;
     const userPredicate = userId === null ? sql`user_id IS NULL` : sql`user_id = ${userId}`;
+    if (input.managed) {
+      assertManagedOAuthTokenCommit(input.managed, {
+        tenantId,
+        userId,
+        serverId,
+        generation: claim.grantGeneration,
+        accessToken: input.accessToken,
+        refreshToken: input.refreshToken,
+        expiresAt: input.expiresAt,
+      });
+      if (
+        input.managed.metadata.claim.kind !== 'refresh' ||
+        input.managed.metadata.claim.claim_id !== claim.claimId ||
+        input.managed.metadata.claim.refresh_generation !== String(claim.refreshGeneration)
+      )
+        throw new RepositoryError('Managed refresh claim mismatch');
+      await lockMCPManagedSubject(
+        this.db,
+        tenantId,
+        userId!,
+        input.managed.metadata.owner.cloud_user_subject,
+        input.managed.metadata.owner.cell_id
+      );
+    }
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    const managedPredicate = input.managed
+      ? sql`AND credential_origin='cloud_managed_v1'
+      AND managed_operation_id=${input.managed.operation_id}
+      AND managed_metadata->>'next_sequence'=${input.managed.expected_sequence}
+      AND managed_metadata->>'handle'=${input.managed.metadata.handle}
+      AND managed_metadata->>'handle_epoch'=${input.managed.metadata.handle_epoch}
+      AND managed_metadata->>'transaction_id'=${input.managed.metadata.transaction_id}
+      AND managed_metadata->'owner'=${JSON.stringify(input.managed.metadata.owner)}::jsonb
+      AND refresh_claimed_at=to_timestamp(${input.managed.metadata.claim.claimed_at}/1000.0)
+      AND refresh_success_generation=${managedOAuthLocalGeneration(input.managed.metadata.claim.refresh_success_generation)}
+      AND refresh_claimed_at>clock_timestamp()-interval '2 minutes'`
+      : sql`AND credential_origin='direct'`;
+    const metadataAssignment = input.managed
+      ? sql`, managed_metadata=${JSON.stringify(input.managed.metadata)}::jsonb, managed_operation_id=NULL, managed_refresh_not_before=NULL`
+      : sql``;
     const sealedAccess = sealBoundSecret(
       input.accessToken,
       this.masterSecret!,
@@ -953,16 +1177,191 @@ export class UserMCPOAuthTokenRepository {
             refresh_claimed_at = NULL,
             updated_at = CURRENT_TIMESTAMP
             ${refreshAssignment}
+            ${metadataAssignment}
         WHERE mcp_server_id = ${serverId}
           AND ${userPredicate}
           AND grant_generation = ${claim.grantGeneration}
           AND refresh_generation = ${claim.refreshGeneration}
           AND refresh_claim_id = ${claim.claimId}
           AND refresh_status = 'refreshing'
+          ${managedPredicate}
         RETURNING mcp_server_id
       `
     );
     return rowsOf(result).length === 1;
+  }
+
+  /** Only the newly elected owner may certify its own pre-dispatch local cancellation. */
+  async releaseUnstartedManagedRefreshClaim(
+    userId: UserID,
+    serverId: MCPServerID,
+    claim: { claimId: string; refreshGeneration: number; grantGeneration: number },
+    operationId: string,
+    sequence: string
+  ): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed refresh requires PostgreSQL');
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    const result = await executeRaw(
+      this.db,
+      sql`UPDATE public.user_mcp_oauth_tokens
+      SET refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
+      WHERE tenant_id=${this.tenantId()} AND user_id=${userId} AND mcp_server_id=${serverId} AND credential_origin='cloud_managed_v1'
+        AND refresh_status='refreshing' AND refresh_claim_id=${claim.claimId} AND managed_operation_id=${operationId}
+        AND grant_generation=${claim.grantGeneration} AND refresh_generation=${claim.refreshGeneration}
+        AND managed_metadata->>'next_sequence'=${sequence} AND refresh_claimed_at>clock_timestamp()-interval '2 minutes'
+      RETURNING mcp_server_id`
+    );
+    return rowsOf(result).length === 1;
+  }
+
+  /** Certified journal result CAS. Never repeat a consumed sequence or extend the original claim. */
+  async finishManagedRefreshRejection(
+    userId: UserID,
+    serverId: MCPServerID,
+    claim: { claimId: string; refreshGeneration: number; grantGeneration: number },
+    input: McpOAuthOperationResponse
+  ): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed refresh requires PostgreSQL');
+    const response = McpOAuthOperationResponseSchema.parse(input);
+    if (
+      response.status === 'succeeded' ||
+      response.status === 'in_progress' ||
+      !('sequence' in response)
+    )
+      return false;
+    const tenantId = this.tenantId()!;
+    if (
+      response.owner.workspace_id !== tenantId ||
+      response.owner.cell_local_user_id !== userId ||
+      response.owner.server_id !== serverId ||
+      response.owner.grant_generation !== String(claim.grantGeneration) ||
+      response.claim.kind !== 'refresh' ||
+      response.claim.claim_id !== claim.claimId ||
+      response.claim.refresh_generation !== String(claim.refreshGeneration)
+    )
+      return false;
+    await lockMCPManagedSubject(
+      this.db,
+      tenantId,
+      userId,
+      response.owner.cloud_user_subject,
+      response.owner.cell_id
+    );
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    const live = rowsOf(
+      await executeRaw(
+        this.db,
+        sql`SELECT managed_metadata,
+      refresh_claimed_at>clock_timestamp()-interval '2 minutes' AS live
+      FROM public.user_mcp_oauth_tokens WHERE tenant_id=${tenantId} AND user_id=${userId} AND mcp_server_id=${serverId}
+      AND credential_origin='cloud_managed_v1' AND grant_generation=${claim.grantGeneration} AND refresh_generation=${claim.refreshGeneration}
+      AND refresh_claim_id=${claim.claimId} AND managed_operation_id=${response.operation_id} AND refresh_status='refreshing'
+      AND refresh_claimed_at=to_timestamp(${response.claim.claimed_at}/1000.0)
+      AND refresh_success_generation=${managedOAuthLocalGeneration(response.claim.refresh_success_generation)}
+      AND managed_metadata->>'next_sequence'=${response.sequence}
+      AND managed_metadata->'owner'=${JSON.stringify(response.owner)}::jsonb`
+      )
+    )[0];
+    if (!live) return false;
+    if (!live.live) {
+      await this.finishRefreshClaim(userId, serverId, claim, 'ambiguous');
+      return false;
+    }
+    if (response.status === 'grant_invalid')
+      return this.deleteClaimedInvalidGrant(userId, serverId, claim);
+    if (
+      !['not_dispatched', 'client_configuration_failed', 'rejected_non_consuming'].includes(
+        response.status
+      )
+    ) {
+      return this.finishRefreshClaim(userId, serverId, claim, 'ambiguous');
+    }
+    const next = 'next_sequence' in response ? response.next_sequence : response.sequence;
+    const retryAfterMs =
+      response.status === 'rejected_non_consuming'
+        ? response.retry_after_ms
+        : MANAGED_REFRESH_ADMISSION_BACKOFF_MS;
+    const result = await executeRaw(
+      this.db,
+      sql`UPDATE public.user_mcp_oauth_tokens
+      SET managed_metadata=jsonb_set(managed_metadata,'{next_sequence}',to_jsonb(${next}::text)),
+        managed_refresh_not_before=GREATEST(managed_refresh_not_before,
+          clock_timestamp()+(${retryAfterMs} * interval '1 millisecond')),
+        refresh_status='idle',refresh_claim_id=NULL,refresh_claimed_at=NULL,managed_operation_id=NULL,updated_at=clock_timestamp()
+      WHERE tenant_id=${tenantId} AND user_id=${userId} AND mcp_server_id=${serverId} AND refresh_claim_id=${claim.claimId}
+        AND managed_operation_id=${response.operation_id} AND managed_metadata->>'next_sequence'=${response.sequence}
+        AND refresh_claimed_at>clock_timestamp()-interval '2 minutes' RETURNING mcp_server_id`
+    );
+    return rowsOf(result).length === 1;
+  }
+
+  /** Exact committed receipt only. A delayed ACK cannot mark a replacement or later rotation. */
+  async markManagedReceiptAcknowledged(input: MCPManagedOAuthGrantMetadata): Promise<boolean> {
+    if (!this.postgres) throw new RepositoryError('Managed receipts require PostgreSQL');
+    const metadata = MCPManagedOAuthGrantMetadataSchema.parse(input);
+    if (metadata.owner.workspace_id !== this.tenantId())
+      throw new RepositoryError('Managed ACK scope mismatch');
+    const result = await executeRaw(
+      this.db,
+      sql`
+      UPDATE public.user_mcp_oauth_tokens
+      SET managed_metadata=jsonb_set(managed_metadata,'{receipt_acknowledged}','true'::jsonb)
+      WHERE tenant_id=${this.tenantId()} AND user_id=${metadata.owner.cell_local_user_id}
+        AND mcp_server_id=${metadata.owner.server_id} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->'owner'=${JSON.stringify(metadata.owner)}::jsonb
+        AND managed_metadata->>'operation_id'=${metadata.operation_id}
+        AND managed_metadata->>'receipt_id'=${metadata.receipt_id}
+        AND managed_metadata->>'signed_receipt'=${metadata.signed_receipt}
+        AND managed_metadata->'claim'=${JSON.stringify(metadata.claim)}::jsonb
+      RETURNING mcp_server_id`
+    );
+    return rowsOf(result).length === 1;
+  }
+
+  /** Daemon-internal projection; does not decrypt or export credentials. */
+  async listManagedReceiptsForAcknowledgement(
+    tenantId: string,
+    afterOperationId?: string,
+    limit = 25
+  ): Promise<MCPManagedOAuthGrantMetadata[]> {
+    if (!this.postgres) throw new RepositoryError('Managed receipts require PostgreSQL');
+    await lockTenantAuthoritySubject(this.db, tenantId, `mcp-managed-ack-scan:${tenantId}`);
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      (afterOperationId !== undefined &&
+        (afterOperationId.length < 1 || afterOperationId.length > 256))
+    )
+      throw new RepositoryError('Invalid managed acknowledgement page');
+    return rowsOf(
+      await executeRaw(
+        this.db,
+        sql`
+      SELECT managed_metadata FROM public.user_mcp_oauth_tokens
+      WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1'
+        AND managed_metadata->>'receipt_acknowledged' IS DISTINCT FROM 'true'
+        AND (${afterOperationId ?? null}::text IS NULL OR managed_metadata->>'operation_id'>${afterOperationId ?? null})
+      ORDER BY managed_metadata->>'operation_id' LIMIT ${limit}
+    `
+      )
+    ).map((row) => MCPManagedOAuthGrantMetadataSchema.parse(row.managed_metadata));
+  }
+
+  /** Daemon-internal projection; does not decrypt or export credentials. */
+  async getManagedMetadata(
+    userId: UserID,
+    serverId: MCPServerID
+  ): Promise<MCPManagedOAuthGrantMetadata | undefined> {
+    if (!this.postgres) return undefined;
+    const row = rowsOf(
+      await executeRaw(
+        this.db,
+        sql`SELECT managed_metadata FROM public.user_mcp_oauth_tokens
+      WHERE tenant_id=${this.tenantId()} AND user_id=${userId} AND mcp_server_id=${serverId} AND credential_origin='cloud_managed_v1'`
+      )
+    )[0];
+    return row ? MCPManagedOAuthGrantMetadataSchema.parse(row.managed_metadata) : undefined;
   }
 
   /** A losing invalid_grant can delete only the exact refresh/grant generation it used. */
@@ -1009,6 +1408,7 @@ export class UserMCPOAuthTokenRepository {
           AND refresh_generation = ${claim.refreshGeneration}
           AND refresh_claim_id = ${claim.claimId}
           AND refresh_status = 'refreshing'
+          AND (credential_origin='direct' OR ${outcome}='ambiguous')
         RETURNING mcp_server_id
       `
     );
@@ -1105,6 +1505,7 @@ export class UserMCPOAuthTokenRepository {
       oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
       oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
       oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+      oauth_token_endpoint_auth_method: userMcpOauthTokens.oauth_token_endpoint_auth_method,
       oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
       refresh_status: userMcpOauthTokens.refresh_status,
     })
@@ -1188,6 +1589,7 @@ export class UserMCPOAuthTokenRepository {
             oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
             oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
             oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+            oauth_token_endpoint_auth_method: userMcpOauthTokens.oauth_token_endpoint_auth_method,
           })
             .from(userMcpOauthTokens)
             .where(

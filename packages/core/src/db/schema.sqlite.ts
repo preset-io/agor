@@ -1,3 +1,8 @@
+import type {
+  MCPManagedOAuthGrantMetadata,
+  MCPManagedOAuthInvalidation,
+  MCPManagedOAuthPendingMetadata,
+} from '../types/mcp-managed-oauth';
 /**
  * SQLite Schema Definition
  *
@@ -148,6 +153,7 @@ export const sessions = sqliteTable(
         agentic_tool_version?: string;
         sdk_session_id?: string; // SDK session ID for conversation continuity (Claude Agent SDK, Codex SDK, etc.)
         mcp_token?: string; // MCP authentication token for Agor self-access
+        mcp_selection_explicit?: boolean;
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
 
@@ -1688,7 +1694,11 @@ export const mcpServers = sqliteTable(
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
     catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
-      .on(sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
+      .on(
+        sql`coalesce(${table.owner_user_id}, '')`,
+        table.catalog_entry_name,
+        sql`coalesce(json_extract(${table.data}, '$.auth.oauth_client_mode'), 'direct')`
+      )
       .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
@@ -1943,6 +1953,12 @@ export const userMcpOauthTokens = sqliteTable(
     // Must be preserved across refreshes.
     oauth_client_id: text('oauth_client_id'),
     oauth_client_secret: text('oauth_client_secret'),
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthGrantMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    // Broker-certified retry floor, checked using DB time after the token row lock.
+    managed_refresh_not_before: t.timestamp('managed_refresh_not_before'),
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     grant_generation: integer('grant_generation').notNull().default(0),
     grant_binding_version: integer('grant_binding_version'),
     grant_binding_fingerprint: text('grant_binding_fingerprint', { length: 64 }),
@@ -1993,6 +2009,10 @@ export const mcpOauthPendingFlows = sqliteTable(
       .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
     oauth_mode: text('oauth_mode', { enum: ['per_user', 'shared'] }).notNull(),
     subject_user_id: text('subject_user_id', { length: 36 }),
+    credential_origin: text('credential_origin').notNull().default('direct'),
+    managed_metadata: t.json<MCPManagedOAuthPendingMetadata>('managed_metadata'),
+    managed_operation_id: text('managed_operation_id'),
+    managed_transaction_id: text('managed_transaction_id'),
     grant_generation: integer('grant_generation').notNull(),
     config_fingerprint_version: integer('config_fingerprint_version').notNull(),
     config_fingerprint: text('config_fingerprint', { length: 64 }).notNull(),
@@ -3189,3 +3209,54 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Deployment-bound non-vending cleanup; survives user/server cascades. */
+export const mcpManagedOauthOutbox = sqliteTable(
+  'mcp_managed_oauth_outbox',
+  {
+    outbox_id: text('outbox_id').primaryKey(),
+    outbox_key: text('outbox_key').notNull(),
+    operation_id: text('operation_id').notNull(),
+    kind: text('kind').notNull(),
+    attempt_id: text('attempt_id').notNull(),
+    user_id: text('user_id').notNull(),
+    mcp_server_id: text('mcp_server_id').notNull(),
+    grant_generation: text('grant_generation').notNull(),
+    managed_metadata: t
+      .json<MCPManagedOAuthGrantMetadata | MCPManagedOAuthPendingMetadata>('managed_metadata')
+      .notNull(),
+    cleanup_authorization_id: text('cleanup_authorization_id'),
+    cleanup_operation_id: text('cleanup_operation_id'),
+    transaction_id: text('transaction_id'),
+    sealed_material: text('sealed_material'),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    completed_at: t.timestamp('completed_at'),
+  },
+  (table) => ({
+    keyUnique: uniqueIndex('mcp_managed_oauth_outbox_key_uq').on(table.outbox_key),
+  })
+);
+
+/** Each tenant projects every authenticated page of its cell's source stream. */
+export const mcpManagedOauthInvalidations = sqliteTable('mcp_managed_oauth_invalidations', {
+  scope_key: text('scope_key').primaryKey(),
+  cell_id: text('cell_id').notNull(),
+  environment: text('environment').notNull(),
+  residency_region: text('residency_region').notNull(),
+  recovery_incarnation: text('recovery_incarnation').notNull(),
+  status: text('status').notNull(),
+  cursor: text('cursor'),
+  page_digest: text('page_digest'),
+  items: t.json<MCPManagedOAuthInvalidation[]>('items').notNull(),
+  staged_items: t.json<MCPManagedOAuthInvalidation[]>('staged_items').notNull(),
+  updated_at: t.timestamp('updated_at').notNull(),
+});
+
+/** Deployment stop authority only. No tenant-derived columns, FK, portability or release. */
+export const mcpManagedOauthCellRetirements = sqliteTable('mcp_managed_oauth_cell_retirements', {
+  cell_id: text('cell_id').primaryKey(),
+  operation_id: text('operation_id').notNull(),
+  generation: text('generation').notNull(),
+  created_at: t.timestamp('created_at').notNull(),
+});

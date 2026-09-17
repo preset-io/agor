@@ -54,6 +54,12 @@ export const ROOT_COMMANDS = [
     policy: 'local',
   },
   {
+    name: 'managed-oauth',
+    description: 'Observe local managed OAuth deployment metadata',
+    group: 'local',
+    policy: 'local',
+  },
+  {
     name: 'login',
     description: 'Select and authenticate with a deployment',
     group: 'connected',

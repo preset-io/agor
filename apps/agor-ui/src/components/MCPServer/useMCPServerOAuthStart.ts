@@ -1,4 +1,8 @@
-import type { MCPAuthRecovery, MCPOAuthStartFailure } from '@agor/core/types';
+import type {
+  MCPAuthRecovery,
+  MCPManagedOAuthStartResult,
+  MCPOAuthStartFailure,
+} from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -7,6 +11,7 @@ import {
   refetchMCPOAuthDurableState,
   waitForMCPOAuthAttempt,
 } from '@/utils/mcpOAuthAttempt';
+import { openMarketplaceOAuthPopup } from '../Marketplace/marketplaceOAuthPopup';
 
 export interface MCPServerOAuthFailure {
   message: string;
@@ -14,11 +19,11 @@ export interface MCPServerOAuthFailure {
   redirectUri?: string;
 }
 
-interface OAuthStartSuccess {
-  success: true;
-  authorizationUrl: string;
-  attempt_id: string;
-}
+type OAuthStartSuccess = Pick<
+  MCPManagedOAuthStartResult,
+  'success' | 'authorizationUrl' | 'attempt_id'
+> &
+  Partial<Pick<MCPManagedOAuthStartResult, 'transaction_id' | 'oauth_client_mode'>>;
 
 interface UseMCPServerOAuthStartOptions {
   client: AgorClient | null;
@@ -33,6 +38,9 @@ interface UseMCPServerOAuthStartOptions {
   /** Current authority to persist/start this OAuth configuration. */
   startAllowed?: boolean;
   startBlockedReason?: string;
+  /** Saved canonical managed row; never inferred from a form toggle. */
+  managed?: boolean;
+  managedUserId?: string | null;
 }
 
 export function useMCPServerOAuthStart({
@@ -46,6 +54,8 @@ export function useMCPServerOAuthStart({
   showSuccess,
   startAllowed = true,
   startBlockedReason = 'You can no longer change this MCP server.',
+  managed = false,
+  managedUserId,
 }: UseMCPServerOAuthStartOptions) {
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
@@ -122,7 +132,11 @@ export function useMCPServerOAuthStart({
     setStartingOAuthFlow(true);
     setOauthFailure(null);
 
+    const managedPopup = managed ? openMarketplaceOAuthPopup() : null;
+    let managedNavigated = false;
     try {
+      if (managed && (!managedPopup || !managedUserId))
+        throw new Error('Managed popup unavailable');
       const targetServerId = await onPrepareOAuthStart();
       if (!isCurrentStart()) return;
       if (!targetServerId) return;
@@ -135,6 +149,7 @@ export function useMCPServerOAuthStart({
       if (!isCurrentStart()) return;
       const data = (await client.service('mcp-servers/oauth-start').create({
         mcp_server_id: targetServerId,
+        ...(managedPopup ? { client_nonce: managedPopup.operationId } : {}),
       })) as OAuthStartSuccess | MCPOAuthStartFailure;
       if (!isCurrentStart()) return;
 
@@ -147,7 +162,24 @@ export function useMCPServerOAuthStart({
           // remains authoritative and must still open for recovery.
         }
         if (!isCurrentStart()) return;
-        window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
+        if (managed) {
+          if (
+            !managedPopup ||
+            !managedUserId ||
+            !data.transaction_id ||
+            !managedPopup.bindManagedFlow?.({
+              nonce: managedPopup.operationId,
+              userId: managedUserId,
+              serverId: targetServerId,
+              attemptId: data.attempt_id,
+              transactionId: data.transaction_id,
+              createdAt: Date.now(),
+            }) ||
+            !managedPopup.navigate(data.authorizationUrl, isCurrentStart)
+          )
+            throw new Error('Managed popup unavailable');
+          managedNavigated = true;
+        } else window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         setOauthCallbackModalVisible(true);
         showInfo('Authenticating... complete sign-in in the new tab.');
 
@@ -163,9 +195,21 @@ export function useMCPServerOAuthStart({
             if (!isCurrentStart()) return;
             if (attempt.status === 'succeeded') {
               try {
-                await refetchMCPOAuthDurableState(client, targetServerId, isCurrentStart);
+                const usable = await refetchMCPOAuthDurableState(
+                  client,
+                  targetServerId,
+                  isCurrentStart
+                );
+                if (managed && !usable) throw new Error('Managed grant not confirmed');
                 if (!isCurrentStart()) return;
               } catch {
+                if (managed) {
+                  if (isCurrentStart())
+                    showError(
+                      'Sign-in completed, but the current connection could not be verified. Check its saved status.'
+                    );
+                  return;
+                }
                 if (isCurrentStart()) console.warn('[OAuth] Durable completion refetch failed');
               }
               if (!isCurrentStart()) return;
@@ -213,6 +257,7 @@ export function useMCPServerOAuthStart({
         });
       }
     } finally {
+      if (!managedNavigated) managedPopup?.close();
       if (isCurrentStart()) {
         oauthStartInFlightRef.current = false;
         setStartingOAuthFlow(false);
@@ -228,6 +273,8 @@ export function useMCPServerOAuthStart({
     showInfo,
     showSuccess,
     startBlockedReason,
+    managed,
+    managedUserId,
   ]);
 
   return {

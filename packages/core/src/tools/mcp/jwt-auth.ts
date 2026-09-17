@@ -6,7 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { MCPAuth } from '../../types/mcp';
+import { assertDirectMCPOAuthClient, type MCPAuth } from '../../types/mcp';
 import { type OutboundDnsLookup, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
@@ -213,6 +213,7 @@ export async function resolveMCPAuthHeaders(
   } = {}
 ): Promise<Record<string, string> | undefined> {
   options.assertCurrent?.();
+  assertDirectMCPOAuthClient(auth);
   if (!auth || auth.type === 'none') {
     return undefined;
   }

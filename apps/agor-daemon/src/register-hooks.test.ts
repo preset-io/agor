@@ -706,13 +706,17 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([
         'sessions/:id/mcp-servers',
-        'mcp-servers/oauth-attempt-status',
         'mcp-servers/oauth-disconnect',
         'mcp-servers/oauth-status',
       ])
     );
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toEqual(
-      expect.arrayContaining(['mcp-servers/oauth-auth-headers', 'mcp-servers/oauth-refresh'])
+      expect.arrayContaining([
+        'mcp-servers/oauth-auth-headers',
+        'mcp-servers/oauth-refresh',
+        'mcp-servers/oauth-managed-return',
+        'mcp-servers/oauth-attempt-status',
+      ])
     );
   });
 

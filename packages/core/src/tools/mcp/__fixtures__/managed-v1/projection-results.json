@@ -1,0 +1,677 @@
+{
+  "valid": {
+    "profile": {
+      "profile_id": "reviewed-alpha",
+      "profile_version": "9223372036854775807",
+      "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalog_entry_name": "com.asana/mcp",
+      "environment": "staging",
+      "region": "us-west-2",
+      "exact_resource_uri": "https://resource.example/mcp",
+      "transport": "streamable_http",
+      "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+      "issuer": "https://issuer.example",
+      "authorization_endpoint": "https://issuer.example/authorize",
+      "token_endpoint": "https://issuer.example/token",
+      "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+      "client_id": "fixture-public-identifier",
+      "scope": [],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "client_kind": "confidential",
+      "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "public_profile": {
+      "profile_id": "reviewed-beta",
+      "profile_version": "1",
+      "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalog_entry_name": "org.example/beta",
+      "environment": "staging",
+      "region": "us-west-2",
+      "exact_resource_uri": "https://resource.example/mcp",
+      "transport": "streamable_http",
+      "metadata_endpoints": [],
+      "issuer": "https://issuer.example/tenant/beta",
+      "authorization_endpoint": "https://issuer.example/authorize",
+      "token_endpoint": "https://issuer.example/token",
+      "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+      "client_id": "fixture-public-identifier",
+      "scope": ["mcp:read", "mcp:write"],
+      "token_endpoint_auth_method": "none",
+      "client_kind": "public",
+      "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "capabilities": {
+      "protocol_version": 1,
+      "binding_version": 1,
+      "enforcement_version": 1,
+      "available": true,
+      "environment": "staging",
+      "residency_region": "us-west-2",
+      "recovery_incarnation": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "profile_versions": [
+        {
+          "profile_id": "reviewed-alpha",
+          "profile_version": "9223372036854775807",
+          "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "catalog_entry_name": "com.asana/mcp",
+          "environment": "staging",
+          "region": "us-west-2",
+          "exact_resource_uri": "https://resource.example/mcp",
+          "transport": "streamable_http",
+          "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+          "issuer": "https://issuer.example",
+          "authorization_endpoint": "https://issuer.example/authorize",
+          "token_endpoint": "https://issuer.example/token",
+          "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+          "client_id": "fixture-public-identifier",
+          "scope": [],
+          "token_endpoint_auth_method": "client_secret_basic",
+          "client_kind": "confidential",
+          "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "profile_id": "reviewed-beta",
+          "profile_version": "1",
+          "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "catalog_entry_name": "org.example/beta",
+          "environment": "staging",
+          "region": "us-west-2",
+          "exact_resource_uri": "https://resource.example/mcp",
+          "transport": "streamable_http",
+          "metadata_endpoints": [],
+          "issuer": "https://issuer.example/tenant/beta",
+          "authorization_endpoint": "https://issuer.example/authorize",
+          "token_endpoint": "https://issuer.example/token",
+          "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+          "client_id": "fixture-public-identifier",
+          "scope": ["mcp:read", "mcp:write"],
+          "token_endpoint_auth_method": "none",
+          "client_kind": "public",
+          "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "flags": {
+        "managed_mcp_oauth_v1": true,
+        "new_starts": true,
+        "exchange": true,
+        "refresh": true,
+        "use_authorization_issuance": true,
+        "revocation": true
+      }
+    },
+    "prepare": {
+      "protocol_version": 1,
+      "operation_id": "operation_alpha",
+      "owner": {
+        "environment": "staging",
+        "residency_region": "us-west-2",
+        "recovery_incarnation": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+        "workspace_id": "workspace_alpha",
+        "cloud_user_subject": "cloud_user_alpha",
+        "cell_local_user_id": "local_user_alpha",
+        "server_id": "server_alpha",
+        "attempt_id": "attempt_alpha",
+        "profile_id": "fake_alpha",
+        "profile_version": "1",
+        "catalog_digest": "35594c902a8ac0a1c004a2eb5ba3c0e47ce105e3ec2c870fe0db92c83498dea6",
+        "config_fingerprint": "4fa1d567e8491f616e4d440035411b454e61d95e742fd008aa901514df021963",
+        "grant_generation": "9007199254740993",
+        "membership_id": "membership_alpha",
+        "cell_id": "cell_alpha",
+        "data_plane_id": "dp_alpha",
+        "placement_epoch": "11",
+        "identity_epoch": "12",
+        "user_identity_epoch": "13",
+        "cell_authority_epoch": "14",
+        "data_plane_authority_epoch": "15"
+      },
+      "catalog_entry_name": "com.asana/mcp",
+      "pkce_challenge": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "method": "S256",
+      "client_nonce_hash": "1ca8bb754bf95ab1e1723165058313bc9d7d3bc486c53847e3af37a617a64c40",
+      "replacement_handle": null
+    },
+    "ack": {
+      "protocol_version": 1,
+      "acknowledged": true
+    },
+    "cancel": {
+      "protocol_version": 1,
+      "canceled": true
+    },
+    "close": {
+      "protocol_version": 1,
+      "closed": true,
+      "provider_revocation": "pending",
+      "cleanup_authorization_id": "cleanup_handle_alpha_1"
+    },
+    "cleanup": {
+      "protocol_version": 1,
+      "closed": true,
+      "provider_revocation": "revoked"
+    },
+    "cleanup_uncertain": {
+      "protocol_version": 1,
+      "closed": true,
+      "provider_revocation": "uncertain"
+    },
+    "cleanup_in_progress": {
+      "protocol_version": 1,
+      "closed": true,
+      "provider_revocation": "in_progress"
+    },
+    "return_ticket": {
+      "protocol_version": 1,
+      "transaction_id": "fixture_transaction",
+      "owner": {
+        "environment": "staging",
+        "residency_region": "us-west-2",
+        "recovery_incarnation": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+        "workspace_id": "workspace_alpha",
+        "cloud_user_subject": "cloud_user_alpha",
+        "cell_local_user_id": "local_user_alpha",
+        "server_id": "server_alpha",
+        "attempt_id": "attempt_alpha",
+        "profile_id": "fake_alpha",
+        "profile_version": "1",
+        "catalog_digest": "35594c902a8ac0a1c004a2eb5ba3c0e47ce105e3ec2c870fe0db92c83498dea6",
+        "config_fingerprint": "4fa1d567e8491f616e4d440035411b454e61d95e742fd008aa901514df021963",
+        "grant_generation": "9007199254740993",
+        "membership_id": "membership_alpha",
+        "cell_id": "cell_alpha",
+        "data_plane_id": "dp_alpha",
+        "placement_epoch": "11",
+        "identity_epoch": "12",
+        "user_identity_epoch": "13",
+        "cell_authority_epoch": "14",
+        "data_plane_authority_epoch": "15"
+      }
+    },
+    "multiple_metadata_profile": {
+      "profile_id": "reviewed-beta",
+      "profile_version": "1",
+      "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalog_entry_name": "org.example/beta",
+      "environment": "staging",
+      "region": "us-west-2",
+      "exact_resource_uri": "https://resource.example/mcp",
+      "transport": "streamable_http",
+      "metadata_endpoints": [
+        "https://resource.example/.well-known/oauth-protected-resource",
+        "https://issuer.example/.well-known/oauth-authorization-server"
+      ],
+      "issuer": "https://issuer.example/tenant/beta",
+      "authorization_endpoint": "https://issuer.example/authorize",
+      "token_endpoint": "https://issuer.example/token",
+      "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+      "client_id": "fixture-public-identifier",
+      "scope": ["mcp:read", "mcp:write"],
+      "token_endpoint_auth_method": "none",
+      "client_kind": "public",
+      "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "invalid": [
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "secret_set_reference": "forbidden-fixture-reference"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "admitted_app_secret_version": "fixture-version"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "client_secret": "forbidden-fixture-value"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "registration_access_token": "forbidden-fixture-value"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "unknown",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "sse",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "01",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775808",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": 1,
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "development",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "eu-west-1",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "none",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": ["two scopes"],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "profile",
+      "value": {
+        "profile_id": "reviewed-alpha",
+        "profile_version": "9223372036854775807",
+        "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "catalog_entry_name": "com.asana/mcp",
+        "environment": "staging",
+        "region": "us-west-2",
+        "exact_resource_uri": "https://resource.example/mcp",
+        "transport": "streamable_http",
+        "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+        "issuer": "https://issuer.example/?query=1",
+        "authorization_endpoint": "https://issuer.example/authorize",
+        "token_endpoint": "https://issuer.example/token",
+        "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+        "client_id": "fixture-public-identifier",
+        "scope": [],
+        "token_endpoint_auth_method": "client_secret_basic",
+        "client_kind": "confidential",
+        "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "schema": "capabilities",
+      "value": {
+        "protocol_version": 1,
+        "binding_version": 1,
+        "enforcement_version": 1,
+        "available": true,
+        "environment": "staging",
+        "residency_region": "us-west-2",
+        "recovery_incarnation": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "profile_versions": [
+          {
+            "profile_id": "old",
+            "profile_version": "1",
+            "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "flags": {
+          "managed_mcp_oauth_v1": true,
+          "new_starts": true,
+          "exchange": true,
+          "refresh": true,
+          "use_authorization_issuance": true,
+          "revocation": true
+        }
+      }
+    },
+    {
+      "schema": "capabilities",
+      "value": {
+        "protocol_version": 1,
+        "binding_version": 1,
+        "enforcement_version": 1,
+        "available": true,
+        "environment": "production",
+        "residency_region": "us-west-2",
+        "recovery_incarnation": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "profile_versions": [
+          {
+            "profile_id": "reviewed-alpha",
+            "profile_version": "9223372036854775807",
+            "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "catalog_entry_name": "com.asana/mcp",
+            "environment": "staging",
+            "region": "us-west-2",
+            "exact_resource_uri": "https://resource.example/mcp",
+            "transport": "streamable_http",
+            "metadata_endpoints": ["https://resource.example/.well-known/oauth-protected-resource"],
+            "issuer": "https://issuer.example",
+            "authorization_endpoint": "https://issuer.example/authorize",
+            "token_endpoint": "https://issuer.example/token",
+            "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+            "client_id": "fixture-public-identifier",
+            "scope": [],
+            "token_endpoint_auth_method": "client_secret_basic",
+            "client_kind": "confidential",
+            "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "profile_id": "reviewed-beta",
+            "profile_version": "1",
+            "catalog_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "catalog_entry_name": "org.example/beta",
+            "environment": "staging",
+            "region": "us-west-2",
+            "exact_resource_uri": "https://resource.example/mcp",
+            "transport": "streamable_http",
+            "metadata_endpoints": [],
+            "issuer": "https://issuer.example/tenant/beta",
+            "authorization_endpoint": "https://issuer.example/authorize",
+            "token_endpoint": "https://issuer.example/token",
+            "exact_redirect_uri": "https://worker.example/v1/callback/alpha",
+            "client_id": "fixture-public-identifier",
+            "scope": ["mcp:read", "mcp:write"],
+            "token_endpoint_auth_method": "none",
+            "client_kind": "public",
+            "registration_evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "flags": {
+          "managed_mcp_oauth_v1": true,
+          "new_starts": true,
+          "exchange": true,
+          "refresh": true,
+          "use_authorization_issuance": true,
+          "revocation": true
+        }
+      }
+    },
+    {
+      "schema": "close",
+      "value": {
+        "protocol_version": 1,
+        "closed": true,
+        "provider_revocation": "revoked"
+      }
+    },
+    {
+      "schema": "cleanup",
+      "value": {
+        "protocol_version": 1,
+        "closed": true,
+        "provider_revocation": "pending"
+      }
+    },
+    {
+      "schema": "return_ticket",
+      "value": {
+        "protocol_version": 1,
+        "transaction_id": "fixture_transaction",
+        "owner": {
+          "environment": "staging",
+          "residency_region": "us-west-2",
+          "recovery_incarnation": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+          "workspace_id": "workspace_alpha",
+          "cloud_user_subject": "cloud_user_alpha",
+          "cell_local_user_id": "local_user_alpha",
+          "server_id": "server_alpha",
+          "attempt_id": "attempt_alpha",
+          "profile_id": "fake_alpha",
+          "profile_version": "1",
+          "catalog_digest": "35594c902a8ac0a1c004a2eb5ba3c0e47ce105e3ec2c870fe0db92c83498dea6",
+          "config_fingerprint": "4fa1d567e8491f616e4d440035411b454e61d95e742fd008aa901514df021963",
+          "grant_generation": "9007199254740993",
+          "membership_id": "membership_alpha",
+          "cell_id": "cell_alpha",
+          "data_plane_id": "dp_alpha",
+          "placement_epoch": 1,
+          "identity_epoch": "12",
+          "user_identity_epoch": "13",
+          "cell_authority_epoch": "14",
+          "data_plane_authority_epoch": "15"
+        }
+      }
+    }
+  ]
+}

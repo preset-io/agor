@@ -1,8 +1,10 @@
 import { glob } from 'glob';
 import { defineConfig } from 'tsup';
 
-// Find all source files
-const srcFiles = glob.sync('src/**/*.ts', { ignore: ['**/*.test.ts', '**/*.spec.ts'] });
+// Test-only cross-repository fixtures must not become executable release entries.
+const srcFiles = glob.sync('src/**/*.ts', {
+  ignore: ['**/*.test.ts', '**/*.spec.ts', '**/test-support/**'],
+});
 
 // Create entry points
 const entries = Object.fromEntries(

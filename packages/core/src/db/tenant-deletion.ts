@@ -42,7 +42,7 @@
 
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
-import { executeRaw, isPostgresDatabase } from './database-wrapper';
+import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
 import {
   buildTenantDeletionManifest,
@@ -409,6 +409,8 @@ async function readTenantCatalog(db: Database): Promise<CatalogRelation[]> {
 
 const CANONICAL_TENANT_POLICY_EXPRESSION =
   "tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default')";
+const MANAGED_GRANT_TENANT_POLICY_EXPRESSION =
+  "((credential_origin='direct')or(coalesce(current_setting('agor.system_scope',true),'')=''))and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
 const STRICT_TENANT_POLICY_EXPRESSION =
   "tenant_id=nullif(current_setting('agor.tenant_id',true),'')";
 // The pending OAuth table also exposes two narrow transaction-local system
@@ -466,6 +468,8 @@ function normalizePolicyExpression(expression: string | null): string | null {
 function assertSupportedPolicies(relation: CatalogRelation): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
   const expectedTenantPolicyExpression =
+    relation.tableName === 'mcp_managed_oauth_outbox' ||
+    relation.tableName === 'mcp_managed_oauth_invalidations' ||
     relation.tableName === 'mcp_oauth_pending_flows' ||
     relation.tableName === 'mcp_oauth_client_registrations' ||
     relation.tableName === 'codex_device_auth_attempts'
@@ -475,7 +479,9 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
         ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
         : relation.tableName === 'github_install_states'
           ? STRICT_TENANT_POLICY_EXPRESSION
-          : CANONICAL_TENANT_POLICY_EXPRESSION;
+          : relation.tableName === 'user_mcp_oauth_tokens'
+            ? MANAGED_GRANT_TENANT_POLICY_EXPRESSION
+            : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {
@@ -903,6 +909,19 @@ export async function deleteTenantData(
       }
     }
     if (dryRun) return;
+    const managedCleanup = rawRows(
+      await executeRaw(
+        scoped,
+        sql`SELECT 1 AS pending
+      WHERE EXISTS (SELECT 1 FROM public.mcp_managed_oauth_outbox WHERE tenant_id=${tenantId} AND completed_at IS NULL)
+      OR EXISTS (SELECT 1 FROM public.user_mcp_oauth_tokens WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1')
+      OR EXISTS (SELECT 1 FROM public.mcp_oauth_pending_flows WHERE tenant_id=${tenantId} AND credential_origin='cloud_managed_v1' AND status IN ('pending','exchanging'))`
+      )
+    );
+    if (managedCleanup.length)
+      throw new TenantDeletionCatalogError(
+        'Managed OAuth authority must be retired and broker close/cancel confirmed before tenant erasure'
+      );
     for (const step of phaseOnePlan.steps) {
       await step.deleteRows(scoped, tenantId);
     }

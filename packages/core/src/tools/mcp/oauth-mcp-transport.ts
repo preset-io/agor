@@ -9,14 +9,17 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { z } from 'zod';
+import { hasTemplateMarker } from '../../mcp/template-patterns.js';
 import type {
+  MCPOAuthClientMode,
   MCPOAuthClientRegistrationID,
   MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
   MCPOAuthFailureReason,
   MCPOAuthRuntimeCompatibilityMode,
+  MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
-import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
+import { assertDirectMCPOAuthClient, MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
@@ -58,6 +61,14 @@ export function __seedAuthCodeTokenCacheForTests(
 // value. The persisted lifecycle is handled in `oauth-cache.ts` (initial
 // auth) and `oauth-refresh.ts` (refresh) which both use the resolver.
 const UNKNOWN_EXPIRY_CACHE_TTL_SECONDS = 3600;
+
+// Reviewed V2 contract. These bounds only tighten existing compatibility
+// policy: Asana does not advertise RFC 9207, so catalog installs use the
+// existing marketplace callback handling, but none of its discovery/resource
+// fallbacks are needed here. Never treat V1 or the documentation's /v2 example
+// as the resource for a V2 grant.
+const ASANA_V2_RESOURCE = 'https://mcp.asana.com/v2/mcp';
+const ASANA_V2_ISSUER = 'https://app.asana.com';
 
 /**
  * Raw OAuth 2.0 token response shape.
@@ -180,7 +191,65 @@ export interface AuthorizationServerMetadata {
   response_types_supported?: string[];
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
+  token_endpoint_auth_methods_supported?: string[]; // RFC 8414
   authorization_response_iss_parameter_supported?: boolean;
+}
+
+/**
+ * How Agor presents confidential-client credentials at the token endpoint.
+ * `client_secret_basic` (HTTP Basic) is Agor's historical default and what most
+ * providers (e.g. Slack) expect; `client_secret_post` puts the credentials in
+ * the request body, which some providers (e.g. HubSpot) require exclusively.
+ */
+export type { MCPOAuthTokenEndpointAuthMethod } from '../../types/mcp.js';
+
+/**
+ * Choose the token-endpoint client-authentication method for a confidential
+ * client, honoring the authorization server's advertised
+ * `token_endpoint_auth_methods_supported` (RFC 8414).
+ *
+ * Default is `client_secret_basic`: it preserves historical behavior when the
+ * server advertises nothing and is what most providers expect. We switch to
+ * `client_secret_post` only when the server advertises it but NOT Basic — e.g.
+ * HubSpot, whose token endpoint accepts `client_secret_post` only. When both
+ * are advertised, Basic wins so existing integrations are unchanged.
+ */
+export function selectTokenEndpointAuthMethod(
+  supportedMethods?: string[]
+): MCPOAuthTokenEndpointAuthMethod {
+  if (!supportedMethods || supportedMethods.length === 0) return 'client_secret_basic';
+  if (supportedMethods.includes('client_secret_basic')) return 'client_secret_basic';
+  if (supportedMethods.includes('client_secret_post')) return 'client_secret_post';
+  return 'client_secret_basic';
+}
+
+/**
+ * Attach client authentication to a token-endpoint request (authorization-code
+ * exchange or refresh). Confidential clients present the secret either as HTTP
+ * Basic (RFC 6749 §2.3.1) or in the request body (`client_secret_post`) per the
+ * negotiated method; public clients (no secret) send only `client_id` in the
+ * body. Mutates `body`/`headers` in place.
+ */
+export function applyClientAuthentication(
+  body: Record<string, string>,
+  headers: Record<string, string>,
+  clientId: string,
+  clientSecret: string | undefined,
+  method: MCPOAuthTokenEndpointAuthMethod
+): void {
+  if (!clientSecret) {
+    // Public client — send client_id in body.
+    body.client_id = clientId;
+    return;
+  }
+  if (method === 'client_secret_post') {
+    // Provider requires credentials in the request body (e.g. HubSpot).
+    body.client_id = clientId;
+    body.client_secret = clientSecret;
+    return;
+  }
+  // Default: HTTP Basic auth, which most providers expect.
+  headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
 }
 
 // Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
@@ -444,12 +513,14 @@ export async function resolveMCPOAuthDiscovery(
   wwwAuthenticateHeader: string | null,
   mcpUrl: string,
   options: {
+    oauthClientMode?: MCPOAuthClientMode;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
     /** Daemon-owned authority/deadline assertion between discovery requests. */
     assertCurrent?: () => void;
   } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options.oauthClientMode });
   options.assertCurrent?.();
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
   const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
@@ -1050,7 +1121,8 @@ async function exchangeCodeForToken(
   clientSecret?: string,
   resourceUri?: string,
   allowLocalhostHttp = false,
-  clientRegistrationInvalidatable = false
+  clientRegistrationInvalidatable = false,
+  tokenEndpointAuthMethod: MCPOAuthTokenEndpointAuthMethod = 'client_secret_basic'
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -1060,8 +1132,6 @@ async function exchangeCodeForToken(
   };
   if (resourceUri) body.resource = resourceUri;
 
-  // Build headers — use HTTP Basic auth when client_secret is available (RFC 6749 §2.3.1),
-  // fall back to body params for public clients or providers that don't support Basic auth.
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
     // GitHub's classic OAuth endpoint returns a form-encoded response by
@@ -1070,13 +1140,8 @@ async function exchangeCodeForToken(
     Accept: 'application/json',
   };
 
-  if (clientSecret) {
-    // Slack and other providers recommend HTTP Basic auth for credentials
-    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
-  } else {
-    // Public client — send client_id in body
-    body.client_id = clientId;
-  }
+  // Present client credentials per the server's advertised auth method.
+  applyClientAuthentication(body, headers, clientId, clientSecret, tokenEndpointAuthMethod);
 
   console.log('[MCP OAuth] Starting authorization-code exchange');
 
@@ -1372,7 +1437,9 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true
+      true,
+      false,
+      selectTokenEndpointAuthMethod(authServerMetadata.token_endpoint_auth_methods_supported)
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1486,6 +1553,7 @@ export function getAuthCodeTokenCacheStats(): {
  * This is returned by startMCPOAuthFlow and consumed by completeMCPOAuthFlow
  */
 export interface OAuthFlowContext {
+  oauthClientMode?: MCPOAuthClientMode;
   metadataUrl: string;
   resourceUri: string;
   issuer: string;
@@ -1497,6 +1565,12 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   /** Exact durable DCR epoch used by this attempt; absent for configured/local clients. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Token-endpoint client-authentication method negotiated from the AS
+   * metadata at flow start. Optional so pre-existing durable flows (sealed
+   * before this field existed) default to `client_secret_basic`.
+   */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1571,6 +1645,20 @@ async function resolveOAuthClient(options: {
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
   assertCurrent?: () => void;
 }): Promise<MCPOAuthResolvedClient> {
+  if (
+    options.resourceUri === ASANA_V2_RESOURCE &&
+    (!options.clientId?.trim() ||
+      !options.clientSecret?.trim() ||
+      hasTemplateMarker(options.clientId) ||
+      hasTemplateMarker(options.clientSecret))
+  ) {
+    throw new OAuthConfigurationError(
+      'client_registration_required',
+      'Asana V2 requires the Client ID and Client Secret of a pre-registered MCP app. ' +
+        'Save literal values in Advanced — OAuth settings, then sign in again; ' +
+        'environment templates are not supported by this browser OAuth flow.'
+    );
+  }
   if (options.clientId) {
     return {
       clientId: options.clientId,
@@ -1715,7 +1803,7 @@ function assertOAuthProtectedResourceMetadata(
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode
 ): void {
   if (
-    compatibilityMode === 'strict'
+    compatibilityMode === 'strict' || resourceUri === ASANA_V2_RESOURCE
       ? statedResource !== resourceUri
       : compatibilityMode === 'marketplace' &&
         !marketplaceResourceMetadataMatches(metadataUrl, statedResource, resourceUri)
@@ -1733,7 +1821,7 @@ function assertOAuthDirectDiscoveryIssuer(
   resourceUri: string,
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode
 ): void {
-  if (compatibilityMode === 'strict') {
+  if (compatibilityMode === 'strict' || resourceUri === ASANA_V2_RESOURCE) {
     throw new OAuthConfigurationError(
       'metadata_incompatible',
       'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
@@ -1778,6 +1866,23 @@ function resolveOAuthAuthorizationContract(options: OAuthAuthorizationContractOp
     authorizationUrlOverride,
     tokenUrlOverride,
   } = options;
+  if (
+    resourceUri === ASANA_V2_RESOURCE &&
+    (issuer !== ASANA_V2_ISSUER ||
+      authServerMetadata?.issuer !== ASANA_V2_ISSUER ||
+      authServerMetadata.authorization_endpoint !== `${ASANA_V2_ISSUER}/-/oauth_authorize` ||
+      authServerMetadata.token_endpoint !== `${ASANA_V2_ISSUER}/-/oauth_token` ||
+      !authServerMetadata.code_challenge_methods_supported?.includes('S256') ||
+      !authServerMetadata.token_endpoint_auth_methods_supported?.includes('client_secret_basic') ||
+      (authorizationUrlOverride !== undefined &&
+        authorizationUrlOverride !== authServerMetadata.authorization_endpoint) ||
+      (tokenUrlOverride !== undefined && tokenUrlOverride !== authServerMetadata.token_endpoint))
+  ) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Asana V2 metadata no longer matches its reviewed issuer, endpoints, PKCE and client authentication contract.'
+    );
+  }
   const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
   if (!tokenEndpoint) {
     throw new OAuthConfigurationError(
@@ -1874,11 +1979,13 @@ export async function validateMCPOAuthMetadata(
   discovery: MCPOAuthDiscoveryResult,
   resourceUri: string,
   options: {
+    oauthClientMode?: MCPOAuthClientMode;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
     assertCurrent?: () => void;
   } = {}
 ): Promise<ValidatedMCPOAuthMetadata> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options.oauthClientMode });
   const compatibilityMode = options.compatibilityMode ?? 'strict';
   const allowLocalhostHttp = options.allowLocalhostHttp === true;
   let authServerMetadata: AuthorizationServerMetadata;
@@ -2089,6 +2196,9 @@ async function startMCPOAuthFlowWithAS(opts: {
     clientId: resolvedClient.clientId,
     clientSecret: resolvedClient.clientSecret,
     clientRegistrationId: resolvedClient.clientRegistrationId,
+    tokenEndpointAuthMethod: selectTokenEndpointAuthMethod(
+      authServerMetadata?.token_endpoint_auth_methods_supported
+    ),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
@@ -2103,6 +2213,7 @@ export async function startMCPOAuthFlow(
   clientId?: string,
   redirectUri?: string,
   options?: {
+    oauthClientMode?: MCPOAuthClientMode;
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     clientSecret?: string;
@@ -2145,6 +2256,7 @@ export async function startMCPOAuthFlow(
     assertCurrent?: () => void;
   }
 ): Promise<OAuthFlowContext> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: options?.oauthClientMode });
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
   const dcrMode = options?.dcrMode ?? MCP_OAUTH_DEFAULT_DCR_MODE;
@@ -2330,6 +2442,7 @@ export async function completeMCPOAuthFlow(
   state: string,
   options: { cacheToken?: boolean; issuer?: string } = {}
 ): Promise<OAuthTokenResponse> {
+  assertDirectMCPOAuthClient({ oauth_client_mode: context.oauthClientMode });
   console.log('[MCP OAuth] Completing OAuth flow with authorization code');
 
   // Verify state to prevent CSRF
@@ -2340,7 +2453,7 @@ export async function completeMCPOAuthFlow(
     throw new OAuthCallbackValidationError('callback_issuer_missing');
   }
   if (
-    context.compatibilityMode !== 'legacy' &&
+    (context.compatibilityMode !== 'legacy' || context.resourceUri === ASANA_V2_RESOURCE) &&
     options.issuer != null &&
     options.issuer !== context.issuer
   ) {
@@ -2357,7 +2470,8 @@ export async function completeMCPOAuthFlow(
     context.clientSecret,
     context.resourceUri,
     context.allowLocalhostHttp,
-    Boolean(context.clientRegistrationId)
+    Boolean(context.clientRegistrationId),
+    context.tokenEndpointAuthMethod ?? 'client_secret_basic'
   );
 
   console.log('[MCP OAuth] Access token received successfully');

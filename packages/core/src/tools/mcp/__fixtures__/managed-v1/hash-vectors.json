@@ -1,0 +1,57 @@
+{
+  "length_prefix": [
+    {
+      "parts": [
+        "ab",
+        "c"
+      ],
+      "hex": "0000000261620000000163",
+      "sha256": "f2939f903016e5bb29b1e4a61cdbd376220ca03a24180b39995f2d50f2e0a647"
+    },
+    {
+      "parts": [
+        "a",
+        "bc"
+      ],
+      "hex": "0000000161000000026263",
+      "sha256": "b534ce16ac9c8b36823f39a395ce8e0e3c7ad9605b82b5444f18cadacd217a5d"
+    },
+    {
+      "parts": [
+        "",
+        "é",
+        "😀",
+        "\u0000"
+      ],
+      "hex": "0000000000000002c3a900000004f09f98800000000100",
+      "sha256": "4348ba08db2b246ea478066237979b30276ded4e6da07d3f8a988f0df026a59c"
+    }
+  ],
+  "owner_fields": [
+    "environment",
+    "residency_region",
+    "recovery_incarnation",
+    "workspace_id",
+    "cloud_user_subject",
+    "cell_local_user_id",
+    "server_id",
+    "attempt_id",
+    "profile_id",
+    "profile_version",
+    "catalog_digest",
+    "config_fingerprint",
+    "grant_generation",
+    "membership_id",
+    "cell_id",
+    "data_plane_id",
+    "placement_epoch",
+    "identity_epoch",
+    "user_identity_epoch",
+    "cell_authority_epoch",
+    "data_plane_authority_epoch"
+  ],
+  "owner_sha256": "294a81b4b685117625eeb7779932e64b0141ca8d77c7b805d2fb8670aedcb3d2",
+  "tokens_digest": "ed650194353c75c28f1547148da93750665ce12ff1f5b0993709cf7851bb3ab8",
+  "empty_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "synthetic_state_sha256": "3d8faccfea9b18b5df5f447a3e45ed15aa2a5d91baa65150a092f262600d5c9f"
+}

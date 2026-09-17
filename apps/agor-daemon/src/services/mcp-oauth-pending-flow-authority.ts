@@ -1,3 +1,12 @@
+import {
+  type McpOAuthClaim,
+  type McpOAuthOwner,
+  McpOAuthOwnerSchema,
+  type McpOAuthPrepareRequest,
+  McpOAuthPrepareRequestSchema,
+  McpOAuthTransactionStatusSchema,
+  mcpOAuthOwnerBytes,
+} from '@agor/core/types';
 /**
  * Durable MCP OAuth pending-flow authority for PostgreSQL deployments.
  *
@@ -81,6 +90,9 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     (material.clientSecret === undefined || typeof material.clientSecret === 'string') &&
     (material.clientRegistrationId === undefined ||
       typeof material.clientRegistrationId === 'string') &&
+    (material.tokenEndpointAuthMethod === undefined ||
+      material.tokenEndpointAuthMethod === 'client_secret_basic' ||
+      material.tokenEndpointAuthMethod === 'client_secret_post') &&
     (material.compatibilityMode === 'strict' ||
       material.compatibilityMode === 'legacy' ||
       material.compatibilityMode === 'marketplace') &&
@@ -167,6 +179,9 @@ export class MCPOAuthPendingFlowAuthority {
         ...(input.context.clientRegistrationId
           ? { clientRegistrationId: input.context.clientRegistrationId }
           : {}),
+        ...(input.context.tokenEndpointAuthMethod
+          ? { tokenEndpointAuthMethod: input.context.tokenEndpointAuthMethod }
+          : {}),
         compatibilityMode: input.context.compatibilityMode,
         authorizationResponseIssuerParameterSupported:
           input.context.authorizationResponseIssuerParameterSupported,
@@ -203,6 +218,251 @@ export class MCPOAuthPendingFlowAuthority {
       });
     });
     return attemptId;
+  }
+
+  /** Allocate a durable, never-reused generation before owner-resolution I/O. No provider prepare is allowed until reserveManaged commits. */
+  async reserveManagedAttempt(input: {
+    tenantId: string;
+    userId: UserID;
+    mcpServerId: MCPServerID;
+  }): Promise<number> {
+    return runWithTenantDatabaseScope(this.db, input.tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).allocateGrantGeneration({
+        tenantId: input.tenantId,
+        mcpServerId: input.mcpServerId,
+        oauthMode: 'per_user',
+        subjectUserId: input.userId,
+      })
+    );
+  }
+
+  /** The synchronous builder computes the v5 HMAC only after durable generation allocation. */
+  async reserveManaged(input: {
+    tenantId: string;
+    userId: UserID;
+    mcpServerId: MCPServerID;
+    attemptId: MCPOAuthAttemptID;
+    grantGeneration?: number;
+    build: (generation: number) => {
+      owner: McpOAuthOwner;
+      prepare_request: McpOAuthPrepareRequest;
+      pkce_verifier: string;
+    };
+  }): Promise<MCPOAuthPendingFlowRecord> {
+    return runWithTenantDatabaseScope(this.db, input.tenantId, async (db) => {
+      const repo = new MCPOAuthPendingFlowRepository(db);
+      const generation =
+        input.grantGeneration ??
+        (await repo.allocateGrantGeneration({
+          tenantId: input.tenantId,
+          mcpServerId: input.mcpServerId,
+          oauthMode: 'per_user',
+          subjectUserId: input.userId,
+        }));
+      const built = input.build(generation);
+      const owner = McpOAuthOwnerSchema.parse(built.owner);
+      const prepare = McpOAuthPrepareRequestSchema.parse(built.prepare_request);
+      if (
+        Buffer.compare(
+          Buffer.from(mcpOAuthOwnerBytes(owner)),
+          Buffer.from(mcpOAuthOwnerBytes(prepare.owner))
+        )
+      )
+        throw new Error('Managed prepare owner mismatch');
+      if (
+        !/^[A-Za-z0-9._~-]{43,128}$/.test(built.pkce_verifier) ||
+        createHash('sha256').update(built.pkce_verifier).digest('base64url') !==
+          prepare.pkce_challenge
+      )
+        throw new Error('Managed PKCE binding mismatch');
+      const material = {
+        version: 1,
+        credential_origin: 'cloud_managed_v1',
+        owner,
+        transaction_id: null,
+        pkce_verifier: built.pkce_verifier,
+      };
+      await repo.create({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        mcpServerId: input.mcpServerId,
+        attemptId: input.attemptId,
+        oauthMode: 'per_user',
+        subjectUserId: input.userId,
+        grantGeneration: generation,
+        configFingerprintVersion: 5,
+        configFingerprint: owner.config_fingerprint,
+        envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
+        stateHash: fingerprintMCPOAuthState(`agor-mcp-managed-reservation-v1\0${input.attemptId}`),
+        sealedMaterial: sealBoundSecret(
+          JSON.stringify(material),
+          this.masterSecret!,
+          'pending-exchange',
+          this.managedEnvelopeBinding(owner, null)
+        ),
+        managedMetadata: { owner, prepare_request: prepare, cancel_epoch: '0' },
+        ttlMs: FLOW_TTL_MS,
+      });
+      return (await repo.getForUser(input.tenantId, input.userId, input.attemptId))!;
+    });
+  }
+
+  async getManagedForTransaction(
+    tenantId: string,
+    userId: UserID,
+    transactionId: string
+  ): Promise<MCPOAuthPendingFlowRecord | null> {
+    return runWithTenantDatabaseScope(this.db, tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).getManagedForTransaction(
+        tenantId,
+        userId,
+        transactionId
+      )
+    );
+  }
+
+  async retireManagedAttempt(
+    record: MCPOAuthPendingFlowRecord,
+    failureCode = 'attempt_canceled'
+  ): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, record.tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).retireManagedAttempt(record, failureCode)
+    );
+  }
+
+  private managedEnvelopeBinding(owner: McpOAuthOwner, transactionId: string | null): string {
+    return `cloud_managed_v1\0${Buffer.from(mcpOAuthOwnerBytes(owner)).toString('base64url')}\0${transactionId ?? '<reservation>'}`;
+  }
+
+  private openManagedMaterial(record: MCPOAuthPendingFlowRecord): { pkce_verifier: string } {
+    if (
+      record.credentialOrigin !== 'cloud_managed_v1' ||
+      !record.managedMetadata ||
+      !record.sealedMaterial
+    )
+      throw new Error('Managed material is unavailable');
+    let material: {
+      version?: unknown;
+      credential_origin?: unknown;
+      owner?: unknown;
+      transaction_id?: unknown;
+      pkce_verifier?: unknown;
+    };
+    try {
+      material = JSON.parse(
+        openBoundSecret(
+          record.sealedMaterial,
+          this.masterSecret!,
+          'pending-exchange',
+          this.managedEnvelopeBinding(
+            record.managedMetadata.owner,
+            record.managedTransactionId ?? null
+          )
+        )
+      );
+      const owner = McpOAuthOwnerSchema.parse(material.owner);
+      if (
+        owner.workspace_id !== record.tenantId ||
+        owner.cell_local_user_id !== record.userId ||
+        owner.server_id !== record.mcpServerId ||
+        owner.attempt_id !== record.attemptId ||
+        owner.grant_generation !== String(record.grantGeneration) ||
+        owner.config_fingerprint !== record.configFingerprint ||
+        record.configFingerprintVersion !== 5 ||
+        material.version !== 1 ||
+        material.credential_origin !== 'cloud_managed_v1' ||
+        material.transaction_id !== (record.managedTransactionId ?? null) ||
+        Buffer.compare(
+          Buffer.from(mcpOAuthOwnerBytes(owner)),
+          Buffer.from(mcpOAuthOwnerBytes(record.managedMetadata.owner))
+        ) ||
+        typeof material.pkce_verifier !== 'string' ||
+        !/^[A-Za-z0-9._~-]{43,128}$/.test(material.pkce_verifier)
+      )
+        throw new Error();
+      return { pkce_verifier: material.pkce_verifier };
+    } catch {
+      throw new Error('Managed pending material binding is invalid');
+    }
+  }
+
+  async bindManagedTransaction(
+    record: MCPOAuthPendingFlowRecord,
+    transactionId: string,
+    cancelEpoch: string
+  ): Promise<boolean> {
+    const material = this.openManagedMaterial(record);
+    const owner = record.managedMetadata!.owner;
+    const sealed = sealBoundSecret(
+      JSON.stringify({
+        version: 1,
+        credential_origin: 'cloud_managed_v1',
+        owner,
+        transaction_id: transactionId,
+        ...material,
+      }),
+      this.masterSecret!,
+      'pending-exchange',
+      this.managedEnvelopeBinding(owner, transactionId)
+    );
+    return runWithTenantDatabaseScope(this.db, record.tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).bindManagedTransaction(
+        record,
+        transactionId,
+        cancelEpoch,
+        sealed
+      )
+    );
+  }
+
+  /** Caller supplies an authenticated broker response, never a browser callback payload. */
+  async claimManagedForTenant(
+    record: MCPOAuthPendingFlowRecord,
+    evidence: unknown
+  ): Promise<MCPOAuthPendingFlowClaimResult> {
+    const status = McpOAuthTransactionStatusSchema.parse(evidence);
+    if (
+      !record.managedMetadata ||
+      status.status !== 'callback_ready' ||
+      status.transaction_id !== record.managedTransactionId ||
+      status.cancel_epoch !== record.managedMetadata.cancel_epoch ||
+      Buffer.compare(
+        Buffer.from(mcpOAuthOwnerBytes(status.owner)),
+        Buffer.from(mcpOAuthOwnerBytes(record.managedMetadata.owner))
+      )
+    )
+      throw new Error('Managed callback authority mismatch');
+    return runWithTenantDatabaseScope(this.db, record.tenantId, (db) =>
+      new MCPOAuthPendingFlowRepository(db).claimManagedForTenant(record, randomUUID())
+    );
+  }
+
+  openManagedClaim(record: MCPOAuthPendingFlowRecord): {
+    pkce_verifier: string;
+    claim: McpOAuthClaim;
+    operation_id: string;
+  } {
+    if (
+      record.status !== 'exchanging' ||
+      !record.exchangeClaimId ||
+      !record.managedOperationId ||
+      !record.exchangeStartedAt ||
+      !record.isCurrent
+    )
+      throw new Error('Managed exchange claim is incomplete');
+    const material = this.openManagedMaterial(record);
+    return {
+      ...material,
+      operation_id: record.managedOperationId,
+      claim: {
+        kind: 'exchange',
+        claim_id: record.exchangeClaimId,
+        claimed_at: record.exchangeStartedAt.getTime(),
+        deadline_at: record.exchangeStartedAt.getTime() + 120_000,
+        refresh_generation: '0',
+        refresh_success_generation: '0',
+      },
+    };
   }
 
   async claimForCallback(rawState: string): Promise<MCPOAuthPendingFlowClaimResult> {
@@ -244,6 +504,7 @@ export class MCPOAuthPendingFlowAuthority {
 
   openClaim(record: MCPOAuthPendingFlowRecord, rawState: string): ClaimedDurableMCPOAuthFlow {
     if (
+      record.credentialOrigin === 'cloud_managed_v1' ||
       record.status !== 'exchanging' ||
       !record.exchangeClaimId ||
       !record.sealedMaterial ||
@@ -305,6 +566,7 @@ export class MCPOAuthPendingFlowAuthority {
         clientId: material.clientId,
         clientSecret: material.clientSecret,
         clientRegistrationId: material.clientRegistrationId,
+        tokenEndpointAuthMethod: material.tokenEndpointAuthMethod,
         state: rawState,
         // Completion never reads this field. Do not persist or reconstruct the
         // secret-bearing authorization URL after the browser has opened it.

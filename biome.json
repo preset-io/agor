@@ -45,6 +45,10 @@
   },
   "overrides": [
     {
+      "includes": ["packages/core/src/tools/mcp/__fixtures__/managed-v1/*.json"],
+      "formatter": { "enabled": false }
+    },
+    {
       "includes": ["**/*.test.ts", "**/*.test.tsx"],
       "linter": {
         "rules": {

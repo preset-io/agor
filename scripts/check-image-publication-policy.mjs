@@ -60,7 +60,8 @@ assert.match(promotion, /"\$\{IMAGE\}:\$\{IMAGE_REVISION\}"/);
 // A standalone preset/agor image may be produced by this workflow, but no
 // checked-in runtime, environment, test, script, or deployment may consume it
 // unnoticed. Component images such as preset/agor-daemon are intentionally
-// distinct. The audit note is the sole non-runnable evidence file excluded.
+// distinct. The one audited consumer is an immutable old-binary compatibility
+// test: it cannot publish, run a mutable image, or reach deployment infrastructure.
 const imageReference = new RegExp(
   String.raw`(?<![\w-])(?:docker\.io/)?${['preset', 'agor'].join('/')}(?=[:@\s"'\x60]|$)`
 );
@@ -99,8 +100,31 @@ const excludedPaths = new Set([
   workflowPath,
   'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
+  'scripts/managed-oauth-old-image-proof.mjs',
+  'scripts/test-managed-oauth-downgrade.test.mjs',
 ]);
 const references = [];
+
+// These are explicit test-only exceptions, not a general script/workflow exemption.
+// Keep the actual image validation tests and the isolation assertions in the image
+// publication gate so changes to this consumer cannot silently relax its contract.
+const { validateOldImage } = await import('./managed-oauth-old-image-proof.mjs');
+const digestImage = `docker.io/preset/agor@sha256:${'a'.repeat(64)}`;
+assert.equal(validateOldImage(digestImage), digestImage);
+for (const invalid of ['preset/agor:main', 'docker.io/preset/agor:latest', `${digestImage}\n`]) {
+  assert.throws(() => validateOldImage(invalid));
+}
+const oldImageProof = await readFile(
+  path.join(root, 'scripts/managed-oauth-old-image-proof.mjs'),
+  'utf8'
+);
+assert.match(oldImageProof, /'--internal'/);
+assert.match(oldImageProof, /'--entrypoint',\s*publishedPackage \? 'node' : 'agor-daemon'/);
+assert.match(oldImageProof, /assert\.equal\(revision, baseline/);
+assert.match(oldImageProof, /'--read-only'/);
+assert.match(oldImageProof, /dst=\/opt\/published-package,readonly/);
+assert.match(oldImageProof, /mount\.RW === false/);
+assert.doesNotMatch(oldImageProof, /docker\(\[\s*['"](?:push|login|build|tag)['"]/);
 
 async function scan(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -127,6 +151,11 @@ async function scan(directory) {
     } catch {
       continue;
     }
+    if (relative === '.github/workflows/postgres-integration.yml') {
+      // PR CI uses the integrity-pinned public npm executable, not private
+      // registry credentials. No Agor image reference is exempted in this lane.
+      assert.equal([...contents.matchAll(/^ {12}--old-package 0\.26\.3$/gm)].length, 1);
+    }
     if (imageReference.test(contents)) references.push(relative);
   }
 }
@@ -148,5 +177,5 @@ assert.equal(
 );
 
 console.log(
-  'Image publication policy valid: PRs build+smoke locally, publish no image/cache, and checked-in consumers do not pull preset/agor.'
+  'Image publication policy valid: PRs publish no image/cache; the only external image consumer is the isolated digest-pinned old-daemon proof.'
 );

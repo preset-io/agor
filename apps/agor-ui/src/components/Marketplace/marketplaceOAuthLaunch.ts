@@ -1,5 +1,9 @@
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
-import type { MCPCatalogConnectResult, MCPOAuthStartFailure } from '@agor/core/types';
+import type {
+  MCPCatalogConnectResult,
+  MCPManagedOAuthStartResult,
+  MCPOAuthStartFailure,
+} from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
@@ -41,7 +45,7 @@ export async function launchMarketplaceOAuth(
   client: AgorClient,
   result: MCPCatalogConnectResult,
   popup: MarketplaceOAuthPopup,
-  options: { isCurrent: () => boolean }
+  options: { isCurrent: () => boolean; userId?: string }
 ): Promise<{ attemptId: string } | null> {
   if (!options.isCurrent()) {
     popup.close();
@@ -49,7 +53,13 @@ export async function launchMarketplaceOAuth(
   }
   const started = (await client.service('mcp-servers/oauth-start').create({
     mcp_server_id: result.mcp_server.mcp_server_id,
-  })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
+    ...(result.mcp_server.auth?.oauth_client_mode === 'cloud_managed_v1'
+      ? { client_nonce: popup.operationId }
+      : {}),
+  })) as
+    | (Pick<MCPManagedOAuthStartResult, 'success' | 'authorizationUrl' | 'attempt_id'> &
+        Partial<Pick<MCPManagedOAuthStartResult, 'transaction_id' | 'oauth_client_mode'>>)
+    | MCPOAuthStartFailure;
   if (!options.isCurrent()) {
     popup.close();
     return null;
@@ -61,6 +71,25 @@ export async function launchMarketplaceOAuth(
   if (!started.authorizationUrl || !started.attempt_id) {
     popup.close();
     throw new MarketplaceOAuthStartError();
+  }
+  if (result.mcp_server.auth?.oauth_client_mode === 'cloud_managed_v1') {
+    if (
+      !options.userId ||
+      !started.transaction_id ||
+      !popup.bindManagedFlow?.({
+        nonce: popup.operationId,
+        userId: options.userId,
+        serverId: result.mcp_server.mcp_server_id,
+        attemptId: started.attempt_id,
+        transactionId: started.transaction_id,
+        createdAt: Date.now(),
+      })
+    ) {
+      popup.close();
+      throw new MarketplaceOAuthStartError(
+        'The sign-in window could not be securely bound. Start sign-in again.'
+      );
+    }
   }
   try {
     if (popup.navigate(started.authorizationUrl, options.isCurrent)) {

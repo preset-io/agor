@@ -67,6 +67,7 @@ export default defineConfig({
     'tools/mcp/oauth-auth': 'src/tools/mcp/oauth-auth.ts', // MCP OAuth 2.0 authentication utilities
     'tools/mcp/oauth-mcp-transport': 'src/tools/mcp/oauth-mcp-transport.ts', // MCP OAuth 2.1 protocol transport
     'tools/mcp/oauth-refresh': 'src/tools/mcp/oauth-refresh.ts', // MCP OAuth refresh_token persistence + mutex
+    'tools/mcp/managed-oauth-client': 'src/tools/mcp/managed-oauth-client.ts', // OAuth-only cell sender and signed receipts
     'tools/mcp/grant-entitlement': 'src/tools/mcp/grant-entitlement.ts', // MCP OAuth grant subject entitlement, enforced at the write
     'tools/mcp/oauth-token-expiry': 'src/tools/mcp/oauth-token-expiry.ts', // MCP OAuth token expiry resolution cascade
     'unix/index': 'src/unix/index.ts', // Sandbox and delegated-home compatibility utilities
@@ -92,6 +93,8 @@ export default defineConfig({
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
+    // Stateful DB authority must be shared by independently bundled tools.
+    '@agor/core/db',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',

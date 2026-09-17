@@ -255,3 +255,330 @@ binary without gateway support also restores raw-secret projection even if the
 tenant row says `enforced`; treat that software rollback as the same audited
 security downgrade. Conversation handles and unrelated tasks are not invalidated
 by an MCP server mutation.
+
+## Managed OAuth deployment evidence
+
+Cloud-managed MCP OAuth is a separate, default-off capability. It never inherits
+this guide's direct-mode rollback behavior: a managed connection becomes
+unavailable when enforced mediation, local authority, clock safety or cohort
+eligibility cannot be verified. It must not project reusable credentials to an
+executor or fall back to direct OAuth.
+
+The runtime deployment loader requires Linux, PostgreSQL, the exact reviewed
+Cloud contract **source** SHA-256, the deployed full 40-character release SHA,
+the actual validated database schema digest, and this replica's deployment ID.
+The startup coordinator supplies the latter values and the already resolved,
+frozen external-launch provider/issuer; none comes from an HTTP request. The
+runtime continues to recheck each tenant's enforced gateway mode and local grant
+authority at each physical MCP hop. A deployment-wide attestation is not a
+substitute for those checks.
+
+Example wiring (leave disabled until the independent deployment gates pass):
+
+```yaml
+managed_mcp_oauth:
+  enabled: false
+  new_starts: false
+  exchange: false
+  refresh: false
+  use_authorization_issuance: false
+  revocation: false
+  broker_origin: https://oauth.example.invalid
+  worker_issuer: https://oauth.example.invalid/
+  environment: staging
+  region: us-west-2
+  cell_id: your-cell-id
+  credential_id: your-workload-credential-id
+  sender_key_id: your-workload-key-id
+  sender_private_key_path: /run/agor-managed/sender.pem
+  worker_public_keyring_path: /run/agor-managed/worker-public.json
+  cell_evidence_path: /run/agor-evidence/cell.json
+  clock_health_path: /run/agor-clock/health.json
+  # contract_sha256: exact source_sha256 from the reviewed source-pin.json
+  # fresh_pilot_enrollment_sha256: deployment-installed immutable enrollment digest
+```
+
+The sender key is a workload RS256 key, **not a provider credential**. Its
+regular file must be readable only by its owner (for example `0400` or `0600`).
+All files and ancestor directories must be root- or daemon-owned, with no group
+or other write permission; symlinks, hard-linked files, nonregular files,
+concurrent in-place rewrites, relative paths and oversized input are refused.
+Public evidence can be world-readable, but cannot be world-writable. The
+keyring file contains only `{issuer, keys: [{kid, public_key_pem}]}` with distinct
+key IDs and SPKI RSA public keys of at least 2048 bits. Private-key PEM in this
+public inventory is rejected. The configured worker issuer must match exactly
+and share the configured broker origin. The keyring is fixed for the daemon's
+lifetime; keyring rotation requires a coordinated restart.
+
+The cohort file must match canonical `McpOAuthCellEvidenceSchema`, including
+all expected replicas, the local release/schema/replica identity, enforced
+mediation, approval reference and attestation digest. The legacy admission path
+requires independent pre-gateway-executor termination evidence. A reviewed deployment attestor must refresh
+it before its at-most-120-second validity expires. The getter reads fresh
+attestation, but does not silently accept a different cell authority epoch,
+recovery incarnation or replica cohort after startup. Reinitialization requires
+a new coordinated admission. An expired/missing/mixed cohort fails closed.
+
+### Dedicated fresh-cell sandbox pilot
+
+The fresh-cell path is restricted to **staging in `us-west-2`**, and does not
+authorize adopting an existing cell, restored database, namespace, or executor
+cohort. It is not a production rollout or a legacy migration shortcut.
+
+Its `fresh_pilot` evidence binds independently established cell/database birth
+identities, namespace UID, immutable admission policy, compatible runtime,
+worker and executor images, configuration/database bindings, and clock source
+policy. `fresh_pilot_enrollment_sha256` pins the entire canonical enrollment in
+deployment-owned configuration. Neither this digest alone nor a caller's
+`fresh: true` is enrollment proof. The trusted producer must establish the
+underlying provenance and enforce admission **before credential-bearing
+workloads run**. Operators must not construct a healthy evidence file by hand.
+The runtime configuration digest covers the complete validated, parsed source
+configuration before environment/default expansion, omitting only the
+enrollment-pin field to avoid a hash self-reference. The runtime captures it
+before injecting secrets or generating per-boot diagnostic IDs. Admission must
+separately pin **all** environment values, SecretRefs, mounts, and images; a
+matching configuration-file digest alone does not establish those bindings.
+The observer does not receive daemon master/JWT secrets to compute this hash.
+
+The runtime compares the enrollment to the protected downward-API values
+`AGOR_DAEMON_INSTANCE_ID` (Pod UID, including single-replica deployments) and
+`AGOR_POD_NAMESPACE` (namespace name). A hostname fallback is not accepted for
+the pilot. Missing or mismatched pins, a changed birth/image/configuration or
+policy binding, a foreign Pod/namespace, and fallback to legacy evidence are
+refused. The pilot declares `pre_gateway_executors_terminated: false`: its
+independently proven fresh lineage is not a claim that old executors were
+terminated. A changed admitted enrollment latches refusal until a coordinated
+restart and fresh admission.
+
+Pilot clock evidence reserves the admitted **2,500 ms issuer uncertainty cap**
+and must fit local uncertainty within the remaining combined 5,000 ms budget.
+This requires enforcement for every signing key accepted by that enrollment;
+it is not a claim that a currently reachable worker proves every signer safe.
+Clock freshness, boot binding, unsafe-clock refusal, and absolute token/permit
+expiry remain mandatory. An outage never extends the original authorization
+window; new authentication or refresh requiring Cloud remains unavailable.
+Pilot samples also require the original suspend-inclusive `boottime_ms` capture.
+Every use checks kernel boot-time age as well as process-monotonic age and uses
+the larger elapsed bound for UTC projection. A short suspension cannot make UTC
+run behind; a stale pre-suspend sample cannot become fresh through a runtime
+restart. This supplements, rather than replaces, independent UTC evidence.
+
+These controls remain default-off. Local fake-provider tests do not establish
+host clock provenance, enrollment custody, provider approval, or permission to
+activate a real sandbox. General production and legacy-migration prerequisites
+remain separate.
+
+### Independent clock-monitor input
+
+`clock_health_path` is a live output of a **separate trusted deployment health
+monitor**, not a file that operators should populate with a current wall time
+or a hardcoded `synchronized: true`. Its closed JSON format is:
+
+- `version`: `1`;
+- `boot_id`: Linux boot UUID for the runtime's host;
+- `monotonic_ms`: sample time from the same Linux `CLOCK_MONOTONIC` domain as
+  the daemon (`process.hrtime`), including the same time namespace;
+- `boottime_ms`: original suspend-inclusive Linux boot-time capture in that same
+  time namespace. Required for the fresh pilot; optional for legacy inputs. The
+  producer must include capture mismatch and kernel quantization in its error
+  budget and never replace this timestamp when republishing an old sample;
+- `utc_ms`: independently established UTC at that sample time;
+- `local_uncertainty_ms`: a conservative local error bound, including oscillator
+  holdover error throughout the next five seconds;
+- `worker_uncertainty_ms`: the independently established worker signing-clock
+  error budget;
+- `synchronized`: `true` only while the monitor can establish those bounds.
+
+The monitor must atomically publish a new regular file frequently enough to
+keep sample age at most five seconds. It must report unsynchronized or stop
+publishing on source loss, uncertain suspend/resume, backward steps, namespace
+mismatch, or unbounded holdover. The runtime rejects old, future, wrong-boot,
+malformed and unsynchronized samples; the combined error must not exceed five
+seconds. Unsafe clock evidence latches the runtime clock closed until
+reinitialization. `Date.now()`, file modification time and a process heartbeat
+are not independent UTC evidence. This runtime implements the bounded input
+consumer; approving and operating the independent monitor and its time sources
+remains a deployment prerequisite, not an assurance manufactured by Agor.
+
+### Kubernetes / Helm integration
+
+Keep the chart's managed feature disabled by default. This repository does not
+ship the Cloud deployment chart. Its operator must wire:
+
+1. A read-only workload-key mount and immutable public keyring mount, separated
+   from provider credentials and from executor mounts.
+2. Read-only mounts of the trusted cohort-attestor and clock-monitor output
+   directories. Producers publish with atomic rename, not in-place writes;
+   neither runtime requests nor executors can modify them.
+3. Full `AGOR_BUILD_SHA`, actual replica identity and validated database schema
+   evidence in the startup coordinator. Mixed/old replicas must not be attested.
+
+Kubernetes projected Secret/ConfigMap files normally use symlinks, which this
+loader deliberately refuses. Use a trusted init-container to copy the selected
+workload key/public inventory to regular files in a dedicated volume, set the
+required ownership/modes, and mount that volume read-only in the daemon. Do not
+relax the reader or expose the source volume to executors to make a projected
+symlink work. A monitor publishing from a different host or time namespace must
+not be connected as if its monotonic clock were the daemon's. The file paths
+and public evidence alone do not authorize activation or certify a provider.
+
+### Cleanup during a managed OAuth shutdown
+
+`revocation` is independent of the master `enabled` flag. Keeping
+`revocation: true` with `enabled: false` permits the separate cleanup-only
+runtime adapter to load; it does not enable connection, exchange, refresh,
+permit issuance or credential use. All deployment configuration fields remain
+required. The cleanup loader still requires PostgreSQL, the supported region,
+the exact contract pin, the configured sender identity and healthy independent
+clock evidence. When both flags are false, neither loader reads deployment
+material.
+
+Cleanup does not require a fresh vending cohort and does not read or expose
+the worker public keyring or cohort attestation. Its restricted sender allows
+only cancellation, closure, cleanup, acknowledgement and authenticated
+capabilities requests. The cleanup coordinator must compare fresh authenticated
+recovery capabilities against the exact durable historical owner before each
+operation; a restored/mismatched recovery incarnation remains quarantined.
+This path cannot retry preparation to recover an unknown transaction, and
+cannot be supplied as the credential-vending or grant-admission adapter.
+
+Maintenance starts immediately, then schedules starts 30–35 seconds apart. Each
+pass admits at most 25 seconds of work and each worker request is bounded by ten
+seconds or the remaining pass budget. Passes never overlap. Tenant and job
+keyset cursors retain unprocessed work; the bounded page size is not a promise
+that every tenant is reconciled within 35 seconds under overload. Invalidation
+processing precedes cleanup, and expired use authorizations still deny locally
+even when maintenance cannot keep up.
+
+Monitor `mcp.managed_maintenance_capacity_limited` and
+`mcp.managed_maintenance_unavailable`, plus the aggregate
+`mcp.managed_maintenance` counters (`reconciled`, `acknowledged`, `closed`,
+`failures`). These contain no tenant, user, handle, endpoint, token or exception
+labels. Sustained backlog or authority unavailability requires operator
+attention; it must not be “fixed” by lengthening permits, skipping invalidation
+checks or discarding durable cleanup obligations. `closed` counts a completed
+local cleanup job, not an independent assertion of successful provider
+revocation.
+
+### Restore and rehome
+
+Managed grants, pending claims, receipts, permits, invalidation checkpoints and
+cleanup outboxes are not portable. Imported managed server definitions are
+disabled, lose Catalog provenance and retain their managed-mode marker so they
+cannot silently become direct OAuth connections. This applies to same-tenant
+archive restore as well as cross-tenant rehome. Reconnect through the destination
+Catalog; do not rewrite encrypted grants or rebind old handles to the new cell.
+
+Source deletion remains blocked while managed grants, active attempts or
+unfinished cleanup obligations exist. A backup/PITR copy is not an ordinary
+replica failover: its external recovery incarnation must remain quarantined
+until the separately approved recovery process admits a new cohort. Restoring
+database rows or copying attestation files does not establish that authority.
+
+The PostgreSQL compatibility lane exercises both the prior compiled startup
+module and the published `agor-live@0.26.3` daemon executable against a newly
+migrated, run-owned database. The npm tarball's integrity and embedded source
+revision are pinned, as is its complete dependency lock. Installation uses no
+credentials or lifecycle scripts. The unmodified executable and frozen
+dependencies run read-only on an immutable public Node image, on an isolated
+internal network. The test requires schema refusal before serving or creating
+users/grants; it does not mock or patch the migration guard.
+
+This is a **published npm executable** proof, not proof of the separately
+published Agor Docker image's packaging. The optional digest-pinned old-image
+proof uses that image's original dependencies, but requires registry access;
+PR jobs do not receive registry credentials or silently skip that prerequisite.
+Its SQLite initialization wrapper is not the PostgreSQL daemon entrypoint.
+This is **startup downgrade refusal**, not containment of an already running
+old daemon or executor: terminate old processes/connections and verify the
+complete cohort before admitting managed OAuth. Do not treat a successful
+compatibility test as permission to perform a rolling migration.
+
+### Source lifecycle commands
+
+Cloud lifecycle automation invokes these **local runtime** commands under its
+existing trusted execution boundary. They neither read provider credentials nor
+make provider requests. PostgreSQL schema admission checks the actual non-owner,
+`NOBYPASSRLS` role, migration ledger and live catalog before doing any work.
+
+After acquiring the existing tenant write gate, retain its exact generation:
+
+```sh
+agor tenant retire --tenant-id TENANT --assert-gate-generation GENERATION --operation-id OPERATION
+agor tenant retirement-status --tenant-id TENANT --assert-gate-generation GENERATION --operation-id OPERATION
+```
+
+Both return one JSON object containing `version: 1`, `tenant_id`,
+`gate_generation`, `operation_id`, `ready`, `pending_attempts`, `active_grants`
+and `pending_cleanup`. Exit zero means the query succeeded, **not** that
+`ready` is true. The operation ID is correlation, not an authority certificate.
+Retirement durably cancels attempts and closes local grants; a healthy source
+daemon with cleanup enabled must drain the exact-old obligations. Status is
+read-only. Neither command acquires or releases the gate. Missing or replaced
+gate proof fails closed; keep the same gate continuously held through the final
+source deletion. Do not retire grants for an ordinary backup export.
+
+Whole-cell decommission additionally needs a permanent admission barrier before
+enumerating tenants, preventing new tenants or delayed receipts from appearing
+after an empty inventory:
+
+```sh
+agor tenant retirement-cell-begin --cell-id CELL --operation-id OPERATION
+agor tenant retirement-targets --cell-id CELL --operation-id OPERATION --assert-cell-gate-generation CELL_GENERATION --limit 100
+```
+
+`CELL` must equal the local configured `managed_mcp_oauth.cell_id`. The first
+command returns `{version:1,cell_id,operation_id,gate_generation}`. Its barrier
+has **no expiry or release path**; retry only with the same operation ID. Never
+use it for workspace rehome, backup, sleep or a temporary drain. It is
+deployment-local control state, not a tenant record or portable archive item.
+
+Target pages return `{version:1,tenant_ids,next_after}` and include orphaned
+managed history for the exact cell, not just currently provisioned workspaces. Pass `--after` from
+the previous `next_after`; the maximum page size is 100. The three cell-fence
+flags are all-or-none. Without them the command is only a DB-local diagnostic
+inventory, not a decommission fence. Automation must union these IDs with its
+ordinary source inventory, retire and poll every tenant under its individual
+gate, and re-enumerate before destroying source infrastructure. Unsupported CLI
+or failed readiness is a blocking error for a managed-history deployment, never
+permission to fall through to ordinary erasure.
+
+Logical databases can serve multiple cells. For cell decommission, pass the
+same cell barrier to both per-tenant commands, using these additional flags:
+`--cell-id CELL --cell-operation-id OPERATION --assert-cell-gate-generation CELL_GENERATION`.
+They then retire/count only that cell's grants, attempts and cleanup jobs;
+foreign-cell rows remain untouched. Their JSON report shape is unchanged.
+Omitting the triple deliberately retains full-tenant retirement semantics for
+workspace lifecycle operations. Historical cleanup targets belonging to another
+current cell are cleanup-only: do not erase their tenant or shared database,
+and release their temporary tenant gate once the exact old-cell cleanup drains.
+
+### Read-only database observation
+
+A trusted deployment observer can measure the running replica's configured
+PostgreSQL connection without reading tenant records or credentials:
+
+```sh
+agor managed-oauth observe-database --cell-id CELL
+```
+
+`CELL` must equal local `managed_mcp_oauth.cell_id`. There are no database URL,
+role, or expected-digest override flags. The command checks the complete binary
+migration ledger and live catalog in a repeatable-read, read-only transaction,
+using the same guard as daemon cohort admission. It refuses privileged logins,
+including privileged sessions masked with `SET ROLE`, inherited ownership,
+schema drift, and non-PostgreSQL databases. It never runs migrations.
+
+Successful JSON contains `version:1`, `cell_id`, `schema_digest`, and
+`database_role`: actual `session_user` and `current_user`,
+`same_session_role:true`, and false `superuser`, `bypass_rls`, `create_role`,
+`create_database`, `privileged_membership`, and `owns_or_inherits` fields.
+Failure returns no observation and a sanitized error.
+
+This is a measurement, **not a signed cohort or eligibility assertion**. The
+external observer must authenticate the exact pod/process and immutable image,
+bound measurement freshness, independently establish complete replica and
+historical executor inventory, and enforce its rollout/admission fence. The
+command does not assert gateway enforcement, release identity, clock health, or
+old-executor termination, and cannot replace those independent observations.

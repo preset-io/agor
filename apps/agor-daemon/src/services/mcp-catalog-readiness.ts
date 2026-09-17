@@ -11,6 +11,10 @@ import { selectCatalogCandidate } from './mcp-catalog-credential-match.js';
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
+  managedReadiness?(
+    entry: MCPCatalogEntry,
+    params: AuthenticatedParams
+  ): Promise<MCPCatalogReadiness['managed_oauth']>;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   isGrantAuthorized(
     candidate: MCPCatalogServerCandidate,
@@ -43,6 +47,13 @@ export class MCPCatalogReadinessService {
       throw new BadRequest('This catalog entry has no Marketplace-connectable remote endpoint');
     }
     const remoteEntry = entry as MCPCatalogEntry & { remote_url: string };
+    const managed = await this.deps
+      .managedReadiness?.(entry, params)
+      .catch(() => ({ available: false as const }));
+    const withManaged = (value: MCPCatalogReadiness): MCPCatalogReadiness => ({
+      ...value,
+      ...(managed ? { managed_oauth: managed } : {}),
+    });
     const candidates = await this.deps.listCandidates(userId, params);
     const knownOAuthInstall = candidates.some(
       ({ server }) =>
@@ -68,16 +79,16 @@ export class MCPCatalogReadinessService {
         { isGrantAuthorized: (candidate) => this.deps.isGrantAuthorized(candidate, params) }
       );
       if (selection.live) {
-        return {
+        return withManaged({
           catalog_key: catalogKey,
           state: selection.liveKind === 'catalog_install' ? 'installed_ready' : 'reusable_oauth',
-        };
+        });
       }
-      return { catalog_key: catalogKey, state: 'oauth_required' };
+      return withManaged({ catalog_key: catalogKey, state: 'oauth_required' });
     }
 
     if (entry.auth_type === 'credentials') {
-      return { catalog_key: catalogKey, state: 'bearer_required' };
+      return withManaged({ catalog_key: catalogKey, state: 'bearer_required' });
     }
     const selection = await selectCatalogCandidate(
       remoteEntry,
@@ -87,9 +98,9 @@ export class MCPCatalogReadinessService {
       Date.now(),
       { isGrantAuthorized: async () => false }
     );
-    return {
+    return withManaged({
       catalog_key: catalogKey,
       state: selection.currentCatalog ? 'installed_ready' : 'no_auth',
-    };
+    });
   }
 }

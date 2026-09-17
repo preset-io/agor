@@ -7,6 +7,9 @@ node_modules/
 # Testing
 coverage/
 .vitest/
+# Run-owned synthetic clock/cohort/key files; the paired fixture removes them.
+.managed-paired-*/
+.managed-integration-*/
 
 # Production
 build/

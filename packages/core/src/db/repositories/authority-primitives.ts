@@ -2,8 +2,9 @@
 
 import { sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { executeRaw } from '../database-wrapper';
+import { executeRaw, rawRows } from '../database-wrapper';
 import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertTenantWritableUnderLock } from '../tenant-write-gate';
 import { RepositoryError } from './base';
 
 const SAFE_AUTHORITY_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
@@ -40,4 +41,50 @@ export async function lockTenantAuthoritySubject(
       pg_catalog.hashtextextended(${lockKey}, ${seed})
     )`
   );
+}
+
+/** FOR SHARE, not KEY SHARE: role UPDATE and deletion must conflict before token locks. */
+export async function lockMCPManagedSubject(
+  db: Database,
+  tenantId: string,
+  userId: string,
+  cloudSubject: string,
+  cellId: string
+): Promise<void> {
+  const scope = getCurrentTenantDatabaseScope();
+  if (
+    scope?.kind !== 'tenant' ||
+    !scope.transactionActive ||
+    scope.db !== db ||
+    scope.tenantId !== tenantId
+  ) {
+    throw new RepositoryError('Managed subject requires its active tenant transaction');
+  }
+  const [cell] = rawRows(
+    await executeRaw(
+      db,
+      sql`SELECT public.agor_mcp_managed_oauth_cell_vending_allowed(${cellId}) AS allowed`
+    )
+  );
+  if (cell?.allowed !== true) throw new RepositoryError('Managed OAuth cell is retired');
+  await assertTenantWritableUnderLock(db, tenantId);
+  const rows = rawRows(
+    await executeRaw(
+      db,
+      sql`SELECT role FROM public.users
+    WHERE tenant_id=${tenantId} AND user_id=${userId} FOR SHARE`
+    )
+  );
+  if (rows.length !== 1 || !['member', 'admin', 'superadmin'].includes(String(rows[0].role))) {
+    throw new RepositoryError('Managed OAuth requires a current member');
+  }
+  const identities = rawRows(
+    await executeRaw(
+      db,
+      sql`SELECT identity_key FROM public.user_external_identities
+    WHERE tenant_id=${tenantId} AND user_id=${userId} AND subject=${cloudSubject} FOR SHARE`
+    )
+  );
+  if (identities.length === 0)
+    throw new RepositoryError('Managed OAuth external identity is no longer current');
 }

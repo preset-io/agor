@@ -1,5 +1,14 @@
 import { redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
-import type { MCPAuth, MCPCatalogEntry, MCPServer, MCPTransport } from '@agor/core/types';
+import {
+  assertMCPManagedOAuthProfileReference,
+  type MCPAuth,
+  type MCPCatalogEntry,
+  type MCPManagedOAuthProfileReference,
+  type MCPServer,
+  type MCPTransport,
+  resolveMCPOAuthClientMode,
+  type UserID,
+} from '@agor/core/types';
 
 /** Catalog transports, as `mcp_servers` names them. */
 export function catalogServerTransport(entry: MCPCatalogEntry): MCPTransport {
@@ -37,10 +46,28 @@ function significantAuth(value: MCPAuth | undefined): Record<string, unknown> {
 function isPrescribedCatalogAuth(
   auth: MCPAuth | undefined,
   prescribed: MCPAuth,
-  reconcileMissingCompatibilityMode: boolean
+  reconcileMissingCompatibilityMode: boolean,
+  configuredClient: boolean
 ): boolean {
   const actual = significantAuth(auth);
   const expected = significantAuth(prescribed);
+  // A reviewed configured-client recipe delegates only these two fields to
+  // the saved row. They remain covered by grant fingerprints and redaction;
+  // this is not permission to reuse another owner's row secret.
+  if (configuredClient) {
+    delete actual.oauth_client_id;
+    delete actual.oauth_client_secret;
+    // Public compatibility overrides are independently authoritative at flow
+    // start. Reconnect must preserve them, not mistake Strict for recipe drift
+    // and not replace the configured client with a catalog auth object.
+    if (
+      actual.oauth_compatibility_mode === 'strict' ||
+      actual.oauth_compatibility_mode === 'legacy'
+    ) {
+      delete actual.oauth_compatibility_mode;
+      delete expected.oauth_compatibility_mode;
+    }
+  }
   // Compatibility policy is evaluated from the current catalog. This one
   // reconciliation lets installs created before an entry acquired an explicit
   // strict policy remain the same install without mutating their row.
@@ -63,6 +90,59 @@ export function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
   };
 }
 
+/** Only a server-side admitted registry selection may call this prescription. */
+export function managedCatalogOAuthConfig(profile: MCPManagedOAuthProfileReference): MCPAuth {
+  assertMCPManagedOAuthProfileReference(profile);
+  return {
+    type: 'oauth',
+    oauth_mode: 'per_user',
+    oauth_client_mode: 'cloud_managed_v1',
+    oauth_managed_profile: { ...profile },
+  };
+}
+
+/**
+ * Separate from direct catalog peers: never convert or reuse a direct/BYO row.
+ * Admission and current immutable registry evidence are supplied by the caller;
+ * a provenance stamp alone is not proof of eligibility.
+ */
+export function isCurrentManagedCatalogInstall(
+  server: Pick<
+    MCPServer,
+    'source' | 'catalog_entry_name' | 'transport' | 'url' | 'auth' | 'headers' | 'owner_user_id'
+  >,
+  entry: MCPCatalogEntry & { remote_url: string },
+  profile: MCPManagedOAuthProfileReference,
+  userId: UserID
+): boolean {
+  try {
+    const prescribed = managedCatalogOAuthConfig(profile);
+    const actualProfile = server.auth?.oauth_managed_profile;
+    assertMCPManagedOAuthProfileReference(actualProfile);
+    const fields = ['type', 'oauth_mode', 'oauth_client_mode', 'oauth_managed_profile'];
+    return (
+      server.owner_user_id === userId &&
+      server.source === 'catalog' &&
+      server.catalog_entry_name === entry.name &&
+      entry.auth_type === 'oauth' &&
+      server.transport === 'http' &&
+      catalogServerTransport(entry) === 'http' &&
+      server.url === entry.remote_url &&
+      Object.keys(server.headers ?? {}).length === 0 &&
+      resolveMCPOAuthClientMode(server.auth) === 'cloud_managed_v1' &&
+      Object.keys(server.auth ?? {}).length === fields.length &&
+      Object.keys(server.auth ?? {}).every((key) => fields.includes(key)) &&
+      server.auth?.type === prescribed.type &&
+      server.auth?.oauth_mode === prescribed.oauth_mode &&
+      (Object.keys(profile) as (keyof MCPManagedOAuthProfileReference)[]).every(
+        (key) => profile[key] === actualProfile[key]
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Canonical current-install predicate shared by Connect reuse and OAuth policy.
  * Historical source/stamp alone is never authority: the row must still match
@@ -82,11 +162,14 @@ export function isCurrentCatalogInstall(
     server.source === 'catalog' &&
     server.catalog_entry_name === entry.name &&
     server.transport === catalogServerTransport(entry) &&
-    sameCatalogEndpoint(server.url, entry.remote_url) &&
+    (entry.oauth?.configured_client
+      ? server.url === entry.remote_url
+      : sameCatalogEndpoint(server.url, entry.remote_url)) &&
     isPrescribedCatalogAuth(
       server.auth,
       prescribed,
-      options.reconcileMissingCompatibilityMode === true
+      options.reconcileMissingCompatibilityMode === true,
+      entry.oauth?.configured_client === true
     ) &&
     Object.keys(server.headers ?? {}).length === 0
   );

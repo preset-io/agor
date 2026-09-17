@@ -50,6 +50,7 @@ import {
   performMCPOAuthFlow,
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
+  selectTokenEndpointAuthMethod,
   startMCPOAuthFlow,
   validateMCPOAuthMetadata,
 } from './oauth-mcp-transport';
@@ -166,6 +167,27 @@ describe('loopback OAuth callback response', () => {
 // completeMCPOAuthFlow — token exchange request contract
 // ---------------------------------------------------------------------------
 
+describe('selectTokenEndpointAuthMethod', () => {
+  it('defaults to client_secret_basic when nothing is advertised', () => {
+    expect(selectTokenEndpointAuthMethod(undefined)).toBe('client_secret_basic');
+    expect(selectTokenEndpointAuthMethod([])).toBe('client_secret_basic');
+  });
+
+  it('prefers client_secret_basic when the AS advertises both', () => {
+    expect(selectTokenEndpointAuthMethod(['client_secret_post', 'client_secret_basic'])).toBe(
+      'client_secret_basic'
+    );
+  });
+
+  it('uses client_secret_post when advertised without basic (HubSpot)', () => {
+    expect(selectTokenEndpointAuthMethod(['client_secret_post'])).toBe('client_secret_post');
+  });
+
+  it('falls back to basic when only unsupported methods are advertised', () => {
+    expect(selectTokenEndpointAuthMethod(['private_key_jwt', 'none'])).toBe('client_secret_basic');
+  });
+});
+
 describe('completeMCPOAuthFlow token exchange', () => {
   const originalFetch = globalThis.fetch;
 
@@ -236,6 +258,54 @@ describe('completeMCPOAuthFlow token exchange', () => {
         }),
       })
     );
+  });
+
+  it('sends client credentials in the body when the AS advertises client_secret_post only (HubSpot)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: 'hubspot-token', token_type: 'bearer' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    const result = await completeMCPOAuthFlow(
+      { ...context, clientSecret: 'hubspot-secret', tokenEndpointAuthMethod: 'client_secret_post' },
+      'authorization-code',
+      'state',
+      { cacheToken: false }
+    );
+
+    expect(result.access_token).toBe('hubspot-token');
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(String(init.body));
+    expect(body.get('client_id')).toBe('client-id');
+    expect(body.get('client_secret')).toBe('hubspot-secret');
+    expect(body.get('code_verifier')).toBe('verifier');
+  });
+
+  it('defaults a confidential client to HTTP Basic when no auth method is negotiated', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: 'basic-token' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    ) as unknown as typeof fetch;
+
+    await completeMCPOAuthFlow(
+      { ...context, clientSecret: 'basic-secret' },
+      'authorization-code',
+      'state',
+      { cacheToken: false }
+    );
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe(
+      `Basic ${Buffer.from('client-id:basic-secret').toString('base64')}`
+    );
+    expect(new URLSearchParams(String(init.body)).get('client_secret')).toBeNull();
   });
 
   it('does not log state, code, PKCE, client secret, bearer token, or secret-bearing URLs', async () => {
