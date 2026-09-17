@@ -118,11 +118,25 @@ Its tools appear on the agent's **next** turn, not the current one — the serve
 
 If you are allowed to prompt the session but not to change its MCP servers, the sign-in still counts: the grant is yours and it is real. The card says the attach needs the session owner or an admin, and the agent is told what to ask for rather than being sent to repeat a sign-in that already worked.
 
-### If you asked from Slack, Discord, or GitHub
+### If you asked from Slack
 
-The card renders in the Agor transcript, which is not where you are. The agent is handed a link to the session and told to relay it — open it, click **Connect**, and come back.
+Ask in a Slack thread and the card comes to you: Agor posts a **Connect _Notion_** button into the same thread, and edits that one message in place as the request moves on — signing in, connected, expired, cancelled, or replaced by a newer request. There is never a second button beside a stale one.
 
-Two things fail closed here. If the gateway channel does not map platform users to Agor accounts, every message in it runs as one shared account, so a sign-in started there would mint a credential the whole channel could drive: the agent refuses and names the setting to turn on. And the connection is always looked up and stored under **the person who is actually prompting** — never the session's owner.
+Tapping it opens an Agor page that checks the link is still live and that **you** are the person it was issued for, then runs the same browser sign-in the canvas card runs. The link is one-use and short-lived; when it lapses, the card in the thread says so rather than leaving a button that fails. Nothing about the tap grants anything on its own — the sign-in still has to complete in a browser, and Agor still re-reads the stored grant before it believes it.
+
+If your browser blocks the sign-in window — Slack's in-app browser on a phone commonly does — the page says so and the button stays live: allow pop-ups and tap again, or open the link in your usual browser.
+
+The agent is also handed a link to the Agor session and told to relay it. That is the fallback, and it always works: open it, click **Connect**, come back. You will see it if the card could not be posted, if an administrator has turned the Slack card off, or if you asked from a thread Agor is not configured to write into.
+
+### If you asked from Discord, GitHub, or Teams
+
+The card renders in the Agor transcript, which is not where you are, and Agor does not post a card into these threads. The agent is handed a link to the session and told to relay it — open it, click **Connect**, and come back.
+
+### What fails closed, on every platform
+
+If the gateway channel does not map platform users to Agor accounts, every message in it runs as one shared account, so a sign-in started there would mint a credential the whole channel could drive: the agent refuses and names the setting to turn on, and the Slack card says the same thing in the thread if alignment is switched off after the card was posted. A card retired that way stays retired — re-enabling the setting does not make a weeks-old button clickable; ask again and you get a fresh one.
+
+The connection is always looked up and stored under **the person who is actually prompting** — never the session's owner. In a shared Slack channel (as opposed to a DM) Agor says so once in the thread, because what a connected account returns becomes readable by everyone in it.
 
 ### Already connected
 
