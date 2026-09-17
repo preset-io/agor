@@ -231,11 +231,59 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
 export interface DaemonVerifiedWidgetRegistryEntry<TParams, TResultMeta>
   extends WidgetRegistryEntryBase<TParams, TResultMeta> {
   resolution: 'daemon_verified';
+  /**
+   * What a caller may do about a resolution SOMEONE ELSE started and did not
+   * finish. Defaults to `'none'`, which is the generic policy every widget had
+   * before: an abandoned `resolving` claim is a diagnosis, never a lease to
+   * take over, because the daemon cannot know whether the prior handler's
+   * external effect ran.
+   *
+   * `'reclaimable'` is an explicit statement by ONE widget type that its
+   * handler has no such effect to duplicate — see
+   * {@link WidgetResolutionRecoveryPolicy}. It is deliberately not available
+   * on the submit variant: `applySubmit` writes env vars and restarts
+   * connectors, and re-running one of those on a claim whose outcome is
+   * unknown is exactly what the generic policy protects.
+   */
+  recovery?: WidgetResolutionRecoveryPolicy;
   resolveFromDaemonVerification: (
     ctx: WidgetSubmitCtx,
     evidence: WidgetDaemonVerifiedEvidence,
     params: TParams
   ) => Promise<TResultMeta>;
+}
+
+/**
+ * How a resolution lane recovers from an interrupted resolution.
+ *
+ * - `'none'` — the generic, conservative policy. A widget that is not
+ *   `pending` refuses every further resolution attempt. An abandoned
+ *   `resolving` claim stays abandoned.
+ * - `'reclaimable'` — the lane's resolution handler is idempotent and
+ *   externally effect-free, so an interrupted resolution may be finished by a
+ *   later authenticated attempt: an abandoned claim older than the resolver's
+ *   cutoff is taken over, and a resolution that already completed answers
+ *   success instead of a conflict.
+ *
+ * Only `oauth` declares `'reclaimable'` today, and the reason is specific
+ * rather than general. Its three milestones — grant persisted, widget resolved
+ * and server attached, agent resumed — are completed by three different
+ * actors, and only the FIRST is completed by the provider callback. The other
+ * two need the browser to come back and POST, so closing the page after
+ * consent used to leave a real credential behind a pending card forever, with
+ * nothing in the system able to finish it. Every step
+ * `resolveFromDaemonVerification` performs is a re-read or an idempotent write
+ * (the grant read decides; the attach is a unique-index upsert; the
+ * auto-resume Task is keyed by `widgetAutoResumeTaskId`), so replaying it
+ * duplicates nothing.
+ */
+export type WidgetResolutionRecoveryPolicy = 'none' | 'reclaimable';
+
+/** The recovery policy an entry declares, defaulting to the generic one. */
+export function widgetRecoveryPolicy(
+  entry: WidgetRegistryEntry<unknown, unknown, unknown> | undefined
+): WidgetResolutionRecoveryPolicy {
+  return entry?.resolution === 'daemon_verified' ? (entry.recovery ?? 'none') : 'none';
 }
 
 /**

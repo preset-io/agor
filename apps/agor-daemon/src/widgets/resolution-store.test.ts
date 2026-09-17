@@ -172,3 +172,101 @@ describe('WidgetResolutionStore', () => {
     ).toMatchObject({ outcome: 'claimed' });
   });
 });
+
+/**
+ * Taking over an abandoned claim — the store half of B1.
+ *
+ * The default is unchanged and stays unchanged: an abandoned `resolving`
+ * claim is a diagnosis, because the store cannot know whether the handler
+ * behind it wrote a secret before dying. A caller may pass a reclaim policy
+ * naming one action and an age, and only the lane whose handler is replay-safe
+ * does (`recovery: 'reclaimable'` on its registry entry).
+ */
+describe('WidgetResolutionStore.claim — abandoned claims', () => {
+  const claimInput = (token: string, at: string) => ({
+    token,
+    action: 'oauth_callback' as const,
+    claimedAt: at,
+    claimedBy: 'user-1' as UserID,
+  });
+
+  async function withHeldClaim(claimedAt: string) {
+    const state = createAtomicRepository();
+    const published: Message[] = [];
+    const store = new WidgetResolutionStore(state.repository, (message) => published.push(message));
+    await store.claim('widget-1' as MessageID, claimInput('first', claimedAt));
+    return { state, store, published };
+  }
+
+  it('refuses a second claim with no policy, however old the first is', async () => {
+    const { state, store } = await withHeldClaim('2026-08-06T00:00:00.000Z');
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      claimInput('second', '2026-08-06T01:00:00.000Z')
+    );
+    expect(result.outcome).toBe('not_pending');
+    expect(state.message.metadata?.widget?.resolution_claim?.token).toBe('first');
+  });
+
+  it('takes over a claim older than the policy and publishes the change', async () => {
+    const { state, store, published } = await withHeldClaim('2026-08-06T00:00:00.000Z');
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      claimInput('second', '2026-08-06T00:05:00.000Z'),
+      { action: 'oauth_callback', afterMs: 60_000 }
+    );
+    expect(result).toMatchObject({ outcome: 'claimed', reclaimed: true });
+    expect(state.message.metadata?.widget?.resolution_claim?.token).toBe('second');
+    expect(state.message.metadata?.widget?.status).toBe('resolving');
+    expect(published).toHaveLength(2);
+  });
+
+  it('leaves a claim younger than the policy alone', async () => {
+    const { state, store } = await withHeldClaim('2026-08-06T00:00:00.000Z');
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      claimInput('second', '2026-08-06T00:00:10.000Z'),
+      { action: 'oauth_callback', afterMs: 60_000 }
+    );
+    expect(result.outcome).toBe('not_pending');
+    expect(state.message.metadata?.widget?.resolution_claim?.token).toBe('first');
+  });
+
+  it('will not reclaim a claim taken by a different action', async () => {
+    const { state, store } = await withHeldClaim('2026-08-06T00:00:00.000Z');
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      { ...claimInput('second', '2026-08-06T00:05:00.000Z'), action: 'submit' },
+      { action: 'submit', afterMs: 60_000 }
+    );
+    expect(result.outcome).toBe('not_pending');
+    expect(state.message.metadata?.widget?.resolution_claim?.token).toBe('first');
+  });
+
+  it('will not reclaim a terminal widget', async () => {
+    const { store } = await withHeldClaim('2026-08-06T00:00:00.000Z');
+    await store.complete('widget-1' as MessageID, 'first', {
+      status: 'submitted',
+      resolvedAt: '2026-08-06T00:00:01.000Z',
+      submittedBy: 'user-1' as UserID,
+    });
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      claimInput('second', '2026-08-06T00:05:00.000Z'),
+      { action: 'oauth_callback', afterMs: 60_000 }
+    );
+    expect(result.outcome).toBe('not_pending');
+  });
+
+  it('does not reclaim when the claim carries no readable age', async () => {
+    const state = createAtomicRepository();
+    const store = new WidgetResolutionStore(state.repository);
+    await store.claim('widget-1' as MessageID, claimInput('first', 'not-a-timestamp'));
+    const result = await store.claim(
+      'widget-1' as MessageID,
+      claimInput('second', '2026-08-06T00:05:00.000Z'),
+      { action: 'oauth_callback', afterMs: 60_000 }
+    );
+    expect(result.outcome).toBe('not_pending');
+  });
+});
