@@ -37,9 +37,8 @@ function cellValue(record: Row, dataIndex: MinimalColumn['dataIndex']): unknown 
 const isActionColumn = (col: MinimalColumn): boolean => col.key === 'actions';
 
 function pageSizeFor(pagination: TableProps<object>['pagination']): number {
-  if (pagination && typeof pagination === 'object' && pagination.pageSize)
-    return pagination.pageSize;
-  return DEFAULT_MOBILE_PAGE_SIZE;
+  if (!pagination || typeof pagination !== 'object') return DEFAULT_MOBILE_PAGE_SIZE;
+  return pagination.pageSize ?? pagination.defaultPageSize ?? DEFAULT_MOBILE_PAGE_SIZE;
 }
 
 export function ResponsiveTable<RecordType extends object>(props: TableProps<RecordType>) {

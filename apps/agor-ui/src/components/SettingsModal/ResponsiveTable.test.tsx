@@ -88,22 +88,28 @@ describe('ResponsiveTable', () => {
     expect(screen.getByText('Actions').closest('dt')).not.toBeNull();
   });
 
-  it('paginates on mobile instead of rendering every row', () => {
-    mockMobile = true;
-    const many: Row[] = Array.from({ length: 25 }, (_, i) => ({ id: String(i), name: `Row ${i}` }));
-    render(
-      <ResponsiveTable<Row>
-        columns={columns}
-        dataSource={many}
-        rowKey="id"
-        pagination={{ pageSize: 10 }}
-      />
-    );
-    expect(screen.getByText('Row 9')).toBeInTheDocument();
-    expect(screen.queryByText('Row 10')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Load more/ }));
-    expect(screen.getByText('Row 10')).toBeInTheDocument();
-  });
+  it.each([{ pageSize: 10 }, { defaultPageSize: 10 }])(
+    'paginates on mobile by %o instead of rendering every row',
+    (pagination) => {
+      mockMobile = true;
+      const many: Row[] = Array.from({ length: 25 }, (_, i) => ({
+        id: String(i),
+        name: `Row ${i}`,
+      }));
+      render(
+        <ResponsiveTable<Row>
+          columns={columns}
+          dataSource={many}
+          rowKey="id"
+          pagination={pagination}
+        />
+      );
+      expect(screen.getByText('Row 9')).toBeInTheDocument();
+      expect(screen.queryByText('Row 10')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Load more/ }));
+      expect(screen.getByText('Row 10')).toBeInTheDocument();
+    }
+  );
 
   it('keeps the real Table (not cards) when rowSelection is used, even on mobile', () => {
     mockMobile = true;
