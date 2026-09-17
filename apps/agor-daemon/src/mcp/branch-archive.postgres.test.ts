@@ -1,10 +1,13 @@
 import {
   BranchRepository,
+  branches,
   createDatabase,
   type Database,
+  eq,
   generateId,
   initializeDatabase,
   runWithTenantDatabaseScope,
+  select,
   UserApiKeysRepository,
 } from '@agor/core/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -53,6 +56,20 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           );
           expect(response.status).toBe(200);
           expect(response.result?.isError).toBe(true);
+          expect(JSON.parse(response.result!.content[0]!.text)).toMatchObject({
+            error: expect.stringMatching(/Branch.*not found/i),
+            tool: 'agor_branches_archive',
+          });
+          await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+            // Public Branch projections intentionally hide the private claim.
+            const row = await select(scoped)
+              .from(branches)
+              .where(eq(branches.branch_id, owner.branch.branch_id))
+              .one();
+            expect(row).toBeDefined();
+            expect(row!.data.workspace_operation).toBeUndefined();
+            expect(row!.data.maintenance).toBeUndefined();
+          });
         }
         const mismatchedKey = await fixture.call(
           owner.rawKey,

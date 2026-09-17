@@ -46,7 +46,11 @@ export async function archiveMcpFixture(db: Database, hosted = false) {
   for (const path of ['branches', 'sessions', 'users']) {
     app.service(path).hooks({ around: { all: [tenantHook()] } });
   }
-  // Compose the same thin route adapter and production hooks as register-routes.ts.
+  // Compose the thin route adapter with production tenant/role/archive-authorization hooks.
+  // Unlike register-routes.ts, this duplicates registration, substitutes a minimal
+  // authenticated-user assertion for requireAuth, and omits ordinary service hooks
+  // from register-hooks.ts. It tests MCP-to-service behavior, not production wiring;
+  // registration/hook changes can therefore regress independently of this fixture.
   // MCP authentication is real (a persisted, hashed personal key), not a params stub.
   const route = '/branches/:id/archive-or-delete';
   app.use(route, {
