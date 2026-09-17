@@ -200,3 +200,84 @@ dbTest(
   },
   30000
 );
+
+dbTest(
+  'profiles active canvas placement reads without loading archived history',
+  async ({ db }) => {
+    const fixture = await seedBoardEntities(db);
+    const branches = new BranchRepository(db);
+    const objects = new BoardObjectRepository(db);
+    for (let index = 0; index < 100; index++) {
+      const branch = await branches.create({
+        repo_id: fixture.repo.repo_id,
+        board_id: fixture.board.board_id,
+        name: `archived-${index}`,
+        ref: `archived-${index}`,
+        branch_unique_id: index + 10,
+        created_by: fixture.owner.user_id,
+        primary_owner_user_id: fixture.owner.user_id,
+        archived: true,
+      });
+      await objects.create({
+        board_id: fixture.board.board_id,
+        branch_id: branch.branch_id,
+        position: { x: 0, y: 0 },
+      });
+    }
+    const server = await boardMetadataTestApp(
+      createTenantScopedDatabaseProxy(db),
+      {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'entity-audit' },
+        execution: {},
+      } as RegisterHooksContext['config'],
+      true
+    );
+    const socket = createClient(server.url, true, {
+      socketAuthentication: {
+        accessToken: server.headers(fixture.owner.user_id).authorization.slice(7),
+      },
+      ackTimeout: 5000,
+    });
+    try {
+      const service = socket.service('board-objects');
+      const find = vi.spyOn(service, 'find');
+      const history = await service.findAll({ query: { $limit: 10_000 } });
+      const beforeRequests = find.mock.calls.length;
+      find.mockClear();
+      const active = await service.findAll({
+        query: { exclude_archived_branches: true, $limit: 100 },
+      });
+      expect(history).toHaveLength(105);
+      expect(active).toHaveLength(4); // three active branches + a card, never the hidden branch
+      expect(active.some((object) => object.object_id === fixture.entities[3].object_id)).toBe(
+        false
+      );
+      const metrics = {
+        before: {
+          requests: beforeRequests,
+          rows: history.length,
+          jsonBytes: Buffer.byteLength(JSON.stringify(history)),
+        },
+        after: {
+          requests: find.mock.calls.length,
+          rows: active.length,
+          jsonBytes: Buffer.byteLength(JSON.stringify(active)),
+        },
+      };
+      expect(metrics.after.jsonBytes).toBeLessThan(metrics.before.jsonBytes / 20);
+      if (process.env.AGOR_PROFILE_INITIAL_LOAD === '1') {
+        process.stdout.write(`Fictional canvas placement profile: ${JSON.stringify(metrics)}\n`);
+      }
+
+      // Pagination applies to the filtered, authorized set, not the archived or
+      // inaccessible rows. The same stable result must survive multiple pages.
+      expect(
+        await service.findAll({ query: { exclude_archived_branches: true, $limit: 2 } })
+      ).toEqual(active);
+    } finally {
+      socket.io.close();
+      await server.close();
+    }
+  }
+);
