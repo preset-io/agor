@@ -2312,12 +2312,20 @@ export class GatewayService {
       }
       // Same app, still allowed to write here — but the configuration this
       // link was sealed against has changed, and the sealed token pins the
-      // generation redemption compares. The button would be refused, so the
-      // card stops offering it rather than showing one that 403s.
-      if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
-        await this.deliverMcpSlackConnectCard(widgetId);
+      // generation redemption compares. Only a card that still offers that
+      // link has anything to withhold: retire it and re-render as the refusal.
+      // A card with no button carries nothing stale, so it goes out through
+      // the freshly loaded connector rather than being stranded forever — by
+      // then `binding_invalidated_at` is usually already set, and refusing to
+      // render would leave the thread showing its last live state permanently.
+      if (state === 'connect_required') {
+        if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
+          await this.deliverMcpSlackConnectCard(widgetId);
+        } else {
+          await this.releaseMcpSlackConnectClaim(widgetId, claimId);
+        }
+        return;
       }
-      return;
     }
 
     const copy = mcpSlackConnectCardCopy(state, {

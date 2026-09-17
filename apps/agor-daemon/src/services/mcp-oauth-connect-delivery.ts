@@ -293,6 +293,19 @@ export async function resolveSlackConnectBinding(
   // The redeem-time server precondition, applied at issue as well: the pure
   // ownership predicate, never the params-shaped caller variant, which would
   // classify this daemon-side call as internal and always allow it.
+  // A link already sealed against an older channel configuration would be
+  // refused at redemption, because the token pins the generation and the
+  // authority re-read compares it. Catch that HERE rather than at delivery:
+  // the authority read above compares the channel's generation to itself (it
+  // has no earlier claim to compare against at issue time), so the only record
+  // of what the live link was sealed against is the delivery row.
+  const sealedGeneration = widget.slack_connect?.gateway_config_generation;
+  if (
+    sealedGeneration !== undefined &&
+    sealedGeneration !== authority.channel.provider_config_generation
+  ) {
+    return refuse('authority_moved');
+  }
   if (!isMCPServerUsableBy(authority.server, task.created_by)) return refuse('authority_moved');
   if ((authority.server.auth?.oauth_mode ?? 'per_user') !== params.oauthMode) {
     return refuse('authority_moved');
