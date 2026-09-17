@@ -95,6 +95,14 @@ DCR requests identify standalone HTTP loopback callbacks as `native` and public 
 
 ### Saved OAuth status
 
+A complete session MCP selection is authoritative, including an empty selection:
+`mcpServerIds: []` means no external MCP servers. Omitting the selection retains
+legacy global-server inheritance. The distinction is saved when creating or
+initializing a session or replacing its MCP selection; it is not inferred from
+an empty attachment table on older sessions. The built-in Agor MCP remains available.
+`attached_mcp_servers` reports explicit links, not implicit global servers, so an
+empty list alone does not establish that a historical task ran without external MCP.
+
 OAuth badges reflect the last saved-grant check, refreshed when the UI loads or
 reconnects and after explicit OAuth actions/events. Idle tabs do not scan all
 grants on a timer. The badge is not a live provider-health guarantee: credentials
