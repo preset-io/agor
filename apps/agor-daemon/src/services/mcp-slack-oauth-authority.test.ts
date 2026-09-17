@@ -121,6 +121,41 @@ describe('shared Slack MCP OAuth authority read', () => {
     ).resolves.toBeNull();
   });
 
+  /**
+   * `'current'` is the issue-time caller's shape: there is no earlier claim to
+   * compare against, so the version check is vacuous by design. It is a value
+   * rather than a re-read of the row precisely so the vacuous case cannot be
+   * confused with a real one at a call site — the spelling it replaced (read
+   * the channel, hand its own generation back in) looked like a check.
+   */
+  it('admits any stored version for `current`, and still refuses a pinned mismatch', async () => {
+    const moved: Fixtures = {
+      channel: { provider_config_generation: 8 },
+      server: { config_version: 4 },
+    };
+    await expect(
+      readSlackMCPOAuthAuthority(
+        repositories(moved),
+        binding({ gatewayConfigGeneration: 'current', mcpServerConfigVersion: 'current' })
+      )
+    ).resolves.not.toBeNull();
+
+    // Only the vacuous request is vacuous. A sealed number is still compared,
+    // one field at a time, which is the check this module exists for.
+    await expect(
+      readSlackMCPOAuthAuthority(
+        repositories(moved),
+        binding({ gatewayConfigGeneration: 7, mcpServerConfigVersion: 'current' })
+      )
+    ).resolves.toBeNull();
+    await expect(
+      readSlackMCPOAuthAuthority(
+        repositories(moved),
+        binding({ gatewayConfigGeneration: 'current', mcpServerConfigVersion: 3 })
+      )
+    ).resolves.toBeNull();
+  });
+
   it('raises the credential floor to admin for a shared-mode server', async () => {
     const shared: Fixtures = { server: { auth: { type: 'oauth', oauth_mode: 'shared' } } };
     // The floor is read from the STORED row, not from anything the token said,

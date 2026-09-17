@@ -38,17 +38,39 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
+/**
+ * A version this read must agree with, or `'current'`.
+ *
+ * `'current'` means "whatever is stored right now, by definition" — the shape
+ * an ISSUE-time caller is in, because there is no earlier claim to compare
+ * against and pinning today's value is exactly what makes a later change
+ * invalidate the link. It is spelled out rather than expressed by reading the
+ * row and passing its own value back in, because that call reads as a real
+ * check at the call site while being `x !== x`: it can never fail, and a
+ * reviewer has to reconstruct why before knowing whether that is intended.
+ *
+ * Every REDEMPTION-time caller passes a number sealed into its token. Passing
+ * `'current'` there would silently retire the one check this module exists for
+ * (see the header), which is why the vacuous case now has to be written down.
+ */
+export type SlackMCPOAuthExpectedVersion = number | 'current';
+
 /** Everything a sealed Slack MCP OAuth token pins about the wider workspace. */
 export interface SlackMCPOAuthAuthorityBinding {
   principalUserId: UserID;
   credentialUserId: UserID;
   sessionId: SessionID;
   gatewayChannelId: string;
-  gatewayConfigGeneration: number;
+  gatewayConfigGeneration: SlackMCPOAuthExpectedVersion;
   slackChannelId: string;
   slackThreadId: string;
   mcpServerId: MCPServerID;
-  mcpServerConfigVersion: number;
+  mcpServerConfigVersion: SlackMCPOAuthExpectedVersion;
+}
+
+/** `'current'` matches by definition; a number must match exactly. */
+function versionMatches(stored: number, expected: SlackMCPOAuthExpectedVersion): boolean {
+  return expected === 'current' || stored === expected;
 }
 
 /** The exact rows the authority was proven against, for lane-specific checks. */
@@ -127,13 +149,13 @@ export async function readSlackMCPOAuthAuthority(
     !hasMinimumRole(credentialUser.role, credentialFloor) ||
     !channel?.enabled ||
     channel.channel_type !== 'slack' ||
-    channel.provider_config_generation !== binding.gatewayConfigGeneration ||
+    !versionMatches(channel.provider_config_generation, binding.gatewayConfigGeneration) ||
     !slackThreadWriteTargetAllowed(binding.slackThreadId, binding.slackChannelId, channel.config) ||
     mapping?.channel_id !== channel.id ||
     mapping.thread_id !== binding.slackThreadId ||
     !server?.enabled ||
     server.auth?.type !== 'oauth' ||
-    (server.config_version ?? 1) !== binding.mcpServerConfigVersion
+    !versionMatches(server.config_version ?? 1, binding.mcpServerConfigVersion)
   ) {
     return null;
   }
