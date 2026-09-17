@@ -6,11 +6,11 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
+import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useAgorStore } from '../../store/agorStore';
 import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
@@ -88,30 +88,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     else navigate('/m/sessions');
   }, [navigate, location.key]);
 
-  const handlePermissionDecision = useCallback(
-    async (
-      decisionSessionId: string,
-      requestId: string,
-      taskId: string,
-      allow: boolean,
-      scope: PermissionScope
-    ) => {
-      if (!client) return;
-      try {
-        await client.service(`sessions/${decisionSessionId}/permission-decision`).create({
-          requestId,
-          taskId,
-          allow,
-          reason: allow ? 'Approved by user' : 'Denied by user',
-          remember: scope !== PermissionScope.ONCE,
-          scope,
-        });
-      } catch (error) {
-        console.error('Failed to send permission decision:', error);
-      }
-    },
-    [client]
-  );
+  const handlePermissionDecision = usePermissionDecision(client);
 
   const appActions = useMemo(
     () => ({

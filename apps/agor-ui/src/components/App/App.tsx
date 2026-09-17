@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig, hasMinimumRole, PermissionScope } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -38,6 +38,7 @@ import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
@@ -1148,32 +1149,7 @@ export const App: React.FC<AppProps> = ({
     [client, navigation]
   );
 
-  const handlePermissionDecision = useCallback(
-    async (
-      sessionId: string,
-      requestId: string,
-      taskId: string,
-      allow: boolean,
-      scope: PermissionScope
-    ) => {
-      if (!client) return;
-
-      try {
-        // Call the permission decision endpoint
-        await client.service(`sessions/${sessionId}/permission-decision`).create({
-          requestId,
-          taskId,
-          allow,
-          reason: allow ? 'Approved by user' : 'Denied by user',
-          remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
-          scope,
-        });
-      } catch (error) {
-        console.error('❌ Failed to send permission decision:', error);
-      }
-    },
-    [client]
-  );
+  const handlePermissionDecision = usePermissionDecision(client);
 
   // Narrow per-id subscriptions: only patches to the SELECTED session (and
   // its branch) wake the shell — those renders are needed to feed
