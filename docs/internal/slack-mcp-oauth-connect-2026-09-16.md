@@ -855,6 +855,43 @@ purpose: an unreadable or mistyped setting should not silently retire an
 affordance a thread is already showing, and the operator turning it off is
 performing a deliberate act and can spell it.
 
+### 7.1.5 What the correctness review found
+
+A second correctness review, run on another model family after §7.1.3, blocked
+merge on two more defects in the delivery projection and reported a third
+instance of the tenant-scope class. All three are fixed here.
+
+**A lost claim reconciled its post and ignored its edit.** §7.1.1 taught the
+settlement CAS to require the claim to still be its own, and taught a delivery
+that finds it is not the owner to retire the message it POSTED. An EDIT was
+explicitly excluded — "an edit reuses the row that is already recorded, so only
+a fresh post can orphan one" — which is true about orphans and beside the point
+about reconciliation.
+
+The interleaving, reproduced with the delivery harness: A starts re-issuing a
+durably failed sign-in, which edits the recorded row; A's 30s lease lapses
+while Slack is being called; B dismisses the widget, renders `cancelled` onto
+the same `ts`, and clears the repair deadline behind it; A's delayed edit lands
+last and puts the Connect button back. A correctly loses the completion CAS and
+did nothing about it, because nothing was orphaned.
+
+The record then says `cancelled` and the thread shows Connect — and the
+disagreement seals itself in, because `rendered_state` is exactly what every
+later render compares against. The no-op shortcut, the claim CAS and an
+explicit repair all skip a card whose recorded state already matches the state
+that would render now. The button cannot authorize the dismissed widget (every
+question is re-asked at redemption, D7), so this is misleading-forever rather
+than an authorization hole — but "the card reflects the widget row" is the
+whole premise of the projection.
+
+`repaintLostMcpSlackConnectRender` is the counterpart to
+`retireOrphanedMcpSlackConnectCard`: fenced on the recorded `ts`, it clears the
+`rendered_state` the delivery just invalidated, sets `next_repair_at`, and
+re-renders from the widget row. A no-op when the winner happened to render the
+same state. Bounded in process at `MCP_SLACK_CONNECT_REPAINT_ATTEMPTS`,
+because losing the claim twice means another daemon is still writing the row
+and the sweep already owns the card by then.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers
