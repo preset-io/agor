@@ -18,7 +18,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '@/store/agorStore';
 import { OAuthConnectWidget } from './OAuthConnectWidget';
+
+/** The last-observed grant snapshot the card reads to pick its button. */
+function setSignedInServers(ids: string[]) {
+  agorStore
+    .getState()
+    .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
+}
 
 /** Wrap with Ant Design's App so `useThemedMessage` finds a message instance. */
 function renderWidget(ui: ReactElement) {
@@ -96,6 +104,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   popupOpens = true;
   waitForAttempt.mockResolvedValue({ status: 'succeeded' });
+  setSignedInServers([]);
 });
 
 describe('OAuthConnectWidget — pending', () => {
@@ -363,5 +372,59 @@ describe('OAuthConnectWidget — terminal states', () => {
       />
     );
     expect(screen.getByText(/Declined to connect "Notion"/)).toBeVisible();
+  });
+});
+
+/**
+ * B1 — the card when the grant is already on file.
+ *
+ * The provider callback persists the grant; this widget resolves only when a
+ * browser POSTs. A reload in between, or a sign-in completed from the Slack
+ * card, leaves a real credential behind a card that still says Connect — and
+ * pressing it used to run a full re-authorization of an account that was
+ * already connected.
+ */
+describe('OAuthConnectWidget — finishing a sign-in that already happened', () => {
+  it('offers a finish, and completes it without any provider round-trip', async () => {
+    setSignedInServers(['srv-notion']);
+    const calls: string[] = [];
+    const client = makeClient({ onCall: (path) => calls.push(path) });
+    renderWidget(<OAuthConnectWidget widget={widget()} client={client} message={message} />);
+
+    expect(screen.getByText('You are already signed in')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish connecting' }));
+
+    await waitFor(() => expect(calls).toEqual(['widgets/widget-1/oauth-resolve']));
+    expect(popup.navigate).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Connected "Notion"/)).toBeVisible();
+  });
+
+  it('falls back to a real sign-in when the daemon disagrees with the snapshot', async () => {
+    // The snapshot is a hint, never the decision: a revoked grant still reads
+    // as connected here until the next refresh, and the card must not leave a
+    // button that can only fail.
+    setSignedInServers(['srv-notion']);
+    const client = makeClient({ resolveError: new Error('Sign-in has not completed') });
+    renderWidget(<OAuthConnectWidget widget={widget()} client={client} message={message} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finish connecting' }));
+    expect(await screen.findByText('Sign-in was not completed')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Finish connecting' })).toBeNull();
+    // Nothing is claimed: the widget stays pending and the ordinary flow works.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() =>
+      expect(popup.navigate).toHaveBeenCalledWith(
+        'https://provider.example/authorize',
+        expect.any(Function)
+      )
+    );
+  });
+
+  it('leaves a card with no grant on file exactly as it was', () => {
+    renderWidget(<OAuthConnectWidget widget={widget()} client={makeClient()} message={message} />);
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeVisible();
+    expect(screen.queryByText('You are already signed in')).toBeNull();
   });
 });
