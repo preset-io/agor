@@ -196,6 +196,7 @@ import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.j
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
 import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
+import { createMCPSlackConnectCardControl } from './services/mcp-slack-connect-control.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -6222,6 +6223,44 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       find: { role: ROLES.MEMBER, action: 'view MCP gateway status' },
       patch: { role: ROLES.ADMIN, action: 'configure MCP gateway rollout' },
+    },
+    requireAuth
+  );
+
+  /**
+   * The Slack MCP connect card's kill switch, as something an operator can
+   * actually reach.
+   *
+   * It was a setting with a setter and no caller: `setMCPSlackConnectCardEnabled`
+   * is plumbing, and "write an app variable by hand" is not an incident
+   * procedure. This is the narrow control surface that makes the switch
+   * operable — read it, change it, and read back what took effect, for the
+   * caller's tenant and no other.
+   *
+   * Narrow on purpose:
+   *
+   *  - Admin for BOTH methods. Unlike `/mcp-egress/status`, nothing here is a
+   *    statement about the caller's own capabilities, so there is no answer a
+   *    non-admin needs. A member who cannot see the switch is not shown a
+   *    control that fails.
+   *  - One tenant per call, because the setting is one app variable per tenant
+   *    and a deployment-wide incident is one write per tenant — exactly as
+   *    `mcp_egress_gateway.mode` is. The response names the tenant it acted on
+   *    so an operator working through several can prove which.
+   *  - No third state. `enabled` is a boolean; an unreadable or mistyped value
+   *    leaves the card ON (`isMCPSlackConnectCardEnabled`), deliberately, and
+   *    this route never writes one.
+   *
+   * The runbook — including what happens to work stranded while it is off — is
+   * §7.1.4 of `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+   */
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-slack-connect/card',
+    createMCPSlackConnectCardControl(db),
+    {
+      find: { role: ROLES.ADMIN, action: 'read the Slack MCP connect card switch' },
+      patch: { role: ROLES.ADMIN, action: 'change the Slack MCP connect card switch' },
     },
     requireAuth
   );

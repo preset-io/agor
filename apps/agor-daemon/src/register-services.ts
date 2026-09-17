@@ -3326,6 +3326,19 @@ export async function registerMCPServices(
    * generation on a still-pending widget, so a newer link, a resolved widget,
    * or a failed delivery stops the flow instead of letting it persist a grant
    * nobody is waiting for any more.
+   *
+   * The operator kill switch is asked here as well as at delivery and
+   * redemption, which is what makes §7.1.4's claim — that switching the lane
+   * off stops it GRANTING, not merely repainting — true of a flow already in
+   * the air. Without it, a link redeemed a second before the switch was thrown
+   * still came back through the provider and persisted a grant, which is the
+   * one outcome an operator reaching for a kill switch is trying to stop. The
+   * window is a single provider round-trip, so this is a small correction to
+   * make and a strange one to have to explain during an incident.
+   *
+   * Turning it back on loses nothing: the refusal collapses into the lane's
+   * generic failure, the delivery records a durable `oauth_failed_at`, and the
+   * card that stamp produces may be re-offered once with a fresh link (§7.2).
    */
   const assertSlackConnectFlowStillAuthorized = async (
     pendingFlow: PendingOAuthFlow
@@ -3336,6 +3349,9 @@ export async function registerMCPServices(
     if (!connect) return;
     if (!tenantId || !userId) throw new Error('Slack MCP connect authority is unavailable');
     await runInOAuthTenantScope(db, tenantId, async () => {
+      if (!(await isMCPSlackConnectCardEnabled(db))) {
+        throw new Error('Slack MCP connect projection is disabled');
+      }
       const fenced = await mutateSlackConnectDelivery(
         new MessagesRepository(db),
         connect.widget_id,
