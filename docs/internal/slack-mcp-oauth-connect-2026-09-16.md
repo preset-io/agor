@@ -188,15 +188,39 @@ is the one thing the agent is here for.
 
 Mint-time and resolve-time preconditions are `authorizeMint` / `authorizeResolve`
 hooks on the **registry entry**, not free functions a caller remembers to call.
-`mintWidgetMessage` runs the mint gate for every widget the MCP tools create and
-refuses a widget type this daemon has not registered; `submissions.ts` runs the
-resolve gate before the durable claim. §7's Slack projection inherits both
-by minting through the same seam rather than by deciding to.
+`mintWidgetMessage` runs the mint gate — and, since the pre-merge pass,
+`parseWidgetMintParams` — for every widget the MCP tools create, and refuses a
+widget type this daemon has not registered; `submissions.ts` runs the resolve
+gate before the durable claim.
+
+The argument for putting them on the seam is not hypothetical, and the
+example is inside this feature rather than ahead of it. `agor_widgets_request_oauth`
+has **two** mint paths: the ordinary one, and the `already_present`
+short-circuit in `attachAndResume`. The short-circuit was written months after
+the tool and was never consciously enrolled in anything — yet it inherited the
+role floor, the gateway identity guard, and the unregistered-type refusal,
+because the only way to create a widget row is through the seam that runs them.
+What it did NOT inherit was the params schema, because that one was not on the
+seam: each tool parsed its own params, the short-circuit built its object with
+`satisfies OAuthWidgetParams`, and a compile-time check strips nothing at
+runtime. So `.strict()` held on one of this type's two paths and not the other
+(§5.1). That is precisely the failure the hooks exist to prevent, observed on
+the one precondition that was not a hook. It is now one.
+
+The §7 Slack projection is deliberately NOT an example here, contrary to what
+this section used to claim: it does not mint. It projects a widget row that
+already exists into a Slack message, and `issueMCPOAuthConnectLink` re-proves
+its own bindings (`resolveSlackConnectBinding`) rather than inheriting the mint
+gate — because the question at projection time is different, and includes ones
+mint never asks (is the channel still writable, is the sealed generation still
+current).
 
 `agor_widgets_request_oauth` also calls the mint gate EARLY, with no params,
 before it resolves a destination — so an unaligned gateway channel is refused
 before a catalog install puts an orphan server row in the database. That call is
-an optimization: skipping it would cost an orphan row, not a missed check.
+an optimization: skipping it would cost an orphan row, not a missed check. The
+params parse has no such early form, which is why it is a separate call rather
+than a fourth argument to the gate.
 
 ### 3.4 `agor_widgets_request_oauth`
 
@@ -563,9 +587,13 @@ not this — see the status table at the top.)
    refused only after signing in (D6). Mint could resolve
    `checkSessionOwnerOrAdmin` up front and render the caveat in the card.
 3. **Expiry.** A pending oauth widget lives forever. **Accepted gap — D7.**
-4. **Popup-blocked recovery path.** The card currently tells the user to allow
-   pop-ups. A same-tab fallback (navigate, return via the callback page) would be
-   better, and §7 needs one anyway for Slack's in-app browser.
+4. **Popup-blocked recovery path.** Every surface now at least SAYS the right
+   thing: the canvas widget always did, and the two Slack landing pages gained a
+   `blocked` state in the pre-merge pass — before it, a refused `window.open`
+   rendered as `failed` ("return to Slack and ask again"), which reproduces the
+   block exactly, on the client where it is most likely (Slack's mobile in-app
+   browser). What is still missing is the recovery itself: a same-tab fallback
+   (navigate, return via the callback page) that does not need pop-ups at all.
 5. **Onboarding integration.** The Catalog drawer's "Start new session" flow and
    this widget now both install-then-connect. They should share one helper.
 
