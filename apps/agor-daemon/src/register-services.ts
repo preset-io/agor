@@ -42,6 +42,7 @@ import {
   getCurrentTenantId,
   getMCPEgressGatewayMode,
   inArray,
+  isMCPSlackConnectCardEnabled,
   isPostgresDatabaseHandle,
   MCPCatalogCandidateRepository,
   MCPMarketplaceRepository,
@@ -5171,6 +5172,12 @@ export async function registerMCPServices(
       // scope that is already open is a no-op, so the `oauth-start` call site
       // (which opens its own) is unaffected. Found by driving the real lane.
       return await runInOAuthTenantScope(db, tenantId, async () => {
+        // The operator kill switch, applied where it actually stops something:
+        // a link already in a thread stops granting, not just stops being
+        // repainted. Same placement as the recovery lane's
+        // `isMcpRuntimeRecoveryEnabled` check, and it collapses into the same
+        // generic failure as every other binding that moved.
+        if (!(await isMCPSlackConnectCardEnabled(db))) throw new Error(genericFailure);
         const messagesRepository = new MessagesRepository(db);
         const message = await messagesRepository.findById(claims.widget_id);
         const pending = readPendingOAuthConnectWidget(message);

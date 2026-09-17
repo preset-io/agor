@@ -1,12 +1,15 @@
 import http, { type Server as HttpServer } from 'node:http';
 import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
+  AppVariableRepository,
   BranchRepository,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   eq,
   GatewayChannelRepository,
   generateId,
+  MCP_SLACK_CONNECT_CARD_KEY,
+  MCP_SLACK_CONNECT_SETTINGS_NAMESPACE,
   MCPServerRepository,
   MessagesRepository,
   mcpServers,
@@ -15,6 +18,7 @@ import {
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
+  setMCPSlackConnectCardEnabled,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -1599,6 +1603,55 @@ describe('Slack MCP connect authenticated route', () => {
     });
     expect(await seeded.widgetStatus()).toBe('pending');
     expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * The kill switch has to stop the lane from GRANTING, not just from
+   * repainting: a card already in a thread carries a live sealed link, and an
+   * operator turning the projection off during an incident is asking for that
+   * link to stop working. The canvas widget stays live either way — it is the
+   * fallback the switch leaves behind.
+   */
+  it('refuses a live link once the Slack card projection is switched off', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, undefined, { requireTenantScope: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, false, harness.user.user_id);
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).rejects.toMatchObject({
+      code: 403,
+      message: 'This MCP connect action is invalid, expired, or superseded.',
+    });
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+    expect(started.success).toBe(false);
+    // Nothing was consumed, so turning the switch back on restores the link
+    // rather than leaving a burned one behind.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, true, harness.user.user_id);
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ state: 'connect_required' });
+
+    // Deliberately not fail-closed on a value nobody recognises: a mistyped
+    // setting must not silently retire an affordance a thread is showing.
+    await new AppVariableRepository(harness.rawDb).set({
+      namespace: MCP_SLACK_CONNECT_SETTINGS_NAMESPACE,
+      key: MCP_SLACK_CONNECT_CARD_KEY,
+      value: 'disbaled',
+      content_type: 'text/plain',
+    });
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ state: 'connect_required' });
   });
 
   it('refuses an expired link and leaves the widget pending', async () => {

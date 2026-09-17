@@ -2,11 +2,11 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §3 — the widget lane  | **Implemented.**                                                                                                                                                                               |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                     |
-| §7 — Slack projection | **Implemented.** Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1; three defects found by the gating review and fixed, §7.1.1. |
+| Section               | State                                                                                                                                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                        |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                              |
+| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.2). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1; three defects found by the gating review and fixed, §7.1.1. |
 
 Numbering warning for anyone reading commit messages against this file: the
 branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
@@ -741,6 +741,46 @@ callback is not by itself evidence of an authority refusal, because the
 provider also rejects a fabricated authorization code. The discriminating
 observation is whether the authorization-code exchange started at all — before
 the fix it did.
+
+### 7.1.2 The operator kill switch
+
+`isMCPSlackConnectCardEnabled` (`db/repositories/mcp-slack-connect-settings.ts`)
+gates the projection, the same way `isMcpRuntimeRecoveryEnabled` gates the
+reactive lane. It reads one app variable, `mcp-slack-connect/card_projection`,
+and is checked in exactly two places: `deliverMcpSlackConnectCard` before
+anything is read or posted, and `loadMCPOAuthConnectBinding` before anything is
+consumed.
+
+Both ends, not just the first, because the point is to stop the lane from
+**granting** and not merely from repainting: a card already in a thread carries
+a live sealed link, and an operator turning this off during an incident is
+asking for that link to stop working. The refusal collapses into the lane's one
+generic failure, and nothing is consumed — turning it back on restores the
+existing link rather than leaving a burned one behind.
+
+What it does not touch is the fallback. The canvas widget still renders a live
+Connect button, and `agor_widgets_request_oauth` still hands the agent the
+`session_url` and the sentence to relay. Off is a degraded Slack experience,
+never a removed feature — which is also why it is **on by default**: the card
+is additive to a link that still works, so a bad card costs a bad-looking Slack
+message rather than a broken flow, and a lane that ships dark is a lane nobody
+ever reports a bug against.
+
+Two known limits, both deliberate:
+
+- It is **per tenant**, because it is an app variable and the lane is a
+  tenant-owned resource. A deployment-wide problem means one write per tenant.
+  That matches `mcp_egress_gateway.mode` exactly and is the reason the switch
+  is a setting rather than an env var; if incident response needs one action,
+  that is a change to make for both settings at once.
+- There is **no admin UI**. The egress mode has a `PATCH` route; this has only
+  `setMCPSlackConnectCardEnabled`. Adding a surface is worth doing the first
+  time an operator actually reaches for it.
+
+A value nobody recognises leaves the card **on**. This is not fail-closed on
+purpose: an unreadable or mistyped setting should not silently retire an
+affordance a thread is already showing, and the operator turning it off is
+performing a deliberate act and can spell it.
 
 ### 7.2 Deliberately not built
 

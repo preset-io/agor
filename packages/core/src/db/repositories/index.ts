@@ -41,6 +41,7 @@ export * from './mcp-member-policy';
 export * from './mcp-oauth-client-registrations';
 export * from './mcp-oauth-pending-flows';
 export * from './mcp-servers';
+export * from './mcp-slack-connect-settings';
 export * from './messages';
 export * from './repos';
 export * from './schedules';
