@@ -2824,7 +2824,7 @@ export class GatewayService {
   /**
    * Re-render a card this daemon repainted but turned out not to own.
    *
-   * The counterpart of `retireOrphanedMcpSlackConnectCard`, for the other
+   * The counterpart of `retireOrphanedSlackCard`, for the other
    * thing a lost claim can leave behind. A delivery that EDITED the recorded
    * row orphans nothing — it wrote over the one card the widget has — but it
    * wrote a state a second claimant had already superseded. The record then
