@@ -32,12 +32,13 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, Button, ConfigProvider, theme } from 'antd';
+import { Alert, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from './components/AgentSelectionGrid/availableAgents';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
+import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
@@ -1162,30 +1163,9 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="warning"
-          title={
-            unsupportedIdentityContract
-              ? 'Incompatible daemon configuration contract'
-              : 'Could not fetch daemon configuration'
-          }
-          description={
-            <div>
-              <p>{authConfigError.message}</p>
-              {unsupportedIdentityContract ? (
-                <p>Deploy compatible Agor UI and daemon versions, then retry.</p>
-              ) : (
-                <>
-                  <p>Make sure the daemon is running:</p>
-                  <p>
-                    <code>cd apps/agor-daemon && pnpm dev</code>
-                  </p>
-                </>
-              )}
-            </div>
-          }
-          action={<Button onClick={retryAuthConfig}>Retry</Button>}
-          showIcon
+        <DaemonConfigurationAlert
+          unsupportedIdentityContract={unsupportedIdentityContract}
+          onRetry={retryAuthConfig}
         />
       </div>
     );
@@ -1241,19 +1221,7 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="error"
-          title="Failed to connect to Agor daemon"
-          description={
-            <div>
-              <p>{connectionError}</p>
-              <p>
-                Start the daemon with: <code>cd apps/agor-daemon && pnpm dev</code>
-              </p>
-            </div>
-          }
-          showIcon
-        />
+        <DaemonConnectionAlert message={connectionError} />
       </div>
     );
   }
