@@ -44,7 +44,7 @@
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^5.0.1",
-    "@types/react": "^19.2.18",
-    "react": "^19.2.8"
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0"
   }
 }
