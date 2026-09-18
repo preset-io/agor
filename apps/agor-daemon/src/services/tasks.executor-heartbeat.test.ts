@@ -243,7 +243,7 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(sessionsPatch).not.toHaveBeenCalled();
   });
 
-  it('settles a stopped active task ahead of queued work and triggers queue processing', async () => {
+  it('publishes a repository-projected stop and triggers queued work without rewriting Session', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000030';
     const sessionId = '018f0000-0000-7000-8000-000000000031';
     const currentTask = {
@@ -275,11 +275,7 @@ describe('TasksService executor heartbeat helpers', () => {
     });
 
     expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      sessionId,
-      { status: 'idle', ready_for_prompt: true },
-      undefined
-    );
+    expect(sessionsPatch).not.toHaveBeenCalled();
     expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, undefined);
   });
 

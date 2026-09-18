@@ -211,7 +211,7 @@ describe('createCanUseToolCallback', () => {
       );
     });
 
-    it('marks task and session timed_out when the permission request times out', async () => {
+    it('terminalizes the task without attempting a post-revocation session patch on timeout', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
@@ -229,10 +229,10 @@ describe('createCanUseToolCallback', () => {
         taskId,
         expect.objectContaining({ status: 'timed_out' })
       );
-      expect(deps.sessionsService.patch).toHaveBeenCalledWith(
-        sessionId,
-        expect.objectContaining({ status: 'timed_out', ready_for_prompt: true })
-      );
+      expect(deps.sessionsService.patch).toHaveBeenCalledTimes(1);
+      expect(deps.sessionsService.patch).toHaveBeenNthCalledWith(1, sessionId, {
+        status: 'awaiting_permission',
+      });
     });
 
     it('always releases the per-session permission lock, even on timeout', async () => {
