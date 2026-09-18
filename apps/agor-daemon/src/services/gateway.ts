@@ -17,7 +17,6 @@ import {
 } from '@agor/core/coordination';
 import {
   BranchRepository,
-  bindRepositoryToTenantUnitOfWork,
   DiscordMessageDeliveryRepository,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
@@ -135,6 +134,10 @@ import {
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
+import {
+  createTenantBoundDataAccess,
+  type TenantBoundDataAccess,
+} from '../utils/tenant-bound-data-access.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import {
   issueMCPOAuthConnectLink,
@@ -1102,6 +1105,22 @@ export class GatewayService {
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
   private sessionMcpRepo: SessionMCPServerRepository;
+  /**
+   * The gateway's only ordinary route to tenant data.
+   *
+   * Everything this service does is identity-only orchestration: Socket Mode
+   * listeners, repair timers, and the bounded repair sweep all run under
+   * `runWithTenantContext` with no transaction. The facade is what removes the
+   * "hold a raw handle and remember to open a scope" arrangement that produced
+   * five separate `MissingTenantDatabaseScopeError` defects on these lanes.
+   */
+  private readonly data: TenantBoundDataAccess;
+  /**
+   * The raw handle, kept for the two things the facade deliberately cannot do:
+   * explicit SYSTEM scopes for cross-tenant listener discovery, and dialect
+   * inspection that must answer outside any scope. Both are narrow, named and
+   * commented at their call sites. Do not reach for this to read tenant data.
+   */
   private db: TenantScopeAwareDatabase;
   private app: Application;
 
@@ -1163,29 +1182,21 @@ export class GatewayService {
     // holding a transaction. Every repository field is therefore bound to a
     // short per-method tenant unit of work here; provider/process/network work
     // must remain outside those database scopes.
-    this.channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
-    this.threadMapRepo = bindRepositoryToTenantUnitOfWork(db, new ThreadSessionMapRepository(db));
-    this.outboundRepo = bindRepositoryToTenantUnitOfWork(
-      db,
-      new GatewayOutboundMessageRepository(db)
-    );
-    this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
-    this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
-    this.taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
-    this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
-    this.messagesRepo = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
-    this.inboundEventRepo = bindRepositoryToTenantUnitOfWork(
-      db,
-      new GatewayInboundEventRepository(db)
-    );
-    this.deliveryRepo = bindRepositoryToTenantUnitOfWork(
-      db,
-      new DiscordMessageDeliveryRepository(db)
-    );
+    this.data = createTenantBoundDataAccess(db);
+    this.channelRepo = this.data.repository(new GatewayChannelRepository(db));
+    this.threadMapRepo = this.data.repository(new ThreadSessionMapRepository(db));
+    this.outboundRepo = this.data.repository(new GatewayOutboundMessageRepository(db));
+    this.branchRepo = this.data.repository(new BranchRepository(db));
+    this.sessionRepo = this.data.repository(new SessionRepository(db));
+    this.taskRepo = this.data.repository(new TaskRepository(db));
+    this.usersRepo = this.data.repository(new UsersRepository(db));
+    this.messagesRepo = this.data.repository(new MessagesRepository(db));
+    this.inboundEventRepo = this.data.repository(new GatewayInboundEventRepository(db));
+    this.deliveryRepo = this.data.repository(new DiscordMessageDeliveryRepository(db));
 
-    this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
-    this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
-    this.sessionMcpRepo = bindRepositoryToTenantUnitOfWork(db, new SessionMCPServerRepository(db));
+    this.mcpServerRepo = this.data.repository(new MCPServerRepository(db));
+    this.userTokenRepo = this.data.repository(new UserMCPOAuthTokenRepository(db));
+    this.sessionMcpRepo = this.data.repository(new SessionMCPServerRepository(db));
     this.db = db;
     this.app = app;
     this.workIdentity = (
@@ -1856,26 +1867,30 @@ export class GatewayService {
    * Read through a tenant database SCOPE from a caller that may hold only
    * tenant CONTEXT.
    *
-   * Every repository field on this service is bound with
-   * `bindRepositoryToTenantUnitOfWork`, which opens a scope per call. What
-   * keeps getting missed is everything else that reaches the database from
-   * here: free functions over `app_variables` (`getMCPEgressGatewayMode`,
-   * `isMCPSlackConnectCardEnabled`) and shared readers that build their own
-   * repositories from a raw handle (`resolveMCPOAuthGrantLiveness`). None of
-   * them has anything to open a scope with, and the callers that reach them —
-   * the bounded repair sweep, and the Socket Mode listener creating a session
-   * — carry tenant identity and no transaction.
+   * Every repository field on this service is bound through `this.data`, which
+   * opens a scope per call. What keeps getting missed is everything else that
+   * reaches the database from here: free functions over `app_variables`
+   * (`getMCPEgressGatewayMode`, `isMCPSlackConnectCardEnabled`) and shared
+   * readers that build their own repositories from a raw handle
+   * (`resolveMCPOAuthGrantLiveness`). None of them has anything to open a scope
+   * with, and the callers that reach them — the bounded repair sweep, and the
+   * Socket Mode listener creating a session — carry tenant identity and no
+   * transaction.
    *
    * Against the production guard each throws `MissingTenantDatabaseScopeError`
    * into a fail-closed catch, which is why this class has now been found five
    * times and never by a test: a suite that stubs the repositories has no
    * guard to trip.
    *
-   * Entering a scope that is already open is a no-op, so this is also correct
-   * for the request-path callers that already have one.
+   * This is now one line over `TenantBoundDataAccess`
+   * (`utils/tenant-bound-data-access.ts`), which is the general form of the
+   * same discipline for every `identity-only` service; the name is kept
+   * because the call sites read better with it. Entering a scope that is
+   * already open is a no-op, so this is also correct for the request-path
+   * callers that already have one.
    */
   private async readInTenantScope<T>(read: (db: TenantScopedDatabase) => Promise<T>): Promise<T> {
-    return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) => read(scoped));
+    return this.data.read(read);
   }
 
   /** Project authoritative Task recovery into one idempotently editable Slack row. */

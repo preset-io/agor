@@ -1598,6 +1598,89 @@ What this drive could NOT discriminate:
 - **The provider round-trip**, as always. Every decision the daemon makes is
   real; obtaining a grant from a vendor is not.
 
+### 7.1.12 Making the tenant-scope class structurally impossible for new code
+
+Five instances of one defect class, three of them found after a reviewer had
+already looked, and one of them (§7.1.3) proof that the shipped recovery lane's
+repair sweep had never once repaired a notice. Every fix so far was per-site.
+This is the durable answer, and it is deliberately bounded: it makes the policy
+**explicit at registration**, and leaves the platform-wide sweep undone.
+
+**The classification.** Every service the daemon registers now declares where
+its tenant database scope is armed — `scoped`, `identity-only`, or a narrowly
+reviewed `system`, each with a written `why`
+(`utils/tenant-service-classification.ts`). The two existing hook inventories
+are the declaration for the paths they name: `TENANT_OWNED_SERVICE_PATHS` means
+`scoped` and `TENANT_IDENTITY_ONLY_SERVICE_PATHS` means `identity-only`, because
+those lists are what actually installs the hook and a second copy would be a
+second place to be wrong. The new table is only for services registered outside
+both — which is exactly where every one of the five defects lived.
+
+`assertTenantServiceClassification(app)` runs at boot as Phase 3.6, next to
+`assertRealtimePublishPolicyCoverage` and for the same reason: it reads the
+registration table rather than request data, so a deployment that boots in CI
+boots in production.
+
+**What this feature classified.** `identity-only`: `mcp-oauth-connect` and
+`mcp-slack-recovery` (the sealed-token browser preflights — the two
+registrations whose missing scope made a valid link look revoked),
+`widgets/:id/{submit,oauth-resolve,dismiss}`, `mcp-catalog/{connect,start-session}`,
+and `mcp-servers/oauth-callback`. `scoped`: `mcp-slack-connect/card`,
+`mcp-member-policy` and `mcp-egress/status`, all registered through the
+tenant-scoped route registrar. `system`:
+`mcp-servers/oauth-browser-reservations`, which touches no database at all — its
+reservation lives in a process-local map and its authority comes from the live
+Socket.IO connection projection.
+
+**The facade.** `createTenantBoundDataAccess`
+(`utils/tenant-bound-data-access.ts`) is what an `identity-only` service holds
+instead of a `TenantScopeAwareDatabase`. It exposes three things — `repository`,
+`read`, `write` — and every one of them enters a tenant database scope first.
+There is no accessor that returns the underlying handle, so the move that
+produced all five defects (hand `db` to a free function over `app_variables`, or
+to a shared reader that builds its own repositories) is not reachable from a
+holder of it. `GatewayService` now binds every repository and its
+`readInTenantScope` through one, and keeps the raw handle only for the two
+things the facade deliberately cannot do: explicit SYSTEM scopes for
+cross-tenant listener discovery, and dialect inspection that must answer outside
+any scope. Both are named and commented as the exceptions they are.
+
+The binder's pinned `tenantId` is right for request-owned deferred work and is
+now documented at its definition as what it is: **not authorization.** It names
+a partition the surrounding work already established; it decides nothing about
+who the caller is or what they may do, and it must never be traceable to caller
+input that skipped identity resolution. The facade's pinned form makes that hard
+to reach for by accident — it refuses to construct without a written `because`,
+so a grep for `pinned` is a complete review list.
+
+**The baseline.** Classifying every authenticated service in the daemon is a
+platform sweep and does not belong in a feature pull request, so the 57 services
+that predate the mechanism are listed and permitted. The list may only shrink,
+and three ratchets say so: a **new or newly-unclassified** service fails the boot
+assertion; an entry that has since been classified or is no longer registered
+fails the test with "remove it from the baseline"; and
+`check:multitenancy-boundaries` caps the `BASELINE-ENTRY` markers in the file at
+57, a number that may only be lowered. What is left in it is deliberate — the
+session/branch/repo/artifact RPC routes, `authentication`, `health`, the
+streaming services — none of which this feature understands well enough to
+classify correctly, which is the whole reason the baseline exists rather than a
+guess.
+
+**What the tests see that the old ones could not.** §7.1.3 recorded the reason
+this class was never caught: _a test that stubs every repository has no guard to
+trip._ `tenant-bound-data-access.test.ts` therefore runs a real migrated SQLite
+database behind `createTenantScopedDatabaseProxy(..., { requireScope: true })`
+and shows both halves on the same handle — `isMCPSlackConnectCardEnabled(db)`,
+the actual kill-switch read from the actual defect, rejects with
+`MissingTenantDatabaseScopeError` under `runWithTenantContext` alone, and
+resolves through `data.read(...)` from the identical caller shape. The
+classification suite proves a brand-new unclassified service is refused by name
+and that a classified one is admitted from any of the three inventories.
+
+**Not touched.** No authorization decision, no route registration, and no
+service moved between the hook inventories. This is about _where a scope is
+armed_, not _who may do what_.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers
@@ -1714,6 +1797,32 @@ Step 2 is where D5 was found.
   added reach where the title is not a substring of the name — `AWS Knowledge`
   against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment was
   corrected then; `matches` now carries the field list and the reason.
+
+- **Instance six: the standalone token refresh reads unscoped. NOT fixed.**
+  Found by the mechanism in §7.1.12, doing exactly what it was built for. Arming
+  the tenant scope guard by default on `register-services.oauth-sqlite.
+integration.test.ts` turns 11 of its assertions red, and the probe says why:
+  `[PROBE] RepositoryError Failed to get OAuth token: Missing tenant database
+scope`.
+
+  `refreshAndPersistToken` (`packages/core/src/tools/mcp/oauth-refresh.ts`)
+  branches on dialect. `refreshPostgres` opens a scope; the standalone SQLite
+  path does not — `loadObservedStandaloneGrant` and `refreshStandalone` build
+  `new UserMCPOAuthTokenRepository(deps.db as Database)` from the raw handle,
+  and their caller `acquireMCPOAuthGrant` has already closed its own short
+  units by the time it calls them. The daemon's handle IS guarded in every mode
+  (`setup/database.ts` takes the `requireScope` default), so on a real SQLite
+  deployment the first read throws, and `mcp-servers/oauth-auth-headers`'
+  catch-all turns it into `{ error: 'needs_reauth' }` — the same laundering, one
+  lane over.
+
+  Left alone deliberately. `mcp-servers/oauth-*` is not this feature's lane, it
+  was already classified `identity-only` before this work, and the fix is a
+  behaviour change inside the token refresh core that needs its own coverage and
+  its own real-stack drive. It is recorded here rather than folded in because
+  that is the bound the follow-up set, and because the finding is itself the
+  argument for the mechanism: five instances took five separate incidents to
+  find; the sixth fell out of turning one fixture default on.
 
 - **`gateway_token`'s `buildResultMeta` `WeakMap`. Fixed as follow-up F3.** The
   submit-resolved variant could not return its own `result_meta`, so
