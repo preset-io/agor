@@ -400,15 +400,44 @@ user one refresh away from usable read _connected_ from the warning surface and
 _not connected_ from the mint short-circuit, and the agent offered a Connect
 button for a server that already worked. Both now call the shared function.
 
-**Exactly one surface answers looser, and it does so from the same read.** The
-gateway's warning also suppresses itself for `refreshable` — a grant whose
-access token has expired but whose refresh token the inject hook will spend
-JIT, before the executor ever sees it. That widening is a named field on the one
-answer, not a second rule, and the asymmetry is deliberate: a wrong warning
-tells a Slack thread a connection is broken when the next turn will use it
-fine, while a wrong `live` resolves a widget against a credential nobody
+**The surfaces that answer looser do so from the same read.** The gateway's
+warning suppresses itself for `refreshable` — a grant whose access token has
+expired, or whose refresh is in flight, but whose refresh token the inject hook
+will spend JIT before the executor ever sees it. That widening is a named field
+on the one answer, not a second rule, and the asymmetry is deliberate: a wrong
+warning tells a Slack thread a connection is broken when the next turn will use
+it fine, while a wrong `live` resolves a widget against a credential nobody
 re-obtained. Warnings may be optimistic; grants may not. `refreshable` is
-documented as readable only by a surface that grants nothing.
+readable only by a surface that grants nothing.
+
+**D4.1 — the agent-facing read joined them, at the `main` merge.** Independently
+of this branch, [#2576] made `oauthGrantCanAuthenticate` the shared predicate
+behind both `getOAuthStatus` and `mcp-oauth-status.ts`, which answers the UI's
+auth badge, and widened both to count a refreshable grant as authenticated.
+That is the same disjunction as `live || refreshable` — the two agree state for
+state — but it contradicted what D4 had just decided for the agent-facing read.
+
+The merge took `main`'s semantics and kept this branch's structure:
+`getOAuthStatus` calls the shared read and reports `live || refreshable`. Three
+reasons. `oauth_authenticated: false` is precisely what tells an agent to offer
+a Connect button, so the strict answer produces the defect D4 exists to prevent,
+one surface over. This branch never touches `mcp-oauth-status.ts`, so the strict
+answer would have shipped a badge-says-connected / agent-says-not disagreement
+that no test on either side can see. And `getOAuthStatus` grants nothing, so
+reading `refreshable` there does not bend the rule above — the paths that issue
+something still require `live`.
+
+**The residual, stated so nobody has to rediscover it.** The `oauth` widget's
+mint short-circuit still requires `live`. So in exactly one state — a bound,
+expired-or-refreshing, still-refreshable grant — the agent-facing read now says
+authenticated while the short-circuit would still render a Connect button. That
+is the D4 disagreement, narrowed rather than closed. Closing it means widening
+the short-circuit, which is a change to a gate: it belongs in its own reviewed
+commit with its own test, not inside a conflict resolution. Until then the
+comment on `resolveMCPOAuthGrantLiveness` names the residual at the point of
+use.
+
+[#2576]: https://github.com/preset-io/agor/pull/2576
 
 A fourth shape exists and is intentionally not folded in:
 `hasLiveCallerOAuthGrant` (`services/mcp-catalog-credential-match.ts`) applies
@@ -1374,8 +1403,9 @@ the server re-read. `mcp-servers.auth-status.test.ts` and the gateway warning
 test were converted off their storage stubs for the same reason — the former
 stubbed `getToken` to always return `null`, so its authenticated branch never
 ran — and the former now also asserts that the agent-facing verdict equals the
-widget's gate state by state, which is the assertion that would have caught the
-disagreement D4 describes.
+shared read's `live || refreshable` state by state, which is the assertion that
+would have caught the disagreement D4 describes. Two of its cases changed
+answer at the `main` merge; see D4.1.
 
 The whole lane was then driven against the branch's managed environment (a real
 daemon + UI on :9099/:11099) over HTTP and the MCP endpoint:

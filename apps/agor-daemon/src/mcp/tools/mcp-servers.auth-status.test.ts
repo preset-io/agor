@@ -8,15 +8,16 @@
  *     could act on and no user could follow when it was relayed into Slack.
  *     There is now a tool that starts the sign-in, so the recovery names it.
  *
- *  2. The verdict. `oauth_authenticated` must be the SAME answer the `oauth`
- *     widget's mint short-circuit and its resolution gate compute, because a
- *     disagreement is directly user-visible: the agent reads "connected" and
- *     the widget offers a Connect button for a server that already works, or
- *     vice versa. That surface used to carry its own inline copy of the whole
- *     rule (server re-read, lookup key, binding, `refresh_status`, expiry).
- *     It now calls `resolveMCPOAuthGrantLiveness`, and the convergence suite
- *     below asserts the two agree state by state rather than asserting the
- *     call was made.
+ *  2. The verdict. `oauth_authenticated` must be the SAME answer every other
+ *     surface computes for the same grant, because a disagreement is directly
+ *     user-visible: the agent reads "connected" while something else offers a
+ *     Connect button for a server that already works, or vice versa. That
+ *     surface used to carry its own inline copy of the whole rule (server
+ *     re-read, lookup key, binding, `refresh_status`, expiry). It now calls
+ *     `resolveMCPOAuthGrantLiveness` and reports `live || refreshable`, which
+ *     is the same verdict `oauthGrantCanAuthenticate` gives the UI's auth
+ *     badge. The convergence suite below asserts the two agree state by state
+ *     rather than asserting the call was made.
  *
  * The earlier version of this file stubbed `getToken` to always return `null`,
  * so the authenticated branch was never executed at all. These tests use a
@@ -238,17 +239,19 @@ describe('agor_mcp_servers_auth_status — actionable OAuth recovery', () => {
 });
 
 /**
- * The agent-facing read and the widget's grant check are ONE function (D4).
+ * The agent-facing read and the shared grant check are ONE function (D4).
  *
  * Each case below is a state where a hand-rolled copy of the rule could
  * plausibly have drifted. The assertion is deliberately not "it returned
- * false" but "it returned exactly what the widget's gate returns", because
- * the defect this guards against is disagreement, not incorrectness: a user
- * one refresh away from usable reading *connected* from the agent while the
- * mint short-circuit reads *not connected* and renders a Connect button for a
- * server that already works.
+ * false" but "it returned exactly what the shared read returns", because the
+ * defect this guards against is disagreement, not incorrectness.
+ *
+ * The verdict it agrees with is `live || refreshable` — the same disjunction
+ * `oauthGrantCanAuthenticate` computes for the UI's auth badge, so one grant
+ * cannot read connected in the badge and disconnected to the agent. Only the
+ * paths that *grant* something take the narrower `live` on its own.
  */
-describe('agent-facing auth status agrees with the widget’s grant check, state by state', () => {
+describe('agent-facing auth status agrees with the shared grant check, state by state', () => {
   it.each([
     {
       state: 'a live, unexpired grant',
@@ -268,18 +271,31 @@ describe('agent-facing auth status agrees with the widget’s grant check, state
       expectAuthenticated: false,
     },
     {
-      // THE disagreement. The gateway's Slack warning deliberately treats this
-      // state as fine; every surface that grants something must not, and the
-      // agent-facing read is one of those.
+      // The state the whole widening is about. This grant's access token has
+      // lapsed but its refresh token is bound and of known outcome, so the
+      // inject hook's JIT refresh will make it usable without the user doing
+      // anything. Reporting it as unauthenticated makes the agent offer a
+      // Connect button for a server that already works, so the agent-facing
+      // read counts it — same as the gateway's Slack warning, and same as the
+      // UI's auth badge via `oauthGrantCanAuthenticate`.
+      //
+      // The `oauth` widget's mint short-circuit still requires `live` and so
+      // still disagrees here; see `resolveMCPOAuthGrantLiveness` for why that
+      // residual is deliberate and what closes it.
       state: 'an expired grant that is one refresh away from usable',
       setup: async (h: Awaited<ReturnType<typeof harness>>, row: MCPServer) =>
         h.saveBoundGrant(row, h.user.user_id, {
           expiresAt: new Date(Date.now() - HOUR),
           refreshToken: 'rt-1',
         }),
-      expectAuthenticated: false,
+      expectAuthenticated: true,
     },
     {
+      // Also refreshable: a refresh this daemon started is in flight against a
+      // refresh token that is still on file, so the outcome is pending rather
+      // than lost. `oauthGrantCanAuthenticate` counts it for the same reason.
+      // An `ambiguous` row would not be — nobody knows whether its refresh
+      // token was already spent — and `refreshable` excludes that state.
       state: 'a grant mid-refresh',
       setup: async (h: Awaited<ReturnType<typeof harness>>, row: MCPServer) => {
         await h.saveBoundGrant(row, h.user.user_id, {
@@ -299,7 +315,7 @@ describe('agent-facing auth status agrees with the widget’s grant check, state
           'refreshing'
         );
       },
-      expectAuthenticated: false,
+      expectAuthenticated: true,
     },
     {
       state: 'a grant whose server configuration moved under it',
@@ -333,6 +349,6 @@ describe('agent-facing auth status agrees with the widget’s grant check, state
     const gate = await h.liveness(row.mcp_server_id);
 
     expect(summary.oauth_authenticated).toBe(expectAuthenticated);
-    expect(summary.oauth_authenticated).toBe(gate.live);
+    expect(summary.oauth_authenticated).toBe(gate.live || gate.refreshable);
   });
 });

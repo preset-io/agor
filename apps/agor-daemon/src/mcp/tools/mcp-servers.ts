@@ -87,18 +87,27 @@ async function getOAuthStatus(
   // The shared read, not a hand-rolled copy of it. This surface used to carry
   // its own inline server re-read, lookup-key derivation, binding check,
   // `refresh_status` rule, and expiry comparison — five rules that had to stay
-  // identical to the widget's resolution gate by hand. When they drifted, a
-  // user one refresh away from usable read "connected" here while the widget's
-  // mint short-circuit read "not connected" and offered a Connect button for a
-  // server that already worked.
+  // identical to the other grant reads by hand, and did not.
   //
   // `resolveMCPOAuthGrantLiveness` re-reads the row from the database on
   // purpose: MCP service responses have already passed through token injection
   // and secret redaction, so binding authority must come from stored state.
+  //
+  // `live || refreshable`, not `live`. This boolean is what tells an agent
+  // whether to offer a Connect button (see the recovery copy further down), so
+  // a bound grant that the inject hook's next JIT refresh will make usable has
+  // to read as authenticated — otherwise the agent offers to reconnect a
+  // server that already works. That disjunction is exactly
+  // `oauthGrantCanAuthenticate`, which is what `mcp-oauth-status.ts` answers
+  // the UI's auth badge with: one grant, one verdict on both surfaces.
+  //
+  // The `oauth` widget's mint short-circuit is deliberately still stricter,
+  // and the residual disagreement that leaves is recorded on
+  // `resolveMCPOAuthGrantLiveness`.
   const liveness = await runWithMcpTenantDatabaseScope(ctx, (db) =>
     resolveMCPOAuthGrantLiveness(db, mcpServer.mcp_server_id, ctx.userId)
   );
-  return liveness.live
+  return liveness.live || liveness.refreshable
     ? { authenticated: true, tokenExpiresAt: liveness.expiresAt?.getTime() }
     : { authenticated: false };
 }
