@@ -1541,27 +1541,35 @@ Step 2 is where D5 was found.
 
 ## 9. Adjacent things deliberately not fixed
 
-- **Catalog search does not match `benefit`.** `filterCatalog` searches
-  `name | title | description`. Of the 62 entries in the shipped
-  `curated.yaml`, all 62 state `benefit`, **17 state `title`**, and none states
-  `description` — so catalog search is a search over the reverse-DNS `name`
-  plus those 17 titles. That covers the product-name lookup this feature needs
-  ("notion" → `com.notion/mcp`) but not prose ("track bugs"). Widening it is a
-  one-line change in `query.ts` that would also change Catalog UI results, so it
-  is out of scope here. The tool's description says what `search` actually
-  matches and points at `category`/`capability` for browsing, and
-  `mcp-catalog-list.test.ts` pins the current behaviour so the gap is visible
-  rather than surprising.
+- **Catalog search did not match `benefit`. Fixed as follow-up F1.**
+  `filterCatalog` searched `name | title | description`. Of the 62 entries in
+  the shipped `curated.yaml`, all 62 state `benefit`, **17 state `title`**, and
+  none states `description` — so catalog search was a search over the
+  reverse-DNS `name` plus those 17 titles. That covered the product-name lookup
+  this feature needs ("notion" → `com.notion/mcp`) and no prose at all. It now
+  also matches `benefit`; `starter_prompt` and `permission_disclosure` stay out,
+  being a suggestion and a consent paragraph rather than a statement of what the
+  server is.
 
-  The practical severity is low, which is why the miscount above (an earlier
-  draft of this section, and `query.ts`'s own sort comment, said no entry states
-  a `title`) changed nothing in the code. `catalogDisplayName` is
+  Because `filterCatalog` is one implementation, this changed the Catalog UI's
+  results too — the intended outcome, and the reason it was deferred rather than
+  waved through. Measured against the shipped file: every product-name lookup is
+  unchanged (`notion` 1→1, `linear` 1→1, `mcp` 58→58), the job phrases that
+  previously returned an empty grid now resolve (`issues` 0→3, `logs` 0→5,
+  `design` 0→4, `specs` 0→2 — Notion and Postman), and single common words
+  broaden a lot (`the` 0→39, `read` 0→22). The last is the honest cost of
+  searching a sentence, it is what a one-line benefit is for, and the grid
+  states "N of M" beside it.
+
+  The practical severity of the gap was low, which is why the miscount above (an
+  earlier draft of this section, and `query.ts`'s own sort comment, said no
+  entry states a `title`) changed nothing in the code. `catalogDisplayName` is
   title-or-capitalized-publisher-segment, and the publisher segment is by
-  construction a substring of `name`, so every display name is reachable by a
+  construction a substring of `name`, so every display name was reachable by a
   search over `name` whether the entry states a title or not. The 17 titles only
-  add reach where the title is not a substring of the name — `AWS Knowledge`
-  against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment is
-  corrected.
+  added reach where the title is not a substring of the name — `AWS Knowledge`
+  against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment was
+  corrected then; `matches` now carries the field list and the reason.
 
 - **`gateway_token`'s `buildResultMeta` `WeakMap`.** The submit-resolved variant
   still cannot return its own `result_meta`, so `gateway-token/index.ts` carries

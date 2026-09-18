@@ -478,12 +478,19 @@ describe('catalog browsing', () => {
     expect(catalogReads.length).toBe(before);
   });
 
-  it('searches title and description, not just name', async () => {
-    // The server searched name, title and description. The browser has to search
-    // the same three, or a term that used to find a server silently stops.
+  it('searches title, benefit and description, not just name', async () => {
+    // The browser runs the shared `filterCatalog`, so the grid reaches every
+    // field that filter reads — including `benefit`, which is the only prose a
+    // real curated entry states and therefore the one that decides whether
+    // typing what a server is FOR finds anything at all.
     catalogRows = [
       { ...DEEPWIKI, title: 'DeepWiki', description: 'Ask about a repository.' },
-      { ...LINEAR, title: 'Linear', description: 'Track issues and projects.' },
+      {
+        ...LINEAR,
+        title: 'Linear',
+        description: 'Track issues and projects.',
+        benefit: 'Turn a conversation into tracked tickets.',
+      },
     ] as typeof catalogRows;
     renderTab();
     await findCard('DeepWiki');
@@ -492,6 +499,11 @@ describe('catalog browsing', () => {
 
     // Matched on `description` alone: the term is in neither name nor title.
     fireEvent.change(input, { target: { value: 'projects' } });
+    await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
+    expect(queryCard('Linear')).toBeInTheDocument();
+
+    // Matched on `benefit` alone, which is the shift this grid inherits.
+    fireEvent.change(input, { target: { value: 'tickets' } });
     await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
     expect(queryCard('Linear')).toBeInTheDocument();
 

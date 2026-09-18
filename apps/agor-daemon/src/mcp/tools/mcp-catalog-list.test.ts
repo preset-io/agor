@@ -117,15 +117,21 @@ describe('agor_mcp_catalog_list', () => {
     });
   });
 
-  it('matches the shared filter exactly — name, title, description; NOT benefit', async () => {
-    // `filterCatalog` is the Catalog UI's filter and searches name/title/
-    // description. No entry in the shipped `curated.yaml` states `description`
-    // or `title`, so today this is effectively a search over `name` — which
-    // covers the product-name lookup this tool exists for ("notion" ->
-    // com.notion/mcp) but NOT prose like "repositories", which lives in
-    // `benefit`. Asserted so the limitation is visible rather than surprising.
+  it('matches the shared filter exactly — name, title, benefit, description', async () => {
+    // `filterCatalog` is the Catalog UI's filter, so this asserts the tool's
+    // description is honest about what `search` reaches. `benefit` is the field
+    // every shipped entry states, which is what makes a phrase describing the
+    // job — rather than only a product name — resolve to an entry.
     expect((await run({ search: 'stated in the description' })).catalog_entries).toHaveLength(1);
-    expect((await run({ search: 'repositories' })).catalog_entries).toEqual([]);
+
+    const prose = await run({ search: 'repositories' });
+    expect(prose.catalog_entries.map((e: { name: string }) => e.name)).toEqual([
+      'io.github.github/github-mcp-server',
+    ]);
+
+    // Still not the starter prompt or the consent text.
+    expect((await run({ search: 'List my open PRs' })).catalog_entries).toEqual([]);
+    expect((await run({ search: 'Agor can act on' })).catalog_entries).toEqual([]);
   });
 
   it('narrows by category, capability, and auth type', async () => {
