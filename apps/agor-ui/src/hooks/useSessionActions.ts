@@ -21,11 +21,19 @@ import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
 
+export const ARCHIVE_REFRESH_WARNING =
+  'Session and same-branch children archived; refresh required to update the session list.';
+
+type ArchiveSessionResult = {
+  session: Session;
+  reconciliation: 'confirmed' | 'refresh-required';
+};
+
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
   unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
@@ -257,7 +265,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult | null> => {
     if (!client) {
       setError('Client not connected');
       return null;
@@ -283,15 +291,11 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
         ])
       );
       try {
-        await commit([...confirmed.values()], (ids) =>
-          Promise.all(ids.map((id) => client.service('sessions').get(id)))
-        );
+        await commit([...confirmed.values()], (id) => client.service('sessions').get(id));
       } catch {
-        throw new Error(
-          'Session archived, but refreshing session state failed. Refresh to reconcile.'
-        );
+        return { session: result.session, reconciliation: 'refresh-required' };
       }
-      return result.session;
+      return { session: result.session, reconciliation: 'confirmed' };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to archive session';
       setError(message);

@@ -55,7 +55,7 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
-import { useSessionActions } from '../../hooks/useSessionActions';
+import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -366,7 +366,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
     : undefined;
   const { modal } = App.useApp();
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showSuccess, showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -1028,7 +1028,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       cancelText: 'Cancel',
       onOk: async () => {
         const archived = await archiveSession(session.session_id);
-        if (archived) {
+        if (archived?.reconciliation === 'refresh-required') {
+          showWarning(ARCHIVE_REFRESH_WARNING);
+        } else if (archived) {
           showSuccess('Session and same-branch children archived');
           onClose();
         } else {

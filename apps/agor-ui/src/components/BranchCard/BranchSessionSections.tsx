@@ -36,7 +36,7 @@ import type React from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { useSessionActions } from '../../hooks/useSessionActions';
+import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import {
   type BranchSectionKey,
   COLLAPSED_BRANCH_NODES_STORAGE_KEY,
@@ -303,7 +303,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const { archiveSession } = useSessionActions(client);
 
@@ -538,7 +538,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
           try {
             const result = await archiveSession(sessionId as SessionID);
-            if (result) {
+            if (result?.reconciliation === 'refresh-required') {
+              showWarning(ARCHIVE_REFRESH_WARNING);
+            } else if (result) {
               showSuccess('Session and same-branch children archived');
             } else {
               showError('Failed to archive session');
@@ -553,7 +555,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         },
       });
     },
-    [archiveSession, modal, showSuccess, showError]
+    [archiveSession, modal, showSuccess, showError, showWarning]
   );
 
   const getGatewaySource = useCallback(

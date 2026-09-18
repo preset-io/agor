@@ -107,15 +107,11 @@ for (const restoreAfterArchive of [false, true]) {
         restored.forEach(sessionPatched);
       }
       // The original archive response arrives only now, after the optional restore.
-      await commit(archived, async () =>
-        Promise.all(
-          rows.map(async (row) => {
-            const fresh = await repository.findById(row.session_id);
-            if (!fresh) throw new Error('Missing test session');
-            return fresh;
-          })
-        )
-      );
+      await commit(archived, async (id) => {
+        const fresh = await repository.findById(id);
+        if (!fresh) throw new Error('Missing test session');
+        return fresh;
+      });
       const database = await repository.findById(parent.session_id);
       expect(database?.archived).toBe(!restoreAfterArchive);
       expect(agorStore.getState().sessionById.has(parent.session_id)).toBe(restoreAfterArchive);

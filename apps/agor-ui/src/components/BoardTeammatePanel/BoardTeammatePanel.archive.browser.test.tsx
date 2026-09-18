@@ -4,10 +4,11 @@ import { App } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { bumpRevision } from '../../store/agorHydration';
 import { buildSessionMaps } from '../../store/agorMaps';
 import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
-import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { enqueueSessionPatch, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { checkBrowserSanity } from '../../test/browserSanity';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
@@ -78,6 +79,12 @@ describe('teammate drawer archive reconciliation', () => {
       remaining: sessions,
       race: 'restore',
     },
+    ...(['failed-read', 'churn'] as const).map((race) => ({
+      target: parent,
+      affected: [parent, child, grandchild, fork],
+      remaining: sessions,
+      race,
+    })),
   ])(
     'reconciles $target.title without refresh (race=$race)',
     async ({ target, affected, remaining, race }) => {
@@ -102,6 +109,11 @@ describe('teammate drawer archive reconciliation', () => {
       });
       const get = vi.fn(async (id: string) => {
         await readGate;
+        if (race === 'failed-read') throw new Error('Read unavailable');
+        if (race === 'churn') {
+          bumpRevision('sessions');
+          enqueueSessionPatch('browser-fixture:user:1', { ...unrelated, title: 'Unrelated' });
+        }
         if (race === 'restore') return sessions.find((s) => s.session_id === id);
         return [archivedRoot, ...affectedSessions].find((s) => s.session_id === id);
       });
@@ -188,9 +200,25 @@ describe('teammate drawer archive reconciliation', () => {
       for (const s of remaining) {
         expect(screen.getByRole('button', { name: `Open session ${s.title}` })).toBeVisible();
       }
-      await waitFor(() =>
-        expect(screen.getByText('Session and same-branch children archived')).toBeVisible()
-      );
+      if (race === 'failed-read' || race === 'churn') {
+        await waitFor(() =>
+          expect(
+            screen.getByText(
+              'Session and same-branch children archived; refresh required to update the session list.'
+            )
+          ).toBeVisible()
+        );
+        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
+        expect(
+          screen.queryByText('Session and same-branch children archived')
+        ).not.toBeInTheDocument();
+        expect(create).toHaveBeenCalledTimes(1);
+        if (race === 'churn') expect(get).toHaveBeenCalledTimes(6 * affected.length);
+      } else {
+        await waitFor(() =>
+          expect(screen.getByText('Session and same-branch children archived')).toBeVisible()
+        );
+      }
     }
   );
 });

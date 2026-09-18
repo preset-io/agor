@@ -80,6 +80,49 @@ let handleIsRaf = false;
 // reset. Old passive subscription cleanups therefore cannot flush caller A's
 // queue after caller B has become current.
 let activeAuthorityScope: string | null = null;
+let authorityCancellation = new AbortController();
+
+const CONFIRMATION_ATTEMPTS = 6;
+const CONFIRMATION_BUDGET_MS = 10_000;
+const CONFIRMATION_CONCURRENCY = 4;
+// Shared across confirmations so overlapping archive actions cannot multiply
+// GET fanout. Retain slots until transport settlement, even after cancellation:
+// Feathers GETs are not abortable, and releasing early would exceed the cap.
+const confirmationReads = new Set<Promise<Session>>();
+
+async function untilCancelled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let cancel!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    cancel = () => reject(signal.reason);
+    signal.addEventListener('abort', cancel, { once: true });
+  });
+  try {
+    return await Promise.race([work, cancelled]);
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
+async function confirmationRead(
+  id: Session['session_id'],
+  refetch: (id: Session['session_id']) => Promise<Session>,
+  signal: AbortSignal
+): Promise<Session> {
+  while (confirmationReads.size >= CONFIRMATION_CONCURRENCY) {
+    // Another confirmation's failure only frees a slot; it is not our failure.
+    await untilCancelled(
+      Promise.race(confirmationReads).catch(() => undefined),
+      signal
+    );
+  }
+  signal.throwIfAborted();
+  const read = refetch(id);
+  confirmationReads.add(read);
+  const release = () => confirmationReads.delete(read);
+  void read.then(release, release);
+  return untilCancelled(read, signal);
+}
 
 // Cadence for the hidden-tab / no-rAF fallback. Browsers throttle background
 // timers to ~1s regardless; a short nominal interval keeps a foreground no-rAF
@@ -188,63 +231,95 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
  * Use hydration's skip-on-race discipline, but not runHydration itself: this is
  * a partial read and must neither cancel a full backfill nor advance its global
  * high-water mark/drop unrelated queued patches. Failures propagate to the
- * caller without applying any response rows; races retry with capped backoff.
+ * caller without applying any response rows; races have a finite retry budget.
  */
 export function captureSessionPatchCommit(): (
   sessions: Session[],
-  refetch: (ids: Session['session_id'][]) => Promise<Session[]>
+  refetch: (id: Session['session_id']) => Promise<Session>
 ) => Promise<void> {
   const authorityScope = activeAuthorityScope;
-  const isCurrent = () => authorityScope !== null && authorityScope === activeAuthorityScope;
+  const authoritySignal = authorityCancellation.signal;
+  const isCurrent = () => authorityScope !== null && !authoritySignal.aborted;
   return async (sessions, refetch) => {
-    if (!authorityScope) return;
-    const ids = [...new Set(sessions.map((session) => session.session_id))];
-    for (let attempt = 0; isCurrent() && ids.length > 0; attempt++) {
-      if (attempt >= 4) {
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, Math.min(200 * 2 ** (attempt - 4), 5000))
+    if (!authorityScope || !isCurrent()) return;
+    const cancellation = new AbortController();
+    const cancelAuthority = () => cancellation.abort(authoritySignal.reason);
+    authoritySignal.addEventListener('abort', cancelAuthority, { once: true });
+    const timeout = setTimeout(
+      () => cancellation.abort(new Error('Session confirmation budget exhausted')),
+      CONFIRMATION_BUDGET_MS
+    );
+    const signal = cancellation.signal;
+    try {
+      const ids = [...new Set(sessions.map((session) => session.session_id))];
+      for (let attempt = 0; attempt < CONFIRMATION_ATTEMPTS && ids.length > 0; attempt++) {
+        signal.throwIfAborted();
+        if (attempt >= 4) {
+          let delay!: ReturnType<typeof setTimeout>;
+          try {
+            await untilCancelled(
+              new Promise<void>((resolve) => {
+                delay = setTimeout(resolve, 200 * 2 ** (attempt - 4));
+              }),
+              signal
+            );
+          } finally {
+            clearTimeout(delay);
+          }
+        }
+        const before = getRevision('sessions');
+        const current = agorStore.getState().sessionById;
+        const lastApplied = getLastAppliedRevision('sessions');
+        const present = ids.filter((id) => {
+          if (tombstones.get(id) === authorityScope) return false;
+          const entry = pending.get(id);
+          // Reconcile patches, not creates: removal/branch eviction stays
+          // authoritative even after frame tombstones drain. Hydration-subsumed
+          // queue entries cannot resurrect an absent row either.
+          return (
+            current.has(id) ||
+            (entry?.authorityScope === authorityScope && entry.revision > lastApplied)
+          );
+        });
+        if (present.length === 0) return;
+        const fresh: Session[] = [];
+        let next = 0;
+        // Only a bounded number of workers/queued slot waiters per invocation.
+        await Promise.all(
+          Array.from({ length: Math.min(present.length, CONFIRMATION_CONCURRENCY) }, async () => {
+            while (next < present.length) {
+              signal.throwIfAborted();
+              const id = present[next++];
+              fresh.push(await confirmationRead(id, refetch, signal));
+            }
+          })
         );
-        if (!isCurrent()) return;
+        signal.throwIfAborted();
+        // Events bump revisions before enqueue; map identity also catches a
+        // wholesale hydration apply (which need not bump the live revision). Its
+        // watermark can subsume a queued-only row even if the maps stay empty.
+        if (
+          getRevision('sessions') !== before ||
+          getLastAppliedRevision('sessions') !== lastApplied ||
+          agorStore.getState().sessionById !== current
+        )
+          continue;
+        const requested = new Set(present);
+        bumpRevision('sessions');
+        for (const session of fresh) {
+          if (requested.has(session.session_id)) enqueueSessionPatch(authorityScope, session);
+        }
+        flushRealtimeNow(authorityScope);
+        return;
       }
-      const before = getRevision('sessions');
-      const current = agorStore.getState().sessionById;
-      const lastApplied = getLastAppliedRevision('sessions');
-      const present = ids.filter((id) => {
-        if (tombstones.get(id) === authorityScope) return false;
-        const entry = pending.get(id);
-        // Reconcile patches, not creates: removal/branch eviction stays
-        // authoritative even after frame tombstones drain. Hydration-subsumed
-        // queue entries cannot resurrect an absent row either.
-        return (
-          current.has(id) ||
-          (entry?.authorityScope === authorityScope && entry.revision > lastApplied)
-        );
-      });
-      if (present.length === 0) return;
-      let fresh: Session[];
-      try {
-        fresh = await refetch(present);
-      } catch (error) {
-        if (!isCurrent()) return;
-        throw error;
-      }
-      if (!isCurrent()) return;
-      // Events bump revisions before enqueue; map identity also catches a
-      // wholesale hydration apply (which need not bump the live revision). Its
-      // watermark can subsume a queued-only row even if the maps stay empty.
-      if (
-        getRevision('sessions') !== before ||
-        getLastAppliedRevision('sessions') !== lastApplied ||
-        agorStore.getState().sessionById !== current
-      )
-        continue;
-      const requested = new Set(present);
-      bumpRevision('sessions');
-      for (const session of fresh) {
-        if (requested.has(session.session_id)) enqueueSessionPatch(authorityScope, session);
-      }
-      flushRealtimeNow(authorityScope);
-      return;
+      if (ids.length > 0) throw new Error('Session confirmation attempts exhausted');
+    } catch (error) {
+      if (isCurrent()) throw error;
+    } finally {
+      // Stop sibling workers on errors as well as deadline/authority changes.
+      cancellation.abort();
+      clearTimeout(timeout);
+      authoritySignal.removeEventListener('abort', cancelAuthority);
     }
   };
 }
@@ -281,6 +356,8 @@ export function untombstoneSession(authorityScope: string, sessionId: string): v
  */
 export function setRealtimeAuthorityScope(authorityScope: string | null): void {
   if (activeAuthorityScope === authorityScope) return;
+  authorityCancellation.abort();
+  authorityCancellation = new AbortController();
   activeAuthorityScope = authorityScope;
   discardRealtimeNow();
 }

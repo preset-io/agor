@@ -55,12 +55,12 @@ describe('useSessionActions archive helpers', () => {
     });
 
     const { result } = renderHook(() => useSessionActions(client));
-    let returned: Session | null = null;
+    let returned: Awaited<ReturnType<typeof result.current.archiveSession>> = null;
     await act(async () => {
       returned = await result.current.archiveSession('session-1' as Session['session_id']);
     });
 
-    expect(returned).toBe(archivedSession);
+    expect(returned).toEqual({ session: archivedSession, reconciliation: 'confirmed' });
     expect(archiveCreate).toHaveBeenCalledWith({});
     expect(sessionsPatch).not.toHaveBeenCalled();
   });
@@ -170,7 +170,10 @@ describe('archive response reconciliation', () => {
     );
     act(() => sessionPatched(affectedSessions[0]));
     await act(async () => {
-      expect(await result.current.archiveSession(parent.session_id)).toBe(affectedSessions[0]);
+      expect(await result.current.archiveSession(parent.session_id)).toEqual({
+        session: affectedSessions[0],
+        reconciliation: 'confirmed',
+      });
     });
     expectActive([unrelated, orphan, remote]);
     // Late/duplicate realtime delivery must be idempotent.
@@ -246,7 +249,7 @@ describe('archive response reconciliation', () => {
           })
         )
       );
-      let request!: Promise<Session | null>;
+      let request!: ReturnType<typeof result.current.archiveSession>;
       act(() => {
         request = result.current.archiveSession(parent.session_id);
       });
@@ -261,7 +264,7 @@ describe('archive response reconciliation', () => {
       await act(async () => {
         // The server emits only changed children, never the already-archived root.
         resolve({ session: archivedRoot, affectedSessions });
-        expect(await request).toBe(archivedRoot);
+        expect(await request).toEqual({ session: archivedRoot, reconciliation: 'confirmed' });
       });
       expectActive(
         newerRoot === 'none' ? [unrelated, orphan, remote] : [restored, unrelated, orphan, remote]
@@ -285,7 +288,7 @@ describe('archive response reconciliation', () => {
       )
     );
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    let request!: Promise<Session | null>;
+    let request!: ReturnType<typeof result.current.archiveSession>;
     act(() => {
       request = result.current.archiveSession(parent.session_id);
     });
@@ -315,7 +318,7 @@ describe('archive response reconciliation', () => {
       )
     );
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    let request!: Promise<Session | null>;
+    let request!: ReturnType<typeof result.current.archiveSession>;
     await act(async () => {
       request = result.current.archiveSession(parent.session_id);
     });
@@ -323,12 +326,10 @@ describe('archive response reconciliation', () => {
     expectActive(sessions);
     await act(async () => {
       reject(new Error('Offline'));
-      expect(await request).toBeNull();
+      expect(await request).toEqual({ session: archived, reconciliation: 'refresh-required' });
     });
     expectActive(sessions);
-    expect(result.current.error).toBe(
-      'Session archived, but refreshing session state failed. Refresh to reconcile.'
-    );
+    expect(result.current.error).toBeNull();
     consoleError.mockRestore();
   });
 
@@ -348,7 +349,7 @@ describe('archive response reconciliation', () => {
         })
       )
     );
-    let request!: Promise<Session | null>;
+    let request!: ReturnType<typeof result.current.archiveSession>;
     act(() => {
       request = result.current.archiveSession(parent.session_id);
     });

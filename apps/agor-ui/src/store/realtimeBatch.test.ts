@@ -234,9 +234,10 @@ describe('confirmed mutation patches', () => {
     const notified = vi.fn();
     const unsubscribe = agorStore.subscribe(notified);
     const archived = [root, child].map((session) => ({ ...session, archived: true }));
-    const refetch = vi.fn(async () => archived);
+    const refetch = vi.fn(async (id) => archived.find((row) => row.session_id === id)!);
     await commit(archived, refetch);
-    expect(refetch).toHaveBeenCalledWith([root.session_id, child.session_id]);
+    expect(refetch).toHaveBeenCalledWith(root.session_id);
+    expect(refetch).toHaveBeenCalledWith(child.session_id);
     expect(getRevision('sessions')).toBeGreaterThan(revisionBefore);
     expect(notified).toHaveBeenCalledTimes(1);
     expect(agorStore.getState().sessionById.size).toBe(0);
@@ -274,7 +275,7 @@ describe('confirmed mutation patches', () => {
       // An old response can even carry a larger timestamp than the restore.
       await commit(
         [makeSession({ archived: true, last_updated: '2026-06-25T00:00:00.000Z' })],
-        async () => [restored]
+        async () => restored
       );
       flushRealtimeNow(AUTHORITY);
       expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
@@ -292,7 +293,7 @@ describe('confirmed mutation patches', () => {
       seedSession(initial);
       const commit = captureSessionPatchCommit();
       const refetch = vi
-        .fn(async () => [restored])
+        .fn(async () => restored)
         .mockImplementationOnce(async () => {
           if (race === 'event') {
             bumpRevision('sessions');
@@ -301,9 +302,9 @@ describe('confirmed mutation patches', () => {
             seedSession(restored);
             recordHydrationApply(['sessions'], [getRevision('sessions')]);
           } else {
-            await captureSessionPatchCommit()([restored], async () => [restored]);
+            await captureSessionPatchCommit()([restored], async () => restored);
           }
-          return [archived];
+          return archived;
         });
       await commit([archived], refetch);
       expect(refetch).toHaveBeenCalledTimes(2);
@@ -320,7 +321,7 @@ describe('confirmed mutation patches', () => {
       tombstoneSession(AUTHORITY, session.session_id);
       sessionRemoved(session);
       if (flushed) flushRealtimeNow(AUTHORITY);
-      const refetch = vi.fn(async () => [session]);
+      const refetch = vi.fn(async () => session);
       await commit([session], refetch);
       flushRealtimeNow(AUTHORITY);
       expect(refetch).not.toHaveBeenCalled();
@@ -351,7 +352,7 @@ describe('confirmed mutation patches', () => {
       // A quiet empty snapshot subsumes this queued event without replacing
       // either map reference (buildSessionMaps preserves equal maps).
       recordHydrationApply(['sessions'], [getRevision('sessions')]);
-      return [session];
+      return session;
     });
     await captureSessionPatchCommit()([session], refetch);
     flushRealtimeNow(AUTHORITY);
@@ -368,7 +369,7 @@ describe('confirmed mutation patches', () => {
       let calls = 0;
       const refetch = vi.fn(async () => {
         if (++calls <= 5) bumpRevision('sessions');
-        return [{ ...session, archived: true }];
+        return { ...session, archived: true };
       });
       const request = captureSessionPatchCommit()([session], refetch);
       await vi.advanceTimersByTimeAsync(0);
@@ -383,6 +384,101 @@ describe('confirmed mutation patches', () => {
     }
   );
 
+  it('terminates sustained unrelated streaming without applying any raced archive snapshot', async () => {
+    vi.useFakeTimers();
+    const session = makeSession();
+    const unrelated = makeSession({ session_id: 'streaming' as Session['session_id'] });
+    seedSession(session);
+    const refetch = vi.fn(async () => {
+      bumpRevision('sessions');
+      enqueueSessionPatch(AUTHORITY, unrelated);
+      flushRealtimeNow(AUTHORITY);
+      return { ...session, archived: true };
+    });
+    const request = captureSessionPatchCommit()([session], refetch);
+    const exhausted = expect(request).rejects.toThrow('attempts exhausted');
+    await vi.runAllTimersAsync();
+    await exhausted;
+    expect(refetch).toHaveBeenCalledTimes(6);
+    expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
+    expect(agorStore.getState().sessionById.get(unrelated.session_id)).toEqual(unrelated);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refetch).toHaveBeenCalledTimes(6);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('caps GET concurrency across overlapping large confirmations', async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 12 }, (_, index) =>
+      makeSession({
+        session_id: `row-${index}` as Session['session_id'],
+      })
+    );
+    rows.forEach(seedSession);
+    let active = 0;
+    let peak = 0;
+    const refetch = vi.fn(async (id: Session['session_id']) => {
+      peak = Math.max(peak, ++active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      active--;
+      return { ...rows.find((row) => row.session_id === id)!, archived: true };
+    });
+    const first = captureSessionPatchCommit()(rows.slice(0, 6), refetch);
+    const second = captureSessionPatchCommit()(rows.slice(6), refetch);
+    expect(refetch).toHaveBeenCalledTimes(4);
+    await vi.runAllTimersAsync();
+    await Promise.all([first, second]);
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['deadline', 'authority'] as const)(
+    'stops hung workers and queued work on %s, including late transport settlement',
+    async (reason) => {
+      vi.useFakeTimers();
+      const rows = Array.from({ length: 12 }, (_, index) =>
+        makeSession({
+          session_id: `row-${index}` as Session['session_id'],
+        })
+      );
+      rows.forEach(seedSession);
+      const originalMaps = agorStore.getState().sessionById;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const refetch = vi.fn(async (id: Session['session_id']) => {
+        await gate;
+        return { ...rows.find((row) => row.session_id === id)!, archived: true };
+      });
+      const first = captureSessionPatchCommit()(rows, refetch);
+      // All of this invocation's workers must wait for shared slots.
+      const second = captureSessionPatchCommit()(rows, refetch);
+      const settled = Promise.allSettled([first, second]);
+      expect(refetch).toHaveBeenCalledTimes(4);
+      if (reason === 'authority') {
+        setRealtimeAuthorityScope('tenant-b:user-b:2');
+        // Returning to the old scope must not revive old reads (ABA).
+        setRealtimeAuthorityScope(AUTHORITY);
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      const results = await settled; // No transport response is required to terminate.
+      expect(results.map((result) => result.status)).toEqual(
+        reason === 'authority' ? ['fulfilled', 'fulfilled'] : ['rejected', 'rejected']
+      );
+      expect(refetch).toHaveBeenCalledTimes(4);
+      release();
+      await vi.runAllTimersAsync();
+      expect(refetch).toHaveBeenCalledTimes(4);
+      expect(agorStore.getState().sessionById).toBe(originalMaps);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  );
+
   it('does not discard unrelated queued patches or advance the full hydration watermark', async () => {
     const session = makeSession();
     seedSession(session);
@@ -390,7 +486,7 @@ describe('confirmed mutation patches', () => {
     bumpRevision('sessions');
     enqueueSessionPatch(AUTHORITY, unrelated);
     const watermark = getLastAppliedRevision('sessions');
-    await captureSessionPatchCommit()([session], async () => [{ ...session, archived: true }]);
+    await captureSessionPatchCommit()([session], async () => ({ ...session, archived: true }));
     expect(getLastAppliedRevision('sessions')).toBe(watermark);
     expect(agorStore.getState().sessionById.get(unrelated.session_id)).toEqual(unrelated);
     expect(agorStore.getState().sessionById.has(session.session_id)).toBe(false);
@@ -404,7 +500,7 @@ describe('confirmed mutation patches', () => {
       const refetch = vi.fn(async () => {
         setRealtimeAuthorityScope('tenant-b:user-b:2');
         if (outcome === 'reject') throw new Error('old authority failed');
-        return [{ ...session, archived: true }];
+        return { ...session, archived: true };
       });
       await captureSessionPatchCommit()([session], refetch);
       expect(refetch).toHaveBeenCalledTimes(1);
