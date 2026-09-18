@@ -19,6 +19,7 @@ import {
 } from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
+import { captureSessionPatchCommit } from '../store/realtimeBatch';
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
@@ -264,9 +265,15 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
     try {
       setError(null);
+      const commit = captureSessionPatchCommit();
       const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
         session: Session;
+        affectedSessions?: Session[];
       };
+      // Do not depend on every descendant's realtime event arriving before the
+      // drawer updates. Only reconcile server-confirmed rows, never infer a
+      // cascade from the visible genealogy (which can include remote sessions).
+      commit(result.affectedSessions?.length ? result.affectedSessions : [result.session]);
       return result.session;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to archive session';

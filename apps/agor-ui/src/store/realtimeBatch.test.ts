@@ -1,8 +1,14 @@
 import type { Session } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bumpRevision, recordHydrationApply, resetHydrationRevisions } from './agorHydration';
+import {
+  bumpRevision,
+  getRevision,
+  recordHydrationApply,
+  resetHydrationRevisions,
+} from './agorHydration';
 import { agorStore } from './agorStore';
 import {
+  captureSessionPatchCommit,
   discardRealtimeNow,
   enqueueSessionPatch,
   flushRealtimeNow,
@@ -74,7 +80,7 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     bumpRevision('sessions');
     enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
     bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'thinking' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'completed' }));
     bumpRevision('sessions');
     enqueueSessionPatch(
       AUTHORITY,
@@ -122,11 +128,11 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     untombstoneSession(AUTHORITY, 's-1'); // create clears the tombstone
     seedSession(makeSession({ status: 'running' }));
     bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'thinking' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'completed' }));
 
     flushRealtimeNow(AUTHORITY);
 
-    expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'thinking' });
+    expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'completed' });
   });
 
   it('flushes via the setTimeout path when the tab is hidden (rAF paused)', () => {
@@ -200,7 +206,7 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     bumpRevision('sessions');
     enqueueSessionPatch(
       replacementAuthority,
-      makeSession({ session_id: 's-b', status: 'thinking' })
+      makeSession({ session_id: 's-b' as Session['session_id'], status: 'completed' })
     );
     flushRealtimeNow(AUTHORITY);
 
@@ -208,6 +214,49 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     expect(agorStore.getState().sessionById.has('s-b')).toBe(false);
 
     flushRealtimeNow(replacementAuthority);
-    expect(agorStore.getState().sessionById.get('s-b')).toMatchObject({ status: 'thinking' });
+    expect(agorStore.getState().sessionById.get('s-b')).toMatchObject({ status: 'completed' });
+  });
+});
+
+describe('confirmed mutation patches', () => {
+  it('commits all returned rows once, supersedes queued active rows and invalidates stale hydration', () => {
+    const root = makeSession();
+    const child = makeSession({ session_id: 'child' as Session['session_id'] });
+    agorStore.getState().applyMaps((prev) => ({
+      ...prev,
+      sessionById: new Map([
+        [root.session_id, root],
+        [child.session_id, child],
+      ]),
+      sessionsByBranch: new Map([[root.branch_id, [root, child]]]),
+    }));
+    const commit = captureSessionPatchCommit();
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, child);
+    const revisionBefore = getRevision('sessions');
+    const notified = vi.fn();
+    const unsubscribe = agorStore.subscribe(notified);
+
+    commit([root, child].map((session) => ({ ...session, archived: true })));
+
+    expect(getRevision('sessions')).toBeGreaterThan(revisionBefore);
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
+    // No earlier queued active row may resurrect the child on the next frame.
+    flushRealtimeNow(AUTHORITY);
+    expect(notified).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('ignores a response captured with no active authority', () => {
+    setRealtimeAuthorityScope(null);
+    const commit = captureSessionPatchCommit();
+    setRealtimeAuthorityScope(AUTHORITY);
+    seedSession(makeSession());
+    const revisionBefore = getRevision('sessions');
+    commit([makeSession({ archived: true })]);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
+    expect(getRevision('sessions')).toBe(revisionBefore);
   });
 });

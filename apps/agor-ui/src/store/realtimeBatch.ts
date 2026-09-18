@@ -53,7 +53,7 @@
  * flush onto the scheduler that matches the new visibility state.
  */
 import type { Session } from '@agor-live/client';
-import { getLastAppliedRevision, getRevision } from './agorHydration';
+import { bumpRevision, getLastAppliedRevision, getRevision } from './agorHydration';
 import { applySessionPatchToMaps } from './agorMaps';
 import { agorStore } from './agorStore';
 
@@ -177,6 +177,22 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
     revision: getRevision('sessions'),
   });
   scheduleFlush();
+}
+
+/**
+ * Capture the requesting authority before an async mutation. Reconcile its
+ * confirmed rows through the same keyed queue/reducer as socket patches, in one
+ * immediate store write. The response supersedes older queued rows and bumps
+ * the revision so an in-flight hydration cannot resurrect them.
+ */
+export function captureSessionPatchCommit(): (sessions: Session[]) => void {
+  const authorityScope = activeAuthorityScope;
+  return (sessions) => {
+    if (!authorityScope || authorityScope !== activeAuthorityScope || sessions.length === 0) return;
+    bumpRevision('sessions');
+    for (const session of sessions) enqueueSessionPatch(authorityScope, session);
+    flushRealtimeNow(authorityScope);
+  };
 }
 
 /**
