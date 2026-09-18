@@ -43,6 +43,29 @@ adds filesystem isolation but does not change the application authorization mode
 `tenants_base_folder` may be absolute, such as `/data/agor-tenants`, or relative
 to the daemon home (`~/.agor`). Its default is `~/.agor/tenants`.
 
+## Per-tenant browser links
+
+A hosted deployment usually serves every tenant on its own host (for example
+`acme.agor.example.com`) while the daemon itself is configured with one
+deployment-wide `AGOR_BASE_URL` / `daemon.base_url`. Session, board, branch,
+artifact, and Knowledge links that the daemon hands back through REST, MCP,
+and gateway messages would then point at the deployment host, where the
+tenant's browser session does not exist. Tell the daemon how a tenant id maps
+to its host:
+
+```yaml
+multi_tenancy:
+  mode: required_from_auth
+  tenant_base_url_template: https://{tenant_id}.agor.example.com
+```
+
+`{tenant_id}` is replaced with the trusted tenant id of the operation that
+produced the link. The template is only honored in `required_from_auth` mode
+and only for tenant ids that form a single DNS label (letters, digits, and
+hyphens); any other id, and any system or cross-tenant work with no tenant
+context, falls back to the deployment-wide base URL. OAuth callbacks and other
+daemon endpoints keep using `daemon.base_url`.
+
 ## Filesystem layout
 
 With filesystem isolation enabled, Agor creates directories lazily:

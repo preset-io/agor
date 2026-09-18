@@ -6,6 +6,7 @@ import {
   DEFAULT_STATIC_TENANT_ID,
   resolveBootstrapTenantId,
   resolveMultiTenancyConfig,
+  resolveTenantBaseUrl,
   resolveTenantContext,
   TenantResolutionError,
 } from './multitenancy';
@@ -346,5 +347,127 @@ describe('multi-tenancy config and tenant resolution', () => {
         })
       ).toThrow(/required_from_auth/);
     });
+  });
+});
+
+describe('multi_tenancy.tenant_base_url_template', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const hostedConfig = {
+    database: { dialect: 'postgresql' as const },
+    execution: {
+      branch_storage: { default_mode: 'clone' as const, allowed_modes: ['clone' as const] },
+    },
+    multi_tenancy: {
+      mode: 'required_from_auth' as const,
+      auth_claim: 'tenant_id',
+      filesystem_isolation_enabled: true,
+      tenant_base_url_template: 'https://{tenant_id}.dp-prod.example.com',
+    },
+  };
+
+  it('accepts a host template in required_from_auth mode', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+    expect(() => assertValidMultiTenancyConfig(hostedConfig)).not.toThrow();
+  });
+
+  it('rejects the template in static mode because there is no per-tenant host', () => {
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        multi_tenancy: {
+          mode: 'static',
+          tenant_base_url_template: 'https://{tenant_id}.example.com',
+        },
+      })
+    ).toThrow(/requires multi_tenancy\.mode: required_from_auth/);
+  });
+
+  it('rejects a template that never substitutes the tenant id', () => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        ...hostedConfig,
+        multi_tenancy: {
+          ...hostedConfig.multi_tenancy,
+          tenant_base_url_template: 'https://workspaces.example.com',
+        },
+      })
+    ).toThrow(/must contain \{tenant_id\}/);
+  });
+
+  it.each([
+    'workspaces.example.com/{tenant_id}',
+    'ftp://{tenant_id}.example.com',
+    'https://{tenant_id}.example.com/?next=1',
+    'https://user:pw@{tenant_id}.example.com',
+    '   ',
+  ])('rejects a template that does not render to a plain http(s) URL: %s', (template) => {
+    vi.stubEnv('AGOR_DB_DIALECT', '');
+    vi.stubEnv('DATABASE_URL', '');
+    expect(() =>
+      assertValidMultiTenancyConfig({
+        ...hostedConfig,
+        multi_tenancy: { ...hostedConfig.multi_tenancy, tenant_base_url_template: template },
+      })
+    ).toThrow(/tenant_base_url_template/);
+  });
+
+  it('renders the tenant host for a DNS-label tenant id', () => {
+    expect(resolveTenantBaseUrl(hostedConfig, 'superset-preset')).toBe(
+      'https://superset-preset.dp-prod.example.com'
+    );
+  });
+
+  it('supports the tenant id as a path segment and strips trailing slashes', () => {
+    expect(
+      resolveTenantBaseUrl(
+        {
+          multi_tenancy: {
+            ...hostedConfig.multi_tenancy,
+            tenant_base_url_template: 'https://agor.example.com/t/{tenant_id}/',
+          },
+        },
+        'acme'
+      )
+    ).toBe('https://agor.example.com/t/acme');
+  });
+
+  it('returns undefined without a template, without a tenant, or outside required_from_auth', () => {
+    expect(resolveTenantBaseUrl({ multi_tenancy: { mode: 'required_from_auth' } }, 'acme')).toBe(
+      undefined
+    );
+    expect(resolveTenantBaseUrl(hostedConfig, undefined)).toBe(undefined);
+    expect(
+      resolveTenantBaseUrl(
+        {
+          multi_tenancy: {
+            mode: 'static',
+            tenant_base_url_template: hostedConfig.multi_tenancy.tenant_base_url_template,
+          },
+        },
+        'default'
+      )
+    ).toBe(undefined);
+  });
+
+  it.each([
+    'evil.example.com',
+    'acme/../admin',
+    'acme@evil.example',
+    '-acme',
+    'ac me',
+    'a'.repeat(64),
+  ])('never substitutes a tenant id that is not one DNS label: %s', (tenantId) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveTenantBaseUrl(hostedConfig, tenantId)).toBe(undefined);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Repeated resolutions for the same tenant do not spam the log.
+    expect(resolveTenantBaseUrl(hostedConfig, tenantId)).toBe(undefined);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

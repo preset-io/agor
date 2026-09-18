@@ -1392,6 +1392,29 @@ export interface AgorMultiTenancySettings {
 
   /** Optional trusted HTTP header set by an auth/edge layer, e.g. `x-agor-tenant-id`. */
   trusted_header?: string;
+
+  /**
+   * Browser-reachable base URL template for user-facing links in
+   * `required_from_auth` deployments that serve each tenant on its own host.
+   *
+   * `{tenant_id}` is replaced with the trusted ambient tenant id, so entity
+   * links (sessions, boards, branches, artifacts, Knowledge) returned through
+   * REST, WebSocket, MCP, and gateway messages point at the tenant's own host
+   * instead of the deployment-wide `ui.base_url` / `daemon.base_url`.
+   *
+   * Only DNS-label tenant ids (`[A-Za-z0-9-]`, 1–63 chars, no leading or
+   * trailing `-`) are ever substituted; any other id falls back to the
+   * deployment-wide base URL. OAuth callbacks and other daemon endpoints keep
+   * using `daemon.base_url`.
+   *
+   * @example
+   * ```yaml
+   * multi_tenancy:
+   *   mode: required_from_auth
+   *   tenant_base_url_template: https://{tenant_id}.agor.example.com
+   * ```
+   */
+  tenant_base_url_template?: string;
 }
 
 /** Canonical upload storage and lifecycle settings. */

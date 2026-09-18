@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
+import { getCurrentTenantId } from '../db/tenant-context';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
@@ -29,7 +30,7 @@ import {
   assertValidRawExternalLaunchConfig,
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
-import { assertValidMultiTenancyConfig } from './multitenancy';
+import { assertValidMultiTenancyConfig, resolveTenantBaseUrl } from './multitenancy';
 import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
@@ -1079,6 +1080,7 @@ function validateConfig(config: AgorConfig): void {
     'static_tenant_id',
     'auth_claim',
     'trusted_header',
+    'tenant_base_url_template',
   ]);
   // The catalog is the file checked into this repository, so it has nothing to
   // configure. The section stays loadable because a config file naming it must
@@ -1939,18 +1941,24 @@ export async function getDaemonBaseUrl(): Promise<string> {
  * that are sent to external platforms like Slack, email, etc.
  *
  * Resolution order:
- * 1. AGOR_BASE_URL environment variable (highest priority)
- * 2. ui.base_url from config.yaml
- * 3. daemon.base_url from config.yaml
- * 4. Default: http://localhost:{port} (constructed from daemon port)
+ * 1. `multi_tenancy.tenant_base_url_template` rendered with the ambient tenant
+ *    id, when both are available (hosted deployments that serve each tenant
+ *    on its own host — see {@link resolveTenantBaseUrl})
+ * 2. AGOR_BASE_URL environment variable
+ * 3. ui.base_url from config.yaml
+ * 4. daemon.base_url from config.yaml
+ * 5. Default: http://localhost:{port} (constructed from daemon port)
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
 export async function getBaseUrl(): Promise<string> {
+  const config = await loadConfig();
+  const tenantBaseUrl = resolveTenantBaseUrl(config, getCurrentTenantId());
+  if (tenantBaseUrl) return tenantBaseUrl;
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-  return resolveBaseUrl(await loadConfig(), 'ui');
+  return resolveBaseUrl(config, 'ui');
 }
 
 /**

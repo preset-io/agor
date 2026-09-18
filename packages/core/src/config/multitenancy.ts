@@ -4,6 +4,19 @@ import type { AgorConfig, AgorMultiTenancySettings } from './types';
 export const DEFAULT_STATIC_TENANT_ID = 'default' as TenantID;
 const RESERVED_AUTH_CLAIMS = new Set(['aud', 'exp', 'iat', 'iss', 'jti', 'nbf', 'sub', 'type']);
 
+/** Placeholder replaced by the trusted tenant id in `multi_tenancy.tenant_base_url_template`. */
+export const TENANT_BASE_URL_TEMPLATE_PLACEHOLDER = '{tenant_id}';
+
+/**
+ * A tenant id that is safe to splice into a URL template: exactly one DNS
+ * label. Anything else (dots, slashes, `@`, spaces, …) could redirect a link
+ * to a different host or path, so it is never substituted.
+ */
+const TENANT_HOST_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+/** Sample id used only to validate the template shape at config load. */
+const TENANT_BASE_URL_TEMPLATE_PROBE_ID = 'tenant-probe';
+
 export interface ResolvedMultiTenancyConfig {
   mode: 'static' | 'required_from_auth';
   static_tenant_id: TenantID;
@@ -161,10 +174,101 @@ export function resolveBootstrapTenantId(config: Pick<AgorConfig, 'multi_tenancy
   );
 }
 
+export function isTenantHostLabel(tenantId: string): boolean {
+  return TENANT_HOST_LABEL_PATTERN.test(tenantId);
+}
+
+function renderTenantBaseUrlTemplate(template: string, tenantId: string): string {
+  return template.split(TENANT_BASE_URL_TEMPLATE_PLACEHOLDER).join(tenantId);
+}
+
+/**
+ * Parse a rendered tenant base URL. Returns the origin plus any path, without
+ * a trailing slash, or `null` when the value is not a plain HTTP(S) URL.
+ */
+function normalizeRenderedTenantBaseUrl(rendered: string): string | null {
+  const trimmed = rendered.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return `${parsed.origin}${path}`;
+}
+
+const warnedUnsafeTenantIds = new Set<string>();
+
+/**
+ * Resolve the browser-reachable base URL for user-facing links of the given
+ * tenant from `multi_tenancy.tenant_base_url_template`.
+ *
+ * Returns `undefined` when no template is configured, when the deployment is
+ * not `required_from_auth`, when no tenant id is available (system/global
+ * work), or when the tenant id is not a single DNS label. Callers fall back to
+ * the deployment-wide base URL in every one of those cases.
+ */
+export function resolveTenantBaseUrl(
+  config: Pick<AgorConfig, 'multi_tenancy'>,
+  tenantId: TenantID | string | undefined
+): string | undefined {
+  const template = config.multi_tenancy?.tenant_base_url_template?.trim();
+  if (!template || !tenantId) return undefined;
+  if (resolveMultiTenancyConfig(config).mode !== 'required_from_auth') return undefined;
+
+  if (!isTenantHostLabel(tenantId)) {
+    if (!warnedUnsafeTenantIds.has(tenantId)) {
+      warnedUnsafeTenantIds.add(tenantId);
+      console.warn(
+        `⚠️  multi_tenancy.tenant_base_url_template ignored for tenant "${tenantId}": ` +
+          'tenant id is not a single DNS label; falling back to the deployment base URL'
+      );
+    }
+    return undefined;
+  }
+
+  return (
+    normalizeRenderedTenantBaseUrl(renderTenantBaseUrlTemplate(template, tenantId)) ?? undefined
+  );
+}
+
+function assertValidTenantBaseUrlTemplate(
+  template: string | undefined,
+  mode: ResolvedMultiTenancyConfig['mode']
+): void {
+  if (template === undefined) return;
+  const trimmed = template.trim();
+  if (!trimmed) {
+    throw new Error('Config error: multi_tenancy.tenant_base_url_template must not be empty');
+  }
+  if (mode !== 'required_from_auth') {
+    throw new Error(
+      'Config error: multi_tenancy.tenant_base_url_template requires multi_tenancy.mode: required_from_auth'
+    );
+  }
+  if (!trimmed.includes(TENANT_BASE_URL_TEMPLATE_PLACEHOLDER)) {
+    throw new Error(
+      `Config error: multi_tenancy.tenant_base_url_template must contain ${TENANT_BASE_URL_TEMPLATE_PLACEHOLDER}`
+    );
+  }
+  const probe = renderTenantBaseUrlTemplate(trimmed, TENANT_BASE_URL_TEMPLATE_PROBE_ID);
+  if (normalizeRenderedTenantBaseUrl(probe) === null) {
+    throw new Error(
+      'Config error: multi_tenancy.tenant_base_url_template must render to a plain http(s) URL ' +
+        `without credentials, query string, or fragment (e.g. https://${TENANT_BASE_URL_TEMPLATE_PLACEHOLDER}.agor.example.com)`
+    );
+  }
+}
+
 export function assertValidMultiTenancyConfig(
   config: Pick<AgorConfig, 'multi_tenancy' | 'database' | 'execution'>
 ): void {
   const resolved = resolveMultiTenancyConfig(config);
+  assertValidTenantBaseUrlTemplate(config.multi_tenancy?.tenant_base_url_template, resolved.mode);
   if (resolved.mode !== 'static' && resolved.mode !== 'required_from_auth') {
     throw new Error('Config error: multi_tenancy.mode must be one of: static, required_from_auth');
   }

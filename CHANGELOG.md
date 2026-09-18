@@ -47,6 +47,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 - **GitHub returns to the MCP Marketplace through a reviewed fine-grained-PAT exception** — GitHub's remote endpoint challenges for OAuth but does not publish Dynamic Client Registration, so Marketplace uses GitHub's documented bearer-token route and verifies each supplied PAT against the pinned catalog endpoint before storage. The 0.26.0 removal note below remains the historical state for that release. ([#2646](https://github.com/preset-io/agor/pull/2646))
 
+### Fixes
+
+- **Per-tenant session links in hosted deployments** — `multi_tenancy.tenant_base_url_template` (e.g. `https://{tenant_id}.agor.example.com`) makes session, board, branch, artifact, and Knowledge links returned through REST, MCP, and gateway messages use the tenant's own host instead of the deployment-wide base URL. Only DNS-label tenant ids are substituted; daemon endpoints and OAuth callbacks keep using `daemon.base_url`.
+
 ## 0.26.1 (2026-09-03)
 
 ### Fixes

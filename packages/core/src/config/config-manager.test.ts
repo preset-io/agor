@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runWithTenantContext } from '../db/tenant-context';
 import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
@@ -1706,6 +1707,51 @@ describe('base URL resolution', () => {
   it('rejects a base URL without an http(s) scheme', async () => {
     process.env.AGOR_BASE_URL = 'agor.example.com';
     await expect(requirePublicBaseUrl()).rejects.toThrow(/must start with http/i);
+  });
+
+  describe('per-tenant UI links (multi_tenancy.tenant_base_url_template)', () => {
+    const cellOrigin = 'https://prod-us1a.dp-prod-us1a.example.com';
+
+    beforeEach(async () => {
+      const agorDir = path.join(tempDir, '.agor');
+      await fs.mkdir(agorDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agorDir, 'config.yaml'),
+        yaml.dump({
+          database: { dialect: 'postgresql' },
+          execution: { branch_storage: { default_mode: 'clone', allowed_modes: ['clone'] } },
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            auth_claim: 'tenant_id',
+            filesystem_isolation_enabled: true,
+            tenant_base_url_template: 'https://{tenant_id}.dp-prod-us1a.example.com',
+          },
+        }),
+        'utf-8'
+      );
+      // The hosted deployment sets the cell-wide origin; UI links must not use it
+      // for a tenant that has its own host.
+      process.env.AGOR_BASE_URL = cellOrigin;
+    });
+
+    it('renders UI links on the ambient tenant host, ahead of AGOR_BASE_URL', async () => {
+      await runWithTenantContext('superset-preset', async () => {
+        await expect(getBaseUrl()).resolves.toBe(
+          'https://superset-preset.dp-prod-us1a.example.com'
+        );
+      });
+    });
+
+    it('keeps daemon endpoints and OAuth callbacks on the deployment origin', async () => {
+      await runWithTenantContext('superset-preset', async () => {
+        await expect(getDaemonBaseUrl()).resolves.toBe(cellOrigin);
+        await expect(requirePublicBaseUrl()).resolves.toBe(cellOrigin);
+      });
+    });
+
+    it('falls back to the deployment origin outside any tenant context', async () => {
+      await expect(getBaseUrl()).resolves.toBe(cellOrigin);
+    });
   });
 });
 
