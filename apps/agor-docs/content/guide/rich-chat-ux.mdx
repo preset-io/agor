@@ -44,13 +44,13 @@ Combined with **per-user analytics** (Settings → Analytics), this gives you a 
 
 **Switch models and reasoning depth mid-session.** Claude and Codex sessions expose a model selector and effort dropdown in the session panel footer. Codex shows **Inherited** until Agor stores an explicit override.
 
-| Effort   | When                                         |
-| -------- | -------------------------------------------- |
-| `low`    | Quick lookups, simple edits                  |
-| `medium` | Balanced speed/quality                       |
+| Effort   | When                                          |
+| -------- | --------------------------------------------- |
+| `low`    | Quick lookups, simple edits                   |
+| `medium` | Balanced speed/quality                        |
 | `high`   | Deep reasoning for complex coding and reviews |
-| `xhigh`  | Extra reasoning depth for supported runtimes |
-| `max`    | Critical decisions, architecture (Opus only) |
+| `xhigh`  | Extra reasoning depth for supported runtimes  |
+| `max`    | Critical decisions, architecture (Opus only)  |
 
 For Claude Code models that support both capacities, Agor lists explicit **200k** and **1M** choices. The 1M choice persists Claude Code's `[1m]` model suffix (for example, `claude-sonnet-4-6[1m]`), so the runtime can enforce account and provider availability. Models whose only supported capacity is 1M have one 1M-labeled choice.
 
@@ -132,6 +132,21 @@ When a todo list shows up half-done at the end of a turn, that's a strong signal
 />
 
 You don't have to wait for a long-running prompt to finish before you start writing the next instruction.
+
+---
+
+## Reading long conversations
+
+Conversations initially display the newest 30 non-queued task sections, with
+the latest task expanded. **Show older tasks** reveals 30 more sections while
+preserving your reading position. Scroll upward after revealing them to read
+the earlier sections. The top-navigation button reveals all task sections and
+jumps to the beginning; in-session search also includes the full conversation.
+
+This is a rendering limit, not a retention or API limit. All task records are
+still loaded; older tasks' messages load when expanded. Search, top navigation,
+or repeatedly revealing history can therefore still be expensive. Queued
+prompts remain in the queue drawer.
 
 ---
 
