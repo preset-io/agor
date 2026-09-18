@@ -860,13 +860,13 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         'Use this FIRST when the user names a product ("connect me to Notion", "I need Linear"): it turns that name into the exact `name` (a reverse-DNS identity like "com.notion/mcp") that `agor_widgets_request_oauth` and the Catalog UI connect by. ' +
         'This is a catalog of what CAN be connected — it is not what the user has installed. For that, use `agor_mcp_servers_list`, or read `attached_mcp_servers` from `agor_sessions_get_current` for what this session can actually call. ' +
         'Read-only: listing an entry connects nothing. `auth_type` is the catalog’s claim about someone else’s endpoint and the connect flow probes it again, so treat it as a hint. ' +
-        '`search` matches the entry identity/title/description, so a product name ("linear", "sentry") works but a description of a job ("track bugs") usually does not — browse with `category` and `capability` for that, or call with no arguments and read the list. ' +
+        '`search` matches the entry identity/title/benefit/description, so both a product name ("linear", "sentry") and a phrase describing the job ("track issues", "read logs") can resolve — though the benefit line is one sentence, so browse with `category` and `capability`, or call with no arguments and read the list, when a phrase finds nothing. ' +
         'If nothing matches, say so and stop — do NOT invent a server or a URL.',
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema: z.strictObject({
         search: mcpOptionalNonEmptyString(
           'search',
-          'Case-insensitive substring matched against name, title, and description.'
+          'Case-insensitive substring matched against name, title, benefit, and description.'
         ),
         category: z
           .enum(MCP_CATALOG_CATEGORIES)

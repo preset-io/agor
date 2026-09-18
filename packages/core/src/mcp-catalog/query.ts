@@ -26,13 +26,26 @@ function contains(haystack: string | undefined, needle: string): boolean {
   return Boolean(haystack?.toLowerCase().includes(needle));
 }
 
-/** Whether one entry survives every active filter. */
+/**
+ * Whether one entry survives every active filter.
+ *
+ * Search reads the four authored fields that say what an entry IS: its
+ * reverse-DNS `name`, its `title`, its `benefit`, and its `description`.
+ * `benefit` is the one every shipped entry states — 62 of 62, against 17
+ * titles and no descriptions — so leaving it out made search a lookup over
+ * identifiers rather than over prose: "notion" resolved, "specs" did not.
+ *
+ * `starter_prompt` and `permission_disclosure` stay out. One is a suggestion
+ * and the other is consent text, so matching either would answer "what can do
+ * this?" with servers that only mention the word while asking permission.
+ */
 function matches(entry: MCPCatalogEntry, filters: MCPCatalogFilters): boolean {
   const search = filters.search?.trim().toLowerCase();
   if (
     search &&
     !contains(entry.name, search) &&
     !contains(entry.title, search) &&
+    !contains(entry.benefit, search) &&
     !contains(entry.description, search)
   ) {
     return false;
