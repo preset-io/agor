@@ -398,7 +398,7 @@ describe('OnboardingWizard', () => {
     );
   });
 
-  it('LLM step lists all providers with Claude recommended, and lets the user switch selection', async () => {
+  it('LLM step recommends only Claude and Codex (GPT), and lets the user switch selection', async () => {
     renderWizard({ initialStep: 'llm' });
 
     expect(screen.getByText('Connect your AI')).toBeInTheDocument();
@@ -406,7 +406,13 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('GPT')).toBeInTheDocument();
     expect(screen.getByText('Gemini')).toBeInTheDocument();
     expect(screen.getByText('Custom')).toBeInTheDocument();
-    expect(screen.getByText('Recommended')).toBeInTheDocument();
+    expect(screen.getAllByText('Recommended')).toHaveLength(2);
+    for (const title of ['Claude', 'GPT']) {
+      expect(screen.getByText(title).closest('button')).toHaveTextContent('Recommended');
+    }
+    for (const title of ['Gemini', 'Custom']) {
+      expect(screen.getByText(title).closest('button')).not.toHaveTextContent('Recommended');
+    }
 
     // No key input until a provider is selected.
     expect(screen.queryByLabelText(/API key/i)).not.toBeInTheDocument();
