@@ -2,11 +2,11 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                                                                                                                                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                                                                                             |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                                                                                                   |
-| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.4). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1 and again in §7.1.2; three defects found by the gating review and fixed (§7.1.1), one more found by the pre-merge drive (§7.1.3). |
+| Section               | State                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                                                                                                                                                            |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                                                                                                                                                                  |
+| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.4). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1 and again in §7.1.2; three defects found by the gating review and fixed (§7.1.1), one more found by the pre-merge drive (§7.1.3). The two lanes' delivery machinery is one engine as of §7.1.10. |
 
 Numbering warning for anyone reading commit messages against this file: the
 branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
@@ -1311,10 +1311,8 @@ connect lane to retire a post that lost its claim; the recovery lane never
 learned it, and neither lane reconciled an EDIT that lost its claim. Both now
 share `retireOrphanedSlackCard` and both repaint a render they no longer own.
 
-What this is NOT is the delivery-engine extraction: the two lanes still own
-their own claim, mint, render and settle loops over their own records. Pinning
-the contract in a test first is what makes that extraction checkable when it
-happens.
+That extraction has now happened — see **7.1.10**. The contract suite is what
+made it checkable, and it is byte-identical across it.
 
 ### 7.1.7 The batch-A real-stack drive
 
@@ -1500,6 +1498,105 @@ What this drive could **not** discriminate:
   not on the refresh being certain.
 - **The provider round-trip**, as before. Every decision the daemon makes about
   the grant is real; obtaining one from Notion is not.
+
+### 7.1.10 The delivery engine, and what stayed in its lane
+
+Two architecture reviews named the duplicated delivery machinery as this
+branch's main outstanding debt, and both declined to block merge on it for the
+same reason: unifying the two lanes in the PR that fixes four bugs in the
+working half is how you break the working half. It is done here anyway, at the
+owner's request, so the whole job was to do it without changing behaviour and
+to be able to prove that.
+
+The proof is `gateway-mcp-slack-delivery-contract.test.ts`, which is
+**unchanged** — byte-identical, hash `e449e210`, verified against the
+pre-extraction tree. It is deliberately blind to how a lane satisfies it, which
+is exactly what makes it a usable fence here: nothing in it could be quietly
+adjusted to accommodate a lane that moved.
+
+`services/mcp-slack-delivery-engine.ts` owns the mechanics:
+
+| Shared                                                                  | Why it was safe                                                                                                                                    |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applySlackDeliveryFailure`                                             | The two backoff transitions were byte-identical over identically-spelled fields.                                                                   |
+| `slackDeliveryClaim`, `slackDeliveryClaimIsLive`                        | Same 30s lease, same CAS predicate; one lane spelled the constant, the other inlined `30_000`.                                                     |
+| `slackDeliveryRepairAt`                                                 | The clamp only. Which states count as ACTIVE stays with the lane that owns the states.                                                             |
+| `slackRenderWasLost`, `clearSlackRenderedState`, `clearLostSlackRender` | The §7.1.5 lost-edit repair, identical modulo the identity fence.                                                                                  |
+| `retireOrphanedSlackCard`                                               | Already shared; moved out of the class unchanged.                                                                                                  |
+| `sendSlackCard`                                                         | `findMessageByMetadata` reconciliation plus the post/edit, and the reconciled `ts` the settlement CAS needs to tell a post from an edit.           |
+| `acquireSlackDeliveryConnector`                                         | Refusing a draining listener's connector across a generation change, and re-verifying app identity and write target on freshly loaded credentials. |
+| `logSlackDeliveryFailure`, `recordSlackDeliveryFailure`                 | Failure accounting and the `stranded=true` line.                                                                                                   |
+| `SlackDeliveryTimers`                                                   | Five hand-rolled copies of don't-double-schedule / free-the-key-before-running / `unref` / clear-on-dispose.                                       |
+| `SlackDeliveryStore`                                                    | The one real difference between the lanes' storage: a notice on a Task's metadata versus a delivery on the widget message's.                       |
+
+What deliberately did **not** move, and would have merged two authority models
+if it had:
+
+- **Rendered state.** `mcpSlackRecoveryRenderedState` reads a Task's status,
+  recovery generation, settled request id and provider dispatch;
+  `mcpSlackConnectRenderedState` reads a widget's own lifecycle. Recovery
+  repairs an active task; connect admits a new turn. Different questions.
+- **Tokens.** Two audiences (`agor:mcp-slack-recovery`,
+  `agor:mcp-oauth-connect`), two binding sets, two issue paths. The connect
+  lane additionally re-SEALS rather than re-issues once a grant has landed;
+  the recovery lane has no such state.
+- **Re-issue and grant liveness.** `mcpSlackConnectMayReissue`, the
+  `grantConnected` read, and the `finish_required`/`finish_stalled` split are
+  connect-only, because only that lane has three milestones with two owners.
+- **`generationCurrent`.** The connect record treats an ABSENT sealed
+  generation as current (the field postdates the record); the recovery notice
+  always carries one. That is a property of the records, so the predicate
+  stays with the caller and only its consequences are shared.
+- **The thread-mismatch tail.** Both lanes release the claim identically when
+  the channel is disabled or is no longer Slack. When the recorded thread stops
+  matching the channel's write policy they diverge: the recovery lane fences
+  the write on its claim and leaves `next_repair_at` unset, while the connect
+  lane's `invalidateMcpSlackConnectBinding` fences only on
+  `binding_invalidated_at` and asks for an immediate repair. The difference is
+  small and looks unintentional, but squaring it would be a behaviour change —
+  so it is left exactly as it was and recorded here instead.
+- **The mint marker.** `slack_connect_due_at`, its retirement and its §7.1.5
+  reschedule are connect-only; the recovery lane's trigger is the Task itself.
+
+Also added: `mcp-slack-delivery-engine.test.ts`, 36 cases against the
+mechanics directly, checked against three mutations it has to catch (an
+off-by-one in the claim-liveness boundary, a dropped claim fence in failure
+accounting, and reuse of a draining listener's connector across a generation
+change). It is a separate file precisely so the contract suite could stay
+byte-identical.
+
+### 7.1.11 The delivery-engine real-stack drive
+
+Same shape as §7.1, §7.1.2 and §7.1.7 — a real daemon (`tsx src/main.ts`), an
+isolated `HOME`, a migrated SQLite database, and **Slack's API and only Slack's
+API replaced** at `WebClient.prototype.apiCall`. One gateway channel, one
+`oauth` widget and one recovery notice, seeded through real repositories before
+the daemon started, so nothing in process knew either existed.
+
+| Case                                  | Result                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First card, both lanes                | One `chat.postMessage` each, in their own threads. Each stamped with its OWN `slack_message_metadata` event type (`agor_mcp_connect`, `agor_mcp_recovery`) through the shared `sendSlackCard`, each preceded by the `conversations.replies` reconciliation lookup.                  |
+| Link-bearing render                   | The connect card carried a `Connect Drive server` URL button whose fragment is a 1282-character sealed token — the shared claim, mint, send and settle path end to end.                                                                                                             |
+| Restart on the extracted tree         | Nothing reposted, nothing repainted. The no-op shortcut and the recorded `rendered_state` held across a process boundary.                                                                                                                                                           |
+| State transition, both lanes          | Each lane edited its OWN recorded `ts` in place (`chat.update`, never a second post), took the button away, settled `rendered_state`, released the claim and cleared its due column.                                                                                                |
+| Slack refuses every write, both lanes | The identical ladder: `attempt=1/6 retrying=true` through `attempt=6/6 retrying=false stranded=true`, then `delivery_attempt_count=6`, no next retry, no due work, no claim. The strongest single piece of evidence that the two lanes now run one failure and scheduling mechanic. |
+
+What this drive could NOT discriminate:
+
+- **The recovery lane's link-bearing render.** The seeded notice's own clock and
+  the task lifecycle the drive forced through raw SQL carried it through
+  `expired_or_superseded` and `manual_next_turn`; both are correct decisions
+  for the history it was given, but neither offers a button. That lane's token
+  issuance is pinned in `gateway-mcp-slack-recovery.test.ts`, not here.
+- **Lease loss and its two repairs.** A single daemon with no concurrent
+  claimant cannot orphan a post or lose an edit. That is precisely what the
+  contract suite drives, by injecting a second claimant mid-Slack-call — which
+  is why it, and not a drive, is the fence this refactor is held to.
+- **The tenant-scope class**, for the reason §7.1.7 gave: the entry shape the
+  defect lives on needs a live Socket Mode connection the fake does not
+  provide.
+- **The provider round-trip**, as always. Every decision the daemon makes is
+  real; obtaining a grant from a vendor is not.
 
 ### 7.2 Deliberately not built
 
