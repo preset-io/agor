@@ -427,15 +427,69 @@ that no test on either side can see. And `getOAuthStatus` grants nothing, so
 reading `refreshable` there does not bend the rule above — the paths that issue
 something still require `live`.
 
-**The residual, stated so nobody has to rediscover it.** The `oauth` widget's
-mint short-circuit still requires `live`. So in exactly one state — a bound,
-expired-or-refreshing, still-refreshable grant — the agent-facing read now says
+**The residual, and how it was closed.** The merge left the `oauth` widget's
+mint short-circuit requiring `live`. So in exactly one state — a bound,
+expired-or-refreshing, still-refreshable grant — the agent-facing read said
 authenticated while the short-circuit would still render a Connect button. That
-is the D4 disagreement, narrowed rather than closed. Closing it means widening
-the short-circuit, which is a change to a gate: it belongs in its own reviewed
-commit with its own test, not inside a conflict resolution. Until then the
-comment on `resolveMCPOAuthGrantLiveness` names the residual at the point of
-use.
+was the D4 disagreement, narrowed rather than closed, and widening a gate
+belongs in its own reviewed commit rather than inside a conflict resolution.
+
+**CLOSED.** The verdict is now one named function,
+`mcpOAuthGrantIsConnected(liveness)` = `live || refreshable`, and every surface
+in this lane calls it: the agent-facing read, the gateway's warning, the mint
+short-circuit, the Slack card's `grantConnected`, the connect page's preflight,
+and the widget's resolution gate. No production caller gates on `live` alone
+any more.
+
+The rule that survives is about what a surface DOES, not which field it reads.
+A surface may be optimistic when it reports a connection or decides whether to
+offer or complete an attach-and-resume: the credential already exists, and the
+worst case is a refresh that fails at call time into the reactive recovery lane
+built for exactly that. Strict belongs where a credential is ISSUED or sealed —
+the callback exchange and the refresh path — and none of the liveness read's
+callers is one of those. Nothing about issuance changed in this commit.
+
+**The resolution gate went with it, and the argument is why.** It looks like
+the exception and is not: `resolveOAuthWidgetFromCallback` attaches an existing
+grant's server to a session and wakes the agent — the same action the mint
+short-circuit takes, against the same credential, under the same user. A gate
+cannot correctly answer a stricter question than the gate one step earlier
+asked; requiring `live` there refused the exact user the mint gate would have
+connected for free. What makes it a security boundary is D3 — the decision
+comes from a grant row this daemon owns, read under the RESOLVER's identity,
+never from the browser's claim — and that is untouched. The 400ms settle wait
+for an in-flight refresh stays; it now covers only the narrower remainder
+(`ambiguous`, or nothing spendable on file), which is the only `refreshing`
+state that still reads unconnected.
+
+**The B1 finish state machine was not merely consistent — it was wrong the
+other way.** `mcpSlackConnectRenderedState`'s `grantLive` was keyed on `live`
+precisely so a card could not offer a finish the resolver would refuse. Keeping
+it there while widening the mint gate would have left no offer/refuse
+mismatch — but it was already producing the opposite defect, which is the same
+class as the one found in batch B (`2fe5cc73`). Consider this lane's own user:
+they sign in, the page goes away before the POST, the card correctly flips to
+_Finish connecting_, and then the hour-lived access token that sign-in produced
+lapses. The card reverted to a buttonless "sign-in is in progress … this
+message updates when it lands", forever, while a perfectly good refreshable
+grant sat on file — withholding a finish the user could have completed. The
+field is now `grantConnected`, read through the shared verdict in both places
+that compute it (the delivery loop and the `/mcp-oauth-connect` preflight), so
+card, page and resolver still cannot disagree — now in both directions.
+
+This also makes §7.1.8's closing paragraph true rather than lucky: a
+`finish_stalled` card tells the user to ask again in the thread, and the fresh
+widget's already-connected short-circuit spends the grant on file. Before this
+commit that advice silently failed once the access token had lapsed — which,
+given the ten-minute link clock, is the likely case.
+
+Guarded by tests at both ends, because the previous disagreement survived two
+reviews by being invisible to every suite: `widgets.oauth.test.ts` asserts the
+mint gate fires exactly when the agent-facing read says connected, over every
+liveness shape, with the shared verdict left unstubbed as the hinge;
+`mcp-servers.auth-status.test.ts` asserts the agent-facing read equals
+`mcpOAuthGrantIsConnected` of a REAL database read, state by state. A future
+change to one surface alone fails one of them.
 
 [#2576]: https://github.com/preset-io/agor/pull/2576
 
@@ -1342,6 +1396,63 @@ one. That is deliberate (§7.2 refuses to extend a consumed link's clock), and i
 is why `finish_stalled`'s copy has to be, and is, a true instruction: asking
 again in the thread mints a fresh widget, whose already-connected short-circuit
 spends the grant that is on file without a second sign-in.
+
+### 7.1.9 The D4.1 real-stack drive
+
+Same shape as §7.1.7 and §7.1.8 — a real daemon (`tsx src/main.ts`), an
+isolated `HOME`, a migrated SQLite database, and **Slack's API and only Slack's
+API replaced** at `WebClient.prototype.apiCall` — for the one state D4.1 is
+about. Two OAuth servers seeded through real repositories, differing only in
+the grant on file:
+
+- **Notion** — access token expired an hour ago, refresh token present and
+  `refresh_status` idle: `live: false, refreshable: true`.
+- **Linear** — same lapse, no refresh token: `live: false, refreshable: false`.
+
+Plus one B1 card: a `pending` widget in a Slack thread whose delivery record
+carries a consumed link, `oauth_succeeded_at`, and no browser ever coming back
+— pointed at the Notion grant.
+
+The whole probe was run twice against the same seed, once on the pre-commit
+rule and once on this one, which is what makes it discriminating rather than
+merely reassuring.
+
+| Probe (Notion, refreshable)                | Before (`live`)                                                    | After (`live \|\| refreshable`)                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `agor_mcp_servers_auth_status` over `/mcp` | `oauth_authenticated: true`                                        | `oauth_authenticated: true` (unchanged — this is the surface the merge already widened) |
+| `agor_widgets_request_oauth` over `/mcp`   | `status: requested` — **a Connect card posted into the thread**    | `status: already_present`, server attached, auto-resume queued, no card                 |
+| The B1 card on the repair sweep            | no edit at all: stayed _Sign-in is in progress_, no button, no end | edited in place to _Finish connecting Notion_ with a re-sealed button                   |
+| `POST /mcp-oauth-connect` (preflight)      | not reachable — no card, so no link to open                        | `finish_required`                                                                       |
+| `POST /widgets/:id/oauth-resolve`          | 403 _"Sign-in to Notion has not completed. Finish the provider…"_  | `submitted`, `auto_resume_queued: true`, server attached, card repainted to _connected_ |
+
+The before column is the incoherence stated as one transcript: the same daemon
+told the agent `oauth_authenticated: true` and then, one tool call later,
+posted a Connect card for that server; and the user who had actually signed in
+was told to go and sign in.
+
+**Linear is the control and it did not move.** On both builds
+`agor_mcp_servers_auth_status` answers `false` and the mint renders a Connect
+button — so this is a widening to `refreshable`, not to "a grant row exists".
+
+What this drive could **not** discriminate:
+
+- **The gateway's pre-prompt warning.** It already suppressed for `refreshable`
+  before this commit; only its spelling changed (`!live && !refreshable` →
+  `!mcpOAuthGrantIsConnected`). Both builds stay quiet about Notion and warn
+  about Linear, so the drive cannot tell them apart, and nothing here should be
+  read as evidence for that call site beyond "it still behaves".
+- **The `refreshing` boundary.** Every grant in the drive is idle; the states
+  where the settle wait now does and does not run (`ambiguous`, or a
+  `refreshing` row with no refresh token) are reached only by racing the JIT
+  refresh, which this harness cannot schedule. Those are pinned in
+  `widgets/oauth/index.test.ts` instead.
+- **Whether the refresh would actually succeed.** The drive proves Agor treats
+  a refreshable grant as connected; it never asks Notion to honour the refresh
+  token, for the same reason §7.1 gave. That is precisely the case the reactive
+  recovery lane covers, and the argument for optimism here rests on that lane,
+  not on the refresh being certain.
+- **The provider round-trip**, as before. Every decision the daemon makes about
+  the grant is real; obtaining one from Notion is not.
 
 ### 7.2 Deliberately not built
 

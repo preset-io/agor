@@ -38,7 +38,10 @@ import {
   fingerprintMCPOAuthGrantConfiguration,
   MCP_OAUTH_GRANT_BINDING_VERSION,
 } from '../../services/mcp-oauth-grant-binding.js';
-import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import type { McpContext } from '../server.js';
 import { registerMcpServerTools, summarizeMcpServer } from './mcp-servers.js';
 
@@ -246,10 +249,18 @@ describe('agor_mcp_servers_auth_status — actionable OAuth recovery', () => {
  * false" but "it returned exactly what the shared read returns", because the
  * defect this guards against is disagreement, not incorrectness.
  *
- * The verdict it agrees with is `live || refreshable` — the same disjunction
- * `oauthGrantCanAuthenticate` computes for the UI's auth badge, so one grant
- * cannot read connected in the badge and disconnected to the agent. Only the
- * paths that *grant* something take the narrower `live` on its own.
+ * The verdict it agrees with is `mcpOAuthGrantIsConnected` — `live ||
+ * refreshable`, the same disjunction `oauthGrantCanAuthenticate` computes for
+ * the UI's auth badge, so one grant cannot read connected in the badge and
+ * disconnected to the agent.
+ *
+ * Since D4.1 that verdict is also what the `oauth` widget's mint gate asks, and
+ * the assertion below says so: an agent told `oauth_authenticated: true` must
+ * not then be handed a Connect button for the same server. The mint gate is
+ * driven from the other end of the chain, over the same states, in
+ * `widgets.oauth.test.ts` — these two files together are what makes a future
+ * divergence fail rather than sit invisible through a review, which is how the
+ * last one survived two.
  */
 describe('agent-facing auth status agrees with the shared grant check, state by state', () => {
   it.each([
@@ -276,12 +287,10 @@ describe('agent-facing auth status agrees with the shared grant check, state by 
       // inject hook's JIT refresh will make it usable without the user doing
       // anything. Reporting it as unauthenticated makes the agent offer a
       // Connect button for a server that already works, so the agent-facing
-      // read counts it — same as the gateway's Slack warning, and same as the
-      // UI's auth badge via `oauthGrantCanAuthenticate`.
-      //
-      // The `oauth` widget's mint short-circuit still requires `live` and so
-      // still disagrees here; see `resolveMCPOAuthGrantLiveness` for why that
-      // residual is deliberate and what closes it.
+      // read counts it — same as the gateway's Slack warning, the UI's auth
+      // badge via `oauthGrantCanAuthenticate`, and (since D4.1) the `oauth`
+      // widget's mint short-circuit, which used to be the one surface that
+      // still rendered a Connect button in exactly this state.
       state: 'an expired grant that is one refresh away from usable',
       setup: async (h: Awaited<ReturnType<typeof harness>>, row: MCPServer) =>
         h.saveBoundGrant(row, h.user.user_id, {
@@ -349,6 +358,10 @@ describe('agent-facing auth status agrees with the shared grant check, state by 
     const gate = await h.liveness(row.mcp_server_id);
 
     expect(summary.oauth_authenticated).toBe(expectAuthenticated);
-    expect(summary.oauth_authenticated).toBe(gate.live || gate.refreshable);
+    // The shared verdict, by name rather than by a re-spelled disjunction: the
+    // mint gate, the widget's resolve gate, the Slack card and the gateway's
+    // warning all call this same function, so re-deriving it here would let
+    // this file keep passing while they drifted.
+    expect(summary.oauth_authenticated).toBe(mcpOAuthGrantIsConnected(gate));
   });
 });

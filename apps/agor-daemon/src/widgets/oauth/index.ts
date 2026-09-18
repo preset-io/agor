@@ -19,8 +19,10 @@
  *     notification, not a payload.
  *  2. **So the browser's word is worth nothing.** A client that simply POSTs
  *     "I signed in" must not resolve the widget. The handler below re-reads
- *     the persisted grant (`resolveMCPOAuthGrantLiveness`) and refuses when
- *     there isn't one, which puts the widget back to `pending` for a retry.
+ *     the persisted grant (`resolveMCPOAuthGrantLiveness`, through
+ *     `mcpOAuthGrantIsConnected` — the same verdict the mint gate asks) and
+ *     refuses when there isn't one, which puts the widget back to `pending`
+ *     for a retry.
  *
  * The attach happens HERE, after the grant lands — never at mint time. An
  * attached-but-unauthorized OAuth server is not inert in direct egress mode:
@@ -41,7 +43,10 @@ import { isMCPServerUsableBy } from '@agor/core/mcp';
 import type { GatewayChannel, MCPServer, MCPServerID, Session, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { z } from 'zod';
-import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import { checkSessionOwnerOrAdmin } from '../../utils/branch-authorization.js';
 import {
   gatewayIdentityRefusalMessage,
@@ -364,17 +369,31 @@ async function resolveOAuthWidgetFromCallback(
     );
   let liveness = await readLiveness();
 
-  // A refresh this daemon started can be in flight at exactly the moment the
-  // browser POSTs — the callback persisted the grant and the inject hook is
-  // already spending it. `refresh_status !== 'idle'` is correct to refuse on
-  // (nobody knows the outcome yet, so nothing may be granted against it), but
-  // it is a race, not a verdict: give it one short look before deciding.
-  if (liveness.reason === 'refreshing') {
+  // `mcpOAuthGrantIsConnected`, not `live` — the same verdict the mint gate
+  // asks (D4.1). This gate completes an attach-and-resume against a credential
+  // that already exists; it issues nothing, seals nothing, and talks to no
+  // provider. What makes it the security boundary is that the decision comes
+  // from a grant row this daemon owns, read under the RESOLVER's identity (D3)
+  // — not the age of that grant's access token. Requiring `live` here while
+  // the mint gate accepts a refreshable grant would refuse a finish for the
+  // exact user the mint gate would have connected for free, and that is not
+  // hypothetical: the B1 lane is built for someone who signs in and comes back
+  // later, by which time an hour-lived access token has lapsed and only its
+  // refresh token is left. The old refusal told them to go and complete a
+  // sign-in they had already completed.
+  //
+  // A refresh this daemon started can still be in flight at exactly the moment
+  // the browser POSTs. Now that a refreshable grant counts, the only rows that
+  // reach here unconnected-and-`refreshing` are the ones with no spendable
+  // refresh token on file (`ambiguous`, or none at all), so the settle wait is
+  // narrower than it was — but it is the same race, and one short look still
+  // turns it into a success instead of advice to redo a sign-in that worked.
+  if (!mcpOAuthGrantIsConnected(liveness) && liveness.reason === 'refreshing') {
     await new Promise((resolve) => setTimeout(resolve, GRANT_REFRESH_SETTLE_MS));
     liveness = await readLiveness();
   }
 
-  if (!liveness.live) {
+  if (!mcpOAuthGrantIsConnected(liveness)) {
     console.info(
       `[widgets] event=oauth_widget_unverified server_id=${params.mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
     );

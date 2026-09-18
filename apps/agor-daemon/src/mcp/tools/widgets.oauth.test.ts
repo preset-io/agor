@@ -23,7 +23,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../utils/append-system-message.js', () => ({
   appendSystemMessage: vi.fn(),
 }));
-vi.mock('../../services/mcp-oauth-grant-liveness.js', () => ({
+// Only the DATABASE read is stubbed. `mcpOAuthGrantIsConnected` — the verdict
+// the mint gate asks of that read — is kept real on purpose: stubbing it would
+// make the convergence suite at the bottom of this file assert that two
+// surfaces agree with a test double rather than with each other.
+vi.mock('../../services/mcp-oauth-grant-liveness.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/mcp-oauth-grant-liveness.js')>()),
   resolveMCPOAuthGrantLiveness: vi.fn(),
 }));
 /**
@@ -56,10 +61,15 @@ vi.mock('@agor/core/db', async (importOriginal) => ({
   },
 }));
 
-import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import type { MCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { registerAllWidgets } from '../../widgets/index.js';
 import { _resetWidgetRegistryForTests } from '../../widgets/registry.js';
+import { summarizeMcpServer } from './mcp-servers.js';
 import { registerWidgetTools } from './widgets.js';
 
 // The mint gate lives on the registry entry, so the tool is only as guarded as
@@ -511,6 +521,116 @@ describe('agor_widgets_request_oauth — already connected', () => {
 
     expect(livenessStub).toHaveBeenCalledWith(expect.anything(), 'srv-notion', 'user-actor');
   });
+
+  it('treats a grant that is one refresh away from usable as already connected', async () => {
+    // D4.1. This exact state — bound, access token lapsed, refresh token on
+    // file and of known outcome — is what `agor_mcp_servers_auth_status` has
+    // already told this agent is `oauth_authenticated: true`, and what the
+    // UI's auth badge shows as connected. Rendering a Connect button for it
+    // would be Agor saying the server works and then offering to connect it.
+    //
+    // Nothing is granted by the short-circuit: the credential exists either
+    // way, and if the JIT refresh does fail at call time the reactive recovery
+    // lane offers a reconnect, which is what that lane is for.
+    livenessStub.mockResolvedValue({
+      live: false,
+      reason: 'expired',
+      refreshable: true,
+    } satisfies MCPOAuthGrantLiveness);
+    const { app, calls } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(payload(result)).toMatchObject({
+      status: 'already_present',
+      mcp_server_id: 'srv-notion',
+    });
+    // Attached and resumed, exactly as for a live grant — not merely "no
+    // button rendered".
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeDefined();
+    expect(
+      JSON.stringify(calls.find((c) => c.service === '/sessions/:id/prompt')?.args[0])
+    ).toContain('already connected');
+  });
+
+  it('still renders the button for a refresh whose outcome nobody knows', async () => {
+    // The other half of the rule, so the widening above is not read as "any
+    // grant row will do". An `ambiguous` refresh — nobody knows whether the
+    // refresh token was already spent — is not `refreshable`, so this is a
+    // server the user really may have to sign in to again.
+    livenessStub.mockResolvedValue({
+      live: false,
+      reason: 'refreshing',
+      refreshable: false,
+    } satisfies MCPOAuthGrantLiveness);
+    const { app } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(payload(result).status).toBe('requested');
+  });
+});
+
+/**
+ * The mint gate and the agent-facing read answer the SAME question (D4.1).
+ *
+ * This is the invariant that went missing twice: `agor_mcp_servers_auth_status`
+ * told an agent a server was connected while this tool would still have minted
+ * a Connect button for it, and no test on either side could see the
+ * disagreement because each pinned its own surface.
+ *
+ * So the assertion is not "the short-circuit fired" but "the short-circuit
+ * fired exactly when the agent-facing read says connected", over every liveness
+ * shape, with the shared verdict left unstubbed as the hinge. A future change
+ * that widens or narrows one surface alone fails here.
+ *
+ * `mcp-servers.auth-status.test.ts` pins the other end of the same chain: that
+ * the agent-facing read is `mcpOAuthGrantIsConnected` of a REAL database read,
+ * state by state, and that it matches the UI badge's rule.
+ */
+describe('the mint gate and the agent-facing read agree, state by state', () => {
+  const summarizeCtx = {
+    db: {} as never,
+    baseServiceParams: { user: { user_id: 'user-actor', role: 'member' }, authenticated: true },
+  } as never;
+
+  it.each([
+    { state: 'a live grant', liveness: { live: true, reason: 'live', refreshable: false } },
+    { state: 'no grant at all', liveness: { live: false, reason: 'no_grant', refreshable: false } },
+    {
+      state: 'an expired grant one refresh away from usable',
+      liveness: { live: false, reason: 'expired', refreshable: true },
+    },
+    {
+      state: 'a refresh in flight with a spendable token behind it',
+      liveness: { live: false, reason: 'refreshing', refreshable: true },
+    },
+    {
+      state: 'a refresh of unknown outcome',
+      liveness: { live: false, reason: 'refreshing', refreshable: false },
+    },
+    {
+      state: 'a grant whose server configuration moved under it',
+      liveness: { live: false, reason: 'unbound', refreshable: false },
+    },
+  ] satisfies Array<{ state: string; liveness: MCPOAuthGrantLiveness }>)(
+    '$state',
+    async ({ liveness }) => {
+      livenessStub.mockResolvedValue(liveness);
+      const { app } = makeApp();
+      const tools = registerAndCapture({ app });
+
+      const minted = payload(
+        await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+      ).status;
+      const summary = await summarizeMcpServer(summarizeCtx, OAUTH_SERVER as never);
+
+      expect(minted === 'already_present').toBe(summary.oauth_authenticated);
+      // And both are the one shared verdict, not merely each other.
+      expect(summary.oauth_authenticated).toBe(mcpOAuthGrantIsConnected(liveness));
+    }
+  );
 });
 
 describe('agor_widgets_request_oauth — superseding a stale Connect button', () => {

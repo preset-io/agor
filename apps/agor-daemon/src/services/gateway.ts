@@ -144,7 +144,10 @@ import {
   type SlackConnectCoordinates,
 } from './mcp-oauth-connect-delivery.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
-import { resolveMCPOAuthGrantLiveness } from './mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from './mcp-oauth-grant-liveness.js';
 import {
   MCP_SLACK_CONNECT_EVENT_TYPE,
   MCP_SLACK_CONNECT_SHARED_WARNING_KEY,
@@ -2530,12 +2533,14 @@ export class GatewayService {
     // leaves a real grant behind an unresolved widget, and a card that only
     // reads the delivery record renders that as a sign-in still in flight,
     // forever, with nothing to press. Read through the one liveness function
-    // (D4), for the credential user the widget was minted for, so the card
-    // cannot offer a finish `/oauth-resolve` would then refuse.
+    // and the one verdict (D4/D4.1), for the credential user the widget was
+    // minted for, so the card cannot offer a finish `/oauth-resolve` would
+    // then refuse — nor withhold one it would accept, which is what keying
+    // this on `live` alone did to the user who came back an hour later.
     //
     // Only asked while the widget is unresolved — a resolved card's state is
     // decided by the widget row alone — so a connected thread costs no read.
-    const grantLive =
+    const grantConnected =
       binding.ok && (widget.status === 'pending' || widget.status === 'resolving')
         ? await this.readInTenantScope((db) =>
             resolveMCPOAuthGrantLiveness(
@@ -2544,7 +2549,7 @@ export class GatewayService {
               binding.task.created_by as UserID
             )
           )
-            .then((liveness) => liveness.live)
+            .then(mcpOAuthGrantIsConnected)
             .catch(() => false)
         : false;
     // A re-issue offers a fresh SIGN-IN link, which is exactly what a landed
@@ -2552,13 +2557,13 @@ export class GatewayService {
     // a re-issue produces, leaving it set would defeat the no-op shortcut and
     // re-render the card on every repair tick.
     const willReissue =
-      binding.ok && !grantLive && mcpSlackConnectMayReissue(widget, delivery, now);
+      binding.ok && !grantConnected && mcpSlackConnectMayReissue(widget, delivery, now);
     let state = mcpSlackConnectRenderedState(
       {
         widget,
         delivery,
         willReissue,
-        grantLive,
+        grantConnected,
         ...(binding.ok ? {} : { refusal: binding.reason }),
       },
       now
@@ -4953,19 +4958,12 @@ export class GatewayService {
 
         // Check which MCP servers are not authenticated for this user.
         //
-        // This is the ONE surface that deliberately answers looser than
-        // `resolveMCPOAuthGrantLiveness`'s `live`, and it gets that widening
-        // from the same read rather than from a second copy of the rule. It
-        // suppresses the warning for `refreshable` too — a grant whose access
-        // token has expired but whose refresh token the inject hook will spend
-        // JIT, before the executor ever sees it.
-        //
-        // The asymmetry is deliberate and belongs to this surface only: the
-        // cost of a wrong warning here is telling a Slack thread a connection
-        // is broken when the next turn will use it fine, whereas the cost of a
-        // wrong `live` anywhere that grants something is resolving a widget
-        // against a credential nobody re-obtained. Warnings may be optimistic;
-        // grants may not. Nothing here attaches, mints, or resolves.
+        // `mcpOAuthGrantIsConnected`, the one verdict — not a second copy of
+        // the rule, and no longer a widening this surface holds alone. It
+        // counts `refreshable` because a grant whose access token has expired
+        // but whose refresh token the inject hook will spend JIT, before the
+        // executor ever sees it, is a working connection; telling a Slack
+        // thread otherwise is a false alarm on a prompt nobody can act on.
         //
         // Read inside a tenant database scope: this listener holds tenant
         // identity and no transaction, and `resolveMCPOAuthGrantLiveness`
@@ -4981,7 +4979,7 @@ export class GatewayService {
               const liveness = await this.readInTenantScope((db) =>
                 resolveMCPOAuthGrantLiveness(db, serverId as MCPServerID, user.user_id as UserID)
               );
-              if (!liveness.live && !liveness.refreshable) {
+              if (!mcpOAuthGrantIsConnected(liveness)) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }
             }

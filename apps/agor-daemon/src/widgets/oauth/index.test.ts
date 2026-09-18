@@ -18,7 +18,10 @@
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../services/mcp-oauth-grant-liveness.js', () => ({
+// Only the database read is stubbed; `mcpOAuthGrantIsConnected` — the verdict
+// this gate asks of it, shared with the mint gate — stays real.
+vi.mock('../../services/mcp-oauth-grant-liveness.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/mcp-oauth-grant-liveness.js')>()),
   resolveMCPOAuthGrantLiveness: vi.fn(),
 }));
 
@@ -198,7 +201,7 @@ describe('oauth widget — role floor', () => {
 });
 
 describe('oauth widget — resolveFromDaemonVerification', () => {
-  it('refuses, and does NOT attach, when no live grant exists', async () => {
+  it('refuses, and does NOT attach, when no grant exists', async () => {
     livenessStub.mockResolvedValue({ live: false, reason: 'no_grant', refreshable: false });
     const { ctx, attachSpy } = makeCtx();
 
@@ -206,17 +209,55 @@ describe('oauth widget — resolveFromDaemonVerification', () => {
     expect(attachSpy).not.toHaveBeenCalled();
   });
 
+  it('refuses an expired grant with nothing left to refresh with', async () => {
+    // The other side of the widening below: `expired` is not by itself a
+    // finish. Without a spendable refresh token the next turn has no
+    // credential, and this user really does have to sign in again.
+    livenessStub.mockResolvedValue({ live: false, reason: 'expired', refreshable: false });
+    const { ctx, attachSpy } = makeCtx();
+
+    await expect(resolve(ctx)).rejects.toThrow(/has not completed/i);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * D4.1: the gate asks the same verdict the mint gate asks.
+   *
+   * This is the B1 user, one hour later. Their sign-in landed, the page went
+   * away before the POST, and by the time they press *Finish connecting* the
+   * access token that sign-in produced has lapsed — leaving a bound grant with
+   * a refresh token the inject hook will spend before the executor sees it.
+   *
+   * Requiring `live` here refused them, with copy telling them to go and
+   * complete a sign-in they had already completed — while the mint gate would
+   * have attached and resumed for the very same grant, for free. Nothing is
+   * issued or sealed by resolving: the credential exists, and this attaches its
+   * server to the session and wakes the agent.
+   */
+  it('finishes for a grant whose access token lapsed while the user was away', async () => {
+    livenessStub.mockResolvedValue({ live: false, reason: 'expired', refreshable: true });
+    const { ctx, attachSpy } = makeCtx();
+
+    const meta = await resolve(ctx);
+    expect(meta.attached).toBe(true);
+    expect(attachSpy).toHaveBeenCalled();
+    // Straight through: no settle wait, because there is no race to settle.
+    expect(livenessStub).toHaveBeenCalledTimes(1);
+  });
+
   /**
    * The daemon's JIT refresh can be in flight at exactly the moment the
    * browser POSTs: the callback persisted the grant and the inject hook is
-   * already spending it. Refusing is right — nobody knows the outcome of a
-   * `refreshing` row, so nothing may be granted against it — but the user on
-   * the other end just finished signing in, and "finish the provider sign-in"
-   * is both false and an instruction to redo a flow that worked.
+   * already spending it. A `refreshing` row with a spendable refresh token now
+   * counts on the first read; this is the narrower remainder — `ambiguous`, or
+   * nothing left to refresh with — where nobody knows the outcome yet, so the
+   * gate still refuses, but the user on the other end just finished signing in
+   * and "finish the provider sign-in" would be both false and an instruction
+   * to redo a flow that worked. One short look turns the race into a success.
    */
-  it('re-reads once when a refresh is in flight, and resolves if it settles', async () => {
+  it('re-reads once when a refresh of unknown outcome is in flight, and resolves if it settles', async () => {
     livenessStub
-      .mockResolvedValueOnce({ live: false, reason: 'refreshing', refreshable: true })
+      .mockResolvedValueOnce({ live: false, reason: 'refreshing', refreshable: false })
       .mockResolvedValueOnce({ live: true, reason: 'live', refreshable: false });
     const { ctx, attachSpy } = makeCtx();
 
@@ -227,7 +268,7 @@ describe('oauth widget — resolveFromDaemonVerification', () => {
   });
 
   it('tells a still-refreshing user to wait, not to sign in again', async () => {
-    livenessStub.mockResolvedValue({ live: false, reason: 'refreshing', refreshable: true });
+    livenessStub.mockResolvedValue({ live: false, reason: 'refreshing', refreshable: false });
     const { ctx, attachSpy } = makeCtx();
 
     const error = await resolve(ctx).then(

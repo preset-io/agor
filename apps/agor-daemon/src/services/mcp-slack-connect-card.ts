@@ -50,8 +50,9 @@ export interface MCPSlackConnectStateInput {
   /** The caller is about to mint a fresh link, clearing the previous outcome. */
   willReissue?: boolean;
   /**
-   * The credential this widget was minted for exists and is spendable right
-   * now, read through `resolveMCPOAuthGrantLiveness` by the caller.
+   * The credential this widget was minted for is on file and expected to work,
+   * read by the caller through `resolveMCPOAuthGrantLiveness` and
+   * `mcpOAuthGrantIsConnected`.
    *
    * Read from the grant rather than from `oauth_succeeded_at` on purpose: the
    * delivery record remembers that a browser round-trip finished, which is a
@@ -62,11 +63,14 @@ export interface MCPSlackConnectStateInput {
    * function as the resolve gate, so the card cannot offer a finish the
    * resolver would refuse.
    *
-   * `refreshable` deliberately does not count: the resolve gate spends only a
-   * live grant, so a card that treated a stale one as landed would offer a
-   * button that fails.
+   * It counts `refreshable` for the same reason the resolve gate does (D4.1),
+   * and the direction of that fix matters here: keying this on `live` alone
+   * meant a card that had said *Finish connecting* reverted to a buttonless
+   * "sign-in in progress" the moment an hour-lived access token lapsed —
+   * withholding a finish from the very user this lane exists for, whose
+   * sign-in landed and who then went away.
    */
-  grantLive?: boolean;
+  grantConnected?: boolean;
 }
 
 /**
@@ -116,7 +120,7 @@ export function mcpSlackConnectRenderedState(
     widget.status === 'resolving' &&
     now - new Date(widget.resolution_claim?.claimed_at ?? '').getTime() >=
       WIDGET_RECLAIM_ABANDONED_AFTER_MS;
-  if (input.grantLive && (widget.status === 'pending' || claimIsAbandoned)) {
+  if (input.grantConnected && (widget.status === 'pending' || claimIsAbandoned)) {
     // No delivery record yet means the first card has not been posted, and the
     // caller can mint a link for it — the same one `connect_required` gets.
     return linkLapsed ? 'finish_stalled' : 'finish_required';
@@ -129,9 +133,11 @@ export function mcpSlackConnectRenderedState(
   if (input.willReissue) return 'connect_required';
   if (!delivery) return 'connect_required';
   if (linkLapsed) return 'expired';
-  // The round-trip finished but no spendable grant is on file — it was
-  // revoked, or it is mid-refresh. Still pending from this card's point of
-  // view, and the link has not lapsed, so the thread waits.
+  // The round-trip finished and no usable credential is on file — it was
+  // revoked, it no longer binds to the server's configuration, or a refresh of
+  // unknown outcome is in flight with nothing spendable behind it. Still
+  // pending from this card's point of view, and the link has not lapsed, so
+  // the thread waits.
   if (delivery.oauth_succeeded_at) return 'sign_in_pending';
   if (delivery.oauth_failed_at) return 'expired';
   if (delivery.token_consumed_at) return 'sign_in_pending';

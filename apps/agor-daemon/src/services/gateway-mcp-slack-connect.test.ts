@@ -59,15 +59,19 @@ vi.mock('@agor/core/db', async () => {
 // the real read — which, against the harness's stand-in database handle,
 // answers "no grant" the same way the production read would for a user who has
 // not signed in.
-const grantLiveness = vi.hoisted(() => ({ live: false }));
+const grantLiveness = vi.hoisted(() => ({ live: false, refreshable: false }));
 vi.mock('./mcp-oauth-grant-liveness.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('./mcp-oauth-grant-liveness.js');
   return {
     ...actual,
+    // The real `mcpOAuthGrantIsConnected` is kept (via `actual`) rather than
+    // stubbed: the whole point of D4.1 is that the delivery loop asks the same
+    // verdict every other surface asks, so a test that also stubbed the
+    // verdict could not see it drift.
     resolveMCPOAuthGrantLiveness: async () => ({
       live: grantLiveness.live,
-      reason: grantLiveness.live ? 'live' : 'no_grant',
-      refreshable: false,
+      reason: grantLiveness.live ? 'live' : grantLiveness.refreshable ? 'expired' : 'no_grant',
+      refreshable: grantLiveness.refreshable,
     }),
   };
 });
@@ -594,6 +598,7 @@ describe('Slack MCP connect durable delivery', () => {
   beforeEach(() => {
     killSwitch.stub = async () => true;
     grantLiveness.live = false;
+    grantLiveness.refreshable = false;
   });
 
   const SECRET = 'connect-card-test-master-secret';
@@ -1231,12 +1236,18 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
       oauth_succeeded_at: '2026-09-16T12:02:00Z',
     });
     expect(
-      mcpSlackConnectRenderedState({ widget: widget(), delivery: succeeded, grantLive: true }, NOW)
+      mcpSlackConnectRenderedState(
+        { widget: widget(), delivery: succeeded, grantConnected: true },
+        NOW
+      )
     ).toBe('finish_required');
     // Without the grant the same record is still a round-trip in flight: the
     // card follows the credential, not the browser's report of one.
     expect(
-      mcpSlackConnectRenderedState({ widget: widget(), delivery: succeeded, grantLive: false }, NOW)
+      mcpSlackConnectRenderedState(
+        { widget: widget(), delivery: succeeded, grantConnected: false },
+        NOW
+      )
     ).toBe('sign_in_pending');
   });
 
@@ -1253,7 +1264,7 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
     // whose answer is to ask again at no cost, not to sign in again.
     expect(
       mcpSlackConnectRenderedState(
-        { widget: widget(), delivery: succeeded, grantLive: true },
+        { widget: widget(), delivery: succeeded, grantConnected: true },
         afterExpiry
       )
     ).toBe('finish_stalled');
@@ -1269,7 +1280,10 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
   it('waits for a live resolution claim, then offers the finish once it is abandoned', () => {
     const live = widget({ status: 'resolving', resolution_claim: abandonedClaim(5_000) });
     expect(
-      mcpSlackConnectRenderedState({ widget: live, delivery: delivery(), grantLive: true }, NOW)
+      mcpSlackConnectRenderedState(
+        { widget: live, delivery: delivery(), grantConnected: true },
+        NOW
+      )
     ).toBe('sign_in_pending');
     // Past the point where `submissions.ts` will take the claim over, the
     // button does something again — the two rules are the same constant.
@@ -1279,7 +1293,7 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
     });
     expect(
       mcpSlackConnectRenderedState(
-        { widget: abandoned, delivery: delivery(), grantLive: true },
+        { widget: abandoned, delivery: delivery(), grantConnected: true },
         NOW
       )
     ).toBe('finish_required');
@@ -1292,7 +1306,7 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
     ]) {
       expect(
         mcpSlackConnectRenderedState(
-          { widget: widgetRow, delivery: delivery(), grantLive: true },
+          { widget: widgetRow, delivery: delivery(), grantConnected: true },
           NOW
         )
       ).not.toMatch(/^finish/);
@@ -1302,14 +1316,14 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
         {
           widget: widget(),
           delivery: delivery({ binding_invalidated_at: '2026-09-16T12:03:00Z' }),
-          grantLive: true,
+          grantConnected: true,
         },
         NOW
       )
     ).toBe('unavailable');
     expect(
       mcpSlackConnectRenderedState(
-        { widget: widget(), delivery: delivery(), grantLive: true, refusal: 'unaligned' },
+        { widget: widget(), delivery: delivery(), grantConnected: true, refusal: 'unaligned' },
         NOW
       )
     ).toBe('unavailable');
@@ -1349,6 +1363,7 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
   beforeEach(() => {
     killSwitch.stub = async () => true;
     grantLiveness.live = true;
+    grantLiveness.refreshable = false;
   });
 
   /**
@@ -1405,6 +1420,40 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
     expect(after?.token_jti).toBe('jti-1');
     expect(after?.oauth_succeeded_at).toBe('2026-09-16T12:02:00.000Z');
     expect(after?.token_consumed_at).toBe('2026-09-16T12:01:00.000Z');
+  });
+
+  it('offers the finish for a grant whose access token lapsed while the user was away', async () => {
+    // D4.1, through the loop that actually renders the card. This is the same
+    // user as the test above, an hour later: the sign-in landed, nobody came
+    // back to POST, and the access token it produced has since expired —
+    // leaving a bound grant with a refresh token the inject hook will spend
+    // before the executor sees it.
+    //
+    // Keying the card on `live` alone reverted it from *Finish connecting* to
+    // a buttonless "sign-in is in progress … this message updates when it
+    // lands", forever, for the one user this whole lane exists for. The card
+    // asks the same verdict `/oauth-resolve` asks, so the button it offers is
+    // one the resolver accepts.
+    grantLiveness.live = false;
+    grantLiveness.refreshable = true;
+    const harness = deliveryHarness({
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      text: string;
+      blocks: { type: string; elements?: { text?: { text?: string }; url?: string }[] }[];
+    };
+    expect(request.text).toMatch(/Finish connecting Notion/);
+    const action = request.blocks.find((block) => block.type === 'actions');
+    expect(action?.elements?.[0]?.url).toMatch(/#token=/);
+    expect(harness.current()).toMatchObject({ rendered_state: 'finish_required' });
   });
 
   it('posts a finish link redemption will actually accept', async () => {
