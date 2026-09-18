@@ -298,7 +298,10 @@ import {
   hasMCPOAuthRelevantServerConfigurationChanged,
   lockMCPOAuthGrantConfiguration,
 } from './services/mcp-oauth-grant-binding.js';
-import { resolveMCPOAuthGrantLiveness } from './services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
@@ -5328,17 +5331,17 @@ export async function registerMCPServices(
       // `sign_in_pending` while this page mapped it straight to "connected",
       // which was a milestone the widget had not reached and the agent had
       // certainly not woken for.
-      const grantLive = await runInOAuthTenantScope(db, binding.claims.tid, () =>
+      const grantConnected = await runInOAuthTenantScope(db, binding.claims.tid, () =>
         resolveMCPOAuthGrantLiveness(
           db,
           binding.claims.mcp_server_id,
           binding.claims.credential_user_id
         )
       )
-        .then((liveness) => liveness.live)
+        .then(mcpOAuthGrantIsConnected)
         .catch(() => false);
       const state = mcpSlackConnectRenderedState(
-        { widget: binding.widget, delivery: binding.delivery, grantLive },
+        { widget: binding.widget, delivery: binding.delivery, grantConnected },
         Date.now()
       );
       return {

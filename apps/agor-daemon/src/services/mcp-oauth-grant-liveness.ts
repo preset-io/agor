@@ -16,30 +16,35 @@
  * longer bound to the server's current OAuth configuration is not something an
  * agent's next turn can spend, so none of them count.
  *
- * Two surfaces want a looser answer, and both take it from this same read
- * rather than from their own. The gateway's "not authenticated" warning
- * suppresses itself for a grant that is one JIT refresh away from usable,
- * because a spurious warning on a connection that will work is the costlier
- * error on a warning surface. `agor_mcp_servers_auth_status` reports that same
- * grant as authenticated, because its `oauth_authenticated: false` is exactly
- * what tells an agent to offer a Connect button, and offering one for a server
- * the next refresh will make work is the same costly error. It is also the
- * rule `mcp-oauth-status.ts` applies to the UI's auth badge, through
- * `oauthGrantCanAuthenticate`; badge and agent must not disagree about one
- * grant.
+ * Every one of those callers wants the same, looser answer, and they all take
+ * it from this read rather than from a copy: `mcpOAuthGrantIsConnected` below,
+ * which is `live || refreshable`. That disjunction is precisely
+ * `oauthGrantCanAuthenticate`, the rule `mcp-oauth-status.ts` applies to the
+ * UI's auth badge, so one grant cannot read connected on the badge and
+ * disconnected anywhere here. A grant whose access token has lapsed but whose
+ * refresh token is bound and of known outcome is one the inject hook's JIT
+ * refresh will spend before the executor ever sees it, so calling it
+ * disconnected is the costly error: it warns a Slack thread about a connection
+ * that works, tells an agent to offer a Connect button for a server that
+ * works, and — until D4.1 was closed — actually rendered that button.
  *
- * That widening is `refreshable` below — a named field on the one answer, not
- * a second rule. `live || refreshable` is precisely
- * `oauthGrantCanAuthenticate`. No surface that *grants* anything reads it: the
- * `oauth` widget's mint short-circuit and its resolution gate both still
- * require `live`.
+ * The rule that survives is about what a surface DOES, not about which fields
+ * it reads. A surface may be optimistic when it reports a connection, or when
+ * it decides whether to offer or complete an attach-and-resume, because the
+ * credential already exists and the worst case is a refresh that fails at call
+ * time into the reactive recovery lane that exists for exactly that. Strict is
+ * for issuing or sealing a credential — the callback exchange and the refresh
+ * path — and none of this function's callers is one of those. The widget's
+ * resolution gate looks like the exception and is not: it attaches an existing
+ * grant's server to a session, the same action the mint short-circuit takes,
+ * so it cannot correctly answer a stricter question than the mint gate asked.
+ * What makes it a security boundary is WHOSE grant it reads and that it reads
+ * one at all (D3) — never how recently that grant's access token was minted.
  *
- * Which leaves one known residual disagreement, in exactly one state: a bound,
- * expired, still-refreshable grant, which the agent-facing read now calls
- * authenticated while the mint short-circuit would still render a Connect
- * button for it. Closing that means widening the short-circuit, which is a
- * change to a gate and belongs in its own reviewed commit with its own test.
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ * `live` and `refreshable` stay separate fields because the rules that produce
+ * them are separate and `reason` has to tell them apart for copy. No caller
+ * should gate on `live` alone. See
+ * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` (D4, D4.1).
  *
  * The lookup key is the *credential* user, never the Session owner: shared-mode
  * servers key on `null`, per-user servers on whoever is actually prompting. See
@@ -61,7 +66,7 @@ type GrantLivenessDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 /**
  * Why the answer came out the way it did.
  *
- * Callers that merely gate on `live` ignore this. It exists because "no grant
+ * Callers that merely gate on the verdict ignore this. It exists because "no grant
  * at all" and "a refresh this daemon started is still in flight" are the same
  * verdict and completely different advice: telling the user who just finished
  * signing in to "finish the provider sign-in" is false.
@@ -89,12 +94,11 @@ export interface MCPOAuthGrantLiveness {
    * Not live now, but a bound grant with a refresh token of known outcome is
    * on file, so the inject hook's JIT refresh is expected to make it usable.
    *
-   * Only the two *reporting* surfaces may act on this: the gateway's
-   * pre-prompt warning, to stay quiet, and `agor_mcp_servers_auth_status`, to
-   * answer `oauth_authenticated`. Neither grants anything. It is never
-   * evidence that a sign-in completed — a refresh that has not happened yet
-   * cannot resolve a widget, and treating it as a grant would let a POST
-   * resolve against a credential nobody has re-obtained.
+   * Read through {@link mcpOAuthGrantIsConnected} rather than on its own. It
+   * is not evidence that a sign-in just happened; it says a credential is on
+   * file and expected to work, which is the question every caller here asks.
+   * What it must never become is evidence for issuing or sealing a token —
+   * nothing in this module's call graph does that.
    */
   refreshable: boolean;
   /**
@@ -106,6 +110,21 @@ export interface MCPOAuthGrantLiveness {
    * non-expiring grant, and for every verdict reached without a grant row.
    */
   expiresAt?: Date;
+}
+
+/**
+ * The one question every caller of this module actually asks: is a credential
+ * on file that this user's next turn can spend?
+ *
+ * A single named predicate rather than `live || refreshable` written out at
+ * six call sites, because the defect this lane keeps producing is two surfaces
+ * answering the same question differently — the agent reading "connected"
+ * while a card offers to connect, or a card offering a finish the resolver
+ * refuses. Divergence now requires editing this function, which a test can
+ * see.
+ */
+export function mcpOAuthGrantIsConnected(liveness: MCPOAuthGrantLiveness): boolean {
+  return liveness.live || liveness.refreshable;
 }
 
 /**

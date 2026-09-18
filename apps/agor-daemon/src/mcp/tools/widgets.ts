@@ -50,7 +50,10 @@ import {
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
@@ -794,12 +797,20 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // before the already-connected branch can attach anything.
       await authorizeWidgetMint('oauth', widgetMintCtx(ctx, targetSessionId), params);
 
-      // Already-connected short-circuit: a live grant means there is nothing
-      // to sign in to. Attach and resume immediately.
+      // Already-connected short-circuit: a credential on file means there is
+      // nothing to sign in to. Attach and resume immediately.
+      //
+      // `mcpOAuthGrantIsConnected`, not `live` — the same verdict
+      // `agor_mcp_servers_auth_status` gave the agent that called this tool
+      // (D4.1). A bound, expired, still-refreshable grant reads connected
+      // there, so rendering a Connect button for it here would be Agor telling
+      // the agent a server works and then offering to connect it. If the
+      // refresh does fail at call time, the reactive recovery lane offers a
+      // reconnect, which is what that lane is for; nothing is granted here.
       const liveness = await runWithMcpTenantDatabaseScope(ctx, (db) =>
         resolveMCPOAuthGrantLiveness(db, server.mcp_server_id, ctx.userId)
       );
-      if (liveness.live) {
+      if (mcpOAuthGrantIsConnected(liveness)) {
         return attachAndResume(
           ctx,
           targetSessionId,

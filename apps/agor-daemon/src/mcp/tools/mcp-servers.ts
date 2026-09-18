@@ -28,7 +28,10 @@ import {
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
@@ -93,21 +96,20 @@ async function getOAuthStatus(
   // purpose: MCP service responses have already passed through token injection
   // and secret redaction, so binding authority must come from stored state.
   //
-  // `live || refreshable`, not `live`. This boolean is what tells an agent
-  // whether to offer a Connect button (see the recovery copy further down), so
-  // a bound grant that the inject hook's next JIT refresh will make usable has
-  // to read as authenticated — otherwise the agent offers to reconnect a
-  // server that already works. That disjunction is exactly
-  // `oauthGrantCanAuthenticate`, which is what `mcp-oauth-status.ts` answers
-  // the UI's auth badge with: one grant, one verdict on both surfaces.
-  //
-  // The `oauth` widget's mint short-circuit is deliberately still stricter,
-  // and the residual disagreement that leaves is recorded on
-  // `resolveMCPOAuthGrantLiveness`.
+  // `mcpOAuthGrantIsConnected` — `live || refreshable`, not `live`. This
+  // boolean is what tells an agent whether to offer a Connect button (see the
+  // recovery copy further down), so a bound grant that the inject hook's next
+  // JIT refresh will make usable has to read as authenticated — otherwise the
+  // agent offers to reconnect a server that already works. That disjunction is
+  // exactly `oauthGrantCanAuthenticate`, which is what `mcp-oauth-status.ts`
+  // answers the UI's auth badge with, and since D4.1 it is also what the
+  // `oauth` widget's mint short-circuit asks: one grant, one verdict, so this
+  // tool cannot tell an agent a server is connected and then hand it a Connect
+  // button for the same server.
   const liveness = await runWithMcpTenantDatabaseScope(ctx, (db) =>
     resolveMCPOAuthGrantLiveness(db, mcpServer.mcp_server_id, ctx.userId)
   );
-  return liveness.live || liveness.refreshable
+  return mcpOAuthGrantIsConnected(liveness)
     ? { authenticated: true, tokenExpiresAt: liveness.expiresAt?.getTime() }
     : { authenticated: false };
 }
