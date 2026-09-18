@@ -56,4 +56,40 @@ describe('OnboardingBanners real-browser UX', () => {
     fireEvent.click(snooze);
     expect(screen.queryByText(/Claude Code rejected/)).not.toBeInTheDocument();
   });
+
+  it('stacks the message above the actions on a narrow viewport (no per-word tower)', async () => {
+    // Every configured browser instance is < 1024px, so the banner is mobile.
+    render(
+      <ConfigProvider theme={{ token: { motion: false } }}>
+        <div style={{ width: 360 }}>
+          <OnboardingBanners
+            user={USER}
+            mcpServerCount={1}
+            gatewayChannelCount={0}
+            integrationsHydrated
+            canManageMcp={false}
+            onOpenUserSettings={vi.fn()}
+            onOpenWorkspaceSettings={vi.fn()}
+            onOpenCatalog={vi.fn()}
+            onCheckAuth={vi.fn(async () => ({
+              status: 'unauthenticated' as const,
+              authenticated: false,
+              method: 'api-key' as const,
+            }))}
+            credentialVersion={0}
+            connectionReady
+          />
+        </div>
+      </ConfigProvider>
+    );
+
+    const message = await screen.findByText(/Claude Code rejected the configured credential/);
+    const button = screen.getByRole('button', { name: 'Review Claude Code settings' });
+    // Message spans a readable width (not squished to a ~60px per-word column).
+    expect(message.getBoundingClientRect().width).toBeGreaterThan(200);
+    // The action sits below the message, not beside it.
+    expect(button.getBoundingClientRect().top).toBeGreaterThan(
+      message.getBoundingClientRect().bottom - 2
+    );
+  });
 });

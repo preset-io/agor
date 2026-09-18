@@ -32,11 +32,13 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, Button, ConfigProvider, theme } from 'antd';
+import { Alert, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from './components/AgentSelectionGrid/availableAgents';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
+import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
@@ -99,7 +101,7 @@ import {
   enrichAuthenticatedUser,
   hasObservedOnboardingCompletion,
 } from './utils/currentUserAuthority';
-import { isMobileDevice } from './utils/deviceDetection';
+import { isMobileViewport } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
@@ -279,12 +281,13 @@ function DeviceRouter() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  useEffect(() => {
-    if (!routeUsesDeviceRouter(location.pathname)) return;
-
-    const checkAndRoute = () => {
-      const isMobile = isMobileDevice();
-      const isOnMobilePath = location.pathname.startsWith('/m');
+  // Reads the pathname explicitly so the resize subscription below can stay
+  // mounted across navigations instead of re-subscribing on every route change.
+  const checkAndRoute = useCallback(
+    (pathname: string) => {
+      if (!routeUsesDeviceRouter(pathname)) return;
+      const isMobile = isMobileViewport();
+      const isOnMobilePath = pathname.startsWith('/m');
 
       const state = agorStore.getState();
       const routeEntities = {
@@ -292,38 +295,33 @@ function DeviceRouter() {
         sessions: state.sessionById.values(),
       };
 
-      // Redirect mobile devices to mobile site
       if (isMobile && !isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'mobile', routeEntities), {
-          replace: true,
-        });
+        navigate(responsiveRoutePath(pathname, 'mobile', routeEntities), { replace: true });
+      } else if (!isMobile && isOnMobilePath) {
+        navigate(responsiveRoutePath(pathname, 'desktop', routeEntities), { replace: true });
       }
-      // Redirect desktop devices away from mobile site
-      else if (!isMobile && isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'desktop', routeEntities), {
-          replace: true,
-        });
-      }
-    };
+    },
+    [navigate]
+  );
 
-    // Check on mount and route change
-    checkAndRoute();
+  // Route change / mount.
+  useEffect(() => {
+    checkAndRoute(location.pathname);
+  }, [location.pathname, checkAndRoute]);
 
-    // Debounced resize handler to avoid excessive redirects
-    let resizeTimeout: NodeJS.Timeout;
+  // Resize subscription — mounted once, not re-created on navigation.
+  useEffect(() => {
+    let resizeTimeout: ReturnType<typeof setTimeout>;
     const handleResize = () => {
       clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(checkAndRoute, 200);
+      resizeTimeout = setTimeout(() => checkAndRoute(window.location.pathname), 200);
     };
-
-    // Listen for window resize events for responsive switching
     window.addEventListener('resize', handleResize);
-
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimeout);
     };
-  }, [location.pathname, navigate]);
+  }, [checkAndRoute]);
 
   return null;
 }
@@ -933,6 +931,18 @@ function AppContent() {
     );
     if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
+    // Always end onboarding inside the first-task composer: if the user skipped
+    // the LLM step, fall back to their governed default agent so the pre-seeded
+    // bootstrap session still opens. When no model is connected, that session's
+    // first turn surfaces the inline connect-model panel (MissingCredentialPanel)
+    // rather than dropping the user on a bare board with a passive banner.
+    const bootstrapAgent =
+      result.agent ??
+      resolveAvailableUserAgenticTool(
+        currentUser,
+        agorStore.getState().agenticToolSettingsByName,
+        AVAILABLE_AGENTS
+      );
     const seeded = await seedOnboardingTeammate({
       slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
@@ -942,7 +952,7 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       sourceBranch: result.sourceBranch,
       sourceRemoteUrl: result.sourceRemoteUrl,
-      agent: result.agent,
+      agent: bootstrapAgent,
       suggestedIntegrations: result.suggestedIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
@@ -1153,30 +1163,9 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="warning"
-          title={
-            unsupportedIdentityContract
-              ? 'Incompatible daemon configuration contract'
-              : 'Could not fetch daemon configuration'
-          }
-          description={
-            <div>
-              <p>{authConfigError.message}</p>
-              {unsupportedIdentityContract ? (
-                <p>Deploy compatible Agor UI and daemon versions, then retry.</p>
-              ) : (
-                <>
-                  <p>Make sure the daemon is running:</p>
-                  <p>
-                    <code>cd apps/agor-daemon && pnpm dev</code>
-                  </p>
-                </>
-              )}
-            </div>
-          }
-          action={<Button onClick={retryAuthConfig}>Retry</Button>}
-          showIcon
+        <DaemonConfigurationAlert
+          unsupportedIdentityContract={unsupportedIdentityContract}
+          onRetry={retryAuthConfig}
         />
       </div>
     );
@@ -1232,19 +1221,7 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="error"
-          title="Failed to connect to Agor daemon"
-          description={
-            <div>
-              <p>{connectionError}</p>
-              <p>
-                Start the daemon with: <code>cd apps/agor-daemon && pnpm dev</code>
-              </p>
-            </div>
-          }
-          showIcon
-        />
+        <DaemonConnectionAlert message={connectionError} />
       </div>
     );
   }
@@ -2150,6 +2127,27 @@ function AppContent() {
 
   const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
 
+  // The post-onboarding connect-AI / integrations banners. Shared verbatim by
+  // both shells so the mobile Home surfaces "AI not connected" proactively
+  // (desktop already shows it above its app content).
+  const onboardingBanners = (
+    <OnboardingBanners
+      user={currentUser}
+      mcpServerCount={mcpServerCount}
+      gatewayChannelCount={gatewayChannelCount}
+      integrationsHydrated={integrationsHydrated}
+      canManageMcp={canManageMcp}
+      onOpenUserSettings={(tab) => {
+        setUserSettingsInitialTab(tab);
+        setOpenUserSettings(true);
+      }}
+      onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+      onCheckAuth={handleCheckAuth}
+      credentialVersion={credentialVersion}
+      connectionReady={connected && !connecting}
+    />
+  );
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -2172,23 +2170,7 @@ function AppContent() {
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
       suppressLeftPanel={onboardingWizardOpen}
-      topBanner={
-        <OnboardingBanners
-          user={currentUser}
-          mcpServerCount={mcpServerCount}
-          gatewayChannelCount={gatewayChannelCount}
-          integrationsHydrated={integrationsHydrated}
-          canManageMcp={canManageMcp}
-          onOpenUserSettings={(tab) => {
-            setUserSettingsInitialTab(tab);
-            setOpenUserSettings(true);
-          }}
-          onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
-          onCheckAuth={handleCheckAuth}
-          credentialVersion={credentialVersion}
-          connectionReady={connected && !connecting}
-        />
-      }
+      topBanner={onboardingBanners}
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
@@ -2417,7 +2399,16 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
+                  authGeneration={authenticationGeneration}
+                  topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
+                  onCreateSession={handleCreateSession}
+                  onForkSession={handleForkSession}
+                  onBtwForkSession={handleBtwForkSession}
+                  onSpawnSession={handleSpawnSession}
+                  onUpdateSession={handleUpdateSession}
+                  onDeleteSession={handleDeleteSession}
+                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}
@@ -2426,6 +2417,10 @@ function AppContent() {
                   onLogout={logout}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
                   onOpenUserSettings={() => setOpenUserSettings(true)}
+                  onOpenAgenticToolSettings={(tool) => {
+                    setUserSettingsInitialTab(tool);
+                    setOpenUserSettings(true);
+                  }}
                   onUpdateBranch={handleUpdateBranch}
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}

@@ -54,6 +54,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -64,6 +65,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import {
@@ -172,6 +174,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     },
     ref
   ) => {
+    const isMobile = useIsMobileViewport();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -316,6 +319,9 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
+        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
+        // textarea also applies these metrics to its mention highlight overlay.
+        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
       />
     );
   }
@@ -354,6 +360,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
+  const isMobileShell = useIsMobileViewport();
+  // 44px touch targets for the header controls on the mobile full-screen shell.
+  const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
+    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+    : undefined;
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
@@ -938,7 +949,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               ? 'Queue here… @ for mentions, : for emoji'
               : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -977,6 +988,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
+    isMobileShell,
     isRunning,
     client,
     userById,
@@ -1544,7 +1556,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
-        borderLeft: `1px solid ${token.colorBorder}`,
+        // No adjacent canvas on the mobile full-screen shell, so drop the left seam.
+        borderLeft: isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
       }}
     >
       {/* Header */}
@@ -1559,6 +1572,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {/* Row 1: icon + title + badge + actions, center-aligned */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+            {/* Mobile: a full-screen session reads as a dismissible overlay, so a
+                leading Close (X) is the right metaphor. Desktop keeps its
+                trailing Close on the right (below). */}
+            {isMobileShell && (
+              <Tooltip title="Close">
+                <Button
+                  type="text"
+                  aria-label="Close"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ ...mobileHeaderButtonStyle, marginLeft: -token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
             <div style={{ flexShrink: 0 }}>
               <ToolIcon tool={session.agentic_tool} size={40} />
             </div>
@@ -1606,7 +1633,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       textAlign: 'left',
                     }}
                   >
-                    <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
+                    <Typography.Text
+                      strong
+                      style={{ fontSize: 18, ...getSessionTitleStyles(isMobileShell ? 1 : 2) }}
+                    >
                       {session.title || session.description
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
@@ -1640,7 +1670,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
+                <Button
+                  type="text"
+                  aria-label="More actions"
+                  icon={<EllipsisOutlined />}
+                  style={mobileHeaderButtonStyle}
+                />
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">
@@ -1649,16 +1684,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 aria-label="Search session"
                 icon={<SearchOutlined />}
                 onClick={openSearch}
+                style={mobileHeaderButtonStyle}
               />
             </Tooltip>
-            <Tooltip title="Close Panel">
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
-              />
-            </Tooltip>
+            {/* Desktop closes from the right; mobile closes from the leading X above. */}
+            {!isMobileShell && (
+              <Tooltip title="Close Panel">
+                <Button
+                  type="text"
+                  aria-label="Close panel"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
           </Space>
         </div>
         {/* Row 2: search bar — always in DOM, animates in/out */}
@@ -1704,7 +1744,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
               </Typography.Text>
             )}
-            {!query && (
+            {!query && !isMobileShell && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 Esc to close
               </Typography.Text>

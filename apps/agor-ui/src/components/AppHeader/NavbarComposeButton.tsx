@@ -1,19 +1,5 @@
-import type {
-  AgenticToolName,
-  AgorClient,
-  Branch,
-  CodexApprovalPolicy,
-  CodexSandboxMode,
-  EffortLevel,
-  PermissionMode,
-  User,
-} from '@agor-live/client';
-import {
-  DEFAULT_AGENTIC_TOOL_NAME,
-  getDefaultPermissionMode,
-  getTeammateConfig,
-  mapToCodexPermissionConfig,
-} from '@agor-live/client';
+import type { AgenticToolName, AgorClient, Branch, User } from '@agor-live/client';
+import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -34,13 +20,13 @@ import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
+import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
-import { buildConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
-import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
-  getUserAgenticToolDefault,
-  getUserDefaultConfigurationSource,
-} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+  buildNewSessionConfig,
+  getNewSessionDefaultValues,
+  getNewSessionToolSwitchValues,
+} from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -137,12 +123,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     (branch: Branch) => {
       if (mcpInitializedBranchIdRef.current === branch.branch_id) return;
       if (!mcpEditedRef.current) {
-        const branchMcpIds = branch.mcp_server_ids;
         form.setFieldValue(
           'mcpServerIds',
-          branchMcpIds && branchMcpIds.length > 0
-            ? branchMcpIds
-            : currentUser?.default_mcp_server_ids
+          resolveSessionMcpServerIds(currentUser?.default_mcp_server_ids, branch)
         );
       }
       mcpInitializedBranchIdRef.current = branch.branch_id;
@@ -193,13 +176,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       AVAILABLE_AGENTS
     );
     setSelectedAgent(primaryTool);
-    const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
     form.resetFields();
-    form.setFieldsValue({
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, primaryTool),
-      ...getFormValuesFromConfig(primaryTool, agentDefaults),
-      mcpServerIds: currentUser?.default_mcp_server_ids,
-    });
+    form.setFieldsValue(getNewSessionDefaultValues(currentUser, primaryTool));
   }, [open, form]);
 
   // Initialize branch inheritance once. Later branch resolution must not wipe
@@ -209,19 +187,11 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     initializeMcpForBranch(primaryBranch);
   }, [open, primaryBranch, initializeMcpForBranch]);
 
-  // Re-seed config defaults when the picked tool changes (mirrors NewSessionModal).
+  // Re-seed config defaults when the picked tool changes (same helper as NewSessionModal).
   useEffect(() => {
-    const tool = selectedAgent as AgenticToolName;
-    const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
-    form.setFieldsValue({
-      ...getFormValuesFromConfig(tool, agentDefaults),
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, tool),
-      ...(tool !== 'codex' && {
-        codexSandboxMode: undefined,
-        codexApprovalPolicy: undefined,
-        codexNetworkAccess: undefined,
-      }),
-    });
+    form.setFieldsValue(
+      getNewSessionToolSwitchValues(currentUser, selectedAgent as AgenticToolName)
+    );
   }, [selectedAgent, form, currentUser]);
 
   const closeAndReset = () => {
@@ -238,62 +208,15 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     );
   }, []);
 
-  const buildConfig = (branch: Branch): NewSessionConfig => {
-    const tool = selectedAgent as AgenticToolName;
-    const values = form.getFieldsValue(true);
-    const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
-    const permissionMode: PermissionMode =
-      (values.permissionMode as PermissionMode | undefined) ??
-      agentDefaults?.permissionMode ??
-      getDefaultPermissionMode(tool);
-    const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-    const inlineConfig = isInline
-      ? buildConfigFromFormValues(tool, {
-          modelConfig: values.modelConfig,
-          effort: values.effort,
-          permissionMode: values.permissionMode,
-        })
-      : undefined;
-    const fallbackMcpServerIds =
-      branch.mcp_server_ids && branch.mcp_server_ids.length > 0
-        ? branch.mcp_server_ids
-        : currentUser?.default_mcp_server_ids;
-
-    const config: NewSessionConfig = {
-      branch_id: branch.branch_id,
-      agent: tool,
-      agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
+  const buildConfig = (branch: Branch): NewSessionConfig =>
+    buildNewSessionConfig({
+      user: currentUser,
+      tool: selectedAgent as AgenticToolName,
+      branch,
+      values: form.getFieldsValue(true),
       initialPrompt: prompt,
-      modelConfig: isInline
-        ? inlineConfig?.modelConfig
-        : (values.modelConfig ?? agentDefaults?.modelConfig),
-      effort: isInline
-        ? undefined
-        : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
-      mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
-      permissionMode,
-      attachmentFiles:
-        attachments.length > 0 ? attachments.map((attachment) => attachment.file) : undefined,
-    };
-
-    if (tool === 'codex') {
-      const codexDefaults = mapToCodexPermissionConfig(permissionMode);
-      config.codexSandboxMode =
-        (values.codexSandboxMode as CodexSandboxMode | undefined) ??
-        agentDefaults?.codexSandboxMode ??
-        codexDefaults.sandboxMode;
-      config.codexApprovalPolicy =
-        (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
-        agentDefaults?.codexApprovalPolicy ??
-        codexDefaults.approvalPolicy;
-      config.codexNetworkAccess =
-        values.codexNetworkAccess ??
-        agentDefaults?.codexNetworkAccess ??
-        codexDefaults.networkAccess;
-    }
-
-    return config;
-  };
+      attachmentFiles: attachments.map((attachment) => attachment.file),
+    });
 
   const doSend = async (mode: SendMode, branch: Branch) => {
     if (!onCreateSession) return;

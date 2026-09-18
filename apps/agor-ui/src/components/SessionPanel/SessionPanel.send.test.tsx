@@ -692,3 +692,20 @@ describe('SessionPanel composer send', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 });
+
+describe('responsive shared prompt input', () => {
+  it('retains the mobile no-autozoom font and matching mention overlay metrics', () => {
+    const viewport = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+    try {
+      renderSessionPanel();
+      const textarea = screen.getByPlaceholderText(/Prompt here/);
+      expect(textarea.style.fontSize).toBe('16px');
+      fireEvent.change(textarea, { target: { value: 'Ask @alice about the fictional project' } });
+      const overlay = textarea.parentElement?.querySelector<HTMLElement>('div[aria-hidden="true"]');
+      expect(overlay).not.toBeNull();
+      expect(overlay?.style.fontSize).toBe(textarea.style.fontSize);
+    } finally {
+      viewport.mockRestore();
+    }
+  });
+});

@@ -84,17 +84,26 @@ export function GlassPanelHighlights({
 export interface GlassPanelProps extends CardProps {
   surfaceAlpha?: number;
   highlights?: boolean | GlassPanelHighlightsProps;
+  /**
+   * Set false to skip the backdrop-filter and use a solid surface. Used on the
+   * mobile shell, where stacking several blur layers in one scroll container
+   * janks low-end devices (and the blur is near-invisible at this alpha).
+   */
+  blur?: boolean;
 }
 
 export function GlassPanel({
   surfaceAlpha = 0.7,
   highlights = false,
+  blur = true,
   style,
   children,
   ...cardProps
 }: GlassPanelProps) {
   const { token } = theme.useToken();
-  const glassStyle = glassCardStyle(token, surfaceAlpha);
+  const glassStyle = blur
+    ? glassCardStyle(token, surfaceAlpha)
+    : { background: token.colorBgContainer };
   const highlightProps = highlights === true ? {} : highlights || null;
 
   return (

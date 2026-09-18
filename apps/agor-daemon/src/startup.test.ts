@@ -2,6 +2,15 @@ import { createTenantScopedDatabaseProxy, MissingTenantDatabaseScopeError } from
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import * as executorResponseChannel from './executor-response-channel.js';
+import { NOOP_METRICS } from './metrics/noop.js';
+import { NOOP_DAEMON_OPERATIONAL_METRICS } from './metrics/operational.js';
+import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
+import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
+import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
+import { SchedulerService } from './services/scheduler.js';
+import { SessionQueueWorker } from './services/session-queue-worker.js';
+import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
 import {
   cleanupOrphanStatuses,
   createEnvironmentHealthMonitor,
@@ -10,7 +19,9 @@ import {
   type StartupContext,
   shouldContainLocalExecutorsOnShutdown,
   shouldReconnectSocketClientsOnShutdown,
+  startup,
 } from './startup.js';
+import * as gitCredentialScan from './utils/git-remote-credential-scan.js';
 
 interface StartupFixtures {
   orphanedTasks?: Task[];
@@ -380,4 +391,129 @@ describe('stuck-idle sweep (IDLE + ready_for_prompt=false)', () => {
 
     expect(sessionsService.patch).not.toHaveBeenCalled();
   });
+});
+
+describe('startup operational metrics lifecycle', () => {
+  it.each(['completed', 'timed out'] as const)(
+    'starts sampling and stops before exporter close when socket drain %s',
+    async (drain) => {
+      vi.useFakeTimers();
+      try {
+        for (const prototype of [
+          TaskRuntimeReconciler.prototype,
+          SessionQueueWorker.prototype,
+          SchedulerService.prototype,
+          KnowledgeEmbeddingIndexer.prototype,
+          DiscordMessageDeliveryWorker.prototype,
+        ]) {
+          vi.spyOn(prototype, 'start').mockImplementation(() => undefined);
+        }
+        vi.spyOn(DistributedHealthMonitor.prototype, 'initialize').mockResolvedValue(undefined);
+        vi.spyOn(DistributedHealthMonitor.prototype, 'cleanup').mockResolvedValue(undefined);
+        vi.spyOn(gitCredentialScan, 'scrubManagedGitRemoteCredentials').mockResolvedValue(
+          undefined
+        );
+        vi.spyOn(executorResponseChannel, 'beginExecutorResponseDrain').mockImplementation(
+          () => undefined
+        );
+        vi.spyOn(console, 'log').mockImplementation(() => undefined);
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const events: string[] = [];
+        const operational = {
+          ...NOOP_DAEMON_OPERATIONAL_METRICS,
+          enabled: true,
+          start: vi.fn(() => {
+            events.push('start');
+          }),
+          stop: vi.fn(() => {
+            events.push('stop');
+          }),
+        };
+        const metrics = {
+          ...NOOP_METRICS,
+          enabled: true,
+          close: vi.fn(async () => {
+            events.push('exporter close');
+          }),
+        };
+        const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+          events.push('exit');
+          return undefined as never;
+        });
+        const signals = new Map<string | symbol, () => Promise<void>>();
+        vi.spyOn(process, 'on').mockImplementation((event, listener) => {
+          signals.set(event, listener as () => Promise<void>);
+          return process;
+        });
+        const { ctx } = makeStartupContextWithGuardedDb();
+        ctx.taskRuntimePolicy = 'shared_postgres';
+        ctx.environmentHealthMonitorPolicy = 'shared_postgres';
+        ctx.environmentHealthMonitorSettings = {
+          scanIntervalMs: 5_000,
+          maxIdleIntervalMs: 30_000,
+          startupOffsetMaxMs: 3_000,
+          scanBatchSize: 32,
+          maxInFlight: 8,
+          httpTimeoutMs: 1_000,
+          claimLeaseMs: 15_000,
+          shutdownDrainTimeoutMs: 5_000,
+        };
+        const settings = new Map<string, unknown>([
+          ['metrics', metrics],
+          ['daemonOperationalMetrics', operational],
+        ]);
+        ctx.app = {
+          ...ctx.app,
+          get: (name: string) => settings.get(name),
+          set: (name: string, value: unknown) => settings.set(name, value),
+          listen: vi.fn(async () => {
+            events.push('listen');
+            return {};
+          }),
+        } as unknown as StartupContext['app'];
+        const socketClose = vi.fn((done: () => void) => {
+          events.push('socket close');
+          if (drain === 'completed') done();
+        });
+        ctx.getSocketServer = () =>
+          ({
+            sockets: { sockets: new Map() },
+            close: socketClose,
+          }) as unknown as ReturnType<StartupContext['getSocketServer']>;
+
+        await startup(ctx);
+        expect(events).toEqual(['listen', 'start']);
+        expect(operational.start).toHaveBeenCalledOnce();
+        expect(signals.has('SIGINT')).toBe(true);
+        const shutdown = signals.get('SIGTERM');
+        if (!shutdown) throw new Error('Missing SIGTERM handler');
+        const stopping = shutdown();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(socketClose).toHaveBeenCalledOnce();
+        if (drain === 'timed out') {
+          expect(operational.stop).not.toHaveBeenCalled();
+          expect(metrics.close).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        await stopping;
+        expect(events).toEqual([
+          'listen',
+          'start',
+          'socket close',
+          'stop',
+          'exporter close',
+          'exit',
+        ]);
+        expect(exit).toHaveBeenCalledWith(0);
+        await shutdown();
+        expect(operational.stop).toHaveBeenCalledOnce();
+        expect(metrics.close).toHaveBeenCalledOnce();
+        expect(exit).toHaveBeenCalledOnce();
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    }
+  );
 });

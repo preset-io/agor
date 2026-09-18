@@ -254,10 +254,11 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       return { branchId: branch.branch_id, sessionId: existingSession.session_id };
     }
 
-    // No agent means the LLM step was skipped: there is no configured model to
-    // run on. Silently defaulting to claude-code here would open a session whose
-    // very first turn fails on missing credentials, so stop at the workspace and
-    // tell the user what to do instead.
+    // Callers resolve a fallback agent so onboarding lands in the first-task
+    // composer even when the LLM step was skipped (the composer then surfaces
+    // the inline connect-model panel). This branch only remains for the rare
+    // case where no agentic tool is available at all — then there is nothing to
+    // open a session with, so stop at the workspace with guidance.
     if (!input.agent) {
       warn(
         `${teammateName}'s workspace is ready. Connect an AI model in Settings - AI & Agents to start your first session.`

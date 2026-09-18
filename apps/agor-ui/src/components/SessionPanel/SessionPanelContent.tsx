@@ -9,6 +9,7 @@ import {
 import { Alert, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -59,6 +60,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
+    const isMobileShell = useIsMobileViewport();
     const { showSuccess, showError } = useThemedMessage();
     const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
     const isQueueHeldByFailure = queuedTasks.length > 0 && session.status === 'failed';
@@ -136,7 +138,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
                   identityLink={sessionPath(session.session_id)}
-                  truncateToFit
+                  // Full labels on mobile (wrap) instead of cramped truncation.
+                  truncateToFit={!isMobileShell}
                 />
               )}
             </BranchMetadataRow>

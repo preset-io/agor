@@ -1,74 +1,82 @@
-import type { Board, Branch, Session, User } from '@agor-live/client';
+import type { Board, Session } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileHomePage } from './MobileHomePage';
 
-function LocationProbe() {
-  return <output data-testid="location">{useLocation().pathname}</output>;
+function renderHome(props: Partial<React.ComponentProps<typeof MobileHomePage>> = {}) {
+  return render(
+    <MemoryRouter initialEntries={['/m']}>
+      <Routes>
+        <Route
+          path="/m"
+          element={
+            <MobileHomePage
+              sessionById={props.sessionById ?? new Map()}
+              branchById={new Map()}
+              boardById={props.boardById ?? new Map()}
+              currentUser={{ user_id: 'u1', name: 'Ada Lovelace' } as never}
+              onAsk={props.onAsk ?? vi.fn()}
+              primaryTeammateName={props.primaryTeammateName}
+              assistantSessionCount={props.assistantSessionCount}
+              onOpenAssistantSessions={props.onOpenAssistantSessions}
+            />
+          }
+        />
+        <Route path="/m/sessions" element={<div>all sessions</div>} />
+        <Route path="/m/board/:id" element={<div>board view</div>} />
+      </Routes>
+    </MemoryRouter>
+  );
 }
 
 describe('MobileHomePage', () => {
-  it('shows workspace actions, stats, sessions, boards, knowledge, and setup', () => {
-    const onOpenSettings = vi.fn();
-    const onMenuClick = vi.fn();
-    render(
-      <MemoryRouter>
-        <MobileHomePage
-          user={{ user_id: 'user-1', name: 'Amin' } as User}
-          boardById={
-            new Map([
-              ['board-1', { board_id: 'board-1', name: 'Shipping', archived: false } as Board],
-            ])
-          }
-          branchById={
-            new Map([
-              [
-                'branch-1',
-                {
-                  branch_id: 'branch-1',
-                  board_id: 'board-1',
-                  name: 'feat/mobile',
-                  archived: false,
-                } as Branch,
-              ],
-            ])
-          }
-          sessionById={
-            new Map([
-              [
-                'session-1',
-                {
-                  session_id: 'session-1',
-                  branch_id: 'branch-1',
-                  created_by: 'user-1',
-                  title: 'Mobile polish',
-                  status: 'running',
-                  last_updated: '2026-08-14T00:00:00Z',
-                  archived: false,
-                } as Session,
-              ],
-            ])
-          }
-          onMenuClick={onMenuClick}
-          onOpenSettings={onOpenSettings}
-        />
-        <LocationProbe />
-      </MemoryRouter>
-    );
+  it('greets the user and triggers Ask primary', () => {
+    const onAsk = vi.fn();
+    renderHome({ onAsk, primaryTeammateName: 'Fable' });
+    expect(screen.getByText('Welcome back, Ada')).toBeInTheDocument();
+    expect(screen.getByText('Ask Fable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(onAsk).toHaveBeenCalled();
+  });
 
-    expect(screen.getByText('Hi, Amin! 👋')).toBeInTheDocument();
-    expect(screen.getByText('Mobile polish')).toBeInTheDocument();
-    expect(screen.getByText('Shipping')).toBeInTheDocument();
-    expect(screen.getByText('Knowledge Base')).toBeInTheDocument();
-    expect(screen.getByText('Workspace setup')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
-    expect(onMenuClick).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: /New board/ }));
-    expect(onOpenSettings).toHaveBeenCalledWith('boards');
-    fireEvent.click(screen.getByRole('button', { name: /Configure MCP tools/ }));
-    expect(onOpenSettings).toHaveBeenCalledWith('mcp');
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/knowledge');
+  it('lists recent sessions with an All sessions link, and navigates to boards', () => {
+    const sessionById = new Map<string, Session>([
+      [
+        's1',
+        { session_id: 's1', title: 'Recent work', status: 'idle', created_by: 'u1' } as Session,
+      ],
+    ]);
+    const boardById = new Map<string, Board>([
+      ['b1', { board_id: 'b1', name: 'Delivery' } as Board],
+    ]);
+    renderHome({ sessionById, boardById });
+
+    expect(screen.getByText('Recent work')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Delivery'));
+    expect(screen.getByText('board view')).toBeInTheDocument();
+  });
+
+  it('opens the assistant session list from the hero body while Ask stays compose', () => {
+    const onAsk = vi.fn();
+    const onOpenAssistantSessions = vi.fn();
+    renderHome({
+      onAsk,
+      primaryTeammateName: 'Fable',
+      assistantSessionCount: 3,
+      onOpenAssistantSessions,
+    });
+
+    // Count is surfaced on the hero.
+    expect(screen.getByText(/3 sessions/)).toBeInTheDocument();
+
+    // The body region opens the assistant's sessions, not compose.
+    fireEvent.click(screen.getByRole('button', { name: "View Fable's sessions" }));
+    expect(onOpenAssistantSessions).toHaveBeenCalled();
+    expect(onAsk).not.toHaveBeenCalled();
+
+    // The Ask button still composes.
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+    expect(onAsk).toHaveBeenCalled();
   });
 });
