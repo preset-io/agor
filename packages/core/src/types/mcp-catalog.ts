@@ -353,7 +353,7 @@ export type MCPCatalogSort = 'popularity' | 'name';
  * filter's.
  */
 export interface MCPCatalogFilters {
-  /** Case-insensitive substring match over name, title, and description. */
+  /** Case-insensitive substring match over name, title, benefit, and description. */
   search?: string;
   category?: MCPCatalogCategory;
   /** Matches entries carrying this capability tag. */

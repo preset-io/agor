@@ -24,4 +24,29 @@ describe('bindRepositoryToTenantUnitOfWork', () => {
     expect(scopes[1]).toBeTruthy();
     expect(scopes[0]).not.toBe(scopes[1]);
   });
+
+  it('pins an explicitly bound tenant where ambient identity is absent', async () => {
+    // A deferred writer — a renewal timer, a failure handler, a callback
+    // projection — is not reliably inside the request's tenant identity, and a
+    // scope opened with no tenant does not satisfy the database scope guard.
+    // Binding the tenant is what makes the handle safe to call from there.
+    const db = { run: () => undefined } as unknown as Database;
+    const tenants: Array<string | undefined> = [];
+    const repo = bindRepositoryToTenantUnitOfWork(
+      db as never,
+      {
+        async read() {
+          const scope = getCurrentTenantDatabaseScope();
+          tenants.push(scope?.kind === 'tenant' ? scope.tenantId : undefined);
+        },
+      },
+      'tenant-sealed'
+    );
+
+    await repo.read();
+    // An ambient identity does not override the pinned one.
+    await runWithTenantContext('tenant-sealed', () => repo.read());
+
+    expect(tenants).toEqual(['tenant-sealed', 'tenant-sealed']);
+  });
 });

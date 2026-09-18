@@ -1,18 +1,24 @@
 import http, { type Server as HttpServer } from 'node:http';
 import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
+  AppVariableRepository,
   BranchRepository,
   createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
   eq,
   GatewayChannelRepository,
   generateId,
+  MCP_SLACK_CONNECT_CARD_KEY,
+  MCP_SLACK_CONNECT_SETTINGS_NAMESPACE,
   MCPServerRepository,
+  MessagesRepository,
   mcpServers,
   RepoRepository,
   runMigrations,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
+  setMCPSlackConnectCardEnabled,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -44,6 +50,7 @@ import type {
   MCPOAuthBrowserReservation,
   MCPServer,
   MCPServerID,
+  MessageID,
   User,
   UserID,
 } from '@agor/core/types';
@@ -60,6 +67,7 @@ import {
 import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
+import { issueMCPOAuthConnectLink } from './services/mcp-oauth-connect-delivery.js';
 import * as oauthUse from './services/mcp-oauth-use.js';
 import { createSocketIOConfig } from './setup/socketio.js';
 import { issueMCPSlackRecoveryToken } from './utils/mcp-slack-recovery-token.js';
@@ -439,6 +447,8 @@ type SQLiteHarness = {
     attemptId: string;
     success: boolean;
   }>;
+  /** Widget ids the connect lane asked the gateway to repaint. */
+  syncedConnectCards: string[];
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
@@ -464,11 +474,33 @@ async function createHarness(
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
     deployment?: RegisterServicesContext['deployment'];
+    /**
+     * Arm the daemon's tenant database scope guard for this harness.
+     *
+     * Off by default because most of this file's fixtures predate the guard
+     * and reach the database through paths that do not yet open a scope. A
+     * suite that opts in gets the production guard: any repository read its
+     * service performs outside a tenant scope throws instead of silently
+     * succeeding, which is what a `:memory:` SQLite database would otherwise
+     * let through.
+     *
+     * The two MCP Slack lanes no longer opt in one test at a time — they go
+     * through `createSlackLaneHarness`, which sets this unconditionally. Five
+     * scope defects have shipped on those lanes and none of them was visible
+     * without the guard, so leaving it to each new test to remember is the
+     * gap rather than a default.
+     */
+    requireTenantScope?: boolean;
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
-  const db = rawDb as unknown as TenantScopeAwareDatabase;
+  const db = (options.requireTenantScope
+    ? createTenantScopedDatabaseProxy(rawDb, {
+        requireScope: true,
+        label: 'sqlite oauth harness',
+      })
+    : rawDb) as unknown as TenantScopeAwareDatabase;
   const user = await new UsersRepository(rawDb).create({
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
@@ -524,15 +556,25 @@ async function createHarness(
   const app = feathers() as Application & { io: typeof io };
   app.io = io;
   const gatewayOAuthResults: SQLiteHarness['gatewayOAuthResults'] = [];
+  const syncedConnectCards: string[] = [];
   app.use(
     '/gateway',
     {
       async syncMcpSlackRecoveryNoticeAfterCommit() {},
+      async syncMcpSlackConnectCard(widgetId: string) {
+        syncedConnectCards.push(widgetId);
+      },
       async markMcpSlackOAuthResult(input: SQLiteHarness['gatewayOAuthResults'][number]) {
         gatewayOAuthResults.push(input);
       },
     },
-    { methods: ['syncMcpSlackRecoveryNoticeAfterCommit', 'markMcpSlackOAuthResult'] }
+    {
+      methods: [
+        'syncMcpSlackRecoveryNoticeAfterCommit',
+        'syncMcpSlackConnectCard',
+        'markMcpSlackOAuthResult',
+      ],
+    }
   );
   const deployment = options.deployment ?? ({} as RegisterServicesContext['deployment']);
   const callbackOrigin = resolveMcpOAuthCallbackOrigin({}, process.env);
@@ -611,6 +653,7 @@ async function createHarness(
     server,
     emittedBrowserEvents,
     gatewayOAuthResults,
+    syncedConnectCards,
     nextAuthorizationUrl: async () => {
       const value = await nextUrl.promise;
       nextUrl = deferred<string>();
@@ -1235,11 +1278,27 @@ afterEach(async () => {
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
 });
 
+/**
+ * Both Slack MCP lanes, always with the daemon's tenant database scope guard.
+ *
+ * Mandatory rather than opt-in. Five tenant-scope defects have now reached a
+ * running daemon on these two lanes, every one of them invisible to a fixture
+ * that lets an unscoped read succeed — and the option below is exactly the
+ * kind of thing a new test forgets to pass. A lane whose fixtures cannot be
+ * built without the guard cannot regrow that gap.
+ */
+async function createSlackLaneHarness(
+  provider: TestProvider,
+  options: Omit<Parameters<typeof createHarness>[2], 'requireTenantScope'> = {}
+) {
+  return createHarness(provider, undefined, { ...options, requireTenantScope: true });
+}
+
 describe('Slack MCP recovery authenticated route', () => {
   it('preflights, consumes once, and propagates the exact reserved OAuth attempt', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1290,10 +1349,42 @@ describe('Slack MCP recovery authenticated route', () => {
     ).toBe('sdk-session-preserved');
   });
 
+  /**
+   * The recovery lane's own start lease, with the guard armed.
+   *
+   * It carries the identical defect the connect lane was blocked for — its
+   * lease renewal, failure marker, and `oauth_started_at` stamp all touch the
+   * Task repository outside any scope — and this file's other recovery tests
+   * could not see it, because they run without the guard.
+   */
+  it('starts a recovery sign-in with the tenant scope guard armed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedSlackRecoveryAction(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ slack_recovery_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      attempt_id?: string;
+    };
+
+    expect(started).toMatchObject({ success: true });
+    expect(provider.requests.length).toBeGreaterThan(0);
+    const task = await new TaskRepository(harness.rawDb).findById(seeded.taskId);
+    expect(task?.metadata?.mcp_slack_recovery_notice).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+  });
+
   it('fails closed after preflight when the Agor principal is revoked', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1310,7 +1401,7 @@ describe('Slack MCP recovery authenticated route', () => {
   it('projects provider success as superseded when authority changes during exchange', async () => {
     const provider = await createTestProvider({ holdToken: true });
     providers.push(provider);
-    const harness = await createHarness(provider);
+    const harness = await createSlackLaneHarness(provider);
     databases.push(harness.rawDb);
     const seeded = await seedSlackRecoveryAction(harness);
     const params = paramsFor(harness);
@@ -1337,6 +1428,592 @@ describe('Slack MCP recovery authenticated route', () => {
       attemptId: started.attempt_id,
       success: true,
     });
+  });
+});
+/**
+ * The connect lane's browser preflight, with the daemon's tenant database
+ * scope guard armed.
+ *
+ * `/mcp-oauth-connect` is registered outside `TENANT_OWNED_SERVICE_PATHS`, so
+ * nothing upstream opens a tenant database scope for it: the service has to
+ * open its own. A harness without the guard cannot see that — a `:memory:`
+ * SQLite database answers an unscoped read happily — which is exactly how the
+ * missing scope reached a running daemon, where every valid link came back as
+ * the lane's generic `Forbidden`.
+ */
+describe('Slack MCP connect authenticated route', () => {
+  async function seedConnect(harness: SQLiteHarness, options: { ageMs?: number } = {}) {
+    const repo = await new RepoRepository(harness.rawDb).create({
+      slug: `slack-connect-${generateId()}`,
+      name: 'Slack connect repo',
+      repo_type: 'local',
+      local_path: `/tmp/slack-connect-${generateId()}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(harness.rawDb).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `slack-connect-${generateId()}`,
+      ref: 'main',
+      branch_unique_id: 100_000 + Math.floor(Math.random() * 1_000_000_000),
+      path: `/tmp/slack-connect-${generateId()}/branch`,
+      created_by: harness.user.user_id,
+    });
+    const session = await new SessionRepository(harness.rawDb).create({
+      session_id: generateId(),
+      branch_id: branch.branch_id,
+      agentic_tool: 'claude-code',
+      created_by: harness.user.user_id,
+    });
+    const channel = await new GatewayChannelRepository(harness.rawDb).create({
+      name: 'Slack connect',
+      channel_type: 'slack',
+      enabled: true,
+      created_by: harness.user.user_id,
+      agor_user_id: harness.user.user_id,
+      target_branch_id: branch.branch_id,
+      // Alignment on: without it the lane refuses at issue, so a test that
+      // left it off would prove nothing about the scope.
+      config: { align_slack_users: true, bot_token: 'xoxb-test-only', app_token: 'xapp-test-only' },
+    });
+    const threadId = 'C2515-1756200000.000002';
+    await new ThreadSessionMapRepository(harness.rawDb).create({
+      channel_id: channel.id,
+      thread_id: threadId,
+      session_id: session.session_id,
+      branch_id: branch.branch_id,
+    });
+    const taskId = generateId();
+    await new TaskRepository(harness.rawDb).create({
+      task_id: taskId,
+      session_id: session.session_id,
+      created_by: harness.user.user_id,
+      full_prompt: 'connect me to this MCP server',
+      status: TaskStatus.COMPLETED,
+      message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+      git_state: { ref_at_start: 'main', sha_at_start: 'slack-connect' },
+      tool_use_count: 0,
+      metadata: {
+        gateway_task_source: {
+          gateway_channel_id: channel.id,
+          channel_type: 'slack',
+          thread_id: threadId,
+          provider_user_id: 'U2515',
+          slack_team_id: 'T2515',
+          slack_channel_id: 'C2515',
+        },
+      },
+    });
+    const widgetId = generateId();
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.create({
+      message_id: widgetId,
+      session_id: session.session_id,
+      task_id: taskId,
+      type: 'widget_request',
+      role: 'system',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content: 'Connect this server',
+      content_preview: 'Widget: oauth',
+      metadata: {
+        widget: {
+          widget_type: 'oauth',
+          widget_id: widgetId,
+          schema_version: 1,
+          status: 'pending',
+          requested_at: new Date().toISOString(),
+          auto_resume: true,
+          params: {
+            mcpServerId: harness.server.mcp_server_id,
+            serverName: 'Saved OAuth server',
+            oauthMode: 'per_user',
+            reason: 'Read the roadmap page.',
+            permissionDisclosure: 'Agor will read the pages you share with it.',
+          },
+        },
+      },
+    });
+    const issued = await issueMCPOAuthConnectLink(
+      {
+        repositories: {
+          sessions: new SessionRepository(harness.rawDb),
+          users: new UsersRepository(harness.rawDb),
+          channels: new GatewayChannelRepository(harness.rawDb),
+          servers: new MCPServerRepository(harness.rawDb),
+          threadMap: new ThreadSessionMapRepository(harness.rawDb),
+        },
+        messages,
+        tasks: new TaskRepository(harness.rawDb),
+        masterSecret: process.env.AGOR_MASTER_SECRET!,
+        baseUrl: 'https://agor.example.test',
+      },
+      {
+        tenantId: 'default',
+        widgetId,
+        now: new Date(Date.now() - (options.ageMs ?? 0)),
+      }
+    );
+    if (!issued) throw new Error('Expected a connect link');
+    return {
+      widgetId,
+      channelId: channel.id,
+      token: decodeURIComponent(issued.url.split('#token=')[1]),
+      widgetStatus: async () =>
+        (await messages.findById(widgetId))?.metadata?.widget?.status ?? 'missing',
+      delivery: async () => (await messages.findById(widgetId))?.metadata?.widget?.slack_connect,
+    };
+  }
+
+  it('preflights a live link for the user it was issued to', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const preflight = await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness));
+
+    expect(preflight).toMatchObject({
+      state: 'connect_required',
+      widget_id: seeded.widgetId,
+      server_name: 'Saved OAuth server',
+      oauth_mode: 'per_user',
+      reason: 'Read the roadmap page.',
+      permission_disclosure: 'Agor will read the pages you share with it.',
+    });
+    expect(preflight.return_to_slack_url).toContain('team=T2515');
+    // A preflight reads; it never consumes.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * B1 — what the page is told when the sign-in already succeeded.
+   *
+   * The provider callback persists the grant and nothing else: the widget's
+   * resolution and the agent's wake-up wait on the browser's POST. This
+   * preflight used to map that straight onto `connected`, which is the one
+   * answer that makes a stuck request look finished.
+   */
+  it('preflights a grant that already landed as a finish, not as a connection', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    await new UserMCPOAuthTokenRepository(harness.rawDb).saveToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID,
+      {
+        accessToken: 'landed-access-token',
+        refreshToken: 'landed-refresh-token',
+        clientId: 'saved-client-id',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      }
+    );
+
+    const preflight = (await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness))) as { state: string };
+
+    expect(preflight).toMatchObject({ state: 'finish_required' });
+    // Still a read: the recovery is a separate, authenticated POST.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it('describes a request that already finished instead of calling the link invalid', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId as MessageID, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        status: 'submitted',
+        resolved_at: new Date().toISOString(),
+        result_meta: { attached: true },
+      },
+    }));
+
+    const preflight = (await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness))) as { state: string };
+
+    // Describing it grants nothing — `oauth-start` still refuses a widget that
+    // is no longer pending, and the consume CAS re-checks it under the row
+    // lock — but telling the person who just finished that their link is
+    // "invalid, expired, or superseded" is the opposite of what happened.
+    expect(preflight).toMatchObject({ state: 'connected' });
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ connect_token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ success: false });
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'a signed-in user who is not the claims subject',
+      async (harness: SQLiteHarness, token: string) => {
+        const other = await new UsersRepository(harness.rawDb).create({
+          email: `slack-connect-other-${generateId()}@example.test`,
+          role: 'admin',
+        });
+        return {
+          token,
+          params: { ...paramsFor(harness), user: other } as AuthenticatedParams,
+        };
+      },
+    ],
+    [
+      'a tampered token',
+      async (harness: SQLiteHarness, token: string) => ({
+        token: `${token.slice(0, -5)}AAAAA`,
+        params: paramsFor(harness),
+      }),
+    ],
+  ])('refuses %s and leaves the widget pending', async (_name, mutate) => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const attempt = await mutate(harness, seeded.token);
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: attempt.token }, attempt.params)
+    ).rejects.toMatchObject({
+      code: 403,
+      message: 'This MCP connect action is invalid, expired, or superseded.',
+    });
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * The kill switch has to stop the lane from GRANTING, not just from
+   * repainting: a card already in a thread carries a live sealed link, and an
+   * operator turning the projection off during an incident is asking for that
+   * link to stop working. The canvas widget stays live either way — it is the
+   * fallback the switch leaves behind.
+   */
+  it('refuses a live link once the Slack card projection is switched off', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, false, harness.user.user_id);
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).rejects.toMatchObject({
+      code: 403,
+      message: 'This MCP connect action is invalid, expired, or superseded.',
+    });
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+    expect(started.success).toBe(false);
+    // Nothing was consumed, so turning the switch back on restores the link
+    // rather than leaving a burned one behind.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, true, harness.user.user_id);
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ state: 'connect_required' });
+
+    // Deliberately not fail-closed on a value nobody recognises: a mistyped
+    // setting must not silently retire an affordance a thread is showing.
+    await new AppVariableRepository(harness.rawDb).set({
+      namespace: MCP_SLACK_CONNECT_SETTINGS_NAMESPACE,
+      key: MCP_SLACK_CONNECT_CARD_KEY,
+      value: 'disbaled',
+      content_type: 'text/plain',
+    });
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).resolves.toMatchObject({ state: 'connect_required' });
+  });
+
+  it('refuses an expired link and leaves the widget pending', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    // Minted a minute past its own maximum lifetime: the sealed claims and the
+    // stored delivery still agree, so expiry is the only thing left to refuse.
+    const seeded = await seedConnect(harness, { ageMs: 11 * 60_000 });
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).rejects.toMatchObject({ code: 403 });
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  /**
+   * The lane's durable touches AFTER the binding loader's own scope has closed.
+   *
+   * `loadMCPOAuthConnectBinding` opens and closes one scope of its own, so a
+   * suite that only exercises the preflight proves nothing about the rest of
+   * `oauth-start`: the start lease, its 10s renewal timer, the failure marker,
+   * and the `oauth_started_at` stamp all run after that scope is gone, on a
+   * path nothing upstream arms. Unscoped, the lease renewal throws
+   * `MissingTenantDatabaseScope`, the handler reports `success: false` before
+   * it has spoken to the provider at all, and the failure marker — which is
+   * also unscoped — swallows its own throw, leaving a consumed one-use token
+   * with no `oauth_failed_at` for the card to render.
+   */
+  it('starts the provider flow for a live link, with the scope guard armed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      attempt_id?: string;
+      error?: string;
+      authorizationUrl?: string;
+    };
+
+    expect(started).toMatchObject({ success: true });
+    expect(new URL(started.authorizationUrl!).searchParams.get('state')).toBeTruthy();
+    // The provider was actually reached: a scope failure returns before the
+    // first outbound request, which is what made the symptom look like a
+    // refusal rather than a missing unit of work.
+    expect(provider.requests.length).toBeGreaterThan(0);
+    expect(await seeded.delivery()).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_attempt_id: started.attempt_id,
+      oauth_started_at: expect.any(String),
+    });
+    expect((await seeded.delivery())?.oauth_start_claim_expires_at).toBeUndefined();
+    expect(await seeded.widgetStatus()).toBe('pending');
+  });
+
+  /**
+   * The same failure handler, reached on purpose.
+   *
+   * The binding still loads and the one-use token is still consumed; what
+   * fails is provider discovery, which is exactly the window the failure
+   * marker exists for. That marker is the only thing standing between a burned
+   * one-use link and a card that can say so, and unscoped it threw into a
+   * `.catch()` that dropped the result — so the link was gone and the card
+   * kept offering it.
+   */
+  /**
+   * F2 — what `oauth-start` tells a user whose link was refused.
+   *
+   * The binding loader collapses every refusal into one generic `Forbidden`
+   * so a redeemer cannot learn which binding moved. Classified as a bare
+   * `Forbidden`, that became "the MCP request authority ... changed or
+   * expired" — a claim about the user's ACCESS, made on the strength of a
+   * signature that did not verify. Whoever read it went to check permissions
+   * that were fine, and never got told the one thing that would have helped.
+   */
+  it('reports a tampered link as a spent link, not as changed authority', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: `${seeded.token}tampered` }, paramsFor(harness))) as {
+      success: boolean;
+      error?: string;
+      recovery?: { category?: string; action?: string; message?: string };
+    };
+
+    expect(started.success).toBe(false);
+    expect(started.recovery).toMatchObject({
+      category: 'link_not_admitted',
+      action: 'request_new_link',
+    });
+    expect(started.error).toContain('new link');
+    expect(started.error).not.toContain('authority');
+    // Still silent about WHICH binding refused: the copy is the same sentence
+    // for a forged signature as for an expired one.
+    expect(started.error).not.toContain('signature');
+    // And nothing was spent proving it — the real link still works.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it('marks a consumed link failed when the start cannot proceed', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    // Take the provider away without touching the server row, whose
+    // `config_version` the sealed claims pin.
+    await provider.close();
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+
+    expect(started.success).toBe(false);
+    // The user's one-shot link is gone; the record has to say why, or the card
+    // keeps offering a button that can never work again.
+    expect(await seeded.delivery()).toMatchObject({
+      token_consumed_at: expect.any(String),
+      oauth_failed_at: expect.any(String),
+    });
+    expect((await seeded.delivery())?.oauth_start_claim_expires_at).toBeUndefined();
+    // Recording it is not enough — the card in the thread is the only surface
+    // the user has, and nothing else wakes it until the repair sweep.
+    expect(harness.syncedConnectCards).toContain(seeded.widgetId);
+  });
+
+  /**
+   * The callback must refuse a flow the channel has since revoked.
+   *
+   * The sealed link pins `gateway_config_generation`, and rotating the bot
+   * token moves it — that is the whole point of the pin. Re-reading the
+   * channel at callback time and passing its CURRENT generation as the
+   * expected one compares the channel to itself and can never refuse, so an
+   * obsolete flow completed and persisted a grant. The expected generation has
+   * to be the one that authorized this flow.
+   */
+  it('refuses a callback whose gateway configuration generation was revoked', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+
+    const channels = new GatewayChannelRepository(harness.rawDb);
+    const before = await channels.findById(seeded.channelId);
+    await channels.update(seeded.channelId, {
+      config: { ...before?.config, bot_token: 'xoxb-rotated-after-issue' },
+    });
+    expect((await channels.findById(seeded.channelId))?.provider_config_generation).toBe(
+      (before?.provider_config_generation ?? 0) + 1
+    );
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+    expect(await seeded.widgetStatus()).toBe('pending');
+  });
+
+  /**
+   * The same fence, reached from the projection's side.
+   *
+   * `binding_invalidated_at` is terminal (§7.2): the card has already been
+   * repainted to say no link can be offered here. A flow that is still in
+   * flight when that happens must not be allowed to finish either, or the
+   * thread shows a retired card beside a grant it says was never made.
+   */
+  it('refuses a callback whose card was retired mid-flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        slack_connect: {
+          ...metadata!.widget!.slack_connect!,
+          binding_invalidated_at: new Date().toISOString(),
+        },
+      },
+    }));
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+  });
+
+  /**
+   * B2 — the kill switch, applied to a flow already in the air.
+   *
+   * §7.1.4 says switching the lane off stops it GRANTING and not merely
+   * repainting. That was true of delivery and of redemption and not of the
+   * window between them: a link redeemed a second before an operator threw the
+   * switch still came back through the provider and persisted a grant, which is
+   * the single outcome someone reaching for a kill switch is trying to stop.
+   */
+  it('refuses a callback for a flow started before the projection was switched off', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+
+    await setMCPSlackConnectCardEnabled(harness.rawDb, false, harness.user.user_id);
+
+    expect((await harness.callback(state!)).status).not.toBe(200);
+    expect(
+      await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).toBeNull();
+    // The widget is still pending and the failure is durable, so turning the
+    // switch back on leaves a card that can be re-offered rather than one
+    // stuck mid-sign-in.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.oauth_failed_at).toEqual(expect.any(String));
   });
 });
 

@@ -35,7 +35,12 @@ const ENTRIES: MCPCatalogEntry[] = [
     category: 'observability',
     capabilities: ['logs', 'metrics'],
   }),
-  entry({ name: 'com.bravo/mcp', has_remote: false, auth_type: 'unknown' }),
+  entry({
+    name: 'com.bravo/mcp',
+    benefit: 'Tracks bugs and ships the fixes.',
+    has_remote: false,
+    auth_type: 'unknown',
+  }),
 ];
 
 const names = (filters: Parameters<typeof filterCatalog>[1]) =>
@@ -111,16 +116,26 @@ describe('filterCatalog ordering', () => {
 });
 
 describe('filterCatalog search', () => {
-  it('searches name, title, and description, and nothing else', () => {
+  it('searches name, title, benefit, and description, and nothing else', () => {
     expect(names({ search: 'zulu' })).toEqual(['com.zulu/mcp']); // name
     expect(names({ search: 'Alpha' })).toEqual(['com.alpha/mcp']); // title
     expect(names({ search: 'the logs' })).toEqual(['com.mike/mcp']); // description
+    expect(names({ search: 'ships the fixes' })).toEqual(['com.bravo/mcp']); // benefit
 
-    // `benefit`, `starter_prompt` and `permission_disclosure` are on every
-    // fixture entry, so a term from one of them matching would return all four.
-    expect(names({ search: 'Does a thing' })).toEqual([]);
+    // `starter_prompt` and `permission_disclosure` are on every fixture entry,
+    // so a term from one of them matching would return all four. They stay out
+    // because one is a suggestion and the other is the consent text: matching
+    // either would answer a search for what a server DOES with servers that
+    // merely mention the word while asking for permission.
     expect(names({ search: 'Do the thing' })).toEqual([]);
     expect(names({ search: 'Reads a thing' })).toEqual([]);
+  });
+
+  it('reaches an entry by prose, which is what `benefit` is for', () => {
+    // The point of widening: three of the four fixtures share the default
+    // benefit, so this term is in exactly one entry's benefit and in no
+    // entry's name or title. Before `benefit` was searched it matched nothing.
+    expect(names({ search: 'bugs' })).toEqual(['com.bravo/mcp']);
   });
 
   it('ignores case in both the term and the field', () => {
@@ -196,10 +211,10 @@ describe('filterCatalog filters', () => {
   });
 });
 
-describe('filterCatalog A–Z over the shipped catalog', () => {
-  // Reads the real `curated.yaml` on purpose. The fixtures above state the rule;
-  // this states that the shelf a user actually sees obeys it, and it fails if
-  // either the comparator or the file regresses.
+describe('filterCatalog over the shipped catalog', () => {
+  // Reads the real `curated.yaml` on purpose. The fixtures above state the
+  // rules; these state that the shelf a user actually sees obeys them, and they
+  // fail if either this module or the file regresses.
   it('sorts the shipped entries by what the cards read', async () => {
     const sorted = filterCatalog(await loadCatalog(), { sort: 'name' });
     const display = sorted.map((entry) => catalogDisplayName(entry));
@@ -207,6 +222,20 @@ describe('filterCatalog A–Z over the shipped catalog', () => {
     expect(display).toEqual(
       [...display].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
     );
+  });
+
+  it('searches the prose the shipped entries actually state', async () => {
+    // Every shipped entry states `benefit` and none states `description`, so a
+    // search that skipped `benefit` was a search over the reverse-DNS `name`
+    // plus the minority of entries stating a `title` — no prose at all.
+    const catalog = await loadCatalog();
+    expect(catalog.every((entry) => entry.benefit)).toBe(true);
+    expect(catalog.some((entry) => entry.description)).toBe(false);
+
+    // "the thing where we keep specs" — the lookup the old behaviour could not
+    // answer. Notion states `specs` in its benefit and nowhere else.
+    const matched = filterCatalog(catalog, { search: 'specs' }).map((entry) => entry.name);
+    expect(matched).toContain('com.notion/mcp');
   });
 
   it('puts Airtable before Exa, whose identifiers order the other way', async () => {
