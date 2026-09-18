@@ -74,6 +74,8 @@ Reuse these instead of adding local tenant plumbing:
 | Short tenant/system database units and guarded proxies                                                                     | `packages/core/src/db/tenant-scope.ts`, `packages/core/src/db/tenant-unit-of-work.ts`                                                                                 |
 | PostgreSQL tenant columns and RLS coverage                                                                                 | `packages/core/src/db/schema.postgres.ts`, `packages/core/src/db/multitenancy-schema.test.ts`, database migrations                                                    |
 | Service ownership and request hooks                                                                                        | `TENANT_OWNED_SERVICE_PATHS` and `TENANT_IDENTITY_ONLY_SERVICE_PATHS` in `apps/agor-daemon/src/register-hooks.ts`                                                     |
+| Registration-time scope classification (and its baseline)                                                                  | `apps/agor-daemon/src/utils/tenant-service-classification.ts`, asserted at boot from `index.ts`                                                                       |
+| Identity-only orchestration's database access                                                                              | `apps/agor-daemon/src/utils/tenant-bound-data-access.ts` (`createTenantBoundDataAccess`)                                                                              |
 | Request/deferred identity helpers                                                                                          | `apps/agor-daemon/src/utils/tenant-db-scope.ts`                                                                                                                       |
 | Queued session work                                                                                                        | `apps/agor-daemon/src/utils/session-queue-tenant-scope.ts`                                                                                                            |
 | MCP database work                                                                                                          | `apps/agor-daemon/src/mcp/tenant-scope.ts`                                                                                                                            |
@@ -101,6 +103,55 @@ belong in `TENANT_OWNED_SERVICE_PATHS` unless they intentionally cross a
 long-running external boundary and open short scoped units at each database
 call.
 
+## Where a service's scope is armed
+
+Every service the daemon registers must declare one of three answers, and the
+boot assertion `assertTenantServiceClassification` refuses to start if one has
+not:
+
+| Answer          | What it means                                                                                                                                                                                                                            | Where it is declared                                                             |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `scoped`        | The registration arms a tenant database scope for the whole request. Handlers may reach tenant repositories directly.                                                                                                                    | `TENANT_OWNED_SERVICE_PATHS`, or `createTenantScopedAuthenticatedRouteRegistrar` |
+| `identity-only` | The registration arms tenant identity and deliberately no request-long transaction, because the service crosses a provider/process/network boundary or is reached from a timer or sweep. Every database access opens its own short unit. | `TENANT_IDENTITY_ONLY_SERVICE_PATHS`, or `TENANT_SERVICE_CLASSIFICATIONS`        |
+| `system`        | Narrowly reviewed: no tenant-owned database access at all. Requires a written `why`.                                                                                                                                                     | `TENANT_SERVICE_CLASSIFICATIONS`                                                 |
+
+This exists because one defect class shipped five times, three of them past a
+reviewer: a route registered outside `TENANT_OWNED_SERVICE_PATHS` reaches a free
+function or unbound repository from identity-only context, the resulting
+`MissingTenantDatabaseScopeError` is laundered by a fail-closed catch into a
+generic refusal or swallowed by a sweep, and the suite stubs every repository so
+there is no guard to trip. Declaring the answer at registration is what stops
+new code from reintroducing it.
+
+An `identity-only` service must reach the database through
+`createTenantBoundDataAccess` or a repository bound with
+`bindRepositoryToTenantUnitOfWork` — never a raw `TenantScopeAwareDatabase`
+handed to a free function. The facade exposes only `repository` / `read` /
+`write`, each of which enters a scope first, and has no accessor that returns
+the underlying handle. Its pinned form names a tenant partition for deferred
+work; **a pinned tenant is not authorization** and must never be traceable to
+caller input that skipped identity resolution, which is why it demands a written
+justification at the construction site.
+
+### The baseline, and its shrink-only rule
+
+Services that predate the mechanism are listed in
+`UNCLASSIFIED_SERVICE_BASELINE` and permitted. **That list may only shrink.**
+
+- A **new or newly-unclassified** service fails the boot assertion and its test.
+- An entry that has since been classified, or is no longer registered, fails the
+  test with "remove it from the baseline".
+- `check:multitenancy-boundaries` caps the number of `BASELINE-ENTRY` markers in
+  that file; the number in the script may only be lowered.
+
+So the way to add a service is to classify it. Classifying the whole daemon is a
+platform sweep for another day — a feature pull request classifies the services
+it owns or touches and leaves the rest baselined.
+
+Integration fixtures for a classified service should build their database handle
+with `createTenantScopedDatabaseProxy(..., { requireScope: true })`. A suite that
+lets an unscoped read succeed cannot see any of this.
+
 ## Proportional validation
 
 Add only the checks implicated by the changed boundary:
@@ -116,6 +167,9 @@ Add only the checks implicated by the changed boundary:
   logs, deletion, or offboarding changes.
 - For system/global paths, prove the operation stays within its stated boundary
   and any required capability grants only the intended access.
+- When a change registers a service or custom route, declare where its tenant
+  database scope is armed (see "Where a service's scope is armed"). The boot
+  assertion refuses an undeclared one; the baseline is closed to new entries.
 - Preserve static-tenant behavior when supported, and run
   `pnpm check:multitenancy-boundaries` when daemon/core boundaries change.
 

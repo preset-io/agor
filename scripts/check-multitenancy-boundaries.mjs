@@ -199,6 +199,23 @@ const checks = [
     },
   },
   {
+    name: 'unclassified tenant service baseline',
+    roots: ['apps/agor-daemon/src/utils'],
+    patterns: [/\/\/ BASELINE-ENTRY/g],
+    // Every service the daemon registers must declare where its tenant
+    // database scope is armed (`scoped` / `identity-only` / narrowly reviewed
+    // `system`). Services that predate that mechanism are listed in
+    // UNCLASSIFIED_SERVICE_BASELINE and permitted; the count below is the
+    // ratchet that keeps the list closed to new entries, so a new or
+    // newly-unclassified service has to be classified rather than listed.
+    //
+    // THIS NUMBER MAY ONLY BE LOWERED. Classifying a baselined service is the
+    // only correct way to change it.
+    baseline: {
+      'apps/agor-daemon/src/utils/tenant-service-classification.ts': 57,
+    },
+  },
+  {
     name: 'raw Drizzle transactions',
     roots: ['packages/core/src', 'apps/agor-daemon/src'],
     patterns: [/\.transaction\s*\(/g],
