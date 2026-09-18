@@ -900,7 +900,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             border: 0,
             background: 'transparent',
             padding: 0,
-            lineHeight: 0,
+            // Match Tree's first-line hover surface without inline baseline offsets.
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            height: '1lh',
+            lineHeight: 'inherit',
             cursor: 'pointer',
             color: 'inherit',
           }}
@@ -947,7 +953,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       >
         <button
           type="button"
-          style={sessionRowStyle(session)}
+          // Keep the same total row spacing, but center the border inside Tree's hover fill.
+          style={{ ...sessionRowStyle(session), marginBlock: 2 }}
           data-session-id={session.session_id}
           aria-label={getSessionRowAccessibleLabel(session)}
           onClick={() => onSessionClick?.(session.session_id)}
