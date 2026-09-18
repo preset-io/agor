@@ -171,3 +171,46 @@ export function slackRenderWasLost(
   if (!record || record.slack_message_ts !== editedTs) return false;
   return record.rendered_state !== undefined && record.rendered_state !== renderedState;
 }
+
+/**
+ * One key, one pending wake-up.
+ *
+ * Both lanes keep the same three kinds of timer — expiry, delivery retry, and
+ * (recovery only) the OAuth start-claim repair — and every one of them was the
+ * same five lines: don't double-schedule, drop the entry before running so the
+ * work can re-schedule itself, `unref` so a pending card never holds the
+ * process open, and clear the lot on dispose.
+ *
+ * Deliberately not a scheduler. It holds no tenant context, decides no delay,
+ * and knows nothing about what it wakes; the lane supplies all three. A key
+ * that is already waiting keeps its existing deadline rather than being pushed
+ * out, which is what makes a repeated delivery attempt idempotent here.
+ */
+export class SlackDeliveryTimers {
+  private timers = new Map<string, NodeJS.Timeout>();
+
+  schedule(key: string, delay: number, run: () => void): void {
+    if (this.timers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.timers.delete(key);
+      run();
+    }, delay);
+    timer.unref?.();
+    this.timers.set(key, timer);
+  }
+
+  has(key: string): boolean {
+    return this.timers.has(key);
+  }
+
+  cancel(key: string): void {
+    const timer = this.timers.get(key);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(key);
+  }
+
+  clear(): void {
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+  }
+}

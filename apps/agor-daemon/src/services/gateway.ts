@@ -166,6 +166,7 @@ import {
   clearSlackRenderedState,
   MCP_SLACK_DELIVERY_MAX_ATTEMPTS,
   MCP_SLACK_REPAINT_ATTEMPTS,
+  SlackDeliveryTimers,
   slackDeliveryClaim,
   slackDeliveryClaimIsLive,
   slackDeliveryRepairAt,
@@ -1144,11 +1145,11 @@ export class GatewayService {
   private slackStreamedMessageIds = new Set<string>();
   private slackStreamedTaskIds = new Set<string>();
   private slackStreamTaskByMessage = new Map<string, string>();
-  private mcpSlackRecoveryExpiryTimers = new Map<string, NodeJS.Timeout>();
-  private mcpSlackDeliveryRetryTimers = new Map<string, NodeJS.Timeout>();
-  private mcpSlackOAuthStartClaimTimers = new Map<string, NodeJS.Timeout>();
-  private mcpSlackConnectExpiryTimers = new Map<string, NodeJS.Timeout>();
-  private mcpSlackConnectRetryTimers = new Map<string, NodeJS.Timeout>();
+  private mcpSlackRecoveryExpiryTimers = new SlackDeliveryTimers();
+  private mcpSlackDeliveryRetryTimers = new SlackDeliveryTimers();
+  private mcpSlackOAuthStartClaimTimers = new SlackDeliveryTimers();
+  private mcpSlackConnectExpiryTimers = new SlackDeliveryTimers();
+  private mcpSlackConnectRetryTimers = new SlackDeliveryTimers();
   private mcpSlackRepairTenants = new Set<string>();
   private mcpSlackRecoveryTenants = new Set<string>();
   private mcpSlackSweepTimer: NodeJS.Timeout | null = null;
@@ -1819,9 +1820,7 @@ export class GatewayService {
           });
         }
       }
-      const retry = this.mcpSlackDeliveryRetryTimers.get(notice.notice_id);
-      if (retry) clearTimeout(retry);
-      this.mcpSlackDeliveryRetryTimers.delete(notice.notice_id);
+      this.mcpSlackDeliveryRetryTimers.cancel(notice.notice_id);
     } catch {
       await this.recordMcpSlackDeliveryFailure(
         task.task_id,
@@ -1860,17 +1859,14 @@ export class GatewayService {
   private scheduleMcpSlackDeliveryRetry(taskId: string, noticeId: string, delay = 5_000): void {
     if (this.mcpSlackDeliveryRetryTimers.has(noticeId)) return;
     const tenantId = requireCurrentTenantId();
-    const timer = setTimeout(() => {
-      this.mcpSlackDeliveryRetryTimers.delete(noticeId);
+    this.mcpSlackDeliveryRetryTimers.schedule(noticeId, delay, () => {
       void runWithTenantContext(tenantId, async () => {
         const task = await this.taskRepo.findById(taskId);
         if (task?.metadata?.mcp_slack_recovery_notice?.notice_id === noticeId) {
           await this.deliverMcpSlackRecoveryNotice(task);
         }
       }).catch(() => console.warn('[gateway] MCP recovery Slack retry failed'));
-    }, delay);
-    timer.unref?.();
-    this.mcpSlackDeliveryRetryTimers.set(noticeId, timer);
+    });
   }
 
   private scheduleMcpSlackRecoveryExpiry(
@@ -1880,21 +1876,16 @@ export class GatewayService {
   ): void {
     const delay = mcpSlackRecoveryExpiryDelay(state, notice);
     if (delay === undefined) {
-      const existing = this.mcpSlackRecoveryExpiryTimers.get(notice.notice_id);
-      if (existing) clearTimeout(existing);
-      this.mcpSlackRecoveryExpiryTimers.delete(notice.notice_id);
+      this.mcpSlackRecoveryExpiryTimers.cancel(notice.notice_id);
       return;
     }
     if (this.mcpSlackRecoveryExpiryTimers.has(notice.notice_id)) return;
     const tenantId = requireCurrentTenantId();
-    const timer = setTimeout(() => {
-      this.mcpSlackRecoveryExpiryTimers.delete(notice.notice_id);
+    this.mcpSlackRecoveryExpiryTimers.schedule(notice.notice_id, delay, () => {
       void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(() =>
         console.warn('[gateway] MCP recovery expiry projection failed')
       );
-    }, delay);
-    timer.unref?.();
-    this.mcpSlackRecoveryExpiryTimers.set(notice.notice_id, timer);
+    });
   }
 
   private scheduleMcpSlackOAuthStartClaimRepair(
@@ -1914,8 +1905,7 @@ export class GatewayService {
     const delay =
       retryDelay ??
       Math.max(0, new Date(notice.oauth_start_claim_expires_at).getTime() - Date.now() + 100);
-    const timer = setTimeout(() => {
-      this.mcpSlackOAuthStartClaimTimers.delete(notice.notice_id);
+    this.mcpSlackOAuthStartClaimTimers.schedule(notice.notice_id, delay, () => {
       void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(
         () => {
           console.warn('[gateway] MCP recovery OAuth start claim repair failed');
@@ -1924,9 +1914,7 @@ export class GatewayService {
           );
         }
       );
-    }, delay);
-    timer.unref?.();
-    this.mcpSlackOAuthStartClaimTimers.set(notice.notice_id, timer);
+    });
   }
 
   /**
@@ -2750,9 +2738,7 @@ export class GatewayService {
           });
         }
       }
-      const retry = this.mcpSlackConnectRetryTimers.get(widgetId);
-      if (retry) clearTimeout(retry);
-      this.mcpSlackConnectRetryTimers.delete(widgetId);
+      this.mcpSlackConnectRetryTimers.cancel(widgetId);
     } catch {
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'slack_write_failed');
     }
@@ -2842,14 +2828,11 @@ export class GatewayService {
   private scheduleMcpSlackConnectRetry(widgetId: MessageID, delay = 5_000): void {
     if (this.mcpSlackConnectRetryTimers.has(widgetId)) return;
     const tenantId = requireCurrentTenantId();
-    const timer = setTimeout(() => {
-      this.mcpSlackConnectRetryTimers.delete(widgetId);
+    this.mcpSlackConnectRetryTimers.schedule(widgetId, delay, () => {
       void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
         () => console.warn('[gateway] MCP connect Slack retry failed')
       );
-    }, delay);
-    timer.unref?.();
-    this.mcpSlackConnectRetryTimers.set(widgetId, timer);
+    });
   }
 
   /**
@@ -2866,21 +2849,16 @@ export class GatewayService {
   ): void {
     const delay = mcpSlackConnectExpiryDelay(state, delivery);
     if (delay === undefined) {
-      const existing = this.mcpSlackConnectExpiryTimers.get(widgetId);
-      if (existing) clearTimeout(existing);
-      this.mcpSlackConnectExpiryTimers.delete(widgetId);
+      this.mcpSlackConnectExpiryTimers.cancel(widgetId);
       return;
     }
     if (this.mcpSlackConnectExpiryTimers.has(widgetId)) return;
     const tenantId = requireCurrentTenantId();
-    const timer = setTimeout(() => {
-      this.mcpSlackConnectExpiryTimers.delete(widgetId);
+    this.mcpSlackConnectExpiryTimers.schedule(widgetId, delay, () => {
       void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
         () => console.warn('[gateway] MCP connect expiry projection failed')
       );
-    }, delay);
-    timer.unref?.();
-    this.mcpSlackConnectExpiryTimers.set(widgetId, timer);
+    });
   }
 
   /** Project one `oauth` widget's durable state into its Slack row. */
@@ -6593,15 +6571,10 @@ export class GatewayService {
     this.mcpSlackSweepTimer = null;
     this.mcpSlackRecoveryTenants.clear();
     this.mcpSlackRepairTenants.clear();
-    for (const timer of this.mcpSlackRecoveryExpiryTimers.values()) clearTimeout(timer);
     this.mcpSlackRecoveryExpiryTimers.clear();
-    for (const timer of this.mcpSlackDeliveryRetryTimers.values()) clearTimeout(timer);
     this.mcpSlackDeliveryRetryTimers.clear();
-    for (const timer of this.mcpSlackOAuthStartClaimTimers.values()) clearTimeout(timer);
     this.mcpSlackOAuthStartClaimTimers.clear();
-    for (const timer of this.mcpSlackConnectExpiryTimers.values()) clearTimeout(timer);
     this.mcpSlackConnectExpiryTimers.clear();
-    for (const timer of this.mcpSlackConnectRetryTimers.values()) clearTimeout(timer);
     this.mcpSlackConnectRetryTimers.clear();
     const leases = new Map(this.activeListenerLeases);
     const retryKeys = new Set(this.listenerRetries.keys());
