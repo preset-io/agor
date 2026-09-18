@@ -162,6 +162,9 @@ describe('archive response reconciliation', () => {
       useSessionActions(
         makeClient({
           'sessions/parent/archive': { create: archiveCreate },
+          sessions: {
+            get: async (id: string) => affectedSessions.find((s) => s.session_id === id),
+          },
         })
       )
     );
@@ -184,6 +187,9 @@ describe('archive response reconciliation', () => {
     const { result } = renderHook(() =>
       useSessionActions(
         makeClient({
+          sessions: {
+            get: async (id: string) => affectedSessions.find((s) => s.session_id === id),
+          },
           'sessions/child/archive': {
             create: async () => ({ session: affectedSessions[0], affectedSessions }),
           },
@@ -202,6 +208,7 @@ describe('archive response reconciliation', () => {
       useSessionActions(
         makeClient({
           'sessions/parent/archive': { create: async () => ({ session: archived }) },
+          sessions: { get: async () => archived },
         })
       )
     );
@@ -225,7 +232,19 @@ describe('archive response reconciliation', () => {
         resolve = done;
       });
       const { result } = renderHook(() =>
-        useSessionActions(makeClient({ 'sessions/parent/archive': { create: () => response } }))
+        useSessionActions(
+          makeClient({
+            'sessions/parent/archive': { create: () => response },
+            sessions: {
+              get: async (id: string) =>
+                id === parent.session_id
+                  ? newerRoot === 'none'
+                    ? archivedRoot
+                    : restored
+                  : affectedSessions.find((s) => s.session_id === id),
+            },
+          })
+        )
       );
       let request!: Promise<Session | null>;
       act(() => {
@@ -280,6 +299,39 @@ describe('archive response reconciliation', () => {
     consoleError.mockRestore();
   });
 
+  it('keeps the batch intact while refetch waits and reports a read failure distinctly', async () => {
+    const archived = { ...parent, archived: true };
+    let reject!: (error: Error) => void;
+    const read = new Promise<Session>((_, fail) => {
+      reject = fail;
+    });
+    const get = vi.fn(() => read);
+    const { result } = renderHook(() =>
+      useSessionActions(
+        makeClient({
+          'sessions/parent/archive': { create: async () => ({ session: archived }) },
+          sessions: { get },
+        })
+      )
+    );
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let request!: Promise<Session | null>;
+    await act(async () => {
+      request = result.current.archiveSession(parent.session_id);
+    });
+    expect(get).toHaveBeenCalledWith(parent.session_id);
+    expectActive(sessions);
+    await act(async () => {
+      reject(new Error('Offline'));
+      expect(await request).toBeNull();
+    });
+    expectActive(sessions);
+    expect(result.current.error).toBe(
+      'Session archived, but refreshing session state failed. Refresh to reconcile.'
+    );
+    consoleError.mockRestore();
+  });
+
   it('does not apply a previous tenant authority response to the replacement store', async () => {
     let resolve!: (value: { session: Session; affectedSessions: Session[] }) => void;
     const response = new Promise<{ session: Session; affectedSessions: Session[] }>(
@@ -287,10 +339,12 @@ describe('archive response reconciliation', () => {
         resolve = resolveResponse;
       }
     );
+    const get = vi.fn();
     const { result } = renderHook(() =>
       useSessionActions(
         makeClient({
           'sessions/parent/archive': { create: () => response },
+          sessions: { get },
         })
       )
     );
@@ -307,6 +361,7 @@ describe('archive response reconciliation', () => {
       });
       await request;
     });
+    expect(get).not.toHaveBeenCalled();
     expectActive(sessions);
   });
 });

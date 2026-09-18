@@ -180,42 +180,72 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
 }
 
 /**
- * Capture the requesting authority before an async mutation. Reconcile its
- * confirmed rows through the same keyed queue/reducer as socket patches, in one
- * immediate store write. Server last_updated orders response rows against both
- * queued and applied state; local revisions only order hydration, not RPCs.
+ * Capture authority before a mutation, then reread its root + affected IDs.
+ * Mutation payloads and last_updated do NOT establish write order (timestamps
+ * may be captured before database locks). Only a post-response, quiet read can
+ * decide between an archive and a competing restore.
+ *
+ * Use hydration's skip-on-race discipline, but not runHydration itself: this is
+ * a partial read and must neither cancel a full backfill nor advance its global
+ * high-water mark/drop unrelated queued patches. Failures propagate to the
+ * caller without applying any response rows; races retry with capped backoff.
  */
-export function captureSessionPatchCommit(): (sessions: Session[]) => void {
+export function captureSessionPatchCommit(): (
+  sessions: Session[],
+  refetch: (ids: Session['session_id'][]) => Promise<Session[]>
+) => Promise<void> {
   const authorityScope = activeAuthorityScope;
-  return (sessions) => {
-    if (!authorityScope || authorityScope !== activeAuthorityScope || sessions.length === 0) return;
-    const current = agorStore.getState().sessionById;
-    const lastApplied = getLastAppliedRevision('sessions');
-    const accepted = sessions.filter((session) => {
-      const id = session.session_id;
-      if (tombstones.get(id) === authorityScope) return false;
-      const entry = pending.get(id);
-      const queued =
-        entry?.authorityScope === authorityScope && entry.revision > lastApplied
-          ? entry.session
-          : undefined;
-      const applied = current.get(id);
-      // This reconciles patches, not creates. Absence remains authoritative
-      // after remove/branch eviction, even once frame tombstones have drained.
-      if (!applied && !queued) return false;
-      const updatedAt = Date.parse(session.last_updated);
-      // Timestamps are not a total-order version: keep observed state on ties
-      // (or invalid response timestamps) rather than roll back a newer change.
-      return (
-        Number.isFinite(updatedAt) &&
-        [applied, queued].every((row) => !row || Date.parse(row.last_updated) < updatedAt)
-      );
-    });
-    if (accepted.length > 0) {
+  const isCurrent = () => authorityScope !== null && authorityScope === activeAuthorityScope;
+  return async (sessions, refetch) => {
+    if (!authorityScope) return;
+    const ids = [...new Set(sessions.map((session) => session.session_id))];
+    for (let attempt = 0; isCurrent() && ids.length > 0; attempt++) {
+      if (attempt >= 4) {
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, Math.min(200 * 2 ** (attempt - 4), 5000))
+        );
+        if (!isCurrent()) return;
+      }
+      const before = getRevision('sessions');
+      const current = agorStore.getState().sessionById;
+      const lastApplied = getLastAppliedRevision('sessions');
+      const present = ids.filter((id) => {
+        if (tombstones.get(id) === authorityScope) return false;
+        const entry = pending.get(id);
+        // Reconcile patches, not creates: removal/branch eviction stays
+        // authoritative even after frame tombstones drain. Hydration-subsumed
+        // queue entries cannot resurrect an absent row either.
+        return (
+          current.has(id) ||
+          (entry?.authorityScope === authorityScope && entry.revision > lastApplied)
+        );
+      });
+      if (present.length === 0) return;
+      let fresh: Session[];
+      try {
+        fresh = await refetch(present);
+      } catch (error) {
+        if (!isCurrent()) return;
+        throw error;
+      }
+      if (!isCurrent()) return;
+      // Events bump revisions before enqueue; map identity also catches a
+      // wholesale hydration apply (which need not bump the live revision). Its
+      // watermark can subsume a queued-only row even if the maps stay empty.
+      if (
+        getRevision('sessions') !== before ||
+        getLastAppliedRevision('sessions') !== lastApplied ||
+        agorStore.getState().sessionById !== current
+      )
+        continue;
+      const requested = new Set(present);
       bumpRevision('sessions');
-      for (const session of accepted) enqueueSessionPatch(authorityScope, session);
+      for (const session of fresh) {
+        if (requested.has(session.session_id)) enqueueSessionPatch(authorityScope, session);
+      }
+      flushRealtimeNow(authorityScope);
+      return;
     }
-    flushRealtimeNow(authorityScope);
   };
 }
 

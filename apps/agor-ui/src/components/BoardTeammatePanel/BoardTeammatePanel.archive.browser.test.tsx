@@ -66,9 +66,21 @@ describe('teammate drawer archive reconciliation', () => {
     { target: parent, affected: [parent, child, grandchild, fork], remaining: [unrelated, orphan] },
     { target: child, affected: [child, grandchild], remaining: [parent, fork, unrelated, orphan] },
     { target: parent, affected: [child, grandchild, fork], remaining: [unrelated, orphan] },
+    {
+      target: parent,
+      affected: [parent, child, grandchild, fork],
+      remaining: [unrelated, orphan],
+      race: 'inversion',
+    },
+    {
+      target: parent,
+      affected: [parent, child, grandchild, fork],
+      remaining: sessions,
+      race: 'restore',
+    },
   ])(
-    'archives $target.title without a refresh or descendant events',
-    async ({ target, affected, remaining }) => {
+    'reconciles $target.title without refresh (race=$race)',
+    async ({ target, affected, remaining, race }) => {
       const affectedSessions = affected.map((s) => ({
         ...s,
         archived: true,
@@ -84,9 +96,19 @@ describe('teammate drawer archive reconciliation', () => {
         resolve = done;
       });
       const create = vi.fn(() => response);
+      let finishRead!: () => void;
+      const readGate = new Promise<void>((done) => {
+        finishRead = done;
+      });
+      const get = vi.fn(async (id: string) => {
+        await readGate;
+        if (race === 'restore') return sessions.find((s) => s.session_id === id);
+        return [archivedRoot, ...affectedSessions].find((s) => s.session_id === id);
+      });
       const client = {
         service: vi.fn((name: string) => {
           if (name === `sessions/${target.session_id}/archive`) return { create };
+          if (name === 'sessions') return { get };
           throw new Error(`Unexpected service: ${name}`);
         }),
       } as unknown as AgorClient;
@@ -140,12 +162,24 @@ describe('teammate drawer archive reconciliation', () => {
       expect(screen.getByRole('button', { name: `Open session ${target.title}` })).toBeVisible();
       await act(async () => {
         // Only a changed root emits a patch; an already-archived root emits nothing.
-        if (affected.includes(target)) sessionPatched(archivedRoot);
+        if (race) {
+          // Inversion: these active writes committed BEFORE the archive, despite
+          // larger timestamps. Restore: these writes committed AFTER it. Only
+          // the authoritative read can distinguish the two.
+          for (const s of affected)
+            sessionPatched({ ...s, last_updated: '2026-09-01T00:00:03.000Z' });
+        } else if (affected.includes(target)) sessionPatched(archivedRoot);
         resolve({ session: archivedRoot, affectedSessions });
         await response;
       });
+      await waitFor(() => expect(get).toHaveBeenCalled());
+      // The mutation payload alone must not hide descendants while reads wait.
+      expect(screen.getByRole('button', { name: 'Open session Grandchild' })).toBeVisible();
+      await act(async () => {
+        finishRead();
+      });
       await waitFor(() => {
-        for (const s of [target, ...affected]) {
+        for (const s of [target, ...affected].filter((s) => !remaining.includes(s))) {
           expect(
             screen.queryByRole('button', { name: `Open session ${s.title}` })
           ).not.toBeInTheDocument();

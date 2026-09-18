@@ -2,6 +2,7 @@ import type { Session } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bumpRevision,
+  getLastAppliedRevision,
   getRevision,
   recordHydrationApply,
   resetHydrationRevisions,
@@ -221,118 +222,114 @@ describe('realtimeBatch — keyed session-patch queue', () => {
 });
 
 describe('confirmed mutation patches', () => {
-  it('commits all returned rows once, supersedes queued active rows and invalidates stale hydration', () => {
+  it('rereads returned IDs, commits once, drains older queued state and invalidates hydration', async () => {
     const root = makeSession();
     const child = makeSession({ session_id: 'child' as Session['session_id'] });
-    agorStore.getState().applyMaps((prev) => ({
-      ...prev,
-      sessionById: new Map([
-        [root.session_id, root],
-        [child.session_id, child],
-      ]),
-      sessionsByBranch: new Map([[root.branch_id, [root, child]]]),
-    }));
+    seedSession(root);
+    seedSession(child);
     const commit = captureSessionPatchCommit();
     bumpRevision('sessions');
     enqueueSessionPatch(AUTHORITY, child);
     const revisionBefore = getRevision('sessions');
     const notified = vi.fn();
     const unsubscribe = agorStore.subscribe(notified);
-
-    commit(
-      [root, child].map((session) => ({
-        ...session,
-        archived: true,
-        last_updated: '2026-06-24T00:00:01.000Z',
-      }))
-    );
-
+    const archived = [root, child].map((session) => ({ ...session, archived: true }));
+    const refetch = vi.fn(async () => archived);
+    await commit(archived, refetch);
+    expect(refetch).toHaveBeenCalledWith([root.session_id, child.session_id]);
     expect(getRevision('sessions')).toBeGreaterThan(revisionBefore);
     expect(notified).toHaveBeenCalledTimes(1);
     expect(agorStore.getState().sessionById.size).toBe(0);
     expect(agorStore.getState().sessionsByBranch.size).toBe(0);
-    // No earlier queued active row may resurrect the child on the next frame.
     flushRealtimeNow(AUTHORITY);
     expect(notified).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
 
-  it('ignores a response captured with no active authority', () => {
+  it('does not reread or apply a response captured with no authority', async () => {
     setRealtimeAuthorityScope(null);
     const commit = captureSessionPatchCommit();
     setRealtimeAuthorityScope(AUTHORITY);
     seedSession(makeSession());
-    const revisionBefore = getRevision('sessions');
-    commit([makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' })]);
+    const refetch = vi.fn();
+    await commit([makeSession({ archived: true })], refetch);
+    expect(refetch).not.toHaveBeenCalled();
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
-    expect(getRevision('sessions')).toBe(revisionBefore);
   });
 
   it.each(['queued', 'applied', 'hydrated'] as const)(
-    'preserves a newer %s unarchive against a delayed archive response',
-    (delivery) => {
+    'preserves a newer %s restore against an older archive response regardless of timestamps',
+    async (delivery) => {
       seedSession(makeSession());
       const commit = captureSessionPatchCommit();
-      const archived = makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' });
-      const restored = makeSession({
-        title: 'Prompted again',
-        status: 'running',
-        last_updated: '2026-06-24T00:00:02.000Z',
-      });
+      const restored = makeSession({ title: 'Restored', branch_id: 'b-2' as Session['branch_id'] });
       bumpRevision('sessions');
       enqueueSessionPatch(AUTHORITY, restored);
       if (delivery === 'applied') flushRealtimeNow(AUTHORITY);
       if (delivery === 'hydrated') {
+        agorStore.getState().resetMaps();
         seedSession(restored);
         recordHydrationApply(['sessions'], [getRevision('sessions')]);
       }
-      const revisionBefore = getRevision('sessions');
-
-      commit([archived]);
+      // An old response can even carry a larger timestamp than the restore.
+      await commit(
+        [makeSession({ archived: true, last_updated: '2026-06-25T00:00:00.000Z' })],
+        async () => [restored]
+      );
       flushRealtimeNow(AUTHORITY);
-
       expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
-      expect(agorStore.getState().sessionsByBranch.get('b-1')).toEqual([restored]);
-      expect(getRevision('sessions')).toBe(revisionBefore);
+      expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+      expect(agorStore.getState().sessionsByBranch.get('b-2')).toEqual([restored]);
     }
   );
 
-  it.each([false, true])('preserves a newer branch/title patch (flushed=%s)', (flushed) => {
-    seedSession(makeSession());
-    const commit = captureSessionPatchCommit();
-    const newer = makeSession({
-      branch_id: 'b-2' as Session['branch_id'],
-      title: 'Moved',
-      last_updated: '2026-06-24T00:00:02.000Z',
-    });
-    bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, newer);
-    if (flushed) flushRealtimeNow(AUTHORITY);
+  it.each(['event', 'hydration', 'confirmation'] as const)(
+    'retries a read raced by %s, never applying its stale snapshot',
+    async (race) => {
+      const initial = makeSession();
+      const archived = { ...initial, archived: true };
+      const restored: Session = { ...initial, title: 'Restored' };
+      seedSession(initial);
+      const commit = captureSessionPatchCommit();
+      const refetch = vi
+        .fn(async () => [restored])
+        .mockImplementationOnce(async () => {
+          if (race === 'event') {
+            bumpRevision('sessions');
+            enqueueSessionPatch(AUTHORITY, restored);
+          } else if (race === 'hydration') {
+            seedSession(restored);
+            recordHydrationApply(['sessions'], [getRevision('sessions')]);
+          } else {
+            await captureSessionPatchCommit()([restored], async () => [restored]);
+          }
+          return [archived];
+        });
+      await commit([archived], refetch);
+      expect(refetch).toHaveBeenCalledTimes(2);
+      expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
+    }
+  );
 
-    commit([makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' })]);
+  it.each([false, true])(
+    'does not resurrect a removed row after tombstone flush=%s',
+    async (flushed) => {
+      const session = makeSession();
+      seedSession(session);
+      const commit = captureSessionPatchCommit();
+      tombstoneSession(AUTHORITY, session.session_id);
+      sessionRemoved(session);
+      if (flushed) flushRealtimeNow(AUTHORITY);
+      const refetch = vi.fn(async () => [session]);
+      await commit([session], refetch);
+      flushRealtimeNow(AUTHORITY);
+      expect(refetch).not.toHaveBeenCalled();
+      expect(agorStore.getState().sessionById.size).toBe(0);
+      expect(agorStore.getState().sessionsByBranch.size).toBe(0);
+    }
+  );
 
-    expect(agorStore.getState().sessionById.get('s-1')).toEqual(newer);
-    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
-    expect(agorStore.getState().sessionsByBranch.get('b-2')).toEqual([newer]);
-  });
-
-  it.each([false, true])('does not resurrect a removed row after tombstone flush=%s', (flushed) => {
-    const session = makeSession();
-    seedSession(session);
-    const commit = captureSessionPatchCommit();
-    tombstoneSession(AUTHORITY, session.session_id);
-    sessionRemoved(session);
-    if (flushed) flushRealtimeNow(AUTHORITY);
-
-    // Use an active response to expose resurrection, not an idempotent archive.
-    commit([makeSession({ last_updated: '2026-06-24T00:00:01.000Z' })]);
-    flushRealtimeNow(AUTHORITY);
-
-    expect(agorStore.getState().sessionById.size).toBe(0);
-    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
-  });
-
-  it('does not freshen a queued row subsumed by hydration that removed it', () => {
+  it('does not freshen a queued row subsumed by hydration that removed it', async () => {
     const session = makeSession();
     seedSession(session);
     const commit = captureSessionPatchCommit();
@@ -340,24 +337,89 @@ describe('confirmed mutation patches', () => {
     enqueueSessionPatch(AUTHORITY, session);
     agorStore.getState().resetMaps();
     recordHydrationApply(['sessions'], [getRevision('sessions')]);
-
-    commit([makeSession({ last_updated: '2026-06-24T00:00:01.000Z' })]);
-
+    const refetch = vi.fn();
+    await commit([session], refetch);
+    expect(refetch).not.toHaveBeenCalled();
     expect(agorStore.getState().sessionById.size).toBe(0);
-    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
   });
 
-  it.each([false, true])('keeps observed state on timestamp ties (flushed=%s)', (flushed) => {
-    seedSession(makeSession());
-    const commit = captureSessionPatchCommit();
-    const restored = makeSession({ last_updated: '2026-06-24T00:00:01.000Z' });
+  it('does not resurrect a queued-only row when an unchanged empty hydration lands during the read', async () => {
+    const session = makeSession();
     bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, restored);
-    if (flushed) flushRealtimeNow(AUTHORITY);
+    enqueueSessionPatch(AUTHORITY, session);
+    const refetch = vi.fn(async () => {
+      // A quiet empty snapshot subsumes this queued event without replacing
+      // either map reference (buildSessionMaps preserves equal maps).
+      recordHydrationApply(['sessions'], [getRevision('sessions')]);
+      return [session];
+    });
+    await captureSessionPatchCommit()([session], refetch);
+    flushRealtimeNow(AUTHORITY);
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(agorStore.getState().sessionById.size).toBe(0);
+  });
 
-    commit([{ ...restored, archived: true }]);
+  it.each([false, true])(
+    'backs off repeated races and stops on authority cancellation=%s',
+    async (cancel) => {
+      vi.useFakeTimers();
+      const session = makeSession();
+      seedSession(session);
+      let calls = 0;
+      const refetch = vi.fn(async () => {
+        if (++calls <= 5) bumpRevision('sessions');
+        return [{ ...session, archived: true }];
+      });
+      const request = captureSessionPatchCommit()([session], refetch);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(refetch).toHaveBeenCalledTimes(4);
+      if (cancel) setRealtimeAuthorityScope('tenant-b:user-b:2');
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refetch).toHaveBeenCalledTimes(cancel ? 4 : 5);
+      await vi.advanceTimersByTimeAsync(400);
+      await request;
+      expect(refetch).toHaveBeenCalledTimes(cancel ? 4 : 6);
+      expect(agorStore.getState().sessionById.has(session.session_id)).toBe(cancel);
+    }
+  );
 
-    expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
-    expect(agorStore.getState().sessionsByBranch.get('b-1')).toEqual([restored]);
+  it('does not discard unrelated queued patches or advance the full hydration watermark', async () => {
+    const session = makeSession();
+    seedSession(session);
+    const unrelated = makeSession({ session_id: 'unrelated' as Session['session_id'] });
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, unrelated);
+    const watermark = getLastAppliedRevision('sessions');
+    await captureSessionPatchCommit()([session], async () => [{ ...session, archived: true }]);
+    expect(getLastAppliedRevision('sessions')).toBe(watermark);
+    expect(agorStore.getState().sessionById.get(unrelated.session_id)).toEqual(unrelated);
+    expect(agorStore.getState().sessionById.has(session.session_id)).toBe(false);
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores a refetch that %s after authority replacement',
+    async (outcome) => {
+      const session = makeSession();
+      seedSession(session);
+      const refetch = vi.fn(async () => {
+        setRealtimeAuthorityScope('tenant-b:user-b:2');
+        if (outcome === 'reject') throw new Error('old authority failed');
+        return [{ ...session, archived: true }];
+      });
+      await captureSessionPatchCommit()([session], refetch);
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
+    }
+  );
+
+  it('applies no mutation payload when refetch fails', async () => {
+    const session = makeSession();
+    seedSession(session);
+    await expect(
+      captureSessionPatchCommit()([{ ...session, archived: true }], async () => {
+        throw new Error('Offline');
+      })
+    ).rejects.toThrow('Offline');
+    expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
   });
 });

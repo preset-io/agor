@@ -273,6 +273,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       // Do not depend on every descendant's realtime event arriving before the
       // drawer updates. Only reconcile server-confirmed rows, never infer a
       // cascade from the visible genealogy (which can include remote sessions).
+      // Their payloads may already be stale: the store refetches these IDs.
       // affectedSessions contains changed rows only: an already-archived root
       // is returned separately and will not produce another realtime patch.
       const confirmed = new Map(
@@ -281,7 +282,15 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
           session,
         ])
       );
-      commit([...confirmed.values()]);
+      try {
+        await commit([...confirmed.values()], (ids) =>
+          Promise.all(ids.map((id) => client.service('sessions').get(id)))
+        );
+      } catch {
+        throw new Error(
+          'Session archived, but refreshing session state failed. Refresh to reconcile.'
+        );
+      }
       return result.session;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to archive session';
