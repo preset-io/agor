@@ -1816,6 +1816,46 @@ describe('Slack MCP connect authenticated route', () => {
    * `.catch()` that dropped the result — so the link was gone and the card
    * kept offering it.
    */
+  /**
+   * F2 — what `oauth-start` tells a user whose link was refused.
+   *
+   * The binding loader collapses every refusal into one generic `Forbidden`
+   * so a redeemer cannot learn which binding moved. Classified as a bare
+   * `Forbidden`, that became "the MCP request authority ... changed or
+   * expired" — a claim about the user's ACCESS, made on the strength of a
+   * signature that did not verify. Whoever read it went to check permissions
+   * that were fine, and never got told the one thing that would have helped.
+   */
+  it('reports a tampered link as a spent link, not as changed authority', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: `${seeded.token}tampered` }, paramsFor(harness))) as {
+      success: boolean;
+      error?: string;
+      recovery?: { category?: string; action?: string; message?: string };
+    };
+
+    expect(started.success).toBe(false);
+    expect(started.recovery).toMatchObject({
+      category: 'link_not_admitted',
+      action: 'request_new_link',
+    });
+    expect(started.error).toContain('new link');
+    expect(started.error).not.toContain('authority');
+    // Still silent about WHICH binding refused: the copy is the same sentence
+    // for a forged signature as for an expired one.
+    expect(started.error).not.toContain('signature');
+    // And nothing was spent proving it — the real link still works.
+    expect(await seeded.widgetStatus()).toBe('pending');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
   it('marks a consumed link failed when the start cannot proceed', async () => {
     const provider = await createTestProvider();
     providers.push(provider);

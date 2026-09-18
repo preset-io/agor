@@ -169,6 +169,17 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'authorization_denied',
   'configuration_changed',
   'permission_changed',
+  /**
+   * A one-use link was not admitted.
+   *
+   * Distinct from `permission_changed` because the two send the user to
+   * different places. An authority change means the access itself moved and is
+   * worth inspecting; a link that is expired, superseded, altered, or opened by
+   * the wrong account means only that THIS link is spent — nothing about the
+   * user's access has to change for a fresh one to work. The refusal that
+   * produces it stays deliberately silent about which binding moved.
+   */
+  'link_not_admitted',
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
@@ -187,6 +198,8 @@ export const MCP_AUTH_RECOVERY_ACTIONS = [
   'retry',
   'review_configuration',
   'contact_admin',
+  /** Ask the agent (or the surface that sent it) for a replacement link. */
+  'request_new_link',
 ] as const;
 export type MCPAuthRecoveryAction = (typeof MCP_AUTH_RECOVERY_ACTIONS)[number];
 

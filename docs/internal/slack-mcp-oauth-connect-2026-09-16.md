@@ -632,6 +632,41 @@ attach and the agent's wake-up happen with nobody present, which is a different
 decision from letting the person who signed in press a button. D1's "attach
 after a browser-bound human action" survives intact.
 
+**D9 — A refusal to admit a link is not a change of authority** (follow-up F2).
+Both redemption lanes collapse every binding failure into one generic
+`Forbidden`, so a redeemer cannot learn which of a dozen bindings moved. That
+silence is aimed at the redeemer; `classifyMCPAuthRecovery` is not the
+redeemer, and it was reading the same bare `Forbidden` everything else throws.
+So `oauth-start` answered a tampered or malformed connect token with _"The MCP
+request authority or OAuth browser reservation changed or expired"_ — a claim
+about the user's ACCESS, made on the strength of a signature that did not
+verify, sending them to re-check permissions that were fine.
+
+The distinction is Agor-owned and in-process. `MCPLinkAdmissionError`
+**subclasses** `Forbidden`: same 403, same `Forbidden` name and `className`,
+same single generic message, byte-identical `toJSON`. Nothing a client can
+observe tells the two apart — the marker is legible only on the daemon's side
+of the boundary, which is the only side that has the right to know. The
+classifier branches on it **before** the `Forbidden` branch it is a subclass
+of, into `link_not_admitted` / `request_new_link`, whose copy says the link is
+spent and to ask the agent for another. The copy is one sentence for every
+refusal, so it stays as silent as the throw it classifies.
+
+The five throw sites are the two binding loaders' final refusal, the two
+"does not match the requested server" guards, and the both-tokens refusal
+(which is raised before the classifying `try` and so changes nothing today —
+marked because it is the same kind of refusal, and a later refactor that moves
+the `try` should not have to rediscover that).
+
+Nothing is narrowed for anyone else. The four call sites that whitelist
+`permission_changed` — `test-oauth`'s catch, discovery's
+`probeAndAcquireOAuthToken` rethrow, its connect-error rethrow, and
+`/mcp-servers/discover`'s catch — are all reached from provider I/O, not from
+link redemption, and `recoveryForOAuthAttemptFailure`'s own
+`'permission_changed'` failure code is a different function on a different
+input. The reactive recovery lane redeems its token through the same loader and
+gets the same corrected answer.
+
 ---
 
 ## 5. Security requirements

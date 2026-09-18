@@ -264,6 +264,7 @@ import { createKnowledgeVersionsService } from './services/knowledge-versions.js
 import { createLeaderboardService } from './services/leaderboard.js';
 import {
   classifyMCPAuthRecovery,
+  MCPLinkAdmissionError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
@@ -5107,7 +5108,10 @@ export async function registerMCPServices(
         };
       });
     } catch {
-      throw new Forbidden(genericFailure);
+      // A refusal to admit this link, which `classifyMCPAuthRecovery` must not
+      // report as the user's authority having changed. Still a `Forbidden`,
+      // still this one message: the marker is in-process only.
+      throw new MCPLinkAdmissionError(genericFailure);
     }
   };
 
@@ -5321,7 +5325,10 @@ export async function registerMCPServices(
       // refused one-use link is not one, and the durable delivery record on
       // the widget already says what the lane did.
     } catch {
-      throw new Forbidden(genericFailure);
+      // A refusal to admit this link, which `classifyMCPAuthRecovery` must not
+      // report as the user's authority having changed. Still a `Forbidden`,
+      // still this one message: the marker is in-process only.
+      throw new MCPLinkAdmissionError(genericFailure);
     }
   };
 
@@ -5396,7 +5403,9 @@ export async function registerMCPServices(
       // and consumes its own one-use record; accepting both would leave the
       // daemon choosing which binding governs the attempt.
       if (data.slack_recovery_token && data.connect_token) {
-        throw new Forbidden('Only one Slack MCP action token may be redeemed per sign-in.');
+        throw new MCPLinkAdmissionError(
+          'Only one Slack MCP action token may be redeemed per sign-in.'
+        );
       }
       const reservedSlackAttemptId =
         data.slack_recovery_token || data.connect_token
@@ -5647,7 +5656,9 @@ export async function registerMCPServices(
             data.mcp_server_id &&
             data.mcp_server_id !== slackRecoveryBinding.claims.mcp_server_id
           ) {
-            throw new Forbidden('This MCP recovery action does not match the requested server.');
+            throw new MCPLinkAdmissionError(
+              'This MCP recovery action does not match the requested server.'
+            );
           }
         }
         if (data.connect_token) {
@@ -5672,7 +5683,9 @@ export async function registerMCPServices(
           }, 10_000);
           slackStartLeaseTimer.unref();
           if (data.mcp_server_id && data.mcp_server_id !== connectBinding.claims.mcp_server_id) {
-            throw new Forbidden('This MCP connect action does not match the requested server.');
+            throw new MCPLinkAdmissionError(
+              'This MCP connect action does not match the requested server.'
+            );
           }
         }
         const savedServerId =
