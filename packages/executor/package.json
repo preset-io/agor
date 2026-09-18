@@ -24,7 +24,7 @@
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "zod": "^4.6.5"
   },
   "optionalDependencies": {

@@ -82,7 +82,7 @@
     "cors": "^2.8.6",
     "cron-parser": "^5.7.0",
     "cronstrue": "^3.24.0",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "discord-api-types": "^0.38.53",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",

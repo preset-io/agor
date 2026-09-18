@@ -36,7 +36,7 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.0",
     "express-rate-limit": "^8.6.2",
