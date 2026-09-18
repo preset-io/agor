@@ -1453,7 +1453,7 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
         status: 'resolving',
         resolution_claim: {
           token: 'claim-token',
-          action: 'oauth_verified',
+          action: 'oauth_callback',
           claimed_at: new Date(Date.now() - 5 * 60_000).toISOString(),
           claimed_by: OWNER,
         },
@@ -1485,7 +1485,7 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
         status: 'resolving',
         resolution_claim: {
           token: 'claim-token',
-          action: 'oauth_verified',
+          action: 'oauth_callback',
           claimed_at: new Date(Date.now() - 5_000).toISOString(),
           claimed_by: OWNER,
         },

@@ -170,6 +170,85 @@ demote the resolver, while the card sits there. See §5.2 and §5.3.
 `evidence.attempt_id` is logged and otherwise unused. A client that invents one
 resolves nothing.
 
+### 3.2.1 Three milestones, and finishing the two the browser owes
+
+Connecting is not one event. It is three, completed by three different actors:
+
+1. **The grant is persisted.** The provider redirects to Agor's OAuth callback,
+   which writes `user_mcp_oauth_tokens`. This one completes on its own.
+2. **The widget resolves and the server attaches.** Only the browser's POST to
+   `/oauth-resolve` does this; the daemon decides everything about it, but
+   nothing asks.
+3. **The agent is admitted to resume.** Same POST, downstream of the same
+   handler.
+
+The original design had no way to reach (2) or (3) except that POST, so closing
+the tab after consent left the worst possible state: a real, spendable
+credential behind a widget that still said Connect, a Slack card that said
+"sign-in is in progress" forever, and an agent that never woke. Reopening the
+page reported success — it read `oauth_succeeded_at`, which is milestone (1) —
+while Slack and the agent stayed where they were. Nothing in the system could
+finish it, and `WidgetResolutionStore` treated an abandoned `resolving` claim as
+terminal by design.
+
+The recovery is one policy plus one state machine.
+
+**The policy is per widget type, and only `oauth` has it.** A
+`daemon_verified` registry entry may declare `recovery: 'reclaimable'`, which
+means two things for that lane alone: a widget that is already `submitted`
+answers `already_resolved: true` instead of `Forbidden`, and a `resolving`
+claim taken by the same action and abandoned past
+`WIDGET_RECLAIM_ABANDONED_AFTER_MS` (60s) may be taken over. The default stays
+`'none'` and the submit-backed widgets keep exactly the semantics they had —
+replaying `applySubmit` could duplicate a secret write or a connector restart,
+which is what the conservative default is for. `oauth` qualifies because every
+step of its handler is a re-read or an idempotent write: the grant read decides
+(the request asserts nothing), the attach is a unique-index upsert, and the
+auto-resume task is keyed by `widgetAutoResumeTaskId`. Replaying the whole
+handler converges on the same three rows and talks to no provider.
+
+`already_resolved` matters more than it looks: it is what lets a recovery
+surface tell "you already succeeded" apart from "you may not", which the same
+`Forbidden` used to conflate. `already_present` is deliberately excluded — that
+status is minted terminal by a short-circuit that never offered a button, so
+reporting a resolution for it would report one that never happened.
+
+**The state machine is shared, and that is the point.** The Slack card and the
+landing page answer from one `mcpSlackConnectRenderedState` over the widget row,
+the delivery record, and the credential read through `resolveMCPOAuthGrantLiveness`
+— the same function the resolve gate spends, so a card can never offer a finish
+`/oauth-resolve` would refuse. They used to answer from two, and disagreed
+exactly where it mattered. The card follows the _credential_, not
+`oauth_succeeded_at`: a round-trip can finish and the grant be revoked, and a
+grant can be on file from the Catalog drawer with no round-trip here at all.
+`refreshable` does not count, because the resolve gate spends only a live grant.
+
+Two states carry the distinction:
+
+- **`finish_required`** — signed in, not attached. Its copy never says
+  "connect", because sending someone back through a flow they completed is the
+  error this whole state exists to stop, and its button is the resolve POST on
+  its own. Slack gets it as a **re-seal, never a re-issue**: same
+  `delivery_generation`, same `jti`, same clock, because a re-issue would clear
+  the `oauth_succeeded_at` that records the sign-in. A re-seal grants strictly
+  less than an issue — it mints nothing and invalidates nothing.
+- **`finish_stalled`** — signed in, and no link left to offer. The button is
+  dropped rather than shown broken, and the copy is an instruction rather than
+  an apology: ask again in the thread, at no second sign-in. That is true
+  because a fresh widget's already-connected short-circuit spends the grant
+  that is on file. Nothing re-mints on a timer.
+
+The one thing the copy must never say in any of these states is "Nothing was
+connected". `expired` is reachable _after_ a round-trip that succeeded and left
+no spendable grant, so it now reads "Agor has no usable connection" — which is
+the useful fact and also the true one.
+
+The canvas widget reads the same last-observed grant snapshot the rest of the
+UI holds, and offers **Finish connecting** rather than a full re-authorization
+of an account that is already connected. The snapshot is a hint and nothing
+more: the daemon re-reads the grant, and a refusal drops the card back to an
+ordinary Connect rather than leaving a button that can only fail.
+
 ### 3.3 `agor_mcp_catalog_list`
 
 Read-only, paginated search over `packages/core/src/mcp-catalog/`. It exists so
@@ -1137,6 +1216,103 @@ correctly there too. The path the defect is on — `GatewayService.create` calle
 nothing else — needs a live Socket Mode connection the fake does not provide.
 That entry shape is what the regression test drives, against the production
 guard, and it fails on the preceding commit.
+
+### 7.1.8 The batch-B real-stack drive
+
+Same shape again — a real daemon (`tsx src/main.ts`), an isolated `HOME`, a
+migrated SQLite database, and **Slack's API and only Slack's API replaced** at
+`WebClient.prototype.apiCall` — for the three-milestone recovery B1 added and
+the operator control B2 added. Four widgets seeded through real repositories
+before the daemon started, each carrying the delivery record a completed
+provider round-trip leaves behind: the link consumed, the flow started,
+`oauth_succeeded_at` stamped, and no browser ever coming back. The grant itself
+is a written `user_mcp_oauth_tokens` row, the same substitution §7.1 and §8
+made, because `/mcp-servers/oauth-start` performs real discovery against the
+vendor endpoint.
+
+The link was re-sealed by the daemon and taken out of the posted Block Kit
+button, so every HTTP call below used the URL a user would actually have
+tapped, not one the driver constructed.
+
+| Case                                        | Result                                                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Grant landed, page closed, link live        | Card edited in place to _Finish connecting Notion_ with a re-sealed button. Same `delivery_generation`, same `jti`, same clock.                                          |
+| Reopening that page                         | Preflight answered `finish_required` — not `connected`, which is what it used to claim while the widget was still pending and the agent still asleep.                    |
+| Pressing the button                         | Widget `submitted`, server attached (one `session_mcp_servers` row), one auto-resume task, card repainted to _Notion connected_, resume message relayed into the thread. |
+| Pressing it twice                           | `201` with `already_resolved: true` and `auto_resume_queued: false`. No second attach, no second task — the task id IS `widgetAutoResumeTaskId`.                         |
+| Claim abandoned two minutes                 | Card offers the finish; the POST reclaims and completes, logging `event=widget_resolution_reclaimed`.                                                                    |
+| Claim five seconds old                      | Card stays _sign-in is in progress_ and the POST is refused. Two browsers racing one card do not take it from each other.                                                |
+| Grant landed, link lapsed                   | _Notion is signed in, but not finished_, no button, and no `next_repair_at` — nothing re-mints on a timer.                                                               |
+| Kill switch: read / non-admin / non-boolean | `{tenant_id, enabled}`; `403` on both methods for a member; `400` on `"off"`, not a write.                                                                               |
+| Kill switch off, two sweep ticks            | Zero `chat.postMessage` and zero `chat.update`. A live link redeemed in that window was refused.                                                                         |
+| Kill switch back on                         | Card repainted within one tick, and the same link — never consumed — worked again.                                                                                       |
+
+**This run found two defects, both fixed here**, and neither was reachable from
+any suite.
+
+**The finish card offered a button redemption would have refused.**
+`mcpOAuthConnectClaimsMatchDelivery` compares whole-second `iat`/`exp` against
+the record's ISO timestamps for _equality_; `issueMCPOAuthConnectLink`
+second-aligns its clock for exactly that reason, in a comment, one function
+away. `resealMCPOAuthConnectLink` inherited that invariant silently and nothing
+asserted it — including the test fixture standing in for a real record, which
+was itself unaligned and passed only because no test ever tried to redeem what
+the card posted. The re-seal now re-reads what it just sealed through
+redemption's own two functions and returns `null` when the answer is no, which
+makes the card's central promise structural rather than remote. The delivery
+loop asks it above the steady-state shortcut, because whether a link can be
+produced is part of which state the card is in; deciding it below left the
+shortcut, the claim and the expiry timer reasoning about a state the card then
+could not render, and redrew a settled `finish_stalled` card every tick. That
+also retired the re-entrant bounce, whose "cannot happen twice" argument only
+ever held for the lapsed reason. Latent rather than live — only
+`issueMCPOAuthConnectLink` writes these records, and it aligns — but the whole
+point of this state is that a card cannot offer a finish `/oauth-resolve` would
+refuse, and that was true by coincidence.
+
+**A claim whose resolver died was unrecoverable from Slack.**
+`mcpSlackConnectRenderedState` has an explicit branch offering the button once
+an abandoned claim is old enough for `submissions.ts` to take it over — and the
+delivery loop could never reach it, because `resolveSlackConnectBinding`
+refuses any widget that is not `pending`. So the exact B1 scenario, one step
+further along (the browser got as far as claiming, then died), left a card
+reading "sign-in is in progress … this message updates when it lands", forever,
+with nothing to press. The binding now admits `resolving`. That grants nothing
+extra: a `resolving` widget is a pending one with a claim on it, nothing on the
+render path mints, and the one caller that does re-checks `status === 'pending'`
+under the row lock — so a claimed widget can only have the link it already has
+re-sealed, which is strictly less than an issue.
+
+What this drive could **not** discriminate:
+
+- **B3's disclosure fix.** The bound only bites past 1000 characters and the
+  longest disclosure in `curated.yaml` is GitHub's, at 808. Every catalog entry
+  therefore arrives byte-identical before and after the change, so the drive
+  posts the same text either way. Only the unit tests, which supply a synthetic
+  over-long entry, tell the two builds apart — the truncation was latent, and
+  the fix is about what the next long disclosure would have lost.
+- **The kill switch's in-flight half.** The drive proves delivery stops and
+  redemption stops. The third check — `assertSlackConnectFlowStillAuthorized`,
+  the one that stops a callback _already in the air_ — sits after a real
+  provider round-trip this harness cannot produce, for the same reason §7.1
+  gave. The integration test drives that entry shape directly.
+- **The cross-tenant step of the operator procedure.** This deployment is
+  `mode=static tenant=default`, so "read, change, verify, **next tenant**"
+  cannot be walked here; only its first four steps were. The route echoes the
+  tenant it acted on and `mcp-slack-connect-control.test.ts` drives a second
+  tenant against a real migrated database.
+- **The provider round-trip**, as before. Everything the daemon decides about
+  the grant is real; obtaining it from Notion is not.
+
+One thing the drive established rather than tested, worth writing down: a
+finish link is re-sealed on the ORIGINAL link's clock, and that clock is
+`MCP_OAUTH_CONNECT_TOKEN_TTL_MS` — ten minutes from the mint, not from the
+sign-in. A provider consent flow eats much of it, so for a real abandoned
+sign-in `finish_stalled` is the likely state and `finish_required` is the lucky
+one. That is deliberate (§7.2 refuses to extend a consumed link's clock), and it
+is why `finish_stalled`'s copy has to be, and is, a true instruction: asking
+again in the thread mints a fresh widget, whose already-connected short-circuit
+spends the grant that is on file without a second sign-in.
 
 ### 7.2 Deliberately not built
 
