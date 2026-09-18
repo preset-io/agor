@@ -1,14 +1,4 @@
-import { Flex, Result, Typography, theme } from 'antd';
-
-interface Props {
-  /**
-   * The workspace's own label, so a member with several open workspaces can
-   * tell which one this is. Everything else about the restriction — why it was
-   * applied, who applied it, which placement or revision it belongs to — is
-   * operator state and is deliberately absent from this screen.
-   */
-  workspaceName?: string;
-}
+import { Flex, Result, theme } from 'antd';
 
 /**
  * Full-page state for a workspace the daemon has closed to ordinary access.
@@ -16,8 +6,15 @@ interface Props {
  * It replaces the whole app shell rather than decorating it: with the socket
  * intentionally disconnected, a mounted workspace would be a live-looking
  * canvas whose every prompt, terminal and upload fails.
+ *
+ * The screen deliberately names nothing. The packet asked for the Team name,
+ * but the browser has no tenant display name without a new endpoint, and the
+ * one label it does hold (`/health` `instance.label`) identifies the
+ * deployment — on a shared Cell it is the Cell, not the Team. Everything else
+ * the restriction record knows — why, who, which placement or revision — is
+ * operator state and belongs on the operator's side of the boundary.
  */
-export function WorkspaceSuspended({ workspaceName }: Props) {
+export function WorkspaceSuspended() {
   const { token } = theme.useToken();
 
   return (
@@ -27,7 +24,6 @@ export function WorkspaceSuspended({ workspaceName }: Props) {
       justify="center"
       style={{ minHeight: '100vh', backgroundColor: token.colorBgLayout }}
     >
-      {workspaceName && <Typography.Text type="secondary">{workspaceName}</Typography.Text>}
       <Result
         status="warning"
         title="This workspace is suspended"

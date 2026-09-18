@@ -1159,7 +1159,7 @@ function AppContent() {
   // so "Reconnecting to daemon…" would be both wrong and never-ending, and a
   // mounted workspace would offer prompts, terminals and uploads that all fail.
   if (tenantRestricted) {
-    return <WorkspaceSuspended workspaceName={instanceConfig?.label} />;
+    return <WorkspaceSuspended />;
   }
 
   // Show reconnecting state if we have tokens but lost connection.

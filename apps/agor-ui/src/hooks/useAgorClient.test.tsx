@@ -515,7 +515,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     expect(io.connect).toHaveBeenCalledTimes(baseline + 1);
   });
 
-  it('recovers the credential when a probe is rejected after release', async () => {
+  it('recovers the credential when a probe is rejected rather than staying parked', async () => {
     vi.useFakeTimers();
     const restClient = { service: vi.fn() };
     vi.mocked(createRestClient).mockResolvedValue(restClient as never);
@@ -531,8 +531,9 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     });
     expect(result.current.tenantRestricted).toBe(true);
 
-    // Reactivation invalidates credentials issued before the restriction, so
-    // the first probe after release is a credential rejection, not a success.
+    // The credential epoch is checked before tenant access and changes on
+    // restrict, so a probe carrying a pre-restriction token is answered with a
+    // credential rejection — both while restricted and after reactivation.
     rejectNextConnect(
       Object.assign(new Error('Invalid or expired authentication token'), {
         data: { code: 401, className: 'not-authenticated' },
@@ -542,8 +543,8 @@ describe('useAgorClient suspended workspace lifecycle', () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
 
-    // Parking on a suspended screen for a workspace that is open again would
-    // be wrong; recovery runs and the reopened handshake clears the state.
+    // Parking on a suspended screen for a workspace that may be open again
+    // would be wrong; recovery runs and an accepted handshake clears the state.
     expect(refreshTokensMock).toHaveBeenCalledWith(restClient, 'stored-refresh');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);

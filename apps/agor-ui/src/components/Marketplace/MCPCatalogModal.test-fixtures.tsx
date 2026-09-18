@@ -188,6 +188,7 @@ export function CatalogHarness({
                 connected: true,
                 connecting: false,
                 authGeneration: 1,
+                tenantRestricted: false,
                 outOfSync: false,
                 capturedSha: null,
                 currentSha: null,

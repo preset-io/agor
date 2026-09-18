@@ -409,12 +409,12 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             enterTenantRestricted();
             return;
           }
-          // Credential recovery still runs while suspended, and is reached only
-          // after the restriction is lifted: the daemon checks tenant admission
-          // before the credential, so a restricted tenant always answers with
-          // the code above. On release, a probe whose stale credential is
-          // rejected recovers or fails over to sign-in instead of leaving the
-          // member parked on a suspended screen for a workspace that is open.
+          // Credential recovery still runs while suspended. The daemon checks
+          // the credential before tenant access, so a restricted tenant is
+          // currently far more likely to answer 401 here than with the code
+          // above; either way, a rejected credential must recover or fail over
+          // to sign-in rather than leave the member parked on a suspended
+          // screen for a workspace that may already be open again.
           if (isDefiniteAuthFailure(err)) {
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
