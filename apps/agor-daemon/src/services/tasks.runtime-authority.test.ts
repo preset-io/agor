@@ -1,3 +1,11 @@
+import { Forbidden } from '@agor/core/feathers';
+
+const assertRuntimeTenantAccess = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../auth/tenant-access.js', () => ({
+  assertRuntimeTenantAccess,
+  isCurrentTenantRuntimeActive: vi.fn().mockResolvedValue(true),
+}));
+
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -74,7 +82,35 @@ function serviceHarness(input: {
 describe('TasksService heartbeat authority control', () => {
   beforeEach(() => {
     beginExecutorTermination.mockReset();
+    assertRuntimeTenantAccess.mockReset().mockResolvedValue(undefined);
     withFreshTenantWrite.mockClear();
+  });
+
+  it('turns restricted running telemetry into Stop without callback automation', async () => {
+    const stopping = { ...task, status: TaskStatus.STOPPING };
+    const { service, reportRuntimeTelemetry } = serviceHarness({
+      report: { outcome: 'continued', task },
+    });
+    const callback = vi.fn();
+    Reflect.set(service, 'handleExecutorHeartbeat', callback);
+    Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => true });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(new Forbidden('Tenant access is restricted'));
+    beginExecutorTermination.mockResolvedValueOnce(stopping);
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).resolves.toBe(stopping);
+    expect(reportRuntimeTelemetry).toHaveBeenCalledBefore(assertRuntimeTenantAccess);
+    expect(beginExecutorTermination).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('rejects durable scope mismatch before restricted telemetry can stop another task', async () => {
+    const { service } = serviceHarness({ report: { outcome: 'scope_mismatch' } });
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).rejects.toMatchObject({ code: 403 });
+    expect(assertRuntimeTenantAccess).not.toHaveBeenCalled();
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
 
   it('claims the existing fenced STOPPING path with one sanitized revoked cause', async () => {

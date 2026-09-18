@@ -24,6 +24,7 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as tenantAccess from '../auth/tenant-access.js';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 import { SessionsService } from './sessions.js';
@@ -1891,6 +1892,9 @@ describe('GatewayService durable listener delivery fences', () => {
   });
 
   it('uses guarded tenant DB units for durable inbound admission and completion', async () => {
+    // This fixture verifies unit-of-work routing, not PostgreSQL restriction SQL.
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(true);
+    vi.spyOn(tenantAccess, 'isCurrentTenantRuntimeActive').mockResolvedValue(true);
     const { db, observations, touch } = makeGuardedPostgresDatabase();
     const service = new GatewayService(db, { service: vi.fn(), get: vi.fn() } as never);
     Object.assign(service as unknown as Record<string, unknown>, {
@@ -2147,88 +2151,100 @@ describe('GatewayService durable listener delivery fences', () => {
     );
   });
 
-  it('prepares and routes one duplicate provider occurrence only once', async () => {
-    const service = new GatewayService(
-      { run: vi.fn() } as never,
-      { service: vi.fn(), get: vi.fn() } as never
-    );
-    const eventId = '01927f9d-0000-7000-8000-000000000099';
-    const claim = vi
-      .fn()
-      .mockResolvedValueOnce({
-        outcome: 'claimed',
-        event: { id: eventId },
-      })
-      .mockResolvedValueOnce({
-        outcome: 'completed_duplicate',
-        event: { id: eventId },
-      });
-    const complete = vi.fn(async () => true);
-    const recordDeliveryMetadata = vi.fn(async () => true);
-    const listenerClaimIsCurrent = vi.fn(async () => true);
-    Object.assign(service as unknown as Record<string, unknown>, {
-      durableListenerOwnership: true,
-      inboundEventRepo: { claim, complete, recordDeliveryMetadata },
-      channelRepo: { listenerClaimIsCurrent },
-    });
-    const create = vi.spyOn(service, 'create').mockResolvedValue({
-      success: true,
-      sessionId: '01927f9d-0000-7000-8000-000000000001',
-      created: true,
-      taskId: '01927f9d-0000-7000-8000-000000000002' as never,
-    });
-    const prepareDelivery = vi.fn(async () => ({ processing_comment_id: 42 }));
-    const channel = attachHiddenTenant(
-      { ...slackChannel, id: 'durable-channel' as never },
-      { tenant_id: 'tenant-durable' }
-    );
-    const lease = {
-      channel_id: channel.id,
-      claim_token: 'opaque-owner',
-      generation: 1,
-      claimed_at: '2026-01-01T00:00:00.000Z',
-      lease_expires_at: '2026-01-01T00:00:30.000Z',
-      instance_id: 'daemon-a',
-      boot_id: 'boot-a',
-      checkpoint: null,
-    };
-    const invoke = () =>
-      (
-        service as unknown as {
-          handleListenerInboundMessage: (
-            channel: GatewayChannel,
-            tenantId: string,
-            msg: Record<string, unknown>,
-            lease: typeof lease
-          ) => Promise<void>;
-        }
-      ).handleListenerInboundMessage(
-        channel,
-        'tenant-durable',
-        {
-          providerEventId: 'slack:event:Ev-1',
-          threadId: 'C1-1.0',
-          text: 'hello',
-          userId: 'U1',
-          prepareDelivery,
-        },
-        lease
+  it.each([false, true])(
+    'deduplicates provider occurrence without replay (suppressed=%s)',
+    async (suppressed) => {
+      if (suppressed)
+        vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(false);
+      const service = new GatewayService(
+        { run: vi.fn() } as never,
+        { service: vi.fn(), get: vi.fn() } as never
       );
+      const eventId = '01927f9d-0000-7000-8000-000000000099';
+      const claim = vi
+        .fn()
+        .mockResolvedValueOnce({
+          outcome: 'claimed',
+          event: { id: eventId },
+        })
+        .mockResolvedValueOnce({
+          outcome: 'completed_duplicate',
+          event: { id: eventId },
+        });
+      const complete = vi.fn(async () => true);
+      const recordDeliveryMetadata = vi.fn(async () => true);
+      const listenerClaimIsCurrent = vi.fn(async () => true);
+      Object.assign(service as unknown as Record<string, unknown>, {
+        durableListenerOwnership: true,
+        inboundEventRepo: { claim, complete, recordDeliveryMetadata },
+        channelRepo: { listenerClaimIsCurrent },
+      });
+      const create = vi.spyOn(service, 'create').mockResolvedValue({
+        success: true,
+        sessionId: '01927f9d-0000-7000-8000-000000000001',
+        created: true,
+        taskId: '01927f9d-0000-7000-8000-000000000002' as never,
+      });
+      const prepareDelivery = vi.fn(async () => ({ processing_comment_id: 42 }));
+      const channel = attachHiddenTenant(
+        { ...slackChannel, id: 'durable-channel' as never },
+        { tenant_id: 'tenant-durable' }
+      );
+      const lease = {
+        channel_id: channel.id,
+        claim_token: 'opaque-owner',
+        generation: 1,
+        claimed_at: '2026-01-01T00:00:00.000Z',
+        lease_expires_at: '2026-01-01T00:00:30.000Z',
+        instance_id: 'daemon-a',
+        boot_id: 'boot-a',
+        checkpoint: null,
+      };
+      const invoke = () =>
+        (
+          service as unknown as {
+            handleListenerInboundMessage: (
+              channel: GatewayChannel,
+              tenantId: string,
+              msg: Record<string, unknown>,
+              lease: typeof lease
+            ) => Promise<void>;
+          }
+        ).handleListenerInboundMessage(
+          channel,
+          'tenant-durable',
+          {
+            providerEventId: 'slack:event:Ev-1',
+            threadId: 'C1-1.0',
+            text: 'hello',
+            userId: 'U1',
+            prepareDelivery,
+          },
+          lease
+        );
 
-    await invoke();
-    await invoke();
+      await invoke();
+      await invoke();
 
-    expect(create).toHaveBeenCalledOnce();
-    expect(prepareDelivery).toHaveBeenCalledOnce();
-    expect(recordDeliveryMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ eventId, metadata: { processing_comment_id: 42 } })
-    );
-    expect(create.mock.calls[0][0]).toMatchObject({
-      gateway_inbound_event_id: eventId,
-      metadata: { processing_comment_id: 42 },
-    });
-    expect(complete).toHaveBeenCalledOnce();
-  });
+      if (suppressed) {
+        expect(create).not.toHaveBeenCalled();
+        expect(prepareDelivery).not.toHaveBeenCalled();
+        expect(recordDeliveryMetadata).not.toHaveBeenCalled();
+        expect(complete).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(create).toHaveBeenCalledOnce();
+      expect(prepareDelivery).toHaveBeenCalledOnce();
+      expect(recordDeliveryMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId, metadata: { processing_comment_id: 42 } })
+      );
+      expect(create.mock.calls[0][0]).toMatchObject({
+        gateway_inbound_event_id: eventId,
+        metadata: { processing_comment_id: 42 },
+      });
+      expect(complete).toHaveBeenCalledOnce();
+    }
+  );
 
   it('does not acknowledge an occurrence still processing under a previous owner', async () => {
     const service = new GatewayService(
@@ -2659,6 +2675,9 @@ describe('GatewayService MCP resolution', () => {
   });
 
   it('attaches gateway MCP defaults through the real guarded SessionsService boundary', async () => {
+    // This fixture verifies unit-of-work routing, not PostgreSQL restriction SQL.
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(true);
+    vi.spyOn(tenantAccess, 'isCurrentTenantRuntimeActive').mockResolvedValue(true);
     const { db, observations, touch } = makeGuardedPostgresDatabase();
     const emitted = vi.fn(() => {
       expect(getCurrentTenantId()).toBe('tenant-channel');

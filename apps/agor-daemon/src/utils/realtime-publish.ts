@@ -35,6 +35,11 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
+import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
+import {
+  assertTenantCredentialEpochValue,
+  readTenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
@@ -957,6 +962,34 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
     }
 
+    // The exact task termination signal is a safety channel, not ordinary
+    // tenant access. All other publications (including relayed events and
+    // permission/MCP refresh signals) must revalidate durable admission.
+    let credentialAdmitted = (_connection: unknown) => true;
+    if (
+      db &&
+      tenantId &&
+      !(context.path === 'tasks' && context.event === 'termination_requested')
+    ) {
+      try {
+        const epoch = await readTenantCredentialEpoch(db, tenantId);
+        credentialAdmitted = (connection: unknown) => {
+          try {
+            assertTenantCredentialEpochValue(
+              epoch,
+              getAuthenticatedConnectionCredentialPayload(connection)
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        tenantScoped = tenantScoped.filter(credentialAdmitted);
+      } catch {
+        return { delivery: [] as PublishChannel[], tenantId };
+      }
+    }
+
     // Authentication/tenant channels are deliberately broad. Narrow them to
     // the declared service read floor before ANY audience resolution so the
     // global, branch, knowledge, streaming, and Redis-relay paths cannot
@@ -971,7 +1004,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       const taskId = extractTaskId(data);
       if (!tenantId || !taskId) return { delivery: [] as PublishChannel[], tenantId };
       const room = existingChannel(app, executorTaskChannelName(tenantId, taskId));
-      return { delivery: room ? [room] : ([] as PublishChannel[]), tenantId };
+      return {
+        delivery: room ? [room.filter(credentialAdmitted)] : ([] as PublishChannel[]),
+        tenantId,
+      };
     }
 
     const resolveDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {

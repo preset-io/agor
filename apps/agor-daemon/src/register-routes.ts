@@ -1,5 +1,11 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { isPostgresDatabaseHandle } from '@agor/core/db';
+import { assertRuntimeTenantAccess } from './auth/tenant-access.js';
+import {
+  assertTenantCredentialEpoch,
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './auth/tenant-credential-epoch.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -67,6 +73,7 @@ import {
   LocalStrategy,
   NotAuthenticated,
   NotFound,
+  Unavailable,
 } from '@agor/core/feathers';
 import {
   isMCPServerUsableBy,
@@ -141,6 +148,7 @@ import {
   issueRuntimeToken,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  runtimeTenantClaims,
 } from './auth/runtime-tokens.js';
 import {
   assertAuthenticationUserAuthMetadata,
@@ -774,6 +782,7 @@ interface BearerHttpAuthenticationService {
  * user lookup and the route's authorization checks.
  */
 export async function authenticateBearerHttpRequest(input: {
+  db: TenantScopeAwareDatabase;
   authentication: BearerHttpAuthenticationService;
   multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
   headers: Record<string, unknown>;
@@ -784,7 +793,7 @@ export async function authenticateBearerHttpRequest(input: {
     { strategy: 'jwt', accessToken: input.token },
     authParams
   );
-  return {
+  const params: AuthenticatedParams = {
     ...authParams,
     user: result.user,
     provider: 'rest',
@@ -800,9 +809,82 @@ export async function authenticateBearerHttpRequest(input: {
         headers: input.headers,
       }),
   };
+  await assertRuntimeTenantAccess(input.db, params.tenant!.tenant_id);
+  return params;
+}
+
+export function createExecutorUploadContentHandler(input: {
+  db: TenantScopeAwareDatabase;
+  authentication: BearerHttpAuthenticationService;
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  const { db, authentication, multiTenancy } = input;
+  // biome-ignore lint/suspicious/noExplicitAny: Express route request/response augmentation
+  return async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const params = await authenticateBearerHttpRequest({
+        db,
+        authentication,
+        multiTenancy,
+        headers: req.headers,
+        token: authHeader.slice(7),
+      });
+      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
+      const uploadRef = req.params.uploadRef;
+      const sessionId = String(req.headers['x-agor-session-id'] ?? '');
+      const branchId = claims?.branch_id;
+      const tenant = params.tenant;
+      if (
+        typeof branchId !== 'string' ||
+        !tenant?.tenant_id ||
+        !sessionId ||
+        !matchesExecutorCommandRuntimeScope(
+          params,
+          uploadMaterializeExecutorCommandId(sessionId, uploadRef),
+          branchId
+        )
+      ) {
+        return res.status(403).json({ error: 'Upload transfer capability denied' });
+      }
+      const store = getUploadStagingStore();
+      const owner = {
+        tenantId: tenant.tenant_id,
+        sessionId: sessionId as SessionID,
+        branchId: branchId as import('@agor/core/types').BranchID,
+        ref: uploadRef as import('@agor/core/types').UploadRef,
+      };
+      const metadata = await store.inspect(owner);
+      const stream = await store.read(owner);
+      res.status(200);
+      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Length', String(metadata.size));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      stream.once('error', (error) => {
+        if (!res.headersSent) res.status(500);
+        res.destroy(error as Error);
+      });
+      res.once('close', () =>
+        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+      );
+      stream.pipe(res);
+    } catch (error) {
+      const status =
+        error instanceof Forbidden || error instanceof Unavailable
+          ? error.code
+          : ((error as { status?: number }).status ?? 404);
+      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
+      else res.destroy();
+    }
+  };
 }
 
 export function createUploadAuthMiddleware(input: {
+  db: TenantScopeAwareDatabase;
   authentication: {
     create(
       data: { strategy: 'jwt'; accessToken: string },
@@ -821,13 +903,17 @@ export function createUploadAuthMiddleware(input: {
       }
 
       req.feathers = await authenticateBearerHttpRequest({
+        db: input.db,
         authentication: input.authentication,
         multiTenancy: input.multiTenancy,
         headers: req.headers,
         token,
       });
       next();
-    } catch {
+    } catch (error) {
+      if (error instanceof Forbidden || error instanceof Unavailable) {
+        return res.status(error.code).json({ error: error.message });
+      }
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -1061,6 +1147,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   authentication.register(
     'jwt',
     new RuntimeJWTStrategy({
+      db,
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
@@ -1145,6 +1232,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     after: {
       create: [
         createIssueBrowserTokensHook({
+          db,
           jwtSecret,
           accessTokenTtl: ACCESS_TOKEN_TTL,
           refreshTokenTtl: REFRESH_TOKEN_TTL,
@@ -1194,6 +1282,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use(
     '/authentication/refresh',
     createRefreshTokenService({
+      db,
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
@@ -1268,6 +1357,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const requestedExpiry = data.expiry_ms ?? maxExpiry;
       const expiryMs = Math.min(requestedExpiry, maxExpiry);
 
+      // Preserve a JWT caller's verified epoch, never upgrade stale authority
+      // across the awaited target lookup. Fresh auth uses current admission.
+      const impersonationTenant = authParams.tenant?.tenant_id;
+      const impersonationEpoch = impersonationTenant
+        ? authParams.authentication?.strategy === 'jwt'
+          ? await assertTenantCredentialEpoch(db, impersonationTenant, authPayload)
+          : await readTenantCredentialEpoch(db, impersonationTenant)
+        : undefined;
       // 9. Generate token
       const jti = generateId();
       const expiresAt = new Date(Date.now() + expiryMs);
@@ -1276,6 +1373,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         {
           sub: targetUser.user_id,
           type: 'access',
+          ...tenantCredentialEpochClaims(impersonationEpoch),
+          ...runtimeTenantClaims(impersonationTenant, tenantTokenClaim),
           impersonated_by: caller.user_id,
           is_impersonated: true,
           jti,
@@ -2628,63 +2727,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // delegated-user command token stays in the Authorization header (never
   // URL/query/logs) and binds exactly one tenant + branch + session + handle.
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
-  (app as any).get('/executor/uploads/:uploadRef/content', async (req: any, res: any) => {
-    try {
-      const authHeader = req.headers.authorization;
-      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-      const params = await authenticateBearerHttpRequest({
-        authentication: app.service('authentication'),
-        multiTenancy,
-        headers: req.headers,
-        token: authHeader.slice(7),
-      });
-      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
-      const uploadRef = req.params.uploadRef;
-      const sessionId = String(req.headers['x-agor-session-id'] ?? '');
-      const branchId = claims?.branch_id;
-      const tenant = params.tenant;
-      if (
-        typeof branchId !== 'string' ||
-        !tenant?.tenant_id ||
-        !sessionId ||
-        !matchesExecutorCommandRuntimeScope(
-          params,
-          uploadMaterializeExecutorCommandId(sessionId, uploadRef),
-          branchId
-        )
-      ) {
-        return res.status(403).json({ error: 'Upload transfer capability denied' });
-      }
-      const store = getUploadStagingStore();
-      const owner = {
-        tenantId: tenant.tenant_id,
-        sessionId: sessionId as SessionID,
-        branchId: branchId as import('@agor/core/types').BranchID,
-        ref: uploadRef as import('@agor/core/types').UploadRef,
-      };
-      const metadata = await store.inspect(owner);
-      const stream = await store.read(owner);
-      res.status(200);
-      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Length', String(metadata.size));
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      stream.once('error', (error) => {
-        if (!res.headersSent) res.status(500);
-        res.destroy(error as Error);
-      });
-      res.once('close', () =>
-        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
-      );
-      stream.pipe(res);
-    } catch (error) {
-      const status = (error as { status?: number }).status ?? 404;
-      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
-      else res.destroy();
-    }
-  });
+  (app as any).get(
+    '/executor/uploads/:uploadRef/content',
+    createExecutorUploadContentHandler({
+      db,
+      authentication: app.service('authentication'),
+      multiTenancy,
+    })
+  );
 
   // Raw streaming executor -> daemon Slack upload data plane. Metadata is
   // bounded in headers; file bytes never enter Feathers/JSON/base64.
@@ -2696,6 +2746,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(401).json({ error: 'Authentication required' });
       }
       const params = await authenticateBearerHttpRequest({
+        db,
         authentication: app.service('authentication'),
         multiTenancy,
         headers: req.headers,
@@ -2910,6 +2961,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     };
 
   const uploadAuthMiddleware = createUploadAuthMiddleware({
+    db,
     authentication: app.service('authentication'),
     multiTenancy,
   });
@@ -4571,6 +4623,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       (params as RouteParams & { tenant?: { tenant_id?: string } }).tenant?.tenant_id ??
       getCurrentTenantId();
     if (!tenantId) throw new NotAuthenticated('MCP gateway projection requires tenant identity');
+    const credentialEpoch = await assertTenantCredentialEpoch(
+      db,
+      tenantId,
+      params.authentication?.payload
+    );
     const mode = await getMCPEgressGatewayMode(db);
     if (!executorScope) {
       if (mode === 'compatibility' || mode === 'enforced') {
@@ -4640,6 +4697,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const toolPolicyHash = mcpToolPolicyHash(server.tool_permissions, jwtSecret);
         const capability = issueMCPEgressCapability(
           {
+            ...tenantCredentialEpochClaims(credentialEpoch),
             tid: tenantId,
             task_id: task.task_id,
             session_id: session.session_id,

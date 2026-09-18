@@ -11,6 +11,7 @@
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import {
+  applyTenantRestrictionIntent,
   BoardRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -39,6 +40,7 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from '../auth/runtime-tokens.js';
+import { assertRuntimeTenantAccess } from '../auth/tenant-access.js';
 import { terminalChannelName } from '../realtime/routing.js';
 import { configureChannels, createSocketIOConfig } from './socketio.js';
 
@@ -264,6 +266,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       app.use('authentication', authentication);
 
       const socketConfig = createSocketIOConfig(app as never, {
+        assertTenantAccess: (tenantId) => assertRuntimeTenantAccess(db, tenantId),
         corsOrigin: '*',
         credentialsAllowed: false,
         workIdentity: { instanceId: 'socket-test', bootId: 'socket-test-boot' },
@@ -476,6 +479,22 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await waitForConnect(clientA);
       await expect(watchBoard(clientA, sharedA.board_id)).resolves.toEqual({ ok: true });
       await expect(watchBoard(clientA, sharedB.board_id)).resolves.toEqual({ ok: false });
+
+      await applyTenantRestrictionIntent(db, tenantA, {
+        version: 1,
+        controllerId: 'socket-test',
+        placementId: 'cell-a',
+        operationId: 'suspend',
+        revision: 1,
+        action: 'restrict',
+      });
+      await expect.poll(() => clientA.io.connected, { timeout: 4000 }).toBe(false);
+      expect(clientB.io.connected).toBe(true);
+      const rejected = new Promise<Error>((resolve) => clientA.io.once('connect_error', resolve));
+      clientA.io.connect();
+      await expect(rejected).resolves.toBeInstanceOf(Error);
+      expect(clientA.io.connected).toBe(false);
+      expect(clientB.io.connected).toBe(true);
     }, 30_000);
   }
 );

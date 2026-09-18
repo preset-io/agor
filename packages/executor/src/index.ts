@@ -17,6 +17,7 @@
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
+  ExecutorTerminationState,
   MessageSource,
   PermissionMode,
   PermissionScope,
@@ -82,7 +83,7 @@ export class AgorExecutor {
   private isRunning = false;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
-  private terminationRequest: Task['termination_request'];
+  private terminationRequest: ExecutorTerminationState['termination_request'];
   private terminationReport: Promise<void> | null = null;
   private terminationObservedAtMs: number | null = null;
   private providerCleanupSlowTimer: ReturnType<typeof setTimeout> | null = null;
@@ -317,7 +318,7 @@ export class AgorExecutor {
   }
 
   private handleTaskLifecycleUpdate(
-    task: Task,
+    task: ExecutorTerminationState,
     source: TerminationObservationSource = 'unknown'
   ): void {
     if (
@@ -368,7 +369,9 @@ export class AgorExecutor {
 
   private async refreshTerminationState(source: TerminationObservationSource): Promise<void> {
     if (!this.client) return;
-    const task = (await this.client.service('tasks').get(this.config.taskId)) as Task;
+    const task = await this.client
+      .service('tasks')
+      .getTerminationState({ task_id: this.config.taskId });
     this.handleTaskLifecycleUpdate(task, source);
   }
 
@@ -385,7 +388,8 @@ export class AgorExecutor {
             task_id: this.config.taskId,
             requested_at: requestedAt,
           }),
-        readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
+        readTask: () =>
+          client.service('tasks').getTerminationState({ task_id: this.config.taskId }),
       });
       this.terminationReport = report;
     }

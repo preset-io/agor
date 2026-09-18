@@ -1,3 +1,10 @@
+import { assertTenantCredentialEpochValue } from '../auth/tenant-credential-epoch.js';
+import {
+  admitTenantSocketPacket,
+  missingSocketTenant,
+  rejectTenantSocketPacket,
+  TenantSocketRestrictionMonitor,
+} from '../auth/tenant-socket-admission.js';
 /**
  * Socket.io Configuration
  *
@@ -43,6 +50,7 @@ import {
 import type { Server, ServerOptions, Socket } from 'socket.io';
 import {
   getAuthenticatedConnectionAuthority,
+  getAuthenticatedConnectionCredentialPayload,
   isAuthenticatedConnectionAuthorityCurrent,
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
@@ -132,6 +140,10 @@ function retireSocketConnectionAuthority(app: Application, connection: unknown):
 }
 
 export interface SocketIOOptions {
+  /** Uncached admission; executors retain only guarded safety RPC transport. */
+  assertTenantAccess?: (tenantId: string) => Promise<void>;
+  assertTenantCredential?: (tenantId: string, payload: unknown) => Promise<unknown>;
+  readTenantCredentialEpoch?: (tenantId: string) => Promise<string | undefined>;
   /** CORS origin configuration */
   corsOrigin: CorsOrigin;
   /**
@@ -754,6 +766,15 @@ export function createSocketIOConfig(
           throw new Error('Authentication token expired during connection setup');
         }
 
+        if (options.assertTenantAccess && authority.principal.kind !== 'executor') {
+          if (!authority.tenant?.tenant_id) throw missingSocketTenant();
+          await options.assertTenantAccess(authority.tenant.tenant_id);
+          await options.assertTenantCredential?.(
+            authority.tenant.tenant_id,
+            getAuthenticatedConnectionCredentialPayload(fs.feathers)
+          );
+        }
+
         logAuthenticated(
           socket,
           authority.principal.kind === 'user' ? authority.principal.userId : undefined
@@ -930,6 +951,28 @@ export function createSocketIOConfig(
         retireSocketConnectionAuthority(app, feathersSocket.feathers);
         socket.disconnect(true);
         return;
+      }
+      if (options.assertTenantAccess) {
+        socket.use((packet, next) => {
+          const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
+          const tenantId = current?.tenant?.tenant_id;
+          if (!tenantId) return rejectTenantSocketPacket(packet, next);
+          void admitTenantSocketPacket({
+            tenantId,
+            executor: current.principal.kind === 'executor',
+            packet,
+            assertAccess: async (id) => {
+              await options.assertTenantAccess!(id);
+              await options.assertTenantCredential?.(
+                id,
+                getAuthenticatedConnectionCredentialPayload(feathersSocket.feathers)
+              );
+            },
+          }).then(
+            () => next(),
+            () => rejectTenantSocketPacket(packet, next)
+          );
+        });
       }
       activeConnections++;
       // Bind revocation to the exact Feathers acknowledgement whose service
@@ -1937,6 +1980,74 @@ export function createSocketIOConfig(
       socket.on('error', (error) => {
         console.error(`❌ Socket.io error on ${socket.id}:`, error);
       });
+    });
+
+    // Each replica checks its own sockets against durable state. No permissive
+    // cache or Redis notification is required, including after a missed event.
+    let checkingRestrictions = false;
+    let monitoredSockets = new Map<string, Socket[]>();
+    const restrictionMonitor = options.assertTenantAccess
+      ? new TenantSocketRestrictionMonitor(async (tenantId) => {
+          await options.assertTenantAccess!(tenantId);
+          if (!options.readTenantCredentialEpoch) return;
+          const epoch = await options.readTenantCredentialEpoch(tenantId);
+          for (const socket of monitoredSockets.get(tenantId) ?? []) {
+            const connection = (socket as FeathersSocket).feathers;
+            try {
+              assertTenantCredentialEpochValue(
+                epoch,
+                getAuthenticatedConnectionCredentialPayload(connection)
+              );
+            } catch {
+              retireSocketConnectionAuthority(app, connection);
+              socket.disconnect(true);
+            }
+          }
+        })
+      : undefined;
+    const restrictionInterval = options.assertTenantAccess
+      ? setInterval(async () => {
+          if (checkingRestrictions) return;
+          checkingRestrictions = true;
+          try {
+            const tenants = new Map<string, Socket[]>();
+            for (const socket of io.sockets.sockets.values()) {
+              const authority = getAuthenticatedConnectionAuthority(
+                (socket as FeathersSocket).feathers
+              );
+              // Only narrowly guarded executor reports/recovery must survive Stop.
+              if (authority?.principal.kind === 'executor') continue;
+              const tenantId = authority?.tenant?.tenant_id;
+              if (!tenantId) {
+                socket.disconnect(true);
+                continue;
+              }
+              const group = tenants.get(tenantId) ?? [];
+              group.push(socket);
+              tenants.set(tenantId, group);
+            }
+            monitoredSockets = tenants;
+            await restrictionMonitor!.check(
+              new Map(
+                [...tenants].map(([tenantId, sockets]) => [
+                  tenantId,
+                  () => {
+                    for (const socket of sockets) {
+                      retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
+                      socket.disconnect(true);
+                    }
+                  },
+                ])
+              )
+            );
+          } finally {
+            checkingRestrictions = false;
+          }
+        }, 1000)
+      : undefined;
+    restrictionInterval?.unref();
+    io.engine.once('close', () => {
+      if (restrictionInterval) clearInterval(restrictionInterval);
     });
 
     // Emit a fixed-key gauge on a steady cadence so log collectors can parse it

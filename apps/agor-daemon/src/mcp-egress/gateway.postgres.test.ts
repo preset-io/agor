@@ -1,6 +1,7 @@
 /** Active-active provider-observation proof. Requires two PostgreSQL pools. */
 import http from 'node:http';
 import {
+  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -261,90 +262,118 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
     });
 
-    it('observes daemon-B commit before daemon-A final check and sends zero provider requests', async () => {
-      const tenantId = `mcp-egress-ha-${generateId()}` as TenantID;
-      let providerRequests = 0;
-      const url = await provider((_request, response) => {
-        providerRequests += 1;
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
-      });
-      const seeded = await seed(tenantId, url);
-      let releaseDns!: () => void;
-      let dnsStarted!: () => void;
-      const dnsGate = new Promise<void>((resolve) => (releaseDns = resolve));
-      const dnsObserved = new Promise<void>((resolve) => (dnsStarted = resolve));
-      const jwtSecret = 'postgres-ha-gateway-signing-key';
-      const gateway = new MCPEgressGateway({
-        db: dbA,
-        app: { get: () => undefined, service: () => ({}) } as unknown as Application,
-        jwtSecret,
-        allowLocalhostHttp: true,
-        resolveDns: async () => {
-          dnsStarted();
-          await dnsGate;
-          return [{ address: '127.0.0.1', family: 4 }];
-        },
-      });
-      const capability = issueMCPEgressCapability(
-        {
-          tid: tenantId,
-          task_id: seeded.task.task_id,
-          session_id: seeded.session.session_id,
-          principal_user_id: seeded.user.user_id,
-          credential_user_id: seeded.user.user_id,
-          mcp_server_id: seeded.mcpServer.mcp_server_id,
-          config_version: seeded.mcpServer.config_version ?? 1,
-          material_hash: mcpEgressMaterialHash(seeded.mcpServer, {}, jwtSecret),
-          rollout_mode: 'enforced',
-          jti: generateId(),
-        },
-        jwtSecret
-      );
+    it.each(['server', 'restriction', 'reactivation'])(
+      'observes daemon-B %s commit before daemon-A final check and sends zero provider requests',
+      async (mutation) => {
+        const tenantId = `mcp-egress-ha-${generateId()}` as TenantID;
+        let providerRequests = 0;
+        const url = await provider((_request, response) => {
+          providerRequests += 1;
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+        });
+        const seeded = await seed(tenantId, url);
+        let releaseDns!: () => void;
+        let dnsStarted!: () => void;
+        const dnsGate = new Promise<void>((resolve) => (releaseDns = resolve));
+        const dnsObserved = new Promise<void>((resolve) => (dnsStarted = resolve));
+        const jwtSecret = 'postgres-ha-gateway-signing-key';
+        const gateway = new MCPEgressGateway({
+          db: dbA,
+          app: { get: () => undefined, service: () => ({}) } as unknown as Application,
+          jwtSecret,
+          allowLocalhostHttp: true,
+          resolveDns: async () => {
+            dnsStarted();
+            await dnsGate;
+            return [{ address: '127.0.0.1', family: 4 }];
+          },
+        });
+        const capability = issueMCPEgressCapability(
+          {
+            tid: tenantId,
+            task_id: seeded.task.task_id,
+            session_id: seeded.session.session_id,
+            principal_user_id: seeded.user.user_id,
+            credential_user_id: seeded.user.user_id,
+            mcp_server_id: seeded.mcpServer.mcp_server_id,
+            config_version: seeded.mcpServer.config_version ?? 1,
+            material_hash: mcpEgressMaterialHash(seeded.mcpServer, {}, jwtSecret),
+            rollout_mode: 'enforced',
+            jti: generateId(),
+          },
+          jwtSecret
+        );
 
-      const pending = gateway.forward({
-        serverId: seeded.mcpServer.mcp_server_id,
-        headers: new Headers({ 'x-agor-mcp-capability': capability }),
-        method: 'POST',
-        body: new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"initialize"}'),
-      });
-      await dnsObserved;
-      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
-        new MCPServerRepository(scoped).update(seeded.mcpServer.mcp_server_id, {
-          description: 'committed by daemon B',
-          expected_config_version: seeded.mcpServer.config_version,
-        })
-      );
-      releaseDns();
-
-      await expect(pending).rejects.toMatchObject({ code: 'tool_permission_changed' });
-      expect(providerRequests).toBe(0);
-
-      const wrongTenantCapability = issueMCPEgressCapability(
-        {
-          tid: `other-${tenantId}`,
-          task_id: seeded.task.task_id,
-          session_id: seeded.session.session_id,
-          principal_user_id: seeded.user.user_id,
-          credential_user_id: seeded.user.user_id,
-          mcp_server_id: seeded.mcpServer.mcp_server_id,
-          config_version: seeded.mcpServer.config_version ?? 1,
-          material_hash: mcpEgressMaterialHash(seeded.mcpServer, {}, jwtSecret),
-          rollout_mode: 'enforced',
-          jti: generateId(),
-        },
-        jwtSecret
-      );
-      await expect(
-        gateway.forward({
+        const pending = gateway.forward({
           serverId: seeded.mcpServer.mcp_server_id,
-          headers: new Headers({ 'x-agor-mcp-capability': wrongTenantCapability }),
+          headers: new Headers({ 'x-agor-mcp-capability': capability }),
           method: 'POST',
-          body: new TextEncoder().encode('{"jsonrpc":"2.0","id":2,"method":"initialize"}'),
-        })
-      ).rejects.toMatchObject({ code: 'rollout_changed' });
-      expect(providerRequests).toBe(0);
-    });
+          body: new TextEncoder().encode('{"jsonrpc":"2.0","id":1,"method":"initialize"}'),
+        });
+        await dnsObserved;
+        if (mutation !== 'server') {
+          await applyTenantRestrictionIntent(dbB, tenantId, {
+            version: 1,
+            controllerId: 'egress-test',
+            placementId: 'placement-one',
+            operationId: 'suspend-one',
+            revision: 1,
+            action: 'restrict',
+          });
+          if (mutation === 'reactivation') {
+            for (const action of ['prepare_release', 'activate'] as const) {
+              await applyTenantRestrictionIntent(dbB, tenantId, {
+                version: 1,
+                controllerId: 'egress-test',
+                placementId: 'placement-one',
+                operationId: 'reactivate-one',
+                revision: 2,
+                action,
+              });
+            }
+          }
+        } else {
+          await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            new MCPServerRepository(scoped).update(seeded.mcpServer.mcp_server_id, {
+              description: 'committed by daemon B',
+              expected_config_version: seeded.mcpServer.config_version,
+            })
+          );
+        }
+        releaseDns();
+
+        await expect(pending).rejects.toMatchObject({
+          code: mutation !== 'server' ? 'tenant_restricted' : 'tool_permission_changed',
+        });
+        expect(providerRequests).toBe(0);
+
+        const wrongTenantCapability = issueMCPEgressCapability(
+          {
+            tid: `other-${tenantId}`,
+            task_id: seeded.task.task_id,
+            session_id: seeded.session.session_id,
+            principal_user_id: seeded.user.user_id,
+            credential_user_id: seeded.user.user_id,
+            mcp_server_id: seeded.mcpServer.mcp_server_id,
+            config_version: seeded.mcpServer.config_version ?? 1,
+            material_hash: mcpEgressMaterialHash(seeded.mcpServer, {}, jwtSecret),
+            rollout_mode: 'enforced',
+            jti: generateId(),
+          },
+          jwtSecret
+        );
+        await expect(
+          gateway.forward({
+            serverId: seeded.mcpServer.mcp_server_id,
+            headers: new Headers({ 'x-agor-mcp-capability': wrongTenantCapability }),
+            method: 'POST',
+            body: new TextEncoder().encode('{"jsonrpc":"2.0","id":2,"method":"initialize"}'),
+          })
+        ).rejects.toMatchObject({ code: 'rollout_changed' });
+        expect(providerRequests).toBe(0);
+      }
+    );
 
     it('allows a provider-observed request admitted before daemon-B commits', async () => {
       const tenantId = `mcp-egress-ha-admitted-${generateId()}` as TenantID;

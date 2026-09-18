@@ -1,3 +1,8 @@
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantRuntimeActive: vi.fn().mockResolvedValue(true),
+  assertRuntimeTenantAccess: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
