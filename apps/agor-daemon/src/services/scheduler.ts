@@ -1,3 +1,7 @@
+import {
+  isCurrentTenantEventAdmitted,
+  isCurrentTenantRuntimeActive,
+} from '../auth/tenant-access.js';
 /**
  * Scheduler Service
  *
@@ -724,6 +728,10 @@ export class SchedulerService {
       return;
     }
 
+    if (!(await isCurrentTenantEventAdmitted(this.db, scheduledRunAt))) {
+      await this.advanceScheduleCursor(schedule, now);
+      return;
+    }
     await this.spawnScheduledSession(schedule, scheduledRunAt, now, { source: 'cron' });
   }
 
@@ -849,6 +857,9 @@ export class SchedulerService {
   ): Promise<Session | null> {
     const { source, triggeredBy } = options;
     const manual = source === 'manual';
+    if (!(await isCurrentTenantRuntimeActive(this.db)))
+      throw new Forbidden('Tenant access is restricted');
+    if (!manual && !(await isCurrentTenantEventAdmitted(this.db, scheduledRunAt))) return null;
     const branch = await this.withTenantDatabase(() =>
       this.branchRepo.findById(schedule.branch_id)
     );
@@ -1148,6 +1159,13 @@ export class SchedulerService {
         this.sessionRepo.isScheduledInitializationComplete(session.session_id)
       )
     ) {
+      return;
+    }
+    const occurredAt = session.custom_context?.scheduled_run?.triggered_manually
+      ? Date.parse(session.created_at)
+      : scheduledRunAt;
+    if (!(await isCurrentTenantEventAdmitted(this.db, occurredAt))) {
+      await this.withTenantDatabase(() => this.sessionRepo.holdScheduledInitialization(sessionId));
       return;
     }
     const stored = session.custom_context?.scheduled_run;

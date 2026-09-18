@@ -403,6 +403,7 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        tenant_restriction_hold?: Task['tenant_restriction_hold'];
         /**
          * Immutable filesystem authority projected when this executor was
          * launched. Internal repository fact; deliberately omitted from the
@@ -1643,6 +1644,64 @@ export const boardGroupGrants = pgTable(
     tenantIdx: index('board_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.group_id] }),
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+// Controller-owned runtime intent. No application CRUD service is registered.
+// Release keeps the revision watermark; re-home must reassert destination intent.
+export const tenantRestrictions = pgTable(
+  'tenant_restrictions',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    controller_id: text('controller_id').notNull(),
+    placement_id: text('placement_id').notNull(),
+    operation_id: text('operation_id').notNull(),
+    revision: bigint('revision', { mode: 'number' }).notNull(),
+    phase: text('phase').notNull(),
+    protocol_version: integer('protocol_version').notNull().default(1),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.controller_id] }),
+  })
+);
+
+/**
+ * Privileged deployment-owned identity for the connected runtime database.
+ *
+ * This singleton is intentionally not tenant-scoped and has no application
+ * CRUD service. Managed startup may only read/lock it after the signed
+ * bootstrap document has been verified; installation/replacement tooling owns
+ * its writes under a separate expected-incarnation fence.
+ */
+export const runtimeInstallationIdentity = pgTable(
+  'runtime_installation_identity',
+  {
+    identity_key: text('identity_key').primaryKey().default('primary'),
+    protocol_version: integer('protocol_version').notNull().default(1),
+    deployment_id: text('deployment_id').notNull(),
+    database_incarnation_id: text('database_incarnation_id').notNull(),
+    database_name: text('database_name').notNull(),
+    logical_database_id: text('logical_database_id').notNull(),
+    team_id: text('team_id').notNull(),
+    placement_id: text('placement_id').notNull(),
+    placement_revision: bigint('placement_revision', { mode: 'number' }).notNull(),
+    placement_origin: text('placement_origin').notNull(),
+    updated_at: t.timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    identityKeyCheck: check(
+      'runtime_installation_identity_key_check',
+      sql`${table.identity_key} = 'primary'`
+    ),
+    protocolVersionCheck: check(
+      'runtime_installation_identity_protocol_version_check',
+      sql`${table.protocol_version} = 1`
+    ),
+    placementRevisionCheck: check(
+      'runtime_installation_identity_placement_revision_check',
+      sql`${table.placement_revision} >= 0 AND ${table.placement_revision} <= 9007199254740991`
+    ),
   })
 );
 

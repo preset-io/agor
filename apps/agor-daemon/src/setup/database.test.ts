@@ -154,6 +154,23 @@ describe('initializeDatabase logging', () => {
     );
   });
 
+  it('runs the managed identity check before any first-run seed writes', async () => {
+    const beforeInitialDataSetup = vi.fn(async () => undefined);
+
+    await initializeDatabase('file:/tmp/agor-runtime-identity.db', {
+      beforeInitialDataSetup,
+    });
+
+    expect(beforeInitialDataSetup).toHaveBeenCalledOnce();
+    expect(beforeInitialDataSetup).toHaveBeenCalledWith(expect.anything());
+    expect(beforeInitialDataSetup.mock.invocationCallOrder[0]).toBeLessThan(
+      adminMocks.runFirstRunAdminBootstrap.mock.invocationCallOrder[0]
+    );
+    expect(beforeInitialDataSetup.mock.invocationCallOrder[0]).toBeLessThan(
+      dbMocks.seedInitialData.mock.invocationCallOrder[0]
+    );
+  });
+
   it('forwards configured PostgreSQL pool settings to the database client', async () => {
     const url = 'postgresql://localhost/agor';
     const pool = { max: 25 };

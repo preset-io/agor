@@ -1,3 +1,7 @@
+import {
+  assertTenantCredentialEpoch,
+  readTenantCredentialEpoch,
+} from './auth/tenant-credential-epoch.js';
 /**
  * Agor Daemon
  *
@@ -69,7 +73,13 @@ import type { HookContext, User } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
-import { createRequireAuthHook } from './auth/require-auth.js';
+import { createTenantRestrictedAuthHook } from './auth/require-auth.js';
+import {
+  assertRuntimeTenantAccess,
+  assertRuntimeTenantRequestAccess,
+} from './auth/tenant-access.js';
+import { requireTenantRuntimeBootstrap } from './auth/tenant-runtime-bootstrap.js';
+import { verifyTenantRuntimeCurrentAuthority } from './auth/tenant-runtime-current-authority.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
@@ -204,6 +214,26 @@ async function startDaemonWithOwnedMetrics(
   const externalLaunchProvider = resolveValidExternalLaunchProvider(config);
   assertValidEffectiveIdentityConfig(config);
   const databaseUrl = resolveDatabaseUrl({ config, env: process.env });
+  // Resolve the scope from the same validated, effective config before the
+  // managed bootstrap barrier. The full frozen snapshot is finalized later,
+  // but the barrier must run before database/Redis/socket/service startup and
+  // must not read `multiTenancy` before its later declaration.
+  const bootstrapMultiTenancy = resolveMultiTenancyConfig(config);
+  const bootstrapTenantScope = bootstrapMultiTenancy.mode === 'static' ? 'static' : 'auth_resolved';
+
+  // Managed tenant runtimes must prove their independently-issued placement
+  // identity before any database, Redis, socket, service, or HTTP startup.
+  // The opt-in gate is intentionally inert for standalone Agor deployments;
+  // once a managed bootstrap variable is present, missing or mismatched
+  // identity fails closed and never falls back to the copied database/config.
+  const tenantRuntimeBootstrap = await requireTenantRuntimeBootstrap({
+    deploymentId,
+    tenantScope: bootstrapTenantScope,
+    ...(bootstrapMultiTenancy.mode === 'static'
+      ? { expectedTeamId: bootstrapMultiTenancy.static_tenant_id }
+      : {}),
+    environment: process.env,
+  });
 
   // Deployment package availability is instance-global. Validate it before
   // database or tenant initialization so no tenant can expand the daemon's
@@ -279,7 +309,11 @@ async function startDaemonWithOwnedMetrics(
   // Auth configuration
   // --------------------------------------------------------------------------
   const authenticatedHook = authenticate({ strategies: ['api-key', 'jwt'] });
-  const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
+  const requireAuthOnly = createTenantRestrictedAuthHook(
+    authenticatedHook,
+    multiTenancy,
+    (tenantId, context) => assertRuntimeTenantRequestAccess(db, tenantId, context)
+  );
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -384,6 +418,12 @@ async function startDaemonWithOwnedMetrics(
   // Create Feathers app + Express middleware
   // --------------------------------------------------------------------------
   const app = feathersExpress(feathers());
+  if (tenantRuntimeBootstrap) {
+    app.set('tenantRuntimeBootstrap', tenantRuntimeBootstrap);
+    console.log(
+      `🔐 Managed tenant runtime bootstrap verified (team=${tenantRuntimeBootstrap.team_id}, placement_revision=${tenantRuntimeBootstrap.placement_revision})`
+    );
+  }
   // One application-owned identity spans every background worker in this
   // daemon process. A dedicated YAML deployment.instance_id may be added with
   // the HA config contract later; unrelated auth configuration is not reused.
@@ -735,6 +775,10 @@ async function startDaemonWithOwnedMetrics(
   await realtimeRuntime?.connect();
 
   const socketIOConfig = createSocketIOConfig(app, {
+    assertTenantAccess: (tenantId) => assertRuntimeTenantAccess(db, tenantId),
+    assertTenantCredential: (tenantId, payload) =>
+      assertTenantCredentialEpoch(db, tenantId, payload),
+    readTenantCredentialEpoch: (tenantId) => readTenantCredentialEpoch(db, tenantId),
     corsOrigin,
     credentialsAllowed,
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the
@@ -759,6 +803,9 @@ async function startDaemonWithOwnedMetrics(
   configureChannels(app);
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });
 
+  let tenantRuntimeCurrentAuthority:
+    | Awaited<ReturnType<typeof verifyTenantRuntimeCurrentAuthority>>
+    | undefined;
   const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     skipFirstRunAdminBootstrap:
@@ -771,7 +818,21 @@ async function startDaemonWithOwnedMetrics(
       ? { max: effectiveConfig.database.postgresql.pool.max }
       : undefined,
     traceServices: effectiveConfig.metrics?.apm?.trace_services ?? 'off',
+    beforeInitialDataSetup: tenantRuntimeBootstrap
+      ? async (connectedDb) => {
+          tenantRuntimeCurrentAuthority = await verifyTenantRuntimeCurrentAuthority(
+            connectedDb,
+            tenantRuntimeBootstrap
+          );
+        }
+      : undefined,
   });
+  if (tenantRuntimeCurrentAuthority) {
+    app.set('tenantRuntimeCurrentAuthority', tenantRuntimeCurrentAuthority);
+    console.log(
+      `🔐 Connected runtime identity verified (team=${tenantRuntimeCurrentAuthority.teamId}, placement_revision=${tenantRuntimeCurrentAuthority.placementRevision})`
+    );
+  }
   configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 
   // --------------------------------------------------------------------------

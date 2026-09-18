@@ -718,6 +718,7 @@ function validateConfig(config: AgorConfig): void {
     'audience',
     'instance_id',
     'provider_id',
+    'restriction_controller_id',
     'jwks_url',
     'public_key',
     'dev_shared_secret',

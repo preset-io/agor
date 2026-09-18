@@ -1,3 +1,4 @@
+import { tenantCredentialEpochClaims } from '../auth/tenant-credential-epoch.js';
 /**
  * Executor Spawning Utility
  *
@@ -1561,11 +1562,16 @@ export function generateTerminalExecutorToken(
     settings: { authentication?: { secret?: string } };
   },
   scope: TerminalExecutorTokenScope,
-  expiresIn: SignOptions['expiresIn']
+  expiresIn: SignOptions['expiresIn'],
+  credentialEpoch?: string
 ): string {
   return issueReservedServiceTokenFromApp(
     app,
-    { ...scope, ...serviceTokenScopeForCurrentTenant() },
+    {
+      ...scope,
+      ...serviceTokenScopeForCurrentTenant(),
+      ...tenantCredentialEpochClaims(credentialEpoch),
+    },
     expiresIn
   );
 }

@@ -41,6 +41,8 @@ import type {
   Task,
   TaskPendingDispatchStatus,
 } from '@agor/core/types';
+import type { TenantRuntimeBootstrapPayload } from './auth/tenant-runtime-bootstrap.js';
+import type { TenantRuntimeCurrentAuthority } from './auth/tenant-runtime-current-authority.js';
 import type { DaemonMetrics } from './metrics/index.js';
 import type { EnvironmentHealthCheckOptions } from './services/branches.js';
 import type {
@@ -66,6 +68,13 @@ export type Application = ExpressApplication & {
   set(name: 'config', value: DeepReadonly<AgorConfig>): ExpressApplication;
   get(name: 'distributedWorkIdentity'): DistributedWorkIdentity | undefined;
   set(name: 'distributedWorkIdentity', value: DistributedWorkIdentity): ExpressApplication;
+  get(name: 'tenantRuntimeBootstrap'): TenantRuntimeBootstrapPayload | undefined;
+  set(name: 'tenantRuntimeBootstrap', value: TenantRuntimeBootstrapPayload): ExpressApplication;
+  get(name: 'tenantRuntimeCurrentAuthority'): TenantRuntimeCurrentAuthority | undefined;
+  set(
+    name: 'tenantRuntimeCurrentAuthority',
+    value: TenantRuntimeCurrentAuthority
+  ): ExpressApplication;
   get(name: 'metrics'): DaemonMetrics | undefined;
   set(name: 'metrics', value: DaemonMetrics): ExpressApplication;
 };
@@ -181,6 +190,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<TaskDispatchClaimResult>;
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  getTerminationState(
+    data: { task_id: string },
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').ExecutorTerminationState>;
   reportTerminationComplete(
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,
     params?: FeathersParams

@@ -381,6 +381,7 @@ export const tasks = sqliteTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        tenant_restriction_hold?: Task['tenant_restriction_hold'];
         /**
          * Immutable filesystem authority projected when this executor was
          * launched. Internal repository fact; deliberately omitted from the
@@ -1490,6 +1491,51 @@ export const boardGroupGrants = sqliteTable(
   (table) => ({
     pk: primaryKey({ columns: [table.board_id, table.group_id] }),
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+// Schema parity only: tenant restriction operations explicitly require PostgreSQL.
+export const tenantRestrictions = sqliteTable('tenant_restrictions', {
+  controller_id: text('controller_id').primaryKey(),
+  placement_id: text('placement_id').notNull(),
+  operation_id: text('operation_id').notNull(),
+  revision: integer('revision').notNull(),
+  phase: text('phase').notNull(),
+  protocol_version: integer('protocol_version').notNull().default(1),
+  updated_at: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+});
+
+// Schema parity with PostgreSQL. Managed runtime installation tooling owns
+// writes; the daemon only reads/locks this singleton after signed bootstrap
+// verification. SQLite remains static/single-tenant and never exposes CRUD.
+export const runtimeInstallationIdentity = sqliteTable(
+  'runtime_installation_identity',
+  {
+    identity_key: text('identity_key').primaryKey().default('primary'),
+    protocol_version: integer('protocol_version').notNull().default(1),
+    deployment_id: text('deployment_id').notNull(),
+    database_incarnation_id: text('database_incarnation_id').notNull(),
+    database_name: text('database_name').notNull(),
+    logical_database_id: text('logical_database_id').notNull(),
+    team_id: text('team_id').notNull(),
+    placement_id: text('placement_id').notNull(),
+    placement_revision: integer('placement_revision').notNull(),
+    placement_origin: text('placement_origin').notNull(),
+    updated_at: t.timestamp('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => ({
+    identityKeyCheck: check(
+      'runtime_installation_identity_key_check',
+      sql`${table.identity_key} = 'primary'`
+    ),
+    protocolVersionCheck: check(
+      'runtime_installation_identity_protocol_version_check',
+      sql`${table.protocol_version} = 1`
+    ),
+    placementRevisionCheck: check(
+      'runtime_installation_identity_placement_revision_check',
+      sql`${table.placement_revision} >= 0 AND ${table.placement_revision} <= 9007199254740991`
+    ),
   })
 );
 

@@ -128,6 +128,8 @@ export async function initializeDatabase(
   options: {
     tenantId?: TenantID | string;
     skipFirstRunAdminBootstrap?: boolean;
+    /** Read-only managed-runtime identity check before any seed writes. */
+    beforeInitialDataSetup?: (db: TenantScopeAwareDatabase) => Promise<void>;
     /** PostgreSQL per-replica connection limit. PostgreSQL only. */
     pool?: { max: number };
     /** Shared custom APM tracing gate; `off` also disables PostgreSQL tracing. */
@@ -166,6 +168,11 @@ export async function initializeDatabase(
 
   // Check migrations (exits if pending)
   await checkAndReportMigrations(db, dbPath);
+
+  // Managed runtime identity is checked after connection/migration compatibility
+  // but before first-run admin/bootstrap writes. A wrong or cloned database must
+  // never be mutated before its deployment-owned authority is accepted.
+  await options.beforeInitialDataSetup?.(scopedDb);
 
   const runInitialDataSetup = async () => {
     // First-run admin bootstrap: create a default admin if no users exist in

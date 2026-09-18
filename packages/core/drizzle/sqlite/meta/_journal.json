@@ -757,6 +757,20 @@
       "when": 1789344000004,
       "tag": "0110_user_provider_oauth_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "6",
+      "when": 1789344000005,
+      "tag": "0111_tenant_restrictions",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "6",
+      "when": 1789344000006,
+      "tag": "0112_runtime_installation_identity",
+      "breakpoints": true
     }
   ]
 }

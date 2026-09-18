@@ -43,12 +43,15 @@ describe('tenant deletion manifest classification', () => {
     expect(covered).toEqual(allPostgresTableNames());
   });
 
-  it('treats every application table as directly tenant-scoped', () => {
+  it('treats customer tables as directly tenant-scoped and installation authority as global', () => {
     const { direct, transitive, global } = classifyPostgresTables();
-    // Nothing is exempt today: every table carries a tenant_id.
+    // Installation identity is deployment-owned and deliberately outside tenant
+    // erasure; every customer table still carries a tenant_id.
     expect(transitive).toEqual([]);
-    expect(global).toEqual([]);
-    expect(direct).toEqual(allPostgresTableNames());
+    expect(global).toEqual(['runtime_installation_identity']);
+    expect(direct).toEqual(
+      allPostgresTableNames().filter((name) => name !== 'runtime_installation_identity')
+    );
     // Spot-check a few tables spanning the FK hierarchy.
     expect(direct).toContain('sessions');
     expect(direct).toContain('users');
@@ -62,9 +65,11 @@ describe('tenant deletion manifest classification', () => {
     }
   });
 
-  it('leaves every table in the deletion plan while nothing is declared global', () => {
+  it('leaves global installation authority out of the deletion plan', () => {
     const planned = new Set(buildTenantDeletionManifest().map((entry) => entry.name));
-    expect([...planned].sort()).toEqual(allPostgresTableNames());
+    expect([...planned].sort()).toEqual(
+      allPostgresTableNames().filter((name) => !GLOBAL_TABLES.has(name))
+    );
   });
 
   it('keeps GLOBAL_TABLES and the column-source map describing the same tables', () => {

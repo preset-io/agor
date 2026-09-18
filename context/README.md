@@ -30,6 +30,7 @@ Tight, code-pointer-heavy notes on internals.
 | [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                |
 | [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
 | [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.   |
+| [`tenant-restrictions.md`](concepts/tenant-restrictions.md)               | Signed restriction intent, runtime admission, and explicit non-containment limits. |
 | [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.       |
 | [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |
 | [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                               |

@@ -190,6 +190,8 @@ export interface AgorExternalLaunchSettings {
 
   /** Stable provider label used in local external identity mapping. Defaults to issuer. */
   provider_id?: string;
+  /** Trusted controller binding for external launch generation checks. */
+  restriction_controller_id?: string;
 
   /** JWKS endpoint used to verify returned launch assertions. */
   jwks_url?: string;

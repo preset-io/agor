@@ -1,0 +1,24 @@
+{
+  "key_id": "cloud-key-golden",
+  "payload": {
+    "kind": "agor.tenant-runtime-restriction-command",
+    "version": 1,
+    "tenant_id": "workspace-golden",
+    "deployment_id": "019c1234-5678-7123-8123-123456789abc",
+    "database_incarnation_id": "db-incarnation-golden",
+    "database_name": "agor-runtime",
+    "logical_database_id": "logical-db-golden",
+    "team_id": "team-golden",
+    "placement_id": "placement-golden",
+    "placement_origin": "https://runtime.example.test/cell-golden",
+    "placement_revision": 11,
+    "controller_id": "agor-cloud-team-suspension-v1",
+    "operation_id": "team_suspension_operation_golden",
+    "revision": 9,
+    "action": "restrict",
+    "issued_at": "2026-09-16T12:01:00.000Z"
+  },
+  "signature": "GAiPktO0_EONEEsTFoIsRYcb0n-HSduJOXXsG1NnPHEWpBep90xCKGT8OWOy37rKDrWmOK7fZSfnaPgBDdg4BA",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+  "canonical": "{\"key_id\":\"cloud-key-golden\",\"payload\":{\"action\":\"restrict\",\"controller_id\":\"agor-cloud-team-suspension-v1\",\"database_incarnation_id\":\"db-incarnation-golden\",\"database_name\":\"agor-runtime\",\"deployment_id\":\"019c1234-5678-7123-8123-123456789abc\",\"issued_at\":\"2026-09-16T12:01:00.000Z\",\"kind\":\"agor.tenant-runtime-restriction-command\",\"logical_database_id\":\"logical-db-golden\",\"operation_id\":\"team_suspension_operation_golden\",\"placement_id\":\"placement-golden\",\"placement_origin\":\"https://runtime.example.test/cell-golden\",\"placement_revision\":11,\"revision\":9,\"team_id\":\"team-golden\",\"tenant_id\":\"workspace-golden\",\"version\":1}}"
+}

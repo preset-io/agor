@@ -76,6 +76,11 @@ function makeService(options: { task?: Partial<Task>; session?: Partial<Session>
   // rename between the terminal status read and the auto-title compare-and-set.
   const sessionsGet = vi.fn(async () => ({ ...session }));
   const triggerQueueProcessing = vi.fn(async () => undefined);
+  // The completion side-effect path performs the hosted-runtime admission
+  // check. Give this unit fixture a standalone SQLite-shaped handle so the
+  // guard takes its existing non-PostgreSQL path instead of receiving
+  // undefined and failing before the auto-title behavior runs.
+  const db = { run: vi.fn() };
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
@@ -88,6 +93,7 @@ function makeService(options: { task?: Partial<Task>; session?: Partial<Session>
   service.repository = repository;
   service.taskRepo = { ...repository, createPending: vi.fn() };
   service.id = 'task_id';
+  Reflect.set(service, 'db', db);
   service.emit = vi.fn();
   service.completionCallbackDispatches = new Map();
   service.app = {

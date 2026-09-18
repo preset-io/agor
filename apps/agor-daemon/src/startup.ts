@@ -1,3 +1,4 @@
+import { TenantRestrictionReconciler } from './services/tenant-restriction-reconciler.js';
 /**
  * Startup & Shutdown
  *
@@ -801,6 +802,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
   taskRuntimeReconciler.start();
+  const tenantRestrictionReconciler = new TenantRestrictionReconciler(
+    db,
+    app,
+    startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined
+  );
+  tenantRestrictionReconciler.start();
   console.log(
     heartbeatConfig.enabled
       ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
@@ -906,6 +913,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       await healthMonitor?.cleanup();
 
       // Stop Task runtime discovery before closing services.
+      tenantRestrictionReconciler.stop();
       taskRuntimeReconciler?.stop();
 
       // Stop durable Session queue discovery. Any in-flight database claim is

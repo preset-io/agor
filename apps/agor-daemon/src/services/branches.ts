@@ -126,7 +126,10 @@ import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sand
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
-import { issueExecutorCommandToken } from './session-token-service.js';
+import {
+  issueExecutorCommandToken,
+  issueExecutorSafetyCommandToken,
+} from './session-token-service.js';
 import type { InternalEnrichmentParams, SessionsService } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 import {
@@ -360,7 +363,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Preparation precedes admission; the row lock rechecks the current snapshot.
     const sessionToken = context
       ? await this.withTenantDatabase(params, () =>
-          issueExecutorCommandToken(
+          (action === 'stop' ? issueExecutorSafetyCommandToken : issueExecutorCommandToken)(
             this.app,
             environmentCommandTokenId(action, attemptId),
             userId,

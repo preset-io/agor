@@ -1,3 +1,8 @@
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantRuntimeActive: vi.fn().mockResolvedValue(true),
+  assertRuntimeTenantAccess: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';

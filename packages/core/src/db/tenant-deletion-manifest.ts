@@ -44,12 +44,10 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * Tables that legitimately hold no tenant-scoped data and must therefore be
  * left untouched by tenant deletion.
  *
- * Currently empty: every application table carries tenant data. The machinery
- * is kept rather than deleted with its last member, because it is what a future
- * global table has to be declared through. Removing it would leave the next one
- * to be classified by whichever guard noticed first — and the exhaustiveness
- * test would then fail with "unclassified table" and no explanation of what the
- * author is being asked to decide.
+ * `runtime_installation_identity` is deployment-owned installation authority,
+ * not customer content. It is intentionally retained when a tenant is erased;
+ * a destination deployment must seed its own identity and never receive it from
+ * a tenant archive.
  *
  * The list is deliberately explicit: the exhaustiveness test fails if a schema
  * table is neither tenant-scoped, transitively tenant-scoped, nor named here, so
@@ -60,7 +58,8 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  *
  * **The invariant is per column, not per table.** A table qualifies only while
  * every one of its columns is sourced from outside every tenant — a public
- * service, or a file in this repository. A column derived from tenant activity
+ * service, a deployment authority, or a file in this repository. A column
+ * derived from tenant activity
  * (a connect counter, a rating, a last-used timestamp) silently breaks the
  * justification even though the table stays in this set: the value aggregates
  * across tenants on read, and its only writer would be a tenant request path.
@@ -70,7 +69,9 @@ export const TENANT_SCOPE_COLUMN = 'tenant_id';
  * is not part of the application schema exports and is never enumerated by this
  * manifest.
  */
-export const GLOBAL_TABLE_NAMES = [] as const satisfies readonly string[];
+export const GLOBAL_TABLE_NAMES = [
+  'runtime_installation_identity',
+] as const satisfies readonly string[];
 
 export type GlobalTableName = (typeof GLOBAL_TABLE_NAMES)[number];
 
@@ -91,6 +92,8 @@ export const GLOBAL_TABLES: ReadonlySet<string> = new Set<string>(GLOBAL_TABLE_N
  * - `computed-from-public-service` — Agor computed it, from such a mirror alone.
  * - `computed-from-repo` — Agor computed it, from repository data alone.
  * - `row-identity` — this row's own identity and write timestamps.
+ * - `deployment-authority` — supplied by a separately managed deployment
+ *   controller, never by a tenant request or tenant-derived aggregate.
  * - `probe` — discovered by contacting a public endpoint.
  * - `composite` — a JSON column whose keys have different sources, classified
  *   one level down in {@link GLOBAL_BLOB_KEY_SOURCES}. Not a licence to skip
@@ -105,6 +108,7 @@ export type GlobalColumnSource =
   | 'computed-from-public-service'
   | 'computed-from-repo'
   | 'row-identity'
+  | 'deployment-authority'
   | 'probe'
   | 'composite';
 
@@ -129,11 +133,24 @@ type ColumnsOf<N extends keyof SchemaTablesByName> = SchemaTablesByName[N] exten
  * error in the editor and in `tsc`, not a test failure someone sees after
  * pushing.
  *
- * With no global tables the required shape is empty and so is this. That is not
- * the guard going quiet: the moment a name is added above, this stops
- * compiling until every one of that table's columns is accounted for.
+ * Every declared global table is required here, and each of its columns must be
+ * accounted for before the code compiles.
  */
-export const GLOBAL_TABLE_COLUMN_SOURCES = {} satisfies {
+export const GLOBAL_TABLE_COLUMN_SOURCES = {
+  runtime_installation_identity: {
+    identity_key: 'row-identity',
+    protocol_version: 'repo',
+    deployment_id: 'deployment-authority',
+    database_incarnation_id: 'deployment-authority',
+    database_name: 'deployment-authority',
+    logical_database_id: 'deployment-authority',
+    team_id: 'deployment-authority',
+    placement_id: 'deployment-authority',
+    placement_revision: 'deployment-authority',
+    placement_origin: 'deployment-authority',
+    updated_at: 'row-identity',
+  },
+} satisfies {
   [N in GlobalTableName]: Record<ColumnsOf<N>, GlobalColumnSource>;
 };
 
@@ -153,7 +170,9 @@ export const GLOBAL_TABLE_COLUMN_SOURCES = {} satisfies {
  * its own entry, which is what makes an unclassified key a compile error. The
  * companion test fails if a `composite` column has no entry here at all.
  */
-export const GLOBAL_BLOB_KEY_SOURCES = {} satisfies {
+export const GLOBAL_BLOB_KEY_SOURCES = {
+  runtime_installation_identity: {},
+} satisfies {
   [N in GlobalTableName]: Record<string, Record<string, GlobalColumnSource>>;
 };
 

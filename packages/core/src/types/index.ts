@@ -38,6 +38,7 @@ export * from './task';
 export * from './template';
 export * from './tenant';
 export * from './tenant-agentic-tool';
+export * from './tenant-restriction';
 export * from './terminal';
 export * from './ui';
 export * from './upload';

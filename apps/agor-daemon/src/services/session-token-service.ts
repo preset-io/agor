@@ -1,3 +1,7 @@
+import {
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from '../auth/tenant-credential-epoch.js';
 /**
  * SessionTokenService - delegated executor JWT issuance and authority policy.
  *
@@ -206,6 +210,7 @@ export class SessionTokenService {
   private readonly tokens = new Map<string, SessionTokenData>();
   private readonly authorityStore: SessionTokenAuthorityStore | null;
   private readonly now: () => Date;
+  private readonly db?: TenantScopeAwareDatabase;
   private readonly onRevoked?: SessionTokenServiceDependencies['onRevoked'];
   private cleanupTimer?: ReturnType<typeof setInterval>;
   private jwtSecret: string | null = null;
@@ -224,6 +229,7 @@ export class SessionTokenService {
       throw new Error('SessionTokenService max uses must be an integer');
     }
 
+    this.db = dependencies.db;
     this.now = dependencies.now ?? (() => new Date());
     this.onRevoked = dependencies.onRevoked;
     if (dependencies.authorityStore) {
@@ -257,7 +263,12 @@ export class SessionTokenService {
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
    */
-  generateCommandToken(commandId: string, userId: string, branchId?: string): Promise<string> {
+  generateCommandToken(
+    commandId: string,
+    userId: string,
+    branchId?: string,
+    issuance?: 'safety-recovery'
+  ): Promise<string> {
     return this.generateTokenWithPurpose(
       commandId,
       userId,
@@ -266,7 +277,8 @@ export class SessionTokenService {
         maxUses: -1,
         expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
       },
-      EXECUTOR_COMMAND_TOKEN_PURPOSE
+      EXECUTOR_COMMAND_TOKEN_PURPOSE,
+      issuance
     );
   }
 
@@ -294,7 +306,8 @@ export class SessionTokenService {
       maxUses?: number;
       expirationMs?: number;
     },
-    purpose: ExecutorTokenPurpose
+    purpose: ExecutorTokenPurpose,
+    issuance?: 'safety-recovery'
   ): Promise<string> {
     if (!this.jwtSecret) {
       throw new Error('SessionTokenService: JWT secret not set. Call setJwtSecret() first.');
@@ -322,7 +335,14 @@ export class SessionTokenService {
       throw new Error('Missing trusted tenant context for executor token issuance');
     }
 
+    // Command recovery credentials may still be minted for exact safety work
+    // while closed; they do not gain ordinary post-reactivation authority.
+    const epoch =
+      this.db && tenantId && issuance !== 'safety-recovery'
+        ? await readTenantCredentialEpoch(this.db, tenantId)
+        : undefined;
     const payload = {
+      ...tenantCredentialEpochClaims(epoch),
       sub: userId,
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose,
@@ -659,4 +679,16 @@ export async function issueExecutorCommandToken(
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
   return service.generateCommandToken(commandId, userId, branchId);
+}
+
+/** Internal lifecycle owners only: exact capability guards still authorize every report. */
+export async function issueExecutorSafetyCommandToken(
+  app: object,
+  commandId: string,
+  userId: string,
+  branchId: string
+): Promise<string> {
+  const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
+  if (!service) throw new Error('Session token service unavailable');
+  return service.generateCommandToken(commandId, userId, branchId, 'safety-recovery');
 }

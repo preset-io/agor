@@ -5,6 +5,7 @@ import {
   GatewayChannelRepository,
   getMCPEgressGatewayMode,
   isEncrypted,
+  isPostgresDatabaseHandle,
   MCPServerRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -47,6 +48,7 @@ import {
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
 } from '@agor/core/utils/safe-outbound-fetch';
+import { assertTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import { resolveSessionPromptAccess } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -958,6 +960,17 @@ export class MCPEgressGateway {
       this.options.db,
       claims.tid,
       async (tenantDb) => {
+        if (isPostgresDatabaseHandle(tenantDb)) {
+          try {
+            await assertTenantCredentialEpoch(tenantDb, claims.tid, claims);
+          } catch {
+            throw new MCPEgressGatewayError(
+              403,
+              'tenant_restricted',
+              'Tenant access is restricted'
+            );
+          }
+        }
         const mode = await getMCPEgressGatewayMode(tenantDb);
         if (mode !== claims.rollout_mode || (mode !== 'compatibility' && mode !== 'enforced')) {
           throw new MCPEgressGatewayError(
