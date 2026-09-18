@@ -147,6 +147,24 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     );
   });
 
+  it('offers env var editing to the creator only when a save handler is wired', () => {
+    const props = {
+      open: true,
+      session: claudeSession,
+      onClose: vi.fn(),
+      currentUser: { user_id: 'u1' } as unknown as User,
+      client: {} as AgorClient,
+    };
+    const { rerender } = render(
+      <SessionSettingsModal {...props} onUpdateSessionEnvSelections={vi.fn()} />
+    );
+    expect(screen.getByText('Environment Variables')).toBeInTheDocument();
+
+    // An editable section nobody persists would drop edits silently, so it is not rendered.
+    rerender(<SessionSettingsModal {...props} />);
+    expect(screen.queryByText('Environment Variables')).not.toBeInTheDocument();
+  });
+
   it('does not repeat save-as-default after a successful close and reopen', async () => {
     persistUserDefaultFromForm.mockClear();
     const currentUser = { user_id: 'u1' } as unknown as User;

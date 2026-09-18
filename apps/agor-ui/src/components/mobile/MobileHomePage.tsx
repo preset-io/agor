@@ -19,6 +19,8 @@ interface MobileHomePageProps {
   boardById: Map<string, Board>;
   currentUser?: User | null;
   onAsk: () => void;
+  /** A session is being created for Ask; the button shows it and refuses a repeated tap. */
+  askPending?: boolean;
   primaryTeammateName?: string;
   primaryTeammateEmoji?: string;
   /** Number of the primary assistant's own sessions (shown on the hero). */
@@ -44,6 +46,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   boardById,
   currentUser,
   onAsk,
+  askPending,
   primaryTeammateName,
   primaryTeammateEmoji,
   assistantSessionCount,
@@ -149,7 +152,12 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   {heroContent}
                 </Flex>
               )}
-              <Button type="primary" onClick={onAsk} style={{ minHeight: MOBILE_TOUCH_TARGET }}>
+              <Button
+                type="primary"
+                onClick={onAsk}
+                loading={askPending}
+                style={{ minHeight: MOBILE_TOUCH_TARGET }}
+              >
                 Ask
               </Button>
             </Flex>

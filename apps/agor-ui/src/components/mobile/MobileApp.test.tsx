@@ -220,6 +220,36 @@ describe('MobileApp branch actions', () => {
     expect(screen.getByTestId('session-page')).toBeInTheDocument();
   });
 
+  it('refuses a repeated Ask tap while a creation is pending, then accepts one after it settles', async () => {
+    let resolve!: (result: null) => void;
+    const onCreateSession = vi.fn(() => new Promise<null>((done) => (resolve = done)));
+    render(
+      mobileAppTree('/m', { client: primaryClient, user: { user_id: 'user-1' }, onCreateSession })
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+
+    // Both Ask surfaces are refused while the first creation is pending (the Home one reads "loading Ask").
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    fireEvent.click(screen.getByRole('button', { name: /Ask$/ }));
+    await act(async () => {});
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+
+    // A creation that yields no session (failure already surfaced) releases Ask again.
+    await act(async () => resolve(null));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(2));
+  });
+
+  it('accepts a new Ask tap after an identity change dropped the pending creation', async () => {
+    const { view, props } = await askWithPendingCreation();
+    view.rerender(mobileAppTree('/m', { ...props, authGeneration: 1 }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await waitFor(() => expect(props.onCreateSession).toHaveBeenCalledTimes(2));
+  });
+
   it('drops an Ask creation that settles after the signed-in identity changed', async () => {
     const { view, props, finish } = await askWithPendingCreation();
     view.rerender(mobileAppTree('/m', { ...props, authGeneration: 1 }));

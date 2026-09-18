@@ -10,7 +10,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -164,8 +164,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const primaryTeammateName = primaryBranch
     ? getTeammateConfig(primaryBranch)?.displayName
     : undefined;
-  // One guard for both create flows: the newest creation owns navigation, so an older one settling late cannot yank the user away.
-  const sessionCreationGuard = useIdentityGuardedAsync([user?.user_id, authGeneration]);
+  // One creation at a time, like desktop quick compose: the ref refuses a repeated tap, the state shows it as pending.
+  const [creatingSession, setCreatingSession] = useState(false);
+  const creatingSessionRef = useRef(false);
+  const markCreating = useCallback((pending: boolean) => {
+    creatingSessionRef.current = pending;
+    setCreatingSession(pending);
+  }, []);
+  // One guard for every create flow: the newest creation owns navigation, so an older one settling late cannot yank the user away.
+  // A guarded call dropped by an identity change never settles, so the pending flag is released here rather than in its `finally`.
+  const sessionCreationGuard = useIdentityGuardedAsync([user?.user_id, authGeneration], () =>
+    markCreating(false)
+  );
 
   // Track the board in view so the Board / Comments tabs have a target even from
   // the Sessions tab. Falls back to the user's main board, then any board.
@@ -215,21 +225,28 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       branch: { branch_id: string } & Pick<Branch, 'board_id' | 'mcp_server_ids'>,
       tool: AgenticToolName
     ) => {
+      if (creatingSessionRef.current) return;
+      markCreating(true);
       const operationGeneration = authGeneration;
-      const result = await sessionCreationGuard.run(() =>
-        onCreateSession(
-          buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
-          branch.board_id ?? ''
-        )
-      );
-      if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return;
-      if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+      try {
+        const result = await sessionCreationGuard.run(() =>
+          onCreateSession(
+            buildNewSessionConfig({ user, tool, branch, initialPrompt: '' }),
+            branch.board_id ?? ''
+          )
+        );
+        if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return;
+        if (result?.sessionId) navigate(`/m/session/${result.sessionId}`);
+      } finally {
+        markCreating(false);
+      }
     },
     [
       navigate,
       user,
       onCreateSession,
       sessionCreationGuard,
+      markCreating,
       authGeneration,
       isAuthenticationGenerationCurrent,
     ]
@@ -246,7 +263,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
 
   const askPrimaryAssistant = useCallback(async () => {
-    if (!client) return;
+    if (!client || creatingSessionRef.current) return;
     const branch = primaryBranch ?? (await refreshPrimaryBranch());
     if (branch === undefined) return;
     // No primary (or a transient resolve failure): open the mobile-native
@@ -342,6 +359,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 boardById={boardById}
                 currentUser={user}
                 onAsk={() => void askPrimaryAssistant()}
+                askPending={creatingSession}
                 primaryTeammateName={primaryTeammateName}
                 primaryTeammateEmoji={
                   primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined
@@ -476,6 +494,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           activeTab={activeTab}
           onSelect={handleTabSelect}
           sessionsBadge={sessionsBadge}
+          askPending={creatingSession}
         />
       )}
 

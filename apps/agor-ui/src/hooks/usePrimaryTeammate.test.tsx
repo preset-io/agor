@@ -115,6 +115,36 @@ describe('usePrimaryTeammate', () => {
     expect(result.current).toMatchObject({ branch: branchA, failed: false });
   });
 
+  it('an explicit pick supersedes a resolve still in flight', async () => {
+    const pending = deferred<Branch | null>();
+    const client = clientResolving(() => pending.promise);
+    const { result } = renderHook(() => usePrimaryTeammate(client, 'user-1', 0));
+    expect(result.current.resolving).toBe(true);
+    act(() => result.current.setBranch(branchA));
+    expect(result.current).toMatchObject({ branch: branchA, current: true, resolving: false });
+    await act(async () => pending.resolve(branchB));
+    expect(result.current).toMatchObject({ branch: branchA, current: true, resolving: false });
+  });
+
+  it('a manual refresh settling after unmount reports undefined', async () => {
+    const pending = deferred<Branch | null>();
+    const getPrimaryTeammate = vi
+      .fn<() => Promise<Branch | null>>()
+      .mockResolvedValueOnce(null)
+      .mockReturnValueOnce(pending.promise);
+    const client = clientResolving(getPrimaryTeammate);
+    const { result, unmount } = renderHook(() => usePrimaryTeammate(client, 'user-1', 0));
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+
+    let manual!: Promise<Branch | null | undefined>;
+    act(() => {
+      manual = result.current.refresh();
+    });
+    unmount();
+    pending.resolve(branchA);
+    await expect(manual).resolves.toBeUndefined();
+  });
+
   it('drops an in-flight response once the client goes away', async () => {
     const pending = deferred<Branch | null>();
     const client = clientResolving(() => pending.promise);

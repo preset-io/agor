@@ -16,6 +16,8 @@ export interface MobileTabBarProps {
   onSelect: (tab: MobileTab) => void;
   /** Count of sessions awaiting the user / running (0 hides the badge). */
   sessionsBadge?: number;
+  /** Ask is creating a session; the action shows it and refuses a repeated tap. */
+  askPending?: boolean;
 }
 
 interface TabDef {
@@ -36,6 +38,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
   onSelect,
   sessionsBadge,
+  askPending,
 }) => {
   const { token } = theme.useToken();
 
@@ -137,6 +140,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
             shape="circle"
             aria-label="Ask your primary assistant"
             onClick={() => onSelect('ask')}
+            loading={askPending}
             icon={<EditOutlined style={{ color: token.colorTextLightSolid }} />}
             style={{
               width: TOUCH_TARGET,

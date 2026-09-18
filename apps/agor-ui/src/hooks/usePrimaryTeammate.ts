@@ -1,5 +1,5 @@
 import type { AgorClient, Branch } from '@agor-live/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 interface PrimaryTeammate {
   branch: Branch | null;
@@ -32,10 +32,20 @@ export function usePrimaryTeammate(
     renderedIdentityRef.current = identity;
   }
 
-  // An explicit choice supersedes whatever the last resolve reported.
+  // Unmount supersedes any in-flight resolve, so a late answer neither commits nor is handed back to a caller's `refresh`.
+  useLayoutEffect(
+    () => () => {
+      requestRef.current += 1;
+    },
+    []
+  );
+
+  // An explicit choice supersedes whatever the last resolve reported, including one still in flight.
   const setBranch = useCallback((next: Branch | null) => {
+    requestRef.current += 1;
     setResolvedBranch(next);
     setBranchRequest(requestRef.current);
+    setResolving(false);
     setFailed(false);
   }, []);
 
