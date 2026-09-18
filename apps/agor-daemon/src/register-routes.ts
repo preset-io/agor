@@ -199,6 +199,7 @@ import {
   type SchedulerService,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
+import { createSpawnPromptService } from './services/session-spawn-prompt';
 import {
   lockTenantAuthorizationFence,
   resolveCurrentTenantAuthorityActor,
@@ -2483,52 +2484,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/spawn-prompt',
-    {
-      async create(
-        data: {
-          userPrompt?: string;
-          /**
-           * Permission mode for the *parent* session's prompt. The spawn
-           * config's `permissionMode` (child's intended mode) is rendered into
-           * the meta-prompt; this field governs how the parent prompt is sent.
-           */
-          parentPermissionMode?: import('@agor/core/types').PermissionMode;
-          // Remaining fields are spawn-subsession context (incl. the *child*
-          // session's permissionMode/modelConfig/etc) — see
-          // `SpawnSubsessionContext` in @agor/core for the shape.
-          [key: string]: unknown;
-        },
-        params: RouteParams
-      ) {
-        const id = params.route?.id;
-        if (!id) throw new BadRequest('Session ID required');
-        if (typeof data?.userPrompt !== 'string') {
-          throw new BadRequest('userPrompt (string) is required');
-        }
-
-        const { renderSpawnSubsessionPrompt } = await import(
-          '@agor/core/templates/spawn-subsession-template'
-        );
-        // Render the meta-prompt against the child-session config (the rest
-        // of `data`). `parentPermissionMode` is intentionally excluded — it's
-        // the parent's send-mode, not part of the template.
-        const { parentPermissionMode, ...spawnContext } = data;
-        const metaPrompt = renderSpawnSubsessionPrompt(
-          spawnContext as unknown as import('@agor/core/templates/spawn-subsession-template').SpawnSubsessionContext
-        );
-
-        const promptService = app.service('/sessions/:id/prompt');
-        return promptService.create(
-          {
-            prompt: metaPrompt,
-            permissionMode: parentPermissionMode,
-            messageSource: 'agor',
-            metadata: { system_authored: true },
-          },
-          { ...params, provider: undefined, route: { id } }
-        );
-      },
-    },
+    createSpawnPromptService(app),
     {
       create: { role: ROLES.MEMBER, action: 'send spawn-subsession prompts' },
     },

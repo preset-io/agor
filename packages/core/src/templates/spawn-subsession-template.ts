@@ -12,12 +12,14 @@
  * round-trip.
  */
 
+import type { SpawnConfig } from '../types/session';
 import { renderTemplate } from './handlebars-helpers';
 
 export interface SpawnSubsessionContext {
   userPrompt: string;
   hasConfig?: boolean;
   agenticTool?: string;
+  presetId?: SpawnConfig['presetId'];
   permissionMode?: string;
   modelConfig?: {
     mode?: string;
@@ -54,6 +56,10 @@ REQUEST: """
     - Permission Mode:
     {{permissionMode}}
   {{/if}}
+  {{#if presetId}}
+    - Configuration Preset:
+    {{presetId}}
+  {{/if}}
   {{#if modelConfig}}
     - Model:
     {{modelConfig.mode}}
@@ -72,8 +78,8 @@ REQUEST: """
     - Codex Approval Policy:
     {{codexApprovalPolicy}}
   {{/if}}
-  {{#if codexNetworkAccess}}
-    - Codex Network Access: enabled
+  {{#if (isDefined codexNetworkAccess)}}
+    - Codex Network Access: {{codexNetworkAccess}}
   {{/if}}
   {{#if mcpServerIds}}
     - MCP Servers:
@@ -110,6 +116,9 @@ hashing and JWT for tokens."
 {{#if permissionMode}}
   - permissionMode: "{{permissionMode}}"
 {{/if}}
+{{#if presetId}}
+  - presetId: "{{presetId}}"
+{{/if}}
 {{#if modelConfig}}
   - modelConfig: { mode: "{{modelConfig.mode}}", model: "{{modelConfig.model}}"{{#if
     modelConfig.effort
@@ -124,7 +133,7 @@ hashing and JWT for tokens."
 {{#if codexApprovalPolicy}}
   - codexApprovalPolicy: "{{codexApprovalPolicy}}"
 {{/if}}
-{{#if codexNetworkAccess}}
+{{#if (isDefined codexNetworkAccess)}}
   - codexNetworkAccess:
   {{codexNetworkAccess}}
 {{/if}}
@@ -150,33 +159,7 @@ hashing and JWT for tokens."
 CRITICAL: - Do NOT explain or respond directly to the user - ALWAYS use the MCP tool - this is
 mandatory - The child session starts fresh - include ALL relevant context in your prompt - Use the
 exact configuration parameters specified above - After spawning, briefly acknowledge what the child
-session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{{your_carefully_prepared_enriched_prompt_with_full_context}}",{{#if
-  agenticTool
-}}
-  "agenticTool": "{{agenticTool}}",{{/if}}{{#if permissionMode}}
-  "permissionMode": "{{permissionMode}}",{{/if}}{{#if modelConfig}}
-  "modelConfig": { "mode": "{{modelConfig.mode}}", "model": "{{modelConfig.model}}"{{#if
-    modelConfig.effort
-  }}, "effort": "{{modelConfig.effort}}"{{/if}}{{#if
-    modelConfig.advisorModel
-  }}, "advisorModel": "{{modelConfig.advisorModel}}"{{/if}}
-  },{{/if}}{{#if codexSandboxMode}}
-  "codexSandboxMode": "{{codexSandboxMode}}",{{/if}}{{#if codexApprovalPolicy}}
-  "codexApprovalPolicy": "{{codexApprovalPolicy}}",{{/if}}{{#if codexNetworkAccess}}
-  "codexNetworkAccess":
-  {{codexNetworkAccess}},{{/if}}{{#if mcpServerIds}}
-  "mcpServerIds": [{{#each mcpServerIds}}"{{this}}"{{#unless @last}},
-    {{/unless}}{{/each}}],{{/if}}{{#if (isDefined callbackConfig.enableCallback)}}
-  "enableCallback":
-  {{callbackConfig.enableCallback}},{{/if}}{{#if (isDefined callbackConfig.includeLastMessage)}}
-  "includeLastMessage":
-  {{callbackConfig.includeLastMessage}},{{/if}}{{#if
-  (isDefined callbackConfig.includeOriginalPrompt)
-}}
-  "includeOriginalPrompt":
-  {{callbackConfig.includeOriginalPrompt}},{{/if}}{{#if extraInstructions}}
-  "extraInstructions": """{{extraInstructions}}"""{{/if}}
-}) Proceed now by calling agor_sessions_spawn with the exact parameters shown above.`;
+session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({{{exactToolArguments}}}) Proceed now by calling agor_sessions_spawn with the exact parameters shown above.`;
 
 /**
  * Render the spawn-subsession meta-prompt for a parent session's LLM.
@@ -187,6 +170,7 @@ export function renderSpawnSubsessionPrompt(context: SpawnSubsessionContext): st
   const hasConfig =
     context.hasConfig ??
     (context.agenticTool !== undefined ||
+      context.presetId !== undefined ||
       context.permissionMode !== undefined ||
       context.modelConfig !== undefined ||
       context.codexSandboxMode !== undefined ||
@@ -208,5 +192,26 @@ export function renderSpawnSubsessionPrompt(context: SpawnSubsessionContext): st
     ...context,
     hasConfig,
     hasCallbackConfig,
+    // JSON serialization preserves explicit false/empty values and escapes strings.
+    // The parent enriches only the prompt, not the selected child configuration.
+    exactToolArguments: JSON.stringify(
+      {
+        prompt: '<your carefully prepared enriched prompt with full context>',
+        agenticTool: context.agenticTool,
+        presetId: context.presetId,
+        permissionMode: context.permissionMode,
+        modelConfig: context.modelConfig,
+        codexSandboxMode: context.codexSandboxMode,
+        codexApprovalPolicy: context.codexApprovalPolicy,
+        codexNetworkAccess: context.codexNetworkAccess,
+        mcpServerIds: context.mcpServerIds,
+        enableCallback: context.callbackConfig?.enableCallback,
+        includeLastMessage: context.callbackConfig?.includeLastMessage,
+        includeOriginalPrompt: context.callbackConfig?.includeOriginalPrompt,
+        extraInstructions: context.extraInstructions,
+      },
+      null,
+      2
+    ),
   } as unknown as Record<string, unknown>);
 }
