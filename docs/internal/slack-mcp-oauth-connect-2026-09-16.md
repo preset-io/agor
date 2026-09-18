@@ -118,24 +118,36 @@ The discriminant is optional on the submit variant, so `env_vars` and
 `gateway_token` registered unchanged.
 
 The daemon-verified variant carries `resolveFromDaemonVerification(ctx, evidence, params)` and
-**no** `submitSchema`, `buildResultMeta`, or `applySubmit`. Two consequences fall
-out of that rather than being enforced separately:
+**no** `submitSchema` or `applySubmit`. There is no schema for a submit body,
+because no submit body is accepted.
 
-- There is no schema for a submit body, because no submit body is accepted.
-- `result_meta` is **returned by the handler** instead of derived from a
-  request. The sanitized facts come from rows the daemon just read. (The
-  `gateway_token` widget needed a module-level `WeakMap` to carry its computed
-  outcome from `applySubmit` to `buildResultMeta`; the OAuth lane has no such
-  seam. That `WeakMap` is left alone — see §8.)
+Follow-up **F3** corrected what that union discriminated on. As shipped it
+encoded two things at once — body-or-no-body, and where `result_meta` came
+from — and only the second was actually constrained: a bodiless handler
+returned its own meta, a body-taking one could not. `gateway_token`, whose
+outcome is decided by a credential probe inside `applySubmit` rather than by
+the body, therefore carried that outcome to `buildResultMeta` through a
+module-level `WeakMap` keyed on submit-object identity, and the next
+form-backed, externally-verified widget would have needed a second one.
+
+`applySubmit` may now **return** `TResultMeta`, with `buildResultMeta` as the
+fallback (and optional). The union then discriminates on the one axis that
+carries weight — whether the entry accepts a body — which is what decides
+payload validation and the endpoint cross-check, and nothing else. The
+`WeakMap` is gone; `env_vars` keeps its builder, which is the case a
+body-projection builder was always right for. The bodiless variant's handler
+still MUST return the meta, because there is no body for a fallback to project.
 
 `submissions.ts` keeps one `doResolveWidget`. Steps 1–3 (load, authorize,
 idempotency) and 5–8 (durable claim, auto-resume admission, terminal patch,
 `widget:resolved` broadcast) are byte-identical for all three actions. Only the
 step-4 dispatch differs. A widget reached through the wrong endpoint is refused,
-both directions:
+both directions — since F3 the question is literally "does this entry accept a
+body" (`widgetAcceptsSubmitBody`), asked against whether this endpoint brought
+one:
 
-- submit-resolved via `/oauth-resolve` → would skip payload validation entirely.
-- OAuth-resolved via `/submit` → would resolve on a client's say-so.
+- body-taking via `/oauth-resolve` → would skip payload validation entirely.
+- bodiless via `/submit` → would resolve on a client's say-so.
 
 `WidgetResolutionClaim.action` widened to `'submit' | 'dismiss' | 'oauth_callback'`
 so a recovery reader can tell which lane owned an abandoned claim. Since the
@@ -1606,8 +1618,11 @@ Step 2 is where D5 was found.
   against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment was
   corrected then; `matches` now carries the field list and the reason.
 
-- **`gateway_token`'s `buildResultMeta` `WeakMap`.** The submit-resolved variant
-  still cannot return its own `result_meta`, so `gateway-token/index.ts` carries
-  its computed outcome across the two calls in a module-level `WeakMap`. The
-  OAuth variant shows the cleaner shape (handler returns the meta). Unifying
-  them is a refactor of a working, well-tested widget and was not attempted.
+- **`gateway_token`'s `buildResultMeta` `WeakMap`. Fixed as follow-up F3.** The
+  submit-resolved variant could not return its own `result_meta`, so
+  `gateway-token/index.ts` carried its computed outcome across the two calls in
+  a module-level `WeakMap` keyed on submit-object identity. `applySubmit` may
+  now return the meta; the `WeakMap` and the widget's `buildResultMeta` are
+  both gone, and with them the fallback that answered a WeakMap miss with a
+  blank channel id and `enabled: false` — the right shape and the wrong answer.
+  See §3.1 for what the union discriminates on now.

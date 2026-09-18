@@ -473,7 +473,7 @@ describe('gateway_token widget — test-before-enable', () => {
       },
     });
     const submit = { tokens: { private_key: 'gh-private-key-value' } };
-    await gatewayTokenWidget.applySubmit(ctx, submit, {
+    const rm = await gatewayTokenWidget.applySubmit(ctx, submit, {
       ...defaultParams,
       channelType: 'github',
       channelName: 'Eng GitHub',
@@ -483,9 +483,8 @@ describe('gateway_token widget — test-before-enable', () => {
     // Tokens are still written, but the channel must NOT be enabled off an unrun probe.
     expect(data.config).toEqual({ private_key: 'gh-private-key-value' });
     expect(data.enabled).toBe(false);
-    const rm = gatewayTokenWidget.buildResultMeta(submit);
-    expect(rm.unverified).toBe(true);
-    expect(rm.enabled).toBe(false);
+    expect(rm?.unverified).toBe(true);
+    expect(rm?.enabled).toBe(false);
     expect(JSON.stringify(rm)).not.toContain('gh-private-key-value');
   });
 });
@@ -681,28 +680,31 @@ describe('classifyGatewayTokenTest', () => {
   });
 });
 
-describe('gateway_token widget — buildResultMeta', () => {
+describe('gateway_token widget — result_meta', () => {
   it('carries channel + enable outcome and NEVER a token value or prefix', async () => {
     const { ctx } = makeCtx();
     const submit = { tokens: { bot_token: 'xoxb-secret-abc', app_token: 'xapp-secret-xyz' } };
-    await gatewayTokenWidget.applySubmit(ctx, submit, defaultParams);
-    const rm = gatewayTokenWidget.buildResultMeta(submit);
-    expect(rm.channelId).toBe('chan-1');
-    expect(rm.channelName).toBe('Eng Slack');
-    expect(rm.channelType).toBe('slack');
-    expect(rm.fieldsSet).toEqual(['app_token', 'bot_token']);
-    expect(rm.enabled).toBe(true);
-    expect(rm.test.ok).toBe(true);
+    const rm = await gatewayTokenWidget.applySubmit(ctx, submit, defaultParams);
+    expect(rm?.channelId).toBe('chan-1');
+    expect(rm?.channelName).toBe('Eng Slack');
+    expect(rm?.channelType).toBe('slack');
+    expect(rm?.fieldsSet).toEqual(['app_token', 'bot_token']);
+    expect(rm?.enabled).toBe(true);
+    expect(rm?.test.ok).toBe(true);
     const serialized = JSON.stringify(rm);
     expect(serialized).not.toContain('xoxb-');
     expect(serialized).not.toContain('xapp-');
     expect(serialized).not.toContain('secret-abc');
   });
 
-  it('exposes only field NAMES even without an outcome', () => {
-    const rm = gatewayTokenWidget.buildResultMeta({ tokens: { bot_token: 'xoxb-leak' } });
-    expect(rm.fieldsSet).toEqual(['bot_token']);
-    expect(JSON.stringify(rm)).not.toContain('xoxb-');
+  it('has no body-only builder, because the outcome is not in the body', () => {
+    // The handler returns the meta, so there is nothing left for
+    // `buildResultMeta` to do here — and the version that existed could only
+    // answer by looking the outcome up in a module-level WeakMap. On a miss it
+    // returned a blank channel id and `enabled: false`: the right SHAPE and
+    // the wrong answer, which is the failure mode the fallback's absence now
+    // makes unrepresentable.
+    expect(gatewayTokenWidget.buildResultMeta).toBeUndefined();
   });
 });
 
@@ -741,7 +743,7 @@ describe('Discord setup vertical contract', () => {
         notVerifiable: [],
       },
     });
-    await gatewayTokenWidget.applySubmit(
+    const passingMeta = await gatewayTokenWidget.applySubmit(
       passing.ctx,
       { tokens: { bot_token: 'discord-write-only-secret' } },
       params
@@ -753,9 +755,7 @@ describe('Discord setup vertical contract', () => {
       1,
       expect.anything()
     );
-    expect(
-      JSON.stringify(gatewayTokenWidget.buildResultMeta({ tokens: { bot_token: 'secret' } }))
-    ).not.toContain('secret');
+    expect(JSON.stringify(passingMeta)).not.toContain('discord-write-only-secret');
 
     const failing = makeCtx({
       channel: {

@@ -244,6 +244,54 @@ function registerTestWidget(
   return { entry, applySubmit };
 }
 
+/**
+ * A body-taking widget whose outcome is NOT derivable from the body.
+ *
+ * Stands in for `gateway_token`, whose enable decision comes from a credential
+ * probe inside `applySubmit`. Its `buildResultMeta` deliberately answers
+ * something different, so a test can tell which source the resolver used
+ * rather than having both agree by construction.
+ */
+type ProbeWidgetResultMeta = { names_submitted: string[]; scope: string; verified?: boolean };
+
+function registerProbeWidget(options: { handlerReturnsMeta: boolean }) {
+  const applySubmit = vi.fn(
+    async (
+      _ctx: unknown,
+      submit: { value: string; scope: 'global' | 'session' },
+      params: { names: string[] }
+    ) =>
+      options.handlerReturnsMeta
+        ? { names_submitted: params.names, scope: submit.scope, verified: true }
+        : undefined
+  );
+  const buildResultMeta = vi.fn((submit: { scope: 'global' | 'session' }) => ({
+    names_submitted: ['FROM_THE_BODY'],
+    scope: submit.scope,
+  }));
+  const buildAutoResumePrompt = vi.fn(
+    (rm: ProbeWidgetResultMeta) =>
+      `[Agor] User submitted ${rm.names_submitted.join(', ')} ` +
+      `(scope: ${rm.scope}, verified: ${String(rm.verified ?? false)}).`
+  );
+  const entry: WidgetRegistryEntry<
+    { names: string[]; reason: string },
+    { value: string; scope: 'global' | 'session' },
+    ProbeWidgetResultMeta
+  > = {
+    type: 'env_vars',
+    schemaVersion: 1,
+    paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
+    submitSchema: z.object({ value: z.string(), scope: z.enum(['global', 'session']) }),
+    buildResultMeta,
+    applySubmit,
+    buildAutoResumePrompt,
+    buildDismissedPrompt: () => '[Agor] User dismissed.',
+  };
+  registerWidget(entry);
+  return { applySubmit, buildResultMeta, buildAutoResumePrompt };
+}
+
 describe('canResolveWidget', () => {
   it('allows an affirmative canonical prompt decision', () => {
     expect(canResolveWidget({ allowed: true })).toBe(true);
@@ -399,6 +447,109 @@ describe('resolveWidget', () => {
     const event = events.find((e) => e.event === 'widget:resolved');
     expect(event).toBeDefined();
     expect((event!.payload as { status: string }).status).toBe('submitted');
+  });
+
+  it('carries a handler-returned result_meta into the prompt, the row, and the broadcast', async () => {
+    // The axis this variant exists for: `gateway_token`'s outcome is decided
+    // by a probe inside the handler, not by the body. Before `applySubmit`
+    // could return one, that outcome reached `buildResultMeta` through a
+    // module-level WeakMap keyed on submit-object identity.
+    const { buildResultMeta, buildAutoResumePrompt } = registerProbeWidget({
+      handlerReturnsMeta: true,
+    });
+    const fixtures = makeFixtures();
+    const { app, calls, events, resolutionStore } = makeApp(fixtures);
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+      { user_id: 'creator-user-id' as UserID },
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        resolveSessionPromptAuthority: allowPrompt,
+      }
+    );
+
+    // The handler's answer won, and the body-only builder was never consulted.
+    expect(buildResultMeta).not.toHaveBeenCalled();
+    expect(buildAutoResumePrompt).toHaveBeenCalledTimes(1);
+    const [promptMeta, promptParams] = buildAutoResumePrompt.mock.calls[0];
+    expect(promptMeta).toEqual({
+      names_submitted: ['HUBSPOT_API_KEY'],
+      scope: 'global',
+      verified: true,
+    });
+    // The prompt builder receives result_meta and params — never the body.
+    // `value` is the only place the secret lives, so its absence from both
+    // arguments is the invariant, not just its absence from the rendered text.
+    expect(JSON.stringify([promptMeta, promptParams])).not.toContain('secret-key');
+    expect(promptMeta).not.toHaveProperty('value');
+
+    const promptCall = calls.find(
+      (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
+    );
+    const promptData = promptCall?.data as { prompt: string };
+    expect(promptData.prompt).toContain('verified: true');
+    expect(promptData.prompt).not.toContain('FROM_THE_BODY');
+    expect(promptData.prompt).not.toContain('secret-key');
+
+    const messagePatch = calls
+      .filter(
+        (c) =>
+          c.service === 'messages' &&
+          c.method === 'patch' &&
+          (c.data as { metadata?: { widget?: { status?: string } } }).metadata?.widget?.status ===
+            'submitted'
+      )
+      .at(-1);
+    const patched = messagePatch?.data as {
+      metadata: { widget: { result_meta: ProbeWidgetResultMeta } };
+    };
+    expect(patched.metadata.widget.result_meta.verified).toBe(true);
+    expect(JSON.stringify(patched)).not.toContain('secret-key');
+
+    const event = events.find((e) => e.event === 'widget:resolved');
+    const payload = event!.payload as { result_meta: ProbeWidgetResultMeta };
+    expect(payload.result_meta.verified).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain('secret-key');
+  });
+
+  it('falls back to buildResultMeta when the handler returns nothing', async () => {
+    // The other half of the contract: a meta that IS a pure projection of the
+    // body (env_vars) still comes from the builder, and the builder is the
+    // only thing the body is handed to.
+    const { buildResultMeta, buildAutoResumePrompt } = registerProbeWidget({
+      handlerReturnsMeta: false,
+    });
+    const fixtures = makeFixtures();
+    const { app, calls, resolutionStore } = makeApp(fixtures);
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'submit', body: { value: 'secret-key', scope: 'session' } },
+      { user_id: 'creator-user-id' as UserID },
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        resolveSessionPromptAuthority: allowPrompt,
+      }
+    );
+
+    expect(buildResultMeta).toHaveBeenCalledTimes(1);
+    expect(buildResultMeta).toHaveBeenCalledWith({ value: 'secret-key', scope: 'session' });
+    const [promptMeta] = buildAutoResumePrompt.mock.calls[0];
+    expect(promptMeta).toEqual({ names_submitted: ['FROM_THE_BODY'], scope: 'session' });
+    expect(JSON.stringify(promptMeta)).not.toContain('secret-key');
+
+    const promptCall = calls.find(
+      (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
+    );
+    const fallbackPrompt = (promptCall?.data as { prompt: string } | undefined)?.prompt;
+    expect(fallbackPrompt).toContain('FROM_THE_BODY');
+    expect(fallbackPrompt).not.toContain('secret-key');
   });
 
   it('rejects a submission when canonical prompt authority denies it', async () => {

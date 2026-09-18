@@ -13,9 +13,10 @@
  *      `recovery: 'reclaimable'`, which lets its own lane finish a resolution
  *      that was interrupted rather than refusing it forever.
  *   4. Durably claim `pending -> resolving` with an opaque token.
- *   5. The sole claimant dispatches to the registry — `applySubmit` for a
- *      submit-resolved widget, `resolveFromDaemonVerification` for an
- *      OAuth-resolved one, no external side-effect for dismiss.
+ *   5. The sole claimant dispatches to the registry — `applySubmit` for an
+ *      entry that takes a body, `resolveFromDaemonVerification` for one that
+ *      takes none, no external side-effect for dismiss. Either handler may
+ *      return the sanitized `result_meta`; `buildResultMeta` is the fallback.
  *   6. Queue a system-authored auto-resume task via the existing
  *      `/sessions/:id/prompt` route (the "Never lose a prompt" #1068 path),
  *      unless `auto_resume === false`.
@@ -31,8 +32,10 @@
  * body at all. `resolveFromDaemonVerification` receives only an advisory attempt
  * id and re-derives the outcome from durable daemon state, so the
  * `result_meta` it returns is composed from rows the daemon read, never from
- * the request. Steps 1-3 and 5-8 are byte-identical for all three actions;
- * only step 4's dispatch differs.
+ * the request. A handler-returned `result_meta` on the submit side is under the
+ * same rule: it is what the side-effect established, never the body echoed
+ * back. Steps 1-3 and 5-8 are byte-identical for all three actions; only step
+ * 4's dispatch differs.
  */
 
 import { generateId } from '@agor/core/db';
@@ -54,6 +57,7 @@ import {
   getWidget,
   type WidgetDaemonVerifiedEvidence,
   type WidgetSubmitCtx,
+  widgetAcceptsSubmitBody,
   widgetRecoveryPolicy,
 } from './registry.js';
 import type { WidgetResolutionStore } from './resolution-store.js';
@@ -304,14 +308,14 @@ async function doResolveWidget(
           `Update the daemon or use a known widget type.`
       );
     }
-    // The endpoint and the registered resolution kind must agree. A
-    // submit-resolved widget reached through `/oauth-resolve` would skip its
-    // payload validation entirely; an OAuth-resolved widget reached through
-    // `/submit` would be resolved on a client's say-so, with no grant check.
-    // Both are refusals, not fallbacks.
+    // Does this entry accept a body, and did this endpoint bring one? They
+    // must agree. An entry that takes a body, reached through
+    // `/oauth-resolve`, would skip its payload validation entirely; one that
+    // takes none, reached through `/submit`, would be resolved on a client's
+    // say-so with no grant check. Both are refusals, not fallbacks.
     const registeredKind = entry.resolution ?? 'submit';
     const requestedKind = action.kind === 'oauth_callback' ? 'daemon_verified' : 'submit';
-    if (registeredKind !== requestedKind) {
+    if (widgetAcceptsSubmitBody(entry) !== (action.kind === 'submit')) {
       throw new Forbidden(
         `Widget type '${widget.widget_type}' is resolved by '${registeredKind}', ` +
           `not '${requestedKind}'.`
@@ -321,7 +325,7 @@ async function doResolveWidget(
       // No payload to validate: there is nothing in the request this path
       // trusts. The handler reads durable state instead.
       oauthEvidence = action.evidence;
-    } else if (entry.resolution !== 'daemon_verified') {
+    } else if (widgetAcceptsSubmitBody(entry)) {
       const parsed = entry.submitSchema.safeParse(action.body);
       if (!parsed.success) {
         throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
@@ -384,17 +388,21 @@ async function doResolveWidget(
     // that explicitly reports failure is the sole safe case for reopening the
     // widget: no later admission/completion failure may replay this effect.
     const resolved = entry!;
+    // Either handler may return the sanitized `result_meta`. The bodiless one
+    // must — nothing else knows what its durable read found — while a
+    // body-taking handler returns one only when the outcome depends on what
+    // its side-effect did, which is why `buildResultMeta` below stays as the
+    // fallback rather than being replaced.
+    let handlerResultMeta: unknown;
     try {
-      if (resolved.resolution === 'daemon_verified') {
-        // Returns its own sanitized result_meta — see the registry docs for
-        // why an OAuth resolution cannot derive one from the request.
-        resultMeta = await resolved.resolveFromDaemonVerification(
+      if (widgetAcceptsSubmitBody(resolved)) {
+        handlerResultMeta = await resolved.applySubmit(ctx, parsedSubmit, widget.params);
+      } else {
+        handlerResultMeta = await resolved.resolveFromDaemonVerification(
           ctx,
           oauthEvidence ?? {},
           widget.params
         );
-      } else {
-        await resolved.applySubmit(ctx, parsedSubmit, widget.params);
       }
     } catch (error) {
       await deps.resolutionStore.fail(widget.widget_id, claimToken, {
@@ -410,8 +418,10 @@ async function doResolveWidget(
     // throwing builder must not be able to invite a replay of that
     // (`resolution-store.ts`). Unreachable with today's pure builders; the
     // ordering is the guarantee, not their purity.
-    if (resolved.resolution !== 'daemon_verified') {
-      resultMeta = resolved.buildResultMeta(parsedSubmit);
+    if (handlerResultMeta === undefined && widgetAcceptsSubmitBody(resolved)) {
+      resultMeta = resolved.buildResultMeta?.(parsedSubmit);
+    } else {
+      resultMeta = handlerResultMeta;
     }
     autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
   }
