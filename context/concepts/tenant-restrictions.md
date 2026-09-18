@@ -30,6 +30,7 @@ absent --restrict(r1)--> restricted
 restricted --prepare_release(r2 > r1)--> release_prepared [still closed]
 release_prepared --activate(exact r2 + operation)--> active [watermark retained]
 any recorded phase --restrict(higher revision)--> restricted
+absent --seed_active(r)--> active [re-home watermark restatement only]
 ```
 
 Higher-revision prepare may supersede an incomplete restriction, but does not
@@ -39,6 +40,20 @@ retries are no-ops; a delayed prepare for an already-active operation is also a
 no-op. Conflicting commands at the same revision are rejected. Advisory locking
 serializes first writers even when no row exists, and rolls back with the
 surrounding transaction. No network/process wait belongs inside this lock.
+
+`seed_active` is the only action that writes an open record without a prepared
+release, and it is accepted **only when the controller has no record at all**.
+It exists because this table is deployment-bound and never portable: a tenant
+moved to a fresh runtime arrives with an empty history that the launch-revision
+check reads as a missing watermark (see Persistence and portability). The
+orchestrator that moved the tenant restates the revision it already carries — it
+cannot repair, override or reopen a runtime that recorded anything, because any
+existing record is rejected with `revision_conflict`. That includes an exact
+replay of a seed this runtime already accepted: an at-least-once delivery whose
+reply was lost is reported as a conflict rather than silently confirmed, so the
+"empty history only" argument never needs a same-command exception. A seeded row
+is an ordinary active record afterwards — a later restrict at a higher revision
+closes it like any other.
 
 Restriction composition is OR across controllers. Releasing one controller's
 restriction cannot clear another's, and never modifies the separate portability
@@ -53,8 +68,9 @@ FORCE RLS. No broad cross-tenant operator policy is added. The table is included
 in the runtime-derived tenant erasure manifest but excluded from portable data
 archives: placement/controller authority belongs to the deployment, not to
 customer content. A destination must receive its own authoritative restriction
-before serving imported data. A missing row alone is not proof that a new or
-restored runtime is allowed to serve. Tenant identifiers must not be recycled;
+before serving imported data (for a tenant whose controller revision is already
+positive, that is exactly what `seed_active` writes). A missing row alone is not
+proof that a new or restored runtime is allowed to serve. Tenant identifiers must not be recycled;
 an authenticated adapter must reject work for retired placements/tenants before
 calling the persistence writer.
 
@@ -104,7 +120,7 @@ conventions: one stable JSON line on stdout, human audit text on stderr.
 agor tenant restriction apply \
   --tenant-id <workspaceId> --controller-id <controller> \
   --placement-id <cellId> --operation-id <operation> \
-  --revision <n> --action restrict|prepare_release|activate
+  --revision <n> --action restrict|prepare_release|activate|seed_active
 
 agor tenant restriction inspect --tenant-id <workspaceId>
 ```
@@ -112,8 +128,11 @@ agor tenant restriction inspect --tenant-id <workspaceId>
 `apply` prints `{"record":…,"changed":…}`; `inspect` prints the records array
 ordered by controller id. Flags are validated with
 `TenantRestrictionCommandSchema` before a connection is opened, so the CLI
-cannot accept an identity or revision the writer would reject. `seed_active` is
-not an action.
+cannot accept an identity or revision the writer would reject. `seed_active` on
+a runtime that holds any record for the controller exits `2` with
+`revision_conflict`; an orchestrator must treat that as terminal (the
+destination already has restriction history, so there is nothing to seed) and
+never as a reason to retry or force.
 
 | Exit | Meaning                                                                             |
 | ---- | ----------------------------------------------------------------------------------- |

@@ -23,7 +23,7 @@ export const TenantRestrictionCommandSchema = z
     placementId: identity,
     operationId: identity,
     revision,
-    action: z.enum(['restrict', 'prepare_release', 'activate']),
+    action: z.enum(['restrict', 'prepare_release', 'activate', 'seed_active']),
   })
   .strict();
 
@@ -57,10 +57,23 @@ export class TenantRestrictionConflictError extends Error {
 }
 
 /**
- * Pure transition policy. Only restrict can create a row. A new release uses a
- * higher revision and stays closed until a separate activation of that exact
- * operation. Active records remain as revision watermarks; never delete them
- * as a release operation. Controller and placement identities cannot be changed.
+ * Pure transition policy. Only restrict can create a CLOSED row. A new release
+ * uses a higher revision and stays closed until a separate activation of that
+ * exact operation. Active records remain as revision watermarks; never delete
+ * them as a release operation. Controller and placement identities cannot be
+ * changed.
+ *
+ * `seed_active` is the one action that writes an OPEN record without a prepared
+ * release, and it is deliberately the narrowest: it is accepted ONLY when this
+ * runtime holds no record at all for the controller. It exists because the
+ * restriction table is deployment-bound and never portable, so a tenant moved to
+ * a fresh runtime arrives with an empty history that the launch-revision check
+ * reads as a missing watermark. The orchestrator that moved the tenant restates
+ * the watermark it already knows; it can never re-open a runtime that recorded
+ * anything, because ANY existing record rejects with `revision_conflict`. That
+ * includes an exact replay of a seed this runtime already accepted: a delivery
+ * that lost its reply is reported as a conflict rather than silently confirmed,
+ * since this action's whole safety argument is "empty history only".
  *
  * Caller must authenticate and bind the controller, tenant and placement before
  * invoking this policy. Knowing an identity string is not authorization.
@@ -70,6 +83,22 @@ export function transitionTenantRestriction(
   input: TenantRestrictionCommand
 ): { record: TenantRestrictionRecord; changed: boolean } {
   const command = TenantRestrictionCommandSchema.parse(input);
+  if (command.action === 'seed_active') {
+    // Empty history only — never a repair, an override, or a release shortcut.
+    if (current) throw new TenantRestrictionConflictError('revision_conflict');
+    const { version, controllerId, placementId, operationId, revision: seeded } = command;
+    return {
+      record: {
+        version,
+        controllerId,
+        placementId,
+        operationId,
+        revision: seeded,
+        phase: 'active',
+      },
+      changed: true,
+    };
+  }
   if (current) {
     current = TenantRestrictionRecordSchema.parse(current);
     if (

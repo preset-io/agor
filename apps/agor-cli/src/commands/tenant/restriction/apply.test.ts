@@ -36,8 +36,14 @@ describe('buildTenantRestrictionCommand', () => {
     });
   });
 
+  it('builds the re-home seed command the destination runtime accepts on empty history', () => {
+    expect(buildTenantRestrictionCommand(flags({ action: 'seed_active' })).action).toBe(
+      'seed_active'
+    );
+  });
+
   it.each<[string, Partial<TenantRestrictionApplyFlags>]>([
-    ['an unknown action', { action: 'seed_active' }],
+    ['an unknown action', { action: 'force_active' }],
     ['a zero revision', { revision: 0 }],
     ['a negative revision', { revision: -1 }],
     ['a fractional revision', { revision: 1.5 }],
@@ -146,7 +152,7 @@ describe('agor tenant restriction apply (argument contract)', () => {
       '--revision',
       '3',
       '--action',
-      'seed_active',
+      'force_active',
     ]);
 
     expect(result.code).toBe(EXIT_FAILURE);

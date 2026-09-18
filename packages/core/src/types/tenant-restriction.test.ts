@@ -65,6 +65,38 @@ describe('tenant restriction intent protocol', () => {
     expect(() => apply(prepared, { ...release, action: 'restrict' })).toThrow('revision_conflict');
   });
 
+  it('seeds an active watermark only on an empty history (re-home destination, plan D2)', () => {
+    const seed: TenantRestrictionCommand = { ...restrict, revision: 4, action: 'seed_active' };
+    const seeded = apply(null, seed);
+    expect(seeded).toEqual({
+      record: {
+        version: 1,
+        controllerId: 'control-one',
+        placementId: 'placement-one',
+        operationId: 'suspend-one',
+        revision: 4,
+        phase: 'active',
+      },
+      changed: true,
+    });
+    expect(isTenantRestrictionClosed(seeded.record)).toBe(false);
+    // ANY recorded state refuses the seed — including an exact replay of the seed
+    // this runtime already accepted, a closed row, and a foreign controller's row.
+    for (const current of [
+      seeded.record,
+      apply(null, restrict).record,
+      apply(apply(null, restrict).record, release).record,
+      { ...seeded.record, controllerId: 'control-two' },
+      { ...seeded.record, revision: 9 },
+    ])
+      expect(() => apply(current, seed)).toThrow('revision_conflict');
+    // The seeded watermark still behaves like any other active record afterwards.
+    expect(() => apply(seeded.record, { ...restrict, revision: 3 })).toThrow('stale_revision');
+    expect(
+      apply(seeded.record, { ...restrict, revision: 5, operationId: 'susp-5' }).record.phase
+    ).toBe('restricted');
+  });
+
   it('allows a newer restriction to supersede a pending release, never the inverse replay', () => {
     const prepared = apply(apply(null, restrict).record, release).record;
     const newer = apply(prepared, { ...restrict, revision: 3, operationId: 'three' }).record;
@@ -85,6 +117,7 @@ describe('tenant restriction intent protocol', () => {
       { placementId: 'a/b' },
       { operationId: 'a\n' },
       { force: true },
+      { action: 'force_active' },
     ])
       expect(TenantRestrictionCommandSchema.safeParse({ ...restrict, ...patch }).success).toBe(
         false

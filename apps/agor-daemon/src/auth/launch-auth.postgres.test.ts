@@ -225,6 +225,52 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('accepts a launch at the watermark a re-home seeded on a fresh destination runtime', async () => {
+      // Plan D2: `tenant_restrictions` is deployment-bound and never travels with a
+      // tenant, so a Workspace re-homed while its Team is active arrives with an empty
+      // history that the launch fence reads as a missing watermark. The seed restates
+      // the revision the Team already carries; nothing else about the fence changes.
+      const tenantId = `launch-seeded-${generateId()}`;
+      const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
+      let assertion = signClaims(identity);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      // Before the seed the destination holds nothing, so the positive claim is refused.
+      assertion = signClaims({
+        ...identity,
+        restriction: { controllerId: 'launch-test', revision: 5 },
+      });
+      await expect(
+        service(dbA, 'launch-test').create({ launchCode: 'unseeded' })
+      ).rejects.toMatchObject({ code: 401 });
+      await applyTenantRestrictionIntent(dbB, tenantId, {
+        version: 1,
+        controllerId: 'launch-test',
+        placementId: 'placement-destination',
+        operationId: 'reactivate-five',
+        revision: 5,
+        action: 'seed_active',
+      });
+      const launched = await service(dbA, 'launch-test').create({ launchCode: 'seeded' });
+      expect(jwt.verify(launched.accessToken, RUNTIME_SECRET)).toMatchObject({
+        tenant_id: tenantId,
+      });
+      // The seeded row is an exact watermark, not a blanket opening.
+      for (const restriction of [
+        undefined,
+        { controllerId: 'launch-test', revision: 0 },
+        { controllerId: 'launch-test', revision: 4 },
+        { controllerId: 'other', revision: 5 },
+      ]) {
+        assertion = signClaims({ ...identity, restriction });
+        await expect(
+          service(dbA, 'launch-test').create({ launchCode: 'stale' })
+        ).rejects.toMatchObject({ code: 401 });
+      }
+    });
+
     it('keeps first-user projection and immutable default-board ownership in one fence', async () => {
       const tenantId = `launch-owner-${generateId()}`;
       const firstEmail = `first-${generateId()}@example.invalid`;

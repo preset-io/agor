@@ -179,6 +179,37 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     expect(replays.map((r) => r.changed).sort()).toEqual([false, true]);
   });
 
+  it('seeds a re-home destination open at the watermark, once, and never repairs a recorded runtime', async () => {
+    const seeded = `restriction-${generateId()}`;
+    const seed = command({ action: 'seed_active', revision: 4, operationId: 'reactivate-four' });
+    const written = await applyTenantRestrictionIntent(db, seeded, seed);
+    expect(written).toMatchObject({ changed: true, record: { phase: 'active', revision: 4 } });
+    await expect(assertTenantUnrestricted(db, seeded)).resolves.toBeUndefined();
+    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    // An at-least-once transport replay is a conflict, not a silent confirmation:
+    // the seed's whole safety argument is that it only ever writes to an empty history.
+    await expect(applyTenantRestrictionIntent(db, seeded, seed)).rejects.toThrow(
+      'revision_conflict'
+    );
+    // A runtime that already recorded anything is never seeded open.
+    const recorded = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, recorded, command());
+    await expect(applyTenantRestrictionIntent(db, recorded, seed)).rejects.toThrow(
+      'revision_conflict'
+    );
+    await expect(assertTenantUnrestricted(db, recorded)).rejects.toBeInstanceOf(
+      TenantRestrictedError
+    );
+    // Concurrent seeds on one empty history: exactly one row, exactly one winner.
+    const raced = `restriction-${generateId()}`;
+    const results = await Promise.allSettled([
+      applyTenantRestrictionIntent(db, raced, seed),
+      applyTenantRestrictionIntent(db, raced, seed),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(await readTenantRestrictionIntents(db, raced)).toMatchObject([{ phase: 'active' }]);
+  });
+
   it('never lets release races reopen a newer restriction', async () => {
     const tenant = `restriction-${generateId()}`;
     await applyTenantRestrictionIntent(db, tenant, command());

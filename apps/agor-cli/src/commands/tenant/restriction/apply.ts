@@ -24,11 +24,14 @@ import {
 export default class TenantRestrictionApply extends Command {
   static override summary = 'Apply one tenant restriction command';
   static override description =
-    'Record a controller-owned restriction command (restrict | prepare_release | activate) for one tenant. ' +
+    'Record a controller-owned restriction command (restrict | prepare_release | activate | seed_active) for one tenant. ' +
     'Runs non-interactively against the runtime database (PostgreSQL-only) without the daemon, and prints ' +
     '{"record":…,"changed":…} as a single JSON line on stdout. ' +
     'This records intent only: it does not authenticate the controller, close existing connections, stop ' +
     'running work, or prove containment. ' +
+    'seed_active restates an already-open watermark on a runtime that holds NO record for the controller ' +
+    '(a tenant moved to a fresh runtime, whose restriction state is never portable); any existing record ' +
+    'rejects it as a revision_conflict. ' +
     'Exit codes: 0 applied or already in that state (see "changed"); ' +
     '2 conflict — stderr carries {"error":"identity_mismatch|stale_revision|revision_conflict|release_not_prepared"}; ' +
     '3 the runtime is not PostgreSQL and holds no restriction state; 1 any other failure.';
@@ -37,6 +40,7 @@ export default class TenantRestrictionApply extends Command {
     '<%= config.bin %> <%= command.id %> --tenant-id acme-corp --controller-id agor-cloud-team-suspension-v1 --placement-id cell-7 --operation-id susp-42 --revision 3 --action restrict',
     '<%= config.bin %> <%= command.id %> --tenant-id acme-corp --controller-id agor-cloud-team-suspension-v1 --placement-id cell-7 --operation-id rel-43 --revision 4 --action prepare_release',
     '<%= config.bin %> <%= command.id %> --tenant-id acme-corp --controller-id agor-cloud-team-suspension-v1 --placement-id cell-7 --operation-id rel-43 --revision 4 --action activate',
+    '<%= config.bin %> <%= command.id %> --tenant-id acme-corp --controller-id agor-cloud-team-suspension-v1 --placement-id cell-9 --operation-id rel-43 --revision 4 --action seed_active',
   ];
 
   static override flags = {
@@ -58,8 +62,9 @@ export default class TenantRestrictionApply extends Command {
       required: true,
     }),
     action: Flags.string({
-      description: 'Transition to record',
-      options: ['restrict', 'prepare_release', 'activate'],
+      description:
+        'Transition to record; seed_active is accepted only when this runtime holds no record for the controller',
+      options: ['restrict', 'prepare_release', 'activate', 'seed_active'],
       required: true,
     }),
   };
