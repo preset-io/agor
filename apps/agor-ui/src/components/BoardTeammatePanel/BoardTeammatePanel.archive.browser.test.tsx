@@ -65,10 +65,20 @@ describe('teammate drawer archive reconciliation', () => {
   it.each([
     { target: parent, affected: [parent, child, grandchild, fork], remaining: [unrelated, orphan] },
     { target: child, affected: [child, grandchild], remaining: [parent, fork, unrelated, orphan] },
+    { target: parent, affected: [child, grandchild, fork], remaining: [unrelated, orphan] },
   ])(
     'archives $target.title without a refresh or descendant events',
     async ({ target, affected, remaining }) => {
-      const affectedSessions = affected.map((s) => ({ ...s, archived: true }));
+      const affectedSessions = affected.map((s) => ({
+        ...s,
+        archived: true,
+        last_updated: '2026-09-01T00:00:02.000Z',
+      }));
+      const archivedRoot = affectedSessions.find((s) => s.session_id === target.session_id) ?? {
+        ...target,
+        archived: true,
+        last_updated: '2026-09-01T00:00:01.000Z',
+      };
       let resolve!: (value: { session: Session; affectedSessions: Session[] }) => void;
       const response = new Promise<{ session: Session; affectedSessions: Session[] }>((done) => {
         resolve = done;
@@ -129,13 +139,13 @@ describe('teammate drawer archive reconciliation', () => {
       // Pending requests leave the tree intact.
       expect(screen.getByRole('button', { name: `Open session ${target.title}` })).toBeVisible();
       await act(async () => {
-        // Reproduce the reported partial event delivery: only the root arrived.
-        sessionPatched(affectedSessions[0]);
-        resolve({ session: affectedSessions[0], affectedSessions });
+        // Only a changed root emits a patch; an already-archived root emits nothing.
+        if (affected.includes(target)) sessionPatched(archivedRoot);
+        resolve({ session: archivedRoot, affectedSessions });
         await response;
       });
       await waitFor(() => {
-        for (const s of affected) {
+        for (const s of [target, ...affected]) {
           expect(
             screen.queryByRole('button', { name: `Open session ${s.title}` })
           ).not.toBeInTheDocument();

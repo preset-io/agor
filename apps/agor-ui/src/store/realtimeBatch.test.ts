@@ -6,6 +6,7 @@ import {
   recordHydrationApply,
   resetHydrationRevisions,
 } from './agorHydration';
+import { sessionRemoved } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 import {
   captureSessionPatchCommit,
@@ -29,6 +30,7 @@ const makeSession = (overrides: Partial<Session> = {}): Session =>
     status: 'idle',
     archived: false,
     created_at: '2026-06-24T00:00:00.000Z',
+    last_updated: '2026-06-24T00:00:00.000Z',
     ...overrides,
   }) as unknown as Session;
 
@@ -237,7 +239,13 @@ describe('confirmed mutation patches', () => {
     const notified = vi.fn();
     const unsubscribe = agorStore.subscribe(notified);
 
-    commit([root, child].map((session) => ({ ...session, archived: true })));
+    commit(
+      [root, child].map((session) => ({
+        ...session,
+        archived: true,
+        last_updated: '2026-06-24T00:00:01.000Z',
+      }))
+    );
 
     expect(getRevision('sessions')).toBeGreaterThan(revisionBefore);
     expect(notified).toHaveBeenCalledTimes(1);
@@ -255,8 +263,101 @@ describe('confirmed mutation patches', () => {
     setRealtimeAuthorityScope(AUTHORITY);
     seedSession(makeSession());
     const revisionBefore = getRevision('sessions');
-    commit([makeSession({ archived: true })]);
+    commit([makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' })]);
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     expect(getRevision('sessions')).toBe(revisionBefore);
+  });
+
+  it.each(['queued', 'applied', 'hydrated'] as const)(
+    'preserves a newer %s unarchive against a delayed archive response',
+    (delivery) => {
+      seedSession(makeSession());
+      const commit = captureSessionPatchCommit();
+      const archived = makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' });
+      const restored = makeSession({
+        title: 'Prompted again',
+        status: 'running',
+        last_updated: '2026-06-24T00:00:02.000Z',
+      });
+      bumpRevision('sessions');
+      enqueueSessionPatch(AUTHORITY, restored);
+      if (delivery === 'applied') flushRealtimeNow(AUTHORITY);
+      if (delivery === 'hydrated') {
+        seedSession(restored);
+        recordHydrationApply(['sessions'], [getRevision('sessions')]);
+      }
+      const revisionBefore = getRevision('sessions');
+
+      commit([archived]);
+      flushRealtimeNow(AUTHORITY);
+
+      expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
+      expect(agorStore.getState().sessionsByBranch.get('b-1')).toEqual([restored]);
+      expect(getRevision('sessions')).toBe(revisionBefore);
+    }
+  );
+
+  it.each([false, true])('preserves a newer branch/title patch (flushed=%s)', (flushed) => {
+    seedSession(makeSession());
+    const commit = captureSessionPatchCommit();
+    const newer = makeSession({
+      branch_id: 'b-2' as Session['branch_id'],
+      title: 'Moved',
+      last_updated: '2026-06-24T00:00:02.000Z',
+    });
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, newer);
+    if (flushed) flushRealtimeNow(AUTHORITY);
+
+    commit([makeSession({ archived: true, last_updated: '2026-06-24T00:00:01.000Z' })]);
+
+    expect(agorStore.getState().sessionById.get('s-1')).toEqual(newer);
+    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+    expect(agorStore.getState().sessionsByBranch.get('b-2')).toEqual([newer]);
+  });
+
+  it.each([false, true])('does not resurrect a removed row after tombstone flush=%s', (flushed) => {
+    const session = makeSession();
+    seedSession(session);
+    const commit = captureSessionPatchCommit();
+    tombstoneSession(AUTHORITY, session.session_id);
+    sessionRemoved(session);
+    if (flushed) flushRealtimeNow(AUTHORITY);
+
+    // Use an active response to expose resurrection, not an idempotent archive.
+    commit([makeSession({ last_updated: '2026-06-24T00:00:01.000Z' })]);
+    flushRealtimeNow(AUTHORITY);
+
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
+  });
+
+  it('does not freshen a queued row subsumed by hydration that removed it', () => {
+    const session = makeSession();
+    seedSession(session);
+    const commit = captureSessionPatchCommit();
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, session);
+    agorStore.getState().resetMaps();
+    recordHydrationApply(['sessions'], [getRevision('sessions')]);
+
+    commit([makeSession({ last_updated: '2026-06-24T00:00:01.000Z' })]);
+
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionsByBranch.size).toBe(0);
+  });
+
+  it.each([false, true])('keeps observed state on timestamp ties (flushed=%s)', (flushed) => {
+    seedSession(makeSession());
+    const commit = captureSessionPatchCommit();
+    const restored = makeSession({ last_updated: '2026-06-24T00:00:01.000Z' });
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, restored);
+    if (flushed) flushRealtimeNow(AUTHORITY);
+
+    commit([{ ...restored, archived: true }]);
+
+    expect(agorStore.getState().sessionById.get('s-1')).toEqual(restored);
+    expect(agorStore.getState().sessionsByBranch.get('b-1')).toEqual([restored]);
   });
 });

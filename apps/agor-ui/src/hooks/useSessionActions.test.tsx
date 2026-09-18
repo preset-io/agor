@@ -1,10 +1,15 @@
 import type { AgorClient, Session } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { bumpRevision } from '../store/agorHydration';
 import { buildSessionMaps } from '../store/agorMaps';
 import { sessionPatched } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
-import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
+import {
+  enqueueSessionPatch,
+  flushRealtimeNow,
+  setRealtimeAuthorityScope,
+} from '../store/realtimeBatch';
 import { useSessionActions } from './useSessionActions';
 
 describe('useSessionActions MCP selection', () => {
@@ -150,6 +155,7 @@ describe('archive response reconciliation', () => {
     const affectedSessions = [parent, child, grandchild, sibling].map((s) => ({
       ...s,
       archived: true,
+      last_updated: '2026-09-01T00:00:01.000Z',
     }));
     const archiveCreate = vi.fn(async () => ({ session: affectedSessions[0], affectedSessions }));
     const { result } = renderHook(() =>
@@ -170,7 +176,11 @@ describe('archive response reconciliation', () => {
   });
 
   it('archiving a child removes only that subtree, not its parent or sibling', async () => {
-    const affectedSessions = [child, grandchild].map((s) => ({ ...s, archived: true }));
+    const affectedSessions = [child, grandchild].map((s) => ({
+      ...s,
+      archived: true,
+      last_updated: '2026-09-01T00:00:01.000Z',
+    }));
     const { result } = renderHook(() =>
       useSessionActions(
         makeClient({
@@ -187,7 +197,7 @@ describe('archive response reconciliation', () => {
   });
 
   it('uses only the returned root when no affected list is supplied, without guessing descendants', async () => {
-    const archived = { ...parent, archived: true };
+    const archived = { ...parent, archived: true, last_updated: '2026-09-01T00:00:01.000Z' };
     const { result } = renderHook(() =>
       useSessionActions(
         makeClient({
@@ -200,6 +210,48 @@ describe('archive response reconciliation', () => {
     });
     expectActive(sessions.filter((s) => s !== parent));
   });
+
+  it.each(['none', 'queued', 'applied'] as const)(
+    'reconciles an unchanged archived root plus changed children, preserving a newer %s root',
+    async (newerRoot) => {
+      const archivedRoot = { ...parent, archived: true, last_updated: '2026-09-01T00:00:01.000Z' };
+      const affectedSessions = [child, grandchild, sibling].map((s) => ({
+        ...s,
+        archived: true,
+        last_updated: '2026-09-01T00:00:02.000Z',
+      }));
+      let resolve!: (value: { session: Session; affectedSessions: Session[] }) => void;
+      const response = new Promise<{ session: Session; affectedSessions: Session[] }>((done) => {
+        resolve = done;
+      });
+      const { result } = renderHook(() =>
+        useSessionActions(makeClient({ 'sessions/parent/archive': { create: () => response } }))
+      );
+      let request!: Promise<Session | null>;
+      act(() => {
+        request = result.current.archiveSession(parent.session_id);
+      });
+      const restored = { ...parent, title: 'Restored', last_updated: '2026-09-01T00:00:03.000Z' };
+      if (newerRoot !== 'none') {
+        act(() => {
+          bumpRevision('sessions');
+          enqueueSessionPatch('tenant-a:user-a:1', restored);
+          if (newerRoot === 'applied') flushRealtimeNow('tenant-a:user-a:1');
+        });
+      }
+      await act(async () => {
+        // The server emits only changed children, never the already-archived root.
+        resolve({ session: archivedRoot, affectedSessions });
+        expect(await request).toBe(archivedRoot);
+      });
+      expectActive(
+        newerRoot === 'none' ? [unrelated, orphan, remote] : [restored, unrelated, orphan, remote]
+      );
+      if (newerRoot !== 'none') {
+        expect(agorStore.getState().sessionById.get(parent.session_id)).toEqual(restored);
+      }
+    }
+  );
 
   it('does not remove anything while pending or after an archive failure', async () => {
     let reject!: (error: Error) => void;
@@ -250,8 +302,8 @@ describe('archive response reconciliation', () => {
     // Even identical IDs may not be mutated by a response from the former authority.
     await act(async () => {
       resolve({
-        session: { ...parent, archived: true },
-        affectedSessions: [{ ...parent, archived: true }],
+        session: { ...parent, archived: true, last_updated: '2026-09-01T00:00:01.000Z' },
+        affectedSessions: [{ ...parent, archived: true, last_updated: '2026-09-01T00:00:01.000Z' }],
       });
       await request;
     });

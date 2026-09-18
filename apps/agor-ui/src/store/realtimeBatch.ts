@@ -182,15 +182,39 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
 /**
  * Capture the requesting authority before an async mutation. Reconcile its
  * confirmed rows through the same keyed queue/reducer as socket patches, in one
- * immediate store write. The response supersedes older queued rows and bumps
- * the revision so an in-flight hydration cannot resurrect them.
+ * immediate store write. Server last_updated orders response rows against both
+ * queued and applied state; local revisions only order hydration, not RPCs.
  */
 export function captureSessionPatchCommit(): (sessions: Session[]) => void {
   const authorityScope = activeAuthorityScope;
   return (sessions) => {
     if (!authorityScope || authorityScope !== activeAuthorityScope || sessions.length === 0) return;
-    bumpRevision('sessions');
-    for (const session of sessions) enqueueSessionPatch(authorityScope, session);
+    const current = agorStore.getState().sessionById;
+    const lastApplied = getLastAppliedRevision('sessions');
+    const accepted = sessions.filter((session) => {
+      const id = session.session_id;
+      if (tombstones.get(id) === authorityScope) return false;
+      const entry = pending.get(id);
+      const queued =
+        entry?.authorityScope === authorityScope && entry.revision > lastApplied
+          ? entry.session
+          : undefined;
+      const applied = current.get(id);
+      // This reconciles patches, not creates. Absence remains authoritative
+      // after remove/branch eviction, even once frame tombstones have drained.
+      if (!applied && !queued) return false;
+      const updatedAt = Date.parse(session.last_updated);
+      // Timestamps are not a total-order version: keep observed state on ties
+      // (or invalid response timestamps) rather than roll back a newer change.
+      return (
+        Number.isFinite(updatedAt) &&
+        [applied, queued].every((row) => !row || Date.parse(row.last_updated) < updatedAt)
+      );
+    });
+    if (accepted.length > 0) {
+      bumpRevision('sessions');
+      for (const session of accepted) enqueueSessionPatch(authorityScope, session);
+    }
     flushRealtimeNow(authorityScope);
   };
 }
