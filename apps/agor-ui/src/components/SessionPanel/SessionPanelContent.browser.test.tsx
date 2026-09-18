@@ -1,9 +1,10 @@
 import type { AgorClient, Session, Task } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import type {} from '@vitest/browser-playwright';
 import { App } from 'antd';
 import { useEffect, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { cdp, page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import SessionPanel from './SessionPanel';
 import { SessionPanelContent } from './SessionPanelContent';
@@ -363,20 +364,39 @@ it.each([390, 220])(
       expect(queueList().clientHeight).toBeGreaterThan(25);
     });
     const composer = screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji');
-    // Chromium can keep successive wheel events latched to the queue even at
-    // its end. Exercise continued real wheel input until the outer body scrolls,
-    // rather than assuming exactly two events cross that native gesture boundary.
-    // Never focus/scrollIntoView the composer to make wheel reachability pass.
-    const wheelToComposer = () =>
-      waitFor(
+    // Position the pointer once. userEvent.wheel() re-hovers before every input,
+    // scrolling the queue back into view and potentially undoing outer scrolling.
+    // Keep native wheel input at that point while observing asynchronous scrolling;
+    // never focus or scrollIntoView the composer to satisfy reachability.
+    const wheelToComposer = async () => {
+      await userEvent.hover(queueList());
+      const rect = queueList().getBoundingClientRect();
+      const frame = window.frameElement?.getBoundingClientRect();
+      const x = (frame?.left ?? 0) + rect.left + rect.width / 2;
+      const y = (frame?.top ?? 0) + rect.top + rect.height / 2;
+      await waitFor(
         async () => {
-          await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
-          const rect = composer.getBoundingClientRect();
-          expect(rect.top).toBeGreaterThan(0);
-          expect(rect.bottom).toBeLessThanOrEqual(height);
+          await act(() =>
+            cdp().send('Input.dispatchMouseEvent', {
+              type: 'mouseWheel',
+              x,
+              y,
+              deltaX: 0,
+              deltaY: 5000,
+            })
+          );
+          await waitFor(
+            () => {
+              const rect = composer.getBoundingClientRect();
+              expect(rect.top).toBeGreaterThan(0);
+              expect(rect.bottom).toBeLessThanOrEqual(height);
+            },
+            { timeout: 200 }
+          );
         },
         { interval: 200, timeout: 3000 }
       );
+    };
     await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
     await waitFor(() =>
       expect(
