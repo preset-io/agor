@@ -1,9 +1,11 @@
 # Tenant restriction intent protocol
 
 **Status: partial runtime enforcement, not a complete suspension feature.**
-No public command, HTTP service, MCP tool, or daemon observer exposes the intent
-writer, and no Cloud-to-runtime transport carries Team suspension state into
-`tenant_restrictions` yet. Shared authenticated service admission, MCP requests,
+The only writer surface is the in-Cell operator command `agor tenant restriction
+apply` (see [CLI](#cli)), which holds the runtime database credential and
+authenticates nobody. No HTTP service, MCP tool, or daemon observer exposes the
+writer, and no authenticated Cloud-to-runtime transport carries Team suspension
+state into `tenant_restrictions` yet. Shared authenticated service admission, MCP requests,
 bearer upload routes, and selected task automation boundaries consume
 restriction state. Ordinary access is denied while exact termination reads and
 scoped lifecycle acknowledgements remain possible. Prompt holds and event
@@ -65,10 +67,11 @@ rollback to an ignoring binary cannot be treated as safe.
 
 The persistence writer records intent; it does not accept/validate containment
 proof or authenticate its caller. No authenticated application seam invokes it
-yet: the Cloud-to-runtime transport that carries Team suspension state and
-revision into this table is the open integration. `activate` is a low-level
-state transition for that trusted transport, not an operator endpoint; the
-transport must establish the release barrier before invoking it.
+yet: the CLI below is a trusted in-Cell process holding the database credential,
+not an authenticated Cloud-to-runtime transport, which remains the open
+integration. `activate` is a low-level state transition for that trusted caller,
+not a customer-reachable endpoint; whoever runs it must establish the release
+barrier first.
 `assertTenantUnrestricted` is an uncached database admission primitive, not a
 complete guard for already-admitted work, stale auth tokens, sockets, or agents.
 
@@ -88,6 +91,59 @@ the partial enforcement already installed is described in the later sections:
 
 A database row or an intent write response proves none of those behaviors.
 
+## CLI
+
+`agor tenant restriction apply|inspect`
+(`apps/agor-cli/src/commands/tenant/restriction/`) is the runtime side of the
+protocol. The Data Plane Agent invokes it as a non-interactive in-Cell Job; it
+needs only the runtime database configuration (`DATABASE_URL`), never contacts
+the daemon, and follows the `agor tenant gate acquire|inspect|release`
+conventions: one stable JSON line on stdout, human audit text on stderr.
+
+```bash
+agor tenant restriction apply \
+  --tenant-id <workspaceId> --controller-id <controller> \
+  --placement-id <cellId> --operation-id <operation> \
+  --revision <n> --action restrict|prepare_release|activate
+
+agor tenant restriction inspect --tenant-id <workspaceId>
+```
+
+`apply` prints `{"record":…,"changed":…}`; `inspect` prints the records array
+ordered by controller id. Flags are validated with
+`TenantRestrictionCommandSchema` before a connection is opened, so the CLI
+cannot accept an identity or revision the writer would reject. `seed_active` is
+not an action.
+
+| Exit | Meaning                                                                             |
+| ---- | ----------------------------------------------------------------------------------- |
+| `0`  | Applied, or already in that state — `changed` says which. `inspect` read (any size) |
+| `1`  | Invalid flags/tenant id, corrupt stored state, or any other failure                 |
+| `2`  | Conflict with the recorded state                                                    |
+| `3`  | `TenantRestrictionUnsupportedError` — the runtime is SQLite and holds no state      |
+
+Failures print exactly one bounded `{"error":<code>}` line on stderr and nothing
+on stdout — except on a SQLite runtime, where the shared client prints its
+pragma banner to stdout before the exit-`3` refusal (as it does for every
+`agor tenant …` command; set `AGOR_SILENT_PRAGMA_LOGS=true` to suppress it).
+For exit `2` the code is the protocol
+`TenantRestrictionConflictCode` (`identity_mismatch`, `stale_revision`,
+`revision_conflict`, `release_not_prepared`) so an orchestrator can branch on
+it; other failures collapse to `invalid_command`, `unsupported_runtime`,
+`invalid_restriction_state` or `failed`. Error text never crosses the boundary.
+Note that exit `2` means _conflict_ here, while the sibling `tenant delete` /
+`tenant gate` commands use `2` for invalid input and `3` for their own
+refusals.
+
+The writer emits one bounded `[tenant.restriction]` line per accepted command,
+after commit, carrying tenant, controller, operation, revision, action, phase
+and `changed`. The CLI routes that line to stderr so stdout stays parseable.
+
+A zero exit means a row was recorded. It is not evidence that the controller
+was authenticated, that connections drained, that processes exited, or that the
+tenant is suspended. An empty `inspect` result only means this database holds no
+recorded intent — never that a new or restored runtime may serve the tenant.
+
 ## Tests
 
 - `src/types/tenant-restriction.test.ts`: transition, binding, validation, and
@@ -97,6 +153,14 @@ A database row or an intent write response proves none of those behaviors.
   concurrent first-writer and release races, rollback, tenant-negative RLS,
   corrupt-state rejection and independent restriction composition.
 - Existing schema/deletion/portability tests cover migration classification.
+- `apps/agor-cli/src/commands/tenant/restriction/apply.test.ts`: flag/schema
+  validation and exit-code mapping, plus daemon-free argument refusals through
+  the real command.
+- `apps/agor-cli/src/commands/tenant/restriction/cli.postgres.test.ts`: the
+  three-step happy path, retry no-ops, stale-revision and identity conflicts,
+  and empty reads, spawned as a child process with only `DATABASE_URL` set. The
+  PostgreSQL runner discovers `apps/agor-cli` alongside `packages/core` and
+  `apps/agor-daemon`.
 
 ## Runtime admission and safety traffic
 

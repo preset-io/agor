@@ -1,9 +1,10 @@
 /**
  * PostgreSQL persistence for tenant restriction INTENT, not enforcement proof.
- * There is intentionally no CLI/HTTP/MCP mutation until an authenticated control
- * adapter and runtime enforcement/containment observer are implemented together.
- * The application database role is a trusted process boundary, not an operator
- * credential; do not call the writer from tenant-controlled request parameters.
+ * The only mutation surface is `agor tenant restriction apply`, an in-Cell
+ * operator/Job command that already holds the runtime database credential.
+ * There is still no HTTP/MCP/daemon mutation route, and the writer authenticates
+ * nobody: the application database role is a trusted process boundary, not an
+ * operator credential. Do not call it from tenant-controlled request parameters.
  */
 import { sql } from 'drizzle-orm';
 import {
@@ -112,6 +113,20 @@ function parseRow(row: Record<string, unknown>): TenantRestrictionRecord {
   return parsed.data;
 }
 
+export interface TenantRestrictionIntentOptions {
+  /**
+   * Destination for the single bounded transition line. Defaults to
+   * `console.info`; a CLI caller whose stdout is a machine-readable contract
+   * passes a stderr writer so the operational line never lands in its payload.
+   */
+  log?: (line: string) => void;
+}
+
+/** Keep an identifier bounded in the operational line; it is correlation only. */
+function loggable(value: string): string {
+  return value.length > 100 ? `${value.slice(0, 100)}…` : value;
+}
+
 /**
  * Serialize even first insertion (FOR UPDATE cannot lock an absent row).
  * Short transaction only; never waits for sockets/processes/network under lock.
@@ -119,11 +134,12 @@ function parseRow(row: Record<string, unknown>): TenantRestrictionRecord {
 export async function applyTenantRestrictionIntent(
   db: Database,
   tenantId: string,
-  input: TenantRestrictionCommand
+  input: TenantRestrictionCommand,
+  options: TenantRestrictionIntentOptions = {}
 ): Promise<{ record: TenantRestrictionRecord; changed: boolean }> {
   requirePostgres(db, tenantId);
   const command = TenantRestrictionCommandSchema.parse(input);
-  return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+  const outcome = await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     await lockTenantExecutionFence(scoped, tenantId);
     const lockKey = JSON.stringify(['tenant-restriction-v1', tenantId, command.controllerId]);
     await executeRaw(
@@ -171,6 +187,15 @@ export async function applyTenantRestrictionIntent(
     }
     return result;
   });
+  // After commit only: an aborted transaction must never leave a line claiming
+  // a transition. The line reports recorded intent, not enforcement or
+  // containment, and stays one bounded line per accepted command.
+  (options.log ?? console.info)(
+    `[tenant.restriction] tenant_id=${loggable(tenantId)} controller_id=${command.controllerId} ` +
+      `operation_id=${command.operationId} revision=${command.revision} ` +
+      `action=${command.action} phase=${outcome.record.phase} changed=${outcome.changed}`
+  );
+  return outcome;
 }
 
 /** Read all owners: clearing one owner's claim must not lift another's. */
