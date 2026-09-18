@@ -30,6 +30,18 @@
  * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.6.
  */
 
+import { getCurrentTenantId } from '@agor/core/db';
+import {
+  type GatewayConnector,
+  type GatewaySendReceipt,
+  getConnector,
+  isSlackWriteTargetAllowed,
+  normalizeSendReceipt,
+  type SlackAgorMessageMetadataEventType,
+} from '@agor/core/gateway';
+import type { GatewayChannel } from '@agor/core/types';
+import { mcpSlackConnectBlocks } from './mcp-slack-connect-card.js';
+
 /** Lease one daemon holds while posting or editing one card, in either lane. */
 export const MCP_SLACK_DELIVERY_CLAIM_MS = 30_000;
 /** How long a card in an active state may go unvisited before a repair tick. */
@@ -212,5 +224,225 @@ export class SlackDeliveryTimers {
   clear(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
+  }
+}
+
+/**
+ * Why one Slack delivery attempt failed, in Agor's own words.
+ *
+ * Chosen at the call site, never derived from the thrown value: an exception
+ * from `@slack/web-api` carries a provider error code and often a message, and
+ * `context/guidelines/logging.md` prohibits logging either. The call site
+ * distinguishes the three cases an operator would act on differently anyway.
+ */
+export type MCPSlackDeliveryFailureReason =
+  /** No connector could be constructed for the channel's stored credentials. */
+  | 'connector_unavailable'
+  /** The connector was built but could not identify its own Slack app. */
+  | 'app_identity_unavailable'
+  /** The post or edit itself was refused. */
+  | 'slack_write_failed';
+
+/** Which MCP Slack lane a delivery, failure or repair belongs to. */
+export type MCPSlackLane = 'recovery' | 'connect';
+
+/**
+ * Report one failed Slack delivery attempt, and say when a card is stranded.
+ *
+ * Both lanes exhaust after `MCP_SLACK_DELIVERY_MAX_ATTEMPTS` inside a
+ * 15-minute window, after which the card is permanently stranded and no sweep
+ * revisits it. That is the one outcome an operator has to be able to see, so
+ * it is an `error` with a `stranded=true` field rather than another
+ * indistinguishable `warn`.
+ *
+ * Everything logged is Agor-owned: the operation, the entity ids needed to
+ * correlate, the attempt count, and a `reason` the daemon chose at the call
+ * site. No exception, message, provider error code, thread id, channel id,
+ * server name, or URL — `context/guidelines/logging.md` prohibits all of them,
+ * and the call site already knows the more useful thing anyway.
+ */
+export function logSlackDeliveryFailure(
+  lane: MCPSlackLane,
+  reason: MCPSlackDeliveryFailureReason,
+  ids: Record<string, string | undefined>,
+  attempt: number | undefined,
+  retrying: boolean
+): void {
+  const stranded = !retrying && (attempt ?? 0) >= MCP_SLACK_DELIVERY_MAX_ATTEMPTS;
+  const fields = [
+    `event=mcp_slack_${lane}_delivery_failed`,
+    `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
+    ...Object.entries(ids).map(([key, value]) => `${key}=${value ?? '<unknown>'}`),
+    `reason=${reason}`,
+    `attempt=${attempt ?? '<unknown>'}/${MCP_SLACK_DELIVERY_MAX_ATTEMPTS}`,
+    `retrying=${retrying}`,
+    `stranded=${stranded}`,
+  ].join(' ');
+  if (stranded) console.error(`[gateway] ${fields}`);
+  else console.warn(`[gateway] ${fields}`);
+}
+
+/** What acquiring a connector for one delivery produced. */
+export type SlackDeliveryConnector =
+  /**
+   * Usable. `revalidated` is true when the channel's configuration generation
+   * had moved since the record was written, and the app identity and write
+   * target were therefore re-verified against freshly loaded credentials —
+   * which is the point at which each lane has its own thing to say about a
+   * link that was sealed against the old generation.
+   */
+  | { outcome: 'ready'; connector: GatewayConnector; revalidated: boolean }
+  /** Accountable as a delivery attempt: retry with backoff, then strand. */
+  | { outcome: 'failed'; reason: MCPSlackDeliveryFailureReason }
+  /** The channel now belongs to a different Slack app, or may not write here. */
+  | { outcome: 'app_moved' };
+
+/**
+ * Get the connector this delivery should go out through.
+ *
+ * A generation mismatch must never reuse the process-local listener: its
+ * connector can still carry the pre-mutation token while a listener restart is
+ * draining, so verification and delivery both happen on freshly loaded
+ * credentials, and the freshly built connector is asked who it actually is
+ * before anything is written.
+ *
+ * `generationCurrent` is the caller's, not this function's: the two lanes read
+ * the sealed generation off different records and disagree about what an
+ * absent one means, and that is a property of their records rather than of the
+ * connector.
+ */
+export async function acquireSlackDeliveryConnector(
+  channel: GatewayChannel,
+  params: {
+    generationCurrent: boolean;
+    expectedTeamId: string;
+    writeTargetChannel: string;
+    activeListener: () => GatewayConnector | undefined;
+  }
+): Promise<SlackDeliveryConnector> {
+  let connector: GatewayConnector;
+  try {
+    connector = params.generationCurrent
+      ? (params.activeListener() ?? getConnector('slack', channel.config))
+      : getConnector('slack', channel.config);
+  } catch {
+    return { outcome: 'failed', reason: 'connector_unavailable' };
+  }
+  if (params.generationCurrent) return { outcome: 'ready', connector, revalidated: false };
+
+  let currentApp: Awaited<ReturnType<NonNullable<GatewayConnector['getAppInfo']>>> | undefined;
+  try {
+    currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
+  } catch {
+    return { outcome: 'failed', reason: 'app_identity_unavailable' };
+  }
+  if (
+    currentApp?.teamId !== params.expectedTeamId ||
+    !isSlackWriteTargetAllowed(channel.config, params.writeTargetChannel)
+  ) {
+    return { outcome: 'app_moved' };
+  }
+  return { outcome: 'ready', connector, revalidated: true };
+}
+
+/**
+ * Post or edit the one Slack row this delivery owns, reconciling first.
+ *
+ * `findMessageByMetadata` is what stops a daemon that crashed between the post
+ * and the `slack_message_ts` write from posting a second card with a second
+ * live button: Slack's own message metadata carries the `delivery_id`, so the
+ * row can be found again from the record alone. Only asked when the record has
+ * no `ts` — once it does, that is the row, and this is an edit.
+ *
+ * Returns the reconciled `ts` alongside the receipt because the settlement CAS
+ * needs to know which of the two this was: a fresh POST that loses its claim
+ * orphaned a row nothing durable names, and an EDIT that loses its claim
+ * repainted the row the record already names. Those are different repairs.
+ */
+export async function sendSlackCard(
+  connector: GatewayConnector,
+  params: {
+    threadId: string;
+    text: string;
+    blocks: unknown[];
+    eventType: SlackAgorMessageMetadataEventType;
+    deliveryId: string;
+    recordedTs?: string;
+  }
+): Promise<{ receipt: GatewaySendReceipt; reconciledMessageTs?: string }> {
+  let reconciledMessageTs = params.recordedTs;
+  if (!reconciledMessageTs && connector.findMessageByMetadata) {
+    reconciledMessageTs = await connector
+      .findMessageByMetadata({
+        threadId: params.threadId,
+        eventType: params.eventType,
+        payloadKey: 'delivery_id',
+        payloadValue: params.deliveryId,
+        limit: 100,
+      })
+      .catch(() => undefined);
+  }
+  const sent = await connector.sendMessage({
+    threadId: params.threadId,
+    text: params.text,
+    blocks: params.blocks,
+    metadata: {
+      ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
+      ...(!reconciledMessageTs
+        ? {
+            slack_message_metadata: {
+              event_type: params.eventType,
+              event_payload: { delivery_id: params.deliveryId },
+            },
+          }
+        : {}),
+    },
+  });
+  return {
+    receipt: normalizeSendReceipt(sent),
+    ...(reconciledMessageTs ? { reconciledMessageTs } : {}),
+  };
+}
+
+/**
+ * Retire a Slack row this daemon posted but turned out not to own.
+ *
+ * Shared by both MCP Slack lanes, because the lease is the same lease and
+ * the mistake is the same mistake. A post that outlives its claim can land
+ * after another claimant has already posted the row the record points at,
+ * and this one's receipt then belongs to a second Slack message nothing
+ * durable names. Repair only ever edits the recorded `ts`, so an orphan left
+ * alone keeps whatever it was last rendered with — including a live button —
+ * permanently. D7 accepted a stale card on the grounds that supersede
+ * handles it; this is the case supersede cannot see, because the row is not
+ * in the record.
+ *
+ * Deleting is the honest outcome: there is one card per widget (or per
+ * notice) and this is not it. A connector that cannot delete gets an edit
+ * instead, which at least takes the button away and points at the row that
+ * is authoritative. Best effort throughout — the owned card is already
+ * correct, and failing the delivery over a duplicate would only schedule
+ * another one.
+ */
+export async function retireOrphanedSlackCard(
+  connector: GatewayConnector,
+  threadId: string,
+  orphan: { orphanTs?: string; ownedTs?: string; text: string; lane: MCPSlackLane }
+): Promise<void> {
+  const { orphanTs, ownedTs, text } = orphan;
+  if (!orphanTs || orphanTs === ownedTs) return;
+  try {
+    if (connector.deleteMessage) {
+      await connector.deleteMessage({ threadId, messageId: orphanTs });
+      return;
+    }
+    await connector.sendMessage({
+      threadId,
+      text,
+      blocks: mcpSlackConnectBlocks({ text }),
+      metadata: { slack_update_ts: orphanTs },
+    });
+  } catch {
+    console.warn(`[gateway] MCP ${orphan.lane} duplicate Slack card could not be retired`);
   }
 }
