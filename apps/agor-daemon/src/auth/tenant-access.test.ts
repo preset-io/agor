@@ -4,6 +4,7 @@ import {
   assertRuntimeTenantAccess,
   gatewayOccurrenceTime,
   isCurrentTenantEventAdmitted,
+  isTenantRestrictedRejection,
 } from './tenant-access.js';
 
 const { assertAccess, postgres, readBoundary } = vi.hoisted(() => ({
@@ -38,13 +39,29 @@ describe('tenant access error boundary', () => {
       });
     }
   );
-  it('maps installed restriction to a neutral denial', async () => {
+  it('maps installed restriction to a neutral denial with a stable client code', async () => {
     postgres.mockReturnValueOnce(true);
     assertAccess.mockRejectedValueOnce(new TenantRestrictedError());
-    await expect(assertRuntimeTenantAccess({} as never, 'tenant-a')).rejects.toMatchObject({
+    const denial = await assertRuntimeTenantAccess({} as never, 'tenant-a').catch((error) => error);
+    expect(denial).toMatchObject({
       code: 403,
       message: 'Tenant access is restricted',
+      data: { code: 'tenant_restricted' },
     });
+    // The code is the entire disclosure: no controller, placement, revision or
+    // phase may ride along to the browser.
+    expect(Object.keys(denial.data)).toEqual(['code']);
+    expect(isTenantRestrictedRejection(denial)).toBe(true);
+  });
+
+  it('does not report an unverifiable read as a restriction', async () => {
+    postgres.mockReturnValueOnce(true);
+    assertAccess.mockRejectedValueOnce(new Error('connection reset'));
+    const failure = await assertRuntimeTenantAccess({} as never, 'tenant-a').catch(
+      (error) => error
+    );
+    expect(failure).toMatchObject({ code: 503 });
+    expect(isTenantRestrictedRejection(failure)).toBe(false);
   });
 });
 

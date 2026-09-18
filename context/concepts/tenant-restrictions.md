@@ -175,6 +175,20 @@ and refuses restricted identity/default-board writes. The credential-generation
 checks below also reject stale grants; end-to-end controller/placement integration
 and certification remain unfinished. SQLite retains standalone behavior.
 
+The 403 carries `data.code` = `TENANT_RESTRICTED_ERROR_CODE` (`tenant_restricted`,
+`types/tenant-restriction.ts`), and the Socket.IO handshake rejects a restricted
+tenant with the same code in its middleware-error `data` instead of the generic
+401 credential rejection. That code is the entire client-facing disclosure: no
+controller, placement, operation, revision or phase. The 503 and the deliberately
+ambiguous per-packet `Forbidden` keep no code, because an unverifiable read is not
+a statement that the tenant is closed. Socket.IO has no server-settable disconnect
+reason, so a socket retired by the restriction monitor carries the code on its
+next handshake. agor-ui matches the code (never message text): `useAgorClient`
+closes the socket, renders the full-page `WorkspaceSuspended` state, closes the
+mutation gate, and re-probes with one handshake at 30s/1m/2m/4m/5m-cap until an
+accepted handshake clears it. The browser state is a presentation of the last
+answer the daemon gave, not evidence of containment.
+
 `auth/termination-read-authority.ts` issues single-call, server-owned read grants
 bound to tenant/path/method/resource for coordinator reads. The minimal executor
 `tasks.getTerminationState` projection exposes only task status and the fields

@@ -1,9 +1,10 @@
-import { Forbidden, Unavailable } from '@agor/core/feathers';
-import { ENVIRONMENT_COMMAND_REPORT_SERVICE } from '@agor/core/types';
+import { Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import { ENVIRONMENT_COMMAND_REPORT_SERVICE, TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   admitTenantSocketPacket,
   rejectTenantSocketPacket,
+  restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
 } from './tenant-socket-admission.js';
 
@@ -110,4 +111,30 @@ it('rejects unacknowledged raw packets without dispatch', () => {
   const next = vi.fn();
   rejectTenantSocketPacket(['terminal:input', {}], next);
   expect(next).toHaveBeenCalledExactlyOnceWith(expect.any(Forbidden));
+});
+
+describe('restricted handshake rejection', () => {
+  it('carries the stable code without controller, placement or revision detail', () => {
+    const rejection = restrictedSocketHandshakeError(
+      new Forbidden('Tenant access is restricted', { code: TENANT_RESTRICTED_ERROR_CODE })
+    );
+    expect(rejection).toMatchObject({
+      message: 'Tenant access is restricted',
+      data: { code: TENANT_RESTRICTED_ERROR_CODE },
+    });
+    expect(Object.keys(rejection!.data)).toEqual(['code']);
+    expect(JSON.stringify(rejection!.data)).not.toMatch(/controller|placement|revision|operation/i);
+  });
+
+  it.each([
+    new NotAuthenticated('Invalid or expired authentication token'),
+    new Unavailable('Tenant access cannot be verified'),
+    new Forbidden('Tenant access cannot be verified'),
+    // Message text alone is never the signal; only the recorded code is.
+    new Forbidden('Tenant access is restricted'),
+    new Error('boom'),
+    undefined,
+  ])('never presents another handshake failure as a restriction: %s', (error) => {
+    expect(restrictedSocketHandshakeError(error)).toBeNull();
+  });
 });

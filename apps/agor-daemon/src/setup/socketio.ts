@@ -3,6 +3,7 @@ import {
   admitTenantSocketPacket,
   missingSocketTenant,
   rejectTenantSocketPacket,
+  restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
 } from '../auth/tenant-socket-admission.js';
 /**
@@ -795,6 +796,19 @@ export function createSocketIOConfig(
           message?: string;
           data?: { name?: string };
         };
+        // A restricted tenant presented a valid credential, so it is neither an
+        // authentication failure for the gauge below nor a refreshable
+        // rejection for the client. Give it its own stable code and let the
+        // client stop reconnecting instead of rotating a token that is fine.
+        const restricted = restrictedSocketHandshakeError(error);
+        if (restricted) {
+          console.warn(
+            `WebSocket handshake rejected for ${socket.id}: tenant access is restricted`
+          );
+          retireSocketConnectionAuthority(app, fs.feathers);
+          next(restricted);
+          return;
+        }
         const expected =
           err?.code === 401 ||
           err?.className === 'not-authenticated' ||

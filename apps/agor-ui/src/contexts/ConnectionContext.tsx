@@ -17,6 +17,8 @@ interface ConnectionContextValue {
   connecting: boolean;
   /** Successful socket-auth generation; changes even when the client does not. */
   authGeneration: number;
+  /** The daemon has closed this tenant to ordinary access. */
+  tenantRestricted: boolean;
   outOfSync: boolean;
   capturedSha: string | null;
   currentSha: string | null;
@@ -26,6 +28,7 @@ const DEFAULT_CONNECTION_CONTEXT: ConnectionContextValue = {
   connected: false,
   connecting: false,
   authGeneration: 0,
+  tenantRestricted: false,
   outOfSync: false,
   capturedSha: null,
   currentSha: null,
@@ -64,7 +67,7 @@ export function useOptionalConnectionState(): ConnectionContextValue | null {
  * Why a mutation is currently blocked. Extend this union as we add new
  * gates (e.g. RBAC, env-not-running, read-only viewer).
  */
-export type MutationBlockReason = 'disconnected' | 'reconnecting' | 'out-of-sync';
+export type MutationBlockReason = 'disconnected' | 'reconnecting' | 'out-of-sync' | 'suspended';
 
 export interface MutationGate {
   canMutate: boolean;
@@ -80,9 +83,18 @@ export interface MutationGate {
  * `useConnectionDisabled()`, which now delegates here.
  */
 export function useMutationGate(): MutationGate {
-  const { connected, connecting, outOfSync } =
+  const { connected, connecting, outOfSync, tenantRestricted } =
     useContext(ConnectionContext) ?? DEFAULT_CONNECTION_CONTEXT;
 
+  // Checked first: while the workspace is suspended no mutation can succeed,
+  // and offering "Reconnecting…" would promise a reconnect we are not making.
+  if (tenantRestricted) {
+    return {
+      canMutate: false,
+      reason: 'suspended',
+      message: 'This workspace is suspended.',
+    };
+  }
   if (outOfSync) {
     return {
       canMutate: false,

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isDefiniteAuthFailure, isTransientConnectionError } from './authErrors';
+import {
+  isDefiniteAuthFailure,
+  isTenantRestrictedError,
+  isTransientConnectionError,
+} from './authErrors';
 
 describe('isDefiniteAuthFailure', () => {
   it('returns true for 401 via `code`, `status`, `statusCode`', () => {
@@ -69,5 +73,52 @@ describe('isTransientConnectionError', () => {
     expect(isTransientConnectionError(new Error('something boring'))).toBe(false);
     expect(isTransientConnectionError(null)).toBe(false);
     expect(isTransientConnectionError(undefined)).toBe(false);
+  });
+});
+
+describe('isTenantRestrictedError', () => {
+  it('recognizes the daemon code on the REST rejection and the socket handshake', () => {
+    // Feathers keeps the numeric status on the error and the code in `data`.
+    expect(
+      isTenantRestrictedError(
+        Object.assign(new Error('Tenant access is restricted'), {
+          code: 403,
+          className: 'forbidden',
+          data: { code: 'tenant_restricted' },
+        })
+      )
+    ).toBe(true);
+    // Socket.IO delivers only message + data on connect_error.
+    expect(
+      isTenantRestrictedError(
+        Object.assign(new Error('Tenant access is restricted'), {
+          data: { code: 'tenant_restricted' },
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('never infers a restriction from message text or a bare status', () => {
+    expect(isTenantRestrictedError(new Error('Tenant access is restricted'))).toBe(false);
+    expect(isTenantRestrictedError({ code: 403 })).toBe(false);
+    // An unverifiable admission read is not a restriction.
+    expect(
+      isTenantRestrictedError(
+        Object.assign(new Error('Tenant access cannot be verified'), { code: 503 })
+      )
+    ).toBe(false);
+    expect(isTenantRestrictedError(null)).toBe(false);
+    expect(isTenantRestrictedError('tenant_restricted')).toBe(false);
+  });
+
+  it('is neither a credential rejection nor a retryable blip', () => {
+    const restricted = Object.assign(new Error('Tenant access is restricted'), {
+      code: 403,
+      data: { code: 'tenant_restricted' },
+    });
+    // Clearing tokens would bounce a member to login for a workspace-level
+    // decision; retrying on the transient cadence is the reconnect storm.
+    expect(isDefiniteAuthFailure(restricted)).toBe(false);
+    expect(isTransientConnectionError(restricted)).toBe(false);
   });
 });

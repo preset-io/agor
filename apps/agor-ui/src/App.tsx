@@ -50,6 +50,7 @@ import { type OnboardingCompletionResult, OnboardingWizard } from './components/
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
+import { WorkspaceSuspended } from './components/WorkspaceSuspended/WorkspaceSuspended';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -355,6 +356,7 @@ function AppContent() {
     connected,
     connecting,
     authGeneration,
+    tenantRestricted,
     error: connectionError,
     retryConnection,
   } = useAgorClient({
@@ -428,8 +430,16 @@ function AppContent() {
   // Referentially stable context value: without the memo, every App render
   // hands consumers a fresh object and defeats their own memoization.
   const connectionContextValue = useMemo(
-    () => ({ connected, connecting, authGeneration, outOfSync, capturedSha, currentSha }),
-    [connected, connecting, authGeneration, outOfSync, capturedSha, currentSha]
+    () => ({
+      connected,
+      connecting,
+      authGeneration,
+      tenantRestricted,
+      outOfSync,
+      capturedSha,
+      currentSha,
+    }),
+    [connected, connecting, authGeneration, tenantRestricted, outOfSync, capturedSha, currentSha]
   );
 
   const directSessionIdFromPath =
@@ -1142,6 +1152,14 @@ function AppContent() {
         localLoginEnabled={authConfig?.identity?.localAuth !== AgorLocalAuthMode.DISABLED}
       />
     );
+  }
+
+  // The daemon has closed this tenant. Replace the whole shell before any
+  // connection or loading state can render: the socket is deliberately closed,
+  // so "Reconnecting to daemon…" would be both wrong and never-ending, and a
+  // mounted workspace would offer prompts, terminals and uploads that all fail.
+  if (tenantRestricted) {
+    return <WorkspaceSuspended workspaceName={instanceConfig?.label} />;
   }
 
   // Show reconnecting state if we have tokens but lost connection.

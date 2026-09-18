@@ -7,7 +7,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { Forbidden, Unavailable } from '@agor/core/feathers';
-import type { HookContext } from '@agor/core/types';
+import { type HookContext, TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 import { assertTenantCredentialEpoch } from './tenant-credential-epoch.js';
 import { isTenantSafetySettlement } from './tenant-safety-settlement.js';
 import { hasTerminationReadAuthority } from './termination-read-authority.js';
@@ -57,7 +57,10 @@ export async function assertRuntimeTenantAccess(
     await assertTenantUnrestricted(db, tenantId);
   } catch (error) {
     if (error instanceof TenantRestrictedError) {
-      throw new Forbidden('Tenant access is restricted');
+      // The stable code is the whole client contract: it distinguishes a closed
+      // tenant from a rejected credential or an unverifiable read without
+      // disclosing controller, placement, revision or phase.
+      throw new Forbidden('Tenant access is restricted', { code: TENANT_RESTRICTED_ERROR_CODE });
     }
     // Database diagnostics, placement IDs and controller details are private.
     // A failed read is never interpreted as an unrestricted tenant.
@@ -84,4 +87,15 @@ export async function isCurrentTenantEventAdmitted(
 export function gatewayOccurrenceTime(timestamp: string): number {
   // Slack uses decimal Unix seconds; other connectors use ISO timestamps.
   return /^\d{10}(?:\.\d+)?$/.test(timestamp) ? Number(timestamp) * 1000 : Date.parse(timestamp);
+}
+
+/**
+ * True only for the neutral restriction denial raised above. An unverifiable
+ * read (503) and a rejected credential (401) are deliberately excluded: a
+ * client must not present either of those as a suspended workspace.
+ */
+export function isTenantRestrictedRejection(error: unknown): boolean {
+  const data = (error as { data?: unknown } | null | undefined)?.data;
+  if (!data || typeof data !== 'object') return false;
+  return (data as { code?: unknown }).code === TENANT_RESTRICTED_ERROR_CODE;
 }

@@ -118,3 +118,15 @@ export function transitionTenantRestriction(
 export function isTenantRestrictionClosed(record: TenantRestrictionRecord): boolean {
   return TenantRestrictionRecordSchema.parse(record).phase !== 'active';
 }
+
+/**
+ * Stable machine-readable code carried in the `data` of the neutral tenant
+ * admission denial, both on the REST/Feathers `Forbidden` and on the Socket.IO
+ * handshake rejection. Clients branch on this value instead of matching the
+ * user-facing message text.
+ *
+ * It says only that this tenant is currently closed to ordinary access. It
+ * carries no controller, placement, operation, revision, phase or reason, and
+ * it is not evidence of containment.
+ */
+export const TENANT_RESTRICTED_ERROR_CODE = 'tenant_restricted';

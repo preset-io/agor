@@ -3,7 +3,9 @@ import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  TENANT_RESTRICTED_ERROR_CODE,
 } from '@agor/core/types';
+import { isTenantRestrictedRejection } from './tenant-access.js';
 
 /** This only preserves transport to authenticated service safety guards, never authorizes an RPC. */
 export function isTenantSafetyPacket(packet: unknown[]): boolean {
@@ -51,6 +53,28 @@ export function rejectTenantSocketPacket(packet: unknown[], next: (error: Error)
 
 export function missingSocketTenant(): Error {
   return new Forbidden('Tenant access cannot be verified');
+}
+
+/**
+ * Public Socket.IO handshake rejection for a restricted tenant.
+ *
+ * Socket.IO preserves a middleware error's `data` on the client's
+ * `connect_error`, so the stable code travels the same way on the socket as on
+ * REST. It is returned only for the restriction denial itself — every other
+ * handshake failure keeps the generic credential rejection, because reporting a
+ * failed observation as a closed tenant would be a claim the daemon cannot make.
+ * Socket.IO has no server-settable disconnect reason, so a socket retired by the
+ * restriction monitor carries this code on its next handshake instead.
+ */
+export function restrictedSocketHandshakeError(
+  error: unknown
+): (Error & { data: { code: string } }) | null {
+  if (!isTenantRestrictedRejection(error)) return null;
+  const rejection = new Error('Tenant access is restricted') as Error & {
+    data: { code: string };
+  };
+  rejection.data = { code: TENANT_RESTRICTED_ERROR_CODE };
+  return rejection;
 }
 
 /** Bound each observation without spawning duplicate reads if a DB call stalls. */
