@@ -407,6 +407,46 @@ describe('confirmed mutation patches', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('hands slots to a small overlapping confirmation before a large one drains', async () => {
+    vi.useFakeTimers();
+    const rows = Array.from({ length: 45 }, (_, index) =>
+      makeSession({ session_id: `row-${index}` as Session['session_id'] })
+    );
+    rows.forEach(seedSession);
+    let active = 0;
+    let peak = 0;
+    const refetch = vi.fn(async (id: Session['session_id']) => {
+      peak = Math.max(peak, ++active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+      active--;
+      return { ...rows.find((row) => row.session_id === id)!, archived: true };
+    });
+    const large = captureSessionPatchCommit()(rows.slice(0, 44), refetch);
+    const small = captureSessionPatchCommit()([rows[44]], refetch);
+    // Attach rejection handling immediately, including on the broken limiter.
+    const settled = Promise.allSettled([large, small]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const mapsAtTwoSeconds = agorStore.getState().sessionById;
+    const callsAtTwoSeconds = refetch.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    const callsAtDeadline = refetch.mock.calls.length;
+    await vi.runAllTimersAsync();
+    expect(await settled).toEqual([
+      { status: 'rejected', reason: new Error('Session confirmation budget exhausted') },
+      { status: 'fulfilled', value: undefined },
+    ]);
+    expect(mapsAtTwoSeconds.has(rows[44].session_id)).toBe(false);
+    expect(mapsAtTwoSeconds.size).toBe(44);
+    expect(callsAtTwoSeconds).toBeLessThan(44);
+    expect(refetch).toHaveBeenCalledTimes(callsAtDeadline);
+    // B's apply raced A's snapshot; A must never apply its partial result.
+    expect(agorStore.getState().sessionById.size).toBe(44);
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('caps GET concurrency across overlapping large confirmations', async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 12 }, (_, index) =>
@@ -471,10 +511,26 @@ describe('confirmed mutation patches', () => {
         reason === 'authority' ? ['fulfilled', 'fulfilled'] : ['rejected', 'rejected']
       );
       expect(refetch).toHaveBeenCalledTimes(4);
+      // A new live invocation must still wait for the cancelled transports,
+      // then receive a slot without launching any of the cancelled waiters.
+      let releaseCurrent!: (session: Session) => void;
+      const currentRefetch = vi.fn(
+        () =>
+          new Promise<Session>((resolve) => {
+            releaseCurrent = resolve;
+          })
+      );
+      const current = captureSessionPatchCommit()([rows[0]], currentRefetch);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(currentRefetch).not.toHaveBeenCalled();
       release();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(refetch).toHaveBeenCalledTimes(4);
+      expect(currentRefetch).toHaveBeenCalledTimes(1);
       expect(agorStore.getState().sessionById).toBe(originalMaps);
+      releaseCurrent({ ...rows[0], archived: true });
+      await current;
+      expect(agorStore.getState().sessionById.has(rows[0].session_id)).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     }
   );

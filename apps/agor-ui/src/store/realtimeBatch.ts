@@ -88,7 +88,18 @@ const CONFIRMATION_CONCURRENCY = 4;
 // Shared across confirmations so overlapping archive actions cannot multiply
 // GET fanout. Retain slots until transport settlement, even after cancellation:
 // Feathers GETs are not abortable, and releasing early would exceed the cap.
-const confirmationReads = new Set<Promise<Session>>();
+let confirmationReads = 0;
+// Set insertion order is FIFO, with O(1) removal of cancelled waiters. A release
+// launches the oldest waiter synchronously, before incumbent workers can requeue.
+const confirmationWaiters = new Set<() => void>();
+
+function drainConfirmationWaiters(): void {
+  while (confirmationReads < CONFIRMATION_CONCURRENCY && confirmationWaiters.size > 0) {
+    const start = confirmationWaiters.values().next().value!;
+    confirmationWaiters.delete(start);
+    start();
+  }
+}
 
 async function untilCancelled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -109,19 +120,45 @@ async function confirmationRead(
   refetch: (id: Session['session_id']) => Promise<Session>,
   signal: AbortSignal
 ): Promise<Session> {
-  while (confirmationReads.size >= CONFIRMATION_CONCURRENCY) {
-    // Another confirmation's failure only frees a slot; it is not our failure.
-    await untilCancelled(
-      Promise.race(confirmationReads).catch(() => undefined),
-      signal
-    );
-  }
   signal.throwIfAborted();
-  const read = refetch(id);
-  confirmationReads.add(read);
-  const release = () => confirmationReads.delete(read);
-  void read.then(release, release);
-  return untilCancelled(read, signal);
+  return new Promise<Session>((resolve, reject) => {
+    const cancel = () => {
+      confirmationWaiters.delete(start);
+      reject(signal.reason);
+    };
+    const start = () => {
+      if (signal.aborted) {
+        cancel();
+        return;
+      }
+      // Reserve before calling transport, including synchronous throws/reentry.
+      confirmationReads++;
+      let read: Promise<Session>;
+      try {
+        read = refetch(id);
+      } catch (error) {
+        read = Promise.reject(error);
+      }
+      const release = () => {
+        signal.removeEventListener('abort', cancel);
+        confirmationReads--;
+        drainConfirmationWaiters();
+      };
+      void read.then(
+        (session) => {
+          release();
+          resolve(session);
+        },
+        (error) => {
+          release();
+          reject(error);
+        }
+      );
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    confirmationWaiters.add(start);
+    drainConfirmationWaiters();
+  });
 }
 
 // Cadence for the hidden-tab / no-rAF fallback. Browsers throttle background
