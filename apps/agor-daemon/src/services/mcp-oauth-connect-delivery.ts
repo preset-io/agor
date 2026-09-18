@@ -266,7 +266,25 @@ export async function resolveSlackConnectBinding(
   });
 
   if (!deps.masterSecret) return refuse('no_secret');
-  if (widget.status !== 'pending') return refuse('not_connectable');
+  // `resolving` is admitted as well as `pending`, and it is not a widening of
+  // what may be granted.
+  //
+  // A `resolving` widget is a pending one with a claim on it — and when that
+  // claim has been abandoned long enough for `submissions.ts` to take it over,
+  // the card's honest state is `finish_required`, with a button that makes the
+  // POST which does exactly that. `mcpSlackConnectRenderedState` has always
+  // said so; refusing the binding here is what made that branch unreachable,
+  // so a resolve POST whose browser died mid-flight left a card reading
+  // "sign-in is in progress … this message updates when it lands" with nothing
+  // coming.
+  //
+  // Nothing here mints. The only caller that does, `issueMCPOAuthConnectLink`,
+  // re-checks `status === 'pending'` under the row lock before it writes, so a
+  // claimed widget still cannot get a fresh link — it can only have the link
+  // it already has re-sealed, which grants strictly less.
+  if (widget.status !== 'pending' && widget.status !== 'resolving') {
+    return refuse('not_connectable');
+  }
 
   const authority = await readSlackMCPOAuthAuthority(deps.repositories, {
     principalUserId: task.created_by as UserID,

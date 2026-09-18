@@ -1438,6 +1438,70 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
     expect(mcpOAuthConnectClaimsMatchDelivery(claims, harness.current(), 'tenant-a')).toBe(true);
   });
 
+  it('offers the finish on a claim whose resolver died, not a wait with no end', async () => {
+    // The sub-case where the browser got FURTHER before it went away: the
+    // resolve POST claimed `pending -> resolving` and then the page (or the
+    // daemon) died. `submissions.ts` will let a later POST take that claim
+    // over once it is a minute old, and `mcpSlackConnectRenderedState` has an
+    // explicit branch to offer the button at exactly that point — but the
+    // delivery loop could not reach it, because the binding it needs refuses
+    // any widget that is not `pending`. So the card said "sign-in is in
+    // progress … this message updates when it lands", forever, with nothing to
+    // press and nothing coming.
+    const harness = deliveryHarness({
+      widget: {
+        status: 'resolving',
+        resolution_claim: {
+          token: 'claim-token',
+          action: 'oauth_verified',
+          claimed_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          claimed_by: OWNER,
+        },
+      } as Partial<WidgetMessageMetadata>,
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      text: string;
+      blocks: { type: string; elements?: { url?: string }[] }[];
+    };
+    expect(request.text).toMatch(/Finish connecting Notion/);
+    const url = request.blocks.find((block) => block.type === 'actions')?.elements?.[0]?.url;
+    expect(url).toMatch(/#token=/);
+    expect(harness.current()).toMatchObject({ rendered_state: 'finish_required' });
+  });
+
+  it('leaves a claim younger than the takeover cutoff alone', async () => {
+    // Two browsers racing the same card must not reclaim from each other, so
+    // until the cutoff the honest card is still "in progress".
+    const harness = deliveryHarness({
+      widget: {
+        status: 'resolving',
+        resolution_claim: {
+          token: 'claim-token',
+          action: 'oauth_verified',
+          claimed_at: new Date(Date.now() - 5_000).toISOString(),
+          claimed_by: OWNER,
+        },
+      } as Partial<WidgetMessageMetadata>,
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.current()).toMatchObject({ rendered_state: 'sign_in_pending' });
+  });
+
   it('shows no button at all rather than one that cannot be redeemed', async () => {
     // The other side of the same promise. A record whose clocks are not
     // second-aligned is one no acceptable link can be re-sealed from — today
