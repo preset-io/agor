@@ -164,18 +164,18 @@ import {
 } from './mcp-slack-connect-card.js';
 import {
   acquireSlackDeliveryConnector,
-  applySlackDeliveryFailure,
-  clearSlackRenderedState,
-  logSlackDeliveryFailure,
+  clearLostSlackRender,
   MCP_SLACK_REPAINT_ATTEMPTS,
   type MCPSlackDeliveryFailureReason,
+  recordSlackDeliveryFailure,
   retireOrphanedSlackCard,
+  type SlackDeliveryStore,
   SlackDeliveryTimers,
+  type SlackDeliveryWrite,
   sendSlackCard,
   slackDeliveryClaim,
   slackDeliveryClaimIsLive,
   slackDeliveryRepairAt,
-  slackRenderWasLost,
 } from './mcp-slack-delivery-engine.js';
 import type { SessionParams } from './sessions.js';
 
@@ -1520,35 +1520,46 @@ export class GatewayService {
     }
   }
 
+  /**
+   * The recovery lane's delivery record: the notice on the Task's metadata.
+   *
+   * Every write is fenced on `notice_id` because a Task's notice is REPLACED
+   * in place by a later recovery generation, so "the record on this task" and
+   * "the record this delivery started on" are not the same question. The
+   * mutated Task travels back alongside the notice: the recovery lane's
+   * rendered state reads the task's own status, so a re-render needs it.
+   */
+  private mcpSlackRecoveryStore(
+    taskId: string,
+    noticeId: string
+  ): SlackDeliveryStore<
+    MCPSlackRecoveryNotice,
+    SlackDeliveryWrite<MCPSlackRecoveryNotice> & { task: Task }
+  > {
+    return {
+      logIds: { task_id: taskId, notice_id: noticeId },
+      identifies: (current) => current?.notice_id === noticeId,
+      write: (mutate) =>
+        this.taskRepo.mutateMCPSlackRecoveryNotice(taskId, mutate).then((result) => ({
+          changed: result.changed,
+          record: result.task.metadata?.mcp_slack_recovery_notice,
+          task: result.task,
+        })),
+    };
+  }
+
   private async recordMcpSlackDeliveryFailure(
     taskId: string,
     noticeId: string,
     claimId: string,
     reason: MCPSlackDeliveryFailureReason
   ): Promise<void> {
-    const failed = await this.taskRepo
-      .mutateMCPSlackRecoveryNotice(taskId, (current) =>
-        current?.notice_id === noticeId && current.delivery_claim?.claim_id === claimId
-          ? applySlackDeliveryFailure(current)
-          : null
-      )
-      .catch(() => undefined);
-    const failedNotice = failed?.task.metadata?.mcp_slack_recovery_notice;
-    const retrying = !!failed?.changed && !!failedNotice?.delivery_next_retry_at;
-    logSlackDeliveryFailure(
-      'recovery',
+    await recordSlackDeliveryFailure(this.mcpSlackRecoveryStore(taskId, noticeId), {
+      lane: 'recovery',
       reason,
-      { task_id: taskId, notice_id: noticeId },
-      failedNotice?.delivery_attempt_count,
-      retrying
-    );
-    if (retrying) {
-      this.scheduleMcpSlackDeliveryRetry(
-        taskId,
-        noticeId,
-        Math.max(100, new Date(failedNotice!.delivery_next_retry_at!).getTime() - Date.now())
-      );
-    }
+      claimId,
+      scheduleRetry: (delay) => this.scheduleMcpSlackDeliveryRetry(taskId, noticeId, delay),
+    });
   }
 
   private async deliverMcpSlackRecoveryNotice(task: Task, attempt = 0): Promise<void> {
@@ -1768,13 +1779,11 @@ export class GatewayService {
     renderedState: MCPSlackRecoveryRenderedState,
     attempt: number
   ): Promise<void> {
-    const cleared = await this.taskRepo
-      .mutateMCPSlackRecoveryNotice(taskId, (current) =>
-        current?.notice_id === noticeId && slackRenderWasLost(current, editedTs, renderedState)
-          ? clearSlackRenderedState(current)
-          : null
-      )
-      .catch(() => undefined);
+    const cleared = await clearLostSlackRender(
+      this.mcpSlackRecoveryStore(taskId, noticeId),
+      editedTs,
+      renderedState
+    );
     if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
       await this.deliverMcpSlackRecoveryNotice(cleared.task, attempt + 1);
     }
@@ -2159,28 +2168,39 @@ export class GatewayService {
     return slackDeliveryRepairAt(mcpSlackConnectExpiryDelay(state, delivery, now), now);
   }
 
+  /**
+   * The connect lane's delivery record: `slack_connect` on the widget
+   * message's own metadata, under the same row lock the widget lifecycle uses.
+   *
+   * No identity fence beyond existence, and deliberately so: a widget has
+   * exactly one delivery record for as long as it exists, and a re-issue
+   * advances that record's generation rather than replacing the record. Where
+   * the generation matters — the settlement CAS — the lane fences on it
+   * explicitly.
+   */
+  private mcpSlackConnectStore(widgetId: MessageID): SlackDeliveryStore<MCPSlackConnectDelivery> {
+    return {
+      logIds: { widget_id: widgetId },
+      identifies: (current) => !!current,
+      write: (mutate) =>
+        mutateSlackConnectDelivery(this.messagesRepo, widgetId, mutate).then((result) => ({
+          changed: result.changed,
+          record: result.delivery,
+        })),
+    };
+  }
+
   private async recordMcpSlackConnectDeliveryFailure(
     widgetId: MessageID,
     claimId: string,
     reason: MCPSlackDeliveryFailureReason
   ): Promise<void> {
-    const failed = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
-      current?.delivery_claim?.claim_id === claimId ? applySlackDeliveryFailure(current) : null
-    ).catch(() => undefined);
-    const retrying = !!failed?.changed && !!failed.delivery?.delivery_next_retry_at;
-    logSlackDeliveryFailure(
-      'connect',
+    await recordSlackDeliveryFailure(this.mcpSlackConnectStore(widgetId), {
+      lane: 'connect',
       reason,
-      { widget_id: widgetId },
-      failed?.delivery?.delivery_attempt_count,
-      retrying
-    );
-    if (retrying) {
-      this.scheduleMcpSlackConnectRetry(
-        widgetId,
-        Math.max(100, new Date(failed!.delivery!.delivery_next_retry_at!).getTime() - Date.now())
-      );
-    }
+      claimId,
+      scheduleRetry: (delay) => this.scheduleMcpSlackConnectRetry(widgetId, delay),
+    });
   }
 
   private async releaseMcpSlackConnectClaim(
@@ -2659,11 +2679,11 @@ export class GatewayService {
     renderedState: MCPSlackConnectRenderedState,
     attempt: number
   ): Promise<void> {
-    const cleared = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) =>
-      latest && slackRenderWasLost(latest, editedTs, renderedState)
-        ? clearSlackRenderedState(latest)
-        : null
-    ).catch(() => undefined);
+    const cleared = await clearLostSlackRender(
+      this.mcpSlackConnectStore(widgetId),
+      editedTs,
+      renderedState
+    );
     // Bounded in process: losing the claim again means a third daemon is
     // still writing this row, and `next_repair_at` above already hands the
     // card to the sweep. Repainting in a loop would just race it harder.
