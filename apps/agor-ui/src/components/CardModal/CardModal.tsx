@@ -28,18 +28,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-
-function isSafeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
 
 const { TextArea } = Input;
 
@@ -263,7 +255,7 @@ const CardModalComponent = ({
         <Typography.Title level={5} style={{ margin: 0, flex: 1 }}>
           {card.title}
         </Typography.Title>
-        {card.url && isSafeUrl(card.url) && (
+        {isSafeExternalUrl(card.url) && (
           <a
             href={card.url}
             target="_blank"

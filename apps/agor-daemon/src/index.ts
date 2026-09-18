@@ -72,7 +72,12 @@ import expressStaticGzip from 'express-static-gzip';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
-import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import {
+  createDaemonMetrics,
+  createDaemonOperationalMetrics,
+  NOOP_METRICS,
+  resolveMetricsWorkIdentity,
+} from './metrics/index.js';
 import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
@@ -411,6 +416,7 @@ async function startDaemonWithOwnedMetrics(
       });
   ownMetrics(metrics);
   app.set('metrics', metrics);
+  app.set('daemonOperationalMetrics', createDaemonOperationalMetrics(metrics));
   reconcileTrackedExecutorGauge(app);
   if (unsafeHaMetricsIdentity) {
     console.warn(

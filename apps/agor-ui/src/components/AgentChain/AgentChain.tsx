@@ -13,7 +13,12 @@
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor-live/client';
+import type {
+  ContentBlock as CoreContentBlock,
+  DiffEnrichment,
+  Message,
+  TranscriptTruncation,
+} from '@agor-live/client';
 import {
   BranchesOutlined,
   BulbOutlined,
@@ -51,6 +56,7 @@ import {
   ToolBlock,
 } from '../ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -60,6 +66,7 @@ interface ToolUseBlock {
 }
 
 interface ToolResultBlock {
+  transcript_truncation?: TranscriptTruncation;
   type: 'tool_result';
   tool_use_id: string;
   content: string | CoreContentBlock[];
@@ -89,6 +96,7 @@ interface ChainItem {
   type: 'thought' | 'tool';
   content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
+  transcript_truncation?: TranscriptTruncation;
 }
 
 /**
@@ -152,9 +160,13 @@ export const AgentChain = React.memo<AgentChainProps>(
 
       // First pass: collect ALL tool results from ALL messages (including user messages)
       const globalToolResultMap = new Map<string, ToolResultBlock>();
+      const renderedToolUseIds = new Set<string>();
       for (const message of messages) {
         if (Array.isArray(message.content)) {
           for (const block of message.content) {
+            if (block.type === 'tool_use' && message.role !== 'user') {
+              renderedToolUseIds.add((block as unknown as ToolUseBlock).id);
+            }
             if (block.type === 'tool_result') {
               const toolResult = block as unknown as ToolResultBlock;
               globalToolResultMap.set(toolResult.tool_use_id, toolResult);
@@ -186,13 +198,21 @@ export const AgentChain = React.memo<AgentChainProps>(
           if (toolResults.length > 0) {
             for (const block of toolResults) {
               const toolResult = block as unknown as ToolResultBlock;
-              const resultText = toolResultToDisplayText(toolResult.content);
+              const truncation = toolResult.transcript_truncation;
+              const isProjected = Object.keys(truncation ?? {}).length > 0;
+              // Paired projected results belong to ToolUseRenderer: a second
+              // text-only thought could hide the notice behind a different
+              // toggle, or duplicate it. Task results live in a separate chain
+              // from their call, so their thought must own the disclosure.
+              if (isProjected && renderedToolUseIds.has(toolResult.tool_use_id)) continue;
 
-              if (resultText.trim()) {
+              const resultText = toolResultToDisplayText(toolResult.content);
+              if (resultText.trim() || isProjected) {
                 items.push({
                   type: 'thought',
                   content: resultText,
                   message,
+                  transcript_truncation: truncation,
                 });
               }
             }
@@ -417,27 +437,30 @@ export const AgentChain = React.memo<AgentChainProps>(
         const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
-          <ToolBlock
-            key={`thought-${index}`}
-            icon={<BulbOutlined style={{ fontSize: 14 }} />}
-            name="Thinking"
-            description={oneLine || undefined}
-            status="success"
-          >
-            {thoughtContent.trim() && (
-              <CollapsibleText
-                maxLines={8}
-                preserveWhitespace
-                style={{
-                  fontSize: token.fontSizeSM,
-                  margin: 0,
-                  color: token.colorTextTertiary,
-                }}
-              >
-                {thoughtContent}
-              </CollapsibleText>
-            )}
-          </ToolBlock>
+          <React.Fragment key={`thought-${index}`}>
+            {/* Keep omission visible even while the result text is collapsed. */}
+            <TranscriptTruncationNotice truncations={[item.transcript_truncation]} />
+            <ToolBlock
+              icon={<BulbOutlined style={{ fontSize: 14 }} />}
+              name="Thinking"
+              description={oneLine || undefined}
+              status="success"
+            >
+              {thoughtContent.trim() && (
+                <CollapsibleText
+                  maxLines={8}
+                  preserveWhitespace
+                  style={{
+                    fontSize: token.fontSizeSM,
+                    margin: 0,
+                    color: token.colorTextTertiary,
+                  }}
+                >
+                  {thoughtContent}
+                </CollapsibleText>
+              )}
+            </ToolBlock>
+          </React.Fragment>
         );
       }
 

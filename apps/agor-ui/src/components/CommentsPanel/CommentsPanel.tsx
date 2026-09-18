@@ -24,6 +24,7 @@ import {
   Button,
   Collapse,
   Popover,
+  Segmented,
   Space,
   Spin,
   Tag,
@@ -53,6 +54,8 @@ export interface CommentsPanelProps {
   loading?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  /** Hide the internal "Comments" header (mobile already shows a board header). */
+  hideHeader?: boolean;
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -60,6 +63,11 @@ export interface CommentsPanelProps {
   onDeleteComment?: (commentId: string) => void;
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
+  /**
+   * Render per-comment actions inline and always-visible instead of on hover.
+   * Required on touch surfaces (mobile), where hover never fires.
+   */
+  alwaysShowActions?: boolean;
 }
 
 type FilterMode = 'all' | 'active';
@@ -278,6 +286,7 @@ const CommentThread: React.FC<{
   isHighlighted?: boolean;
   scrollRef?: React.RefObject<HTMLDivElement | null>;
   client: AgorClient | null;
+  alwaysShowActions?: boolean;
 }> = ({
   comment,
   replies,
@@ -290,11 +299,13 @@ const CommentThread: React.FC<{
   isHighlighted,
   scrollRef,
   client,
+  alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [replyValue, setReplyValue] = useState('');
   const [isHovered, setIsHovered] = useState(false);
+  const showActions = isHovered || alwaysShowActions;
   const user = userById.get(comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
 
@@ -369,18 +380,24 @@ const CommentThread: React.FC<{
           }
         />
 
-        {/* Action buttons overlay (visible on hover) */}
-        {isHovered && (
+        {/* Action buttons. On hover surfaces they float top-right; when
+            alwaysShowActions (touch) they sit inline below so they're tappable
+            and never overlap the comment text. */}
+        {showActions && (
           <div
-            style={{
-              position: 'absolute',
-              top: 4,
-              right: 0,
-              backgroundColor: token.colorBgContainer,
-              borderRadius: 4,
-              padding: '2px',
-              boxShadow: token.boxShadowTertiary,
-            }}
+            style={
+              alwaysShowActions
+                ? { marginTop: token.marginXS }
+                : {
+                    position: 'absolute',
+                    top: 4,
+                    right: 0,
+                    backgroundColor: token.colorBgContainer,
+                    borderRadius: 4,
+                    padding: '2px',
+                    boxShadow: token.boxShadowTertiary,
+                  }
+            }
           >
             <Space size="small">
               {onToggleReaction && (
@@ -554,6 +571,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   loading = false,
   collapsed = false,
   onToggleCollapse,
+  hideHeader = false,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -561,6 +579,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   onDeleteComment,
   hoveredCommentId,
   selectedCommentId,
+  alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
   const [filter, setFilter] = useState<FilterMode>('active');
@@ -745,41 +764,43 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         flexDirection: 'column',
       }}
     >
-      {/* Header */}
-      <div
-        style={{
-          padding: 12,
-          borderBottom: `1px solid ${token.colorBorder}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Space>
-          <CommentOutlined />
-          <Title level={5} style={{ margin: 0 }}>
-            Comments
-          </Title>
-          <Badge
-            count={filteredThreads.length}
-            showZero={false}
-            style={{
-              backgroundColor: filteredThreads.some(threadMentionsUser)
-                ? token.colorError
-                : token.colorPrimaryBgHover,
-            }}
-          />
-        </Space>
-        {onToggleCollapse && (
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            onClick={onToggleCollapse}
-            danger
-          />
-        )}
-      </div>
+      {/* Header — hidden on mobile, where the board header already titles the view */}
+      {!hideHeader && (
+        <div
+          style={{
+            padding: 12,
+            borderBottom: `1px solid ${token.colorBorder}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Space>
+            <CommentOutlined />
+            <Title level={5} style={{ margin: 0 }}>
+              Comments
+            </Title>
+            <Badge
+              count={filteredThreads.length}
+              showZero={false}
+              style={{
+                backgroundColor: filteredThreads.some(threadMentionsUser)
+                  ? token.colorError
+                  : token.colorPrimaryBgHover,
+              }}
+            />
+          </Space>
+          {onToggleCollapse && (
+            <Button
+              type="text"
+              size="small"
+              icon={<CloseOutlined />}
+              onClick={onToggleCollapse}
+              danger
+            />
+          )}
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div
@@ -789,22 +810,15 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
           backgroundColor: token.colorBgContainer,
         }}
       >
-        <Space>
-          <Button
-            type={filter === 'active' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('active')}
-          >
-            Active
-          </Button>
-          <Button
-            type={filter === 'all' ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setFilter('all')}
-          >
-            All
-          </Button>
-        </Space>
+        <Segmented<FilterMode>
+          size="small"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { label: 'Active', value: 'active' },
+            { label: 'All', value: 'all' },
+          ]}
+        />
       </div>
 
       {/* Thread List */}
@@ -825,6 +839,17 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               textAlign: 'center',
               padding: 32,
               color: token.colorTextSecondary,
+              // On mobile the panel fills the screen, so centre the empty state
+              // instead of clustering it at the top.
+              ...(hideHeader
+                ? {
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }
+                : {}),
             }}
           >
             <CommentOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
@@ -897,6 +922,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                         isHighlighted={isHighlighted}
                         scrollRef={commentRefs.current[thread.comment_id]}
                         client={client}
+                        alwaysShowActions={alwaysShowActions}
                       />
                     );
                   })}

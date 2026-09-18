@@ -19,7 +19,19 @@ import type {
 import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
-import { Alert, Button, Col, Empty, Flex, message, Pagination, Row, Skeleton, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Flex,
+  message,
+  Pagination,
+  Row,
+  Skeleton,
+  theme,
+} from 'antd';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -848,7 +860,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
             {Array.from({ length: 6 }, (_, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
               <Col key={index} {...GRID_SPANS}>
-                <Skeleton active paragraph={{ rows: 2 }} />
+                {/* Same Card chrome as CatalogCard so the skeleton grid matches
+                    the loaded grid one-to-one (bordered, padded, full height). */}
+                <Card size="small" style={{ height: '100%' }}>
+                  <Skeleton active paragraph={{ rows: 2 }} />
+                </Card>
               </Col>
             ))}
           </Row>

@@ -50,6 +50,7 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
@@ -653,6 +654,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
 
+  // Task calls/results rendered as text bypass ToolUseRenderer. Keep their
+  // projection notices visible rather than treating omitted input as empty.
+  const taskTruncations = Array.isArray(message.content)
+    ? message.content
+        .filter(
+          (block) =>
+            (block.type === 'tool_use' && block.name === 'Task') ||
+            (block.type === 'tool_result' && isTaskResult)
+        )
+        .map((block) => block.transcript_truncation)
+    : [];
+
   // Also check for streaming thinking content
   const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
   const isThinking = 'isThinking' in message ? message.isThinking : false;
@@ -664,7 +677,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
 
-  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
+  const hasTaskTruncation = taskTruncations.some((value) => Object.keys(value ?? {}).length > 0);
+  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasTaskTruncation) {
     return null;
   }
 
@@ -676,6 +690,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   return (
     <>
+      <TranscriptTruncationNotice truncations={taskTruncations} />
       {/* Thinking blocks (collapsed by default) */}
       {hasThinking && (
         <ThinkingBlock

@@ -1,25 +1,5 @@
-import { EXECUTOR_REQUEST_DATA_BUDGET_BYTES } from './feathers-client.js';
-
-export interface ContentBlock {
-  type: string;
-  tool_use_id?: string;
-  content?: unknown;
-  id?: string;
-  name?: string;
-  [key: string]: unknown;
-}
-
-export interface ToolUseRef {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-export interface TruncationResult {
-  blocks: ContentBlock[];
-  truncated: boolean;
-  truncatedTools: string[];
-}
+import type { MessagePatch, TranscriptTruncation } from '@agor/core/types';
+import { isGeneratedDiff } from './generated-diff.js';
 
 type TruncatorFn = (content: unknown, targetBytes: number) => unknown;
 
@@ -27,7 +7,7 @@ const HEAD_RATIO = 0.75;
 const TAIL_RATIO = 0.15;
 
 function byteSize(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
 }
 
 function truncateString(s: string, targetBytes: number): string {
@@ -35,9 +15,14 @@ function truncateString(s: string, targetBytes: number): string {
   const tailBytes = Math.floor(targetBytes * TAIL_RATIO);
   const buf = Buffer.from(s, 'utf8');
   if (buf.length <= targetBytes) return s;
-  const head = buf.subarray(0, headBytes).toString('utf8');
-  const tail = buf.subarray(buf.length - tailBytes).toString('utf8');
-  const removed = buf.length - headBytes - tailBytes;
+  let headEnd = headBytes;
+  let tailStart = buf.length - tailBytes;
+  // Never split a UTF-8 code point into replacement characters.
+  while (headEnd > 0 && (buf[headEnd] & 0xc0) === 0x80) headEnd -= 1;
+  while (tailStart < buf.length && (buf[tailStart] & 0xc0) === 0x80) tailStart += 1;
+  const head = buf.subarray(0, headEnd).toString('utf8');
+  const tail = buf.subarray(tailStart).toString('utf8');
+  const removed = tailStart - headEnd;
   return `${head}\n\n[… truncated ${removed.toLocaleString()} bytes …]\n\n${tail}`;
 }
 
@@ -119,75 +104,163 @@ const TOOL_TRUNCATORS: Record<string, TruncatorFn> = {
   'list-directory': bashTruncator,
 };
 
-function resolveToolName(
-  block: ContentBlock,
-  allBlocks: ContentBlock[],
-  toolUses: ToolUseRef[] | undefined
-): string | undefined {
-  const toolUseId = block.tool_use_id;
-  if (!toolUseId) return undefined;
-  if (toolUses) {
-    const match = toolUses.find((t) => t.id === toolUseId);
-    if (match) return match.name;
-  }
-  const useBlock = allBlocks.find((b) => b.type === 'tool_use' && b.id === toolUseId);
-  if (useBlock?.name && typeof useBlock.name === 'string') return useBlock.name;
-  return undefined;
+/**
+ * Project only persisted tool data, never provider/model arguments. The budget
+ * is for the ENTIRE create/patch data object, including duplicated tool_uses,
+ * preview, metadata and JSON escaping. Identity/authority and non-tool messages
+ * are not disposable: if they alone exceed the budget the transport guard fails
+ * closed. No files, caches or tenant lookups are involved here.
+ */
+export function projectMessageData<T extends MessagePatch>(data: T, budgetBytes: number): T {
+  return projectMessage(data, budgetBytes, false);
 }
 
-function truncateToolResultBlock(
-  block: ContentBlock,
-  toolName: string | undefined,
-  targetBytes: number
-): ContentBlock {
-  const truncator = (toolName && TOOL_TRUNCATORS[toolName]) || genericTruncator;
-  const truncatedContent = truncator(block.content, targetBytes);
-  return { ...block, content: truncatedContent };
-}
+function projectMessage<T extends MessagePatch>(
+  data: T,
+  budgetBytes: number,
+  generatedOnly: boolean
+): T {
+  if (byteSize(data) <= budgetBytes) return data;
 
-export function truncateContentIfNeeded(
-  contentBlocks: ContentBlock[],
-  toolUses: ToolUseRef[] | undefined,
-  budgetBytes: number = EXECUTOR_REQUEST_DATA_BUDGET_BYTES
-): TruncationResult {
-  const totalSize = byteSize(contentBlocks);
-  if (totalSize <= budgetBytes) {
-    return { blocks: contentBlocks, truncated: false, truncatedTools: [] };
+  const projected = { ...data };
+  if (Array.isArray(data.content)) {
+    projected.content = data.content.map((block) => ({ ...block }));
   }
+  const toolUses = data.tool_uses?.map((use) => ({ ...use }));
+  if (toolUses) projected.tool_uses = toolUses;
 
-  const blocks = contentBlocks.map((b) => ({ ...b }));
-  const truncatedTools: string[] = [];
-
-  const toolResultIndices = blocks
-    .map((b, i) => ({ block: b, index: i, size: byteSize(b) }))
-    .filter((e) => e.block.type === 'tool_result')
-    .sort((a, b) => b.size - a.size);
-
-  for (const entry of toolResultIndices) {
-    const currentTotal = byteSize(blocks);
-    if (currentTotal <= budgetBytes) break;
-
-    const toolName = resolveToolName(entry.block, blocks, toolUses);
-    const excess = currentTotal - budgetBytes;
-    const currentBlockSize = byteSize(blocks[entry.index]);
-    const targetBlockSize = Math.max(200, currentBlockSize - excess - 100);
-
-    blocks[entry.index] = truncateToolResultBlock(blocks[entry.index], toolName, targetBlockSize);
-    if (toolName) truncatedTools.push(toolName);
-    else truncatedTools.push('unknown');
+  type Owner = { transcript_truncation?: TranscriptTruncation; [key: string]: unknown };
+  const candidates: {
+    owners: Owner[];
+    field: string;
+    size: number;
+    toolName?: string;
+    generated?: boolean;
+  }[] = [];
+  const inputs = new Map<string, Owner[]>();
+  const blocks = Array.isArray(projected.content) ? projected.content : [];
+  const uses = [...blocks.filter((block) => block.type === 'tool_use'), ...(toolUses ?? [])];
+  for (const use of uses) {
+    if (use.input === undefined) continue;
+    const id = String(use.id);
+    const owners = inputs.get(id) ?? [];
+    owners.push(use);
+    inputs.set(id, owners);
   }
-
-  if (byteSize(blocks) > budgetBytes) {
-    for (const entry of toolResultIndices) {
-      if (byteSize(blocks) <= budgetBytes) break;
-      const toolName = resolveToolName(entry.block, blocks, toolUses);
-      blocks[entry.index] = {
-        ...blocks[entry.index],
-        content: `[Tool result omitted — original size ${entry.size.toLocaleString()} bytes exceeded transport budget]`,
-      };
-      if (toolName && !truncatedTools.includes(toolName)) truncatedTools.push(toolName);
+  for (const owners of inputs.values()) {
+    candidates.push({
+      owners,
+      field: 'input',
+      size: owners.reduce((sum, owner) => sum + byteSize(owner.input), 0),
+    });
+  }
+  // Only tool payloads are lossy. Keep identity, status and error flags verbatim,
+  // including provider-supplied truncation metadata.
+  const protectedFields = new Set([
+    'type',
+    'id',
+    'name',
+    'tool_use_id',
+    'status',
+    'is_error',
+    'truncated',
+    'transcript_truncation',
+    'input',
+  ]);
+  for (const block of blocks) {
+    if (block.type !== 'tool_use' && block.type !== 'tool_result') continue;
+    for (const [field, value] of Object.entries(block)) {
+      if (protectedFields.has(field) || value === undefined) continue;
+      const use = uses.find((use) => use.id === block.tool_use_id);
+      candidates.push({
+        owners: [block],
+        field,
+        generated: field === 'diff' && isGeneratedDiff(value),
+        size: byteSize(value),
+        toolName: typeof use?.name === 'string' ? use.name : undefined,
+      });
     }
   }
+  // Presentation is always disposable before original data, even when smaller.
+  // Arbitrary provider fields (including unmarked "diff") stay in the original
+  // fallback tier. Size only orders candidates within each retention tier.
+  candidates.sort((a, b) => Number(!!b.generated) - Number(!!a.generated) || b.size - a.size);
 
-  return { blocks, truncated: true, truncatedTools };
+  for (const { owners, field, size, toolName, generated } of candidates) {
+    if (generatedOnly && !generated) continue;
+    const total = byteSize(projected);
+    if (total <= budgetBytes) break;
+    const previous = owners.map((owner) => ({
+      value: owner[field],
+      truncation: owner.transcript_truncation,
+    }));
+    for (const owner of owners) {
+      const originalBytes = byteSize(owner[field]);
+      const original = owner[field];
+      owner.transcript_truncation = {
+        ...owner.transcript_truncation,
+        [field]: {
+          original_bytes: owner.transcript_truncation?.[field]?.original_bytes ?? originalBytes,
+        },
+      };
+      if (field === 'input') {
+        // No executable-looking partial arguments. Both copies of this tool's
+        // input are replaced together, leaving the caller's objects untouched.
+        owner.input = {
+          notice: `[Tool input omitted from transcript: ${originalBytes} serialized bytes]`,
+        };
+      } else if (field === 'content') {
+        const target = Math.max(0, size - (total - budgetBytes) - 256);
+        const truncator = (toolName && TOOL_TRUNCATORS[toolName]) || genericTruncator;
+        owner.content = target >= 200 ? truncator(original, target) : undefined;
+        // Truncators are best-effort (escaping, huge array items, etc.). Measure
+        // the actual wrapper again; omission is the deterministic fallback.
+        if (owner.content === undefined || byteSize(projected) > budgetBytes) {
+          owner.content = `[Tool result omitted — original size ${originalBytes} serialized bytes exceeded transport budget]`;
+        }
+      } else {
+        // In particular, never retain a partial structuredPatch/files object
+        // that a renderer could mistake for a complete diff.
+        delete owner[field];
+      }
+    }
+    // Markers themselves have a cost, especially for duplicated short inputs.
+    // Only keep a projection if it actually reduces the full serialized data.
+    if (byteSize(projected) >= total) {
+      owners.forEach((owner, index) => {
+        owner[field] = previous[index].value;
+        if (previous[index].truncation) owner.transcript_truncation = previous[index].truncation;
+        else delete owner.transcript_truncation;
+      });
+    }
+  }
+  return projected;
+}
+
+/** Bulk creates share one transport budget, not one budget per message. */
+export function projectTranscriptData(
+  data: MessagePatch | MessagePatch[],
+  budgetBytes: number
+): MessagePatch | MessagePatch[] {
+  if (!Array.isArray(data)) return projectMessageData(data, budgetBytes);
+  if (byteSize(data) <= budgetBytes) return data;
+  const projected = [...data];
+  const entries = data.map((message, index) => ({ index, size: byteSize(message) }));
+  entries.sort((a, b) => b.size - a.size);
+  // Bulk writes also exhaust generated enrichment across ALL messages before
+  // touching originals in any message. The array wrapper counts in both passes.
+  for (const generatedOnly of [true, false]) {
+    for (const { index } of entries) {
+      const total = byteSize(projected);
+      if (total <= budgetBytes) break;
+      const message = projected[index];
+      if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
+      projected[index] = projectMessage(
+        message,
+        Math.max(0, budgetBytes - total + byteSize(message)),
+        generatedOnly
+      );
+    }
+  }
+  return projected;
 }

@@ -45,7 +45,10 @@ export function missingMCPOAuthGrantError(auth: MCPAuth): Error {
  * row is the exact committed grant (needed by discovery's publication fence).
  */
 export async function acquireMCPOAuthGrant(
-  deps: Omit<RefreshAndPersistDeps, 'observedRefreshVersion'>
+  deps: Omit<RefreshAndPersistDeps, 'observedRefreshVersion'> & {
+    /** Daemon-owned post-401 retry only; callers must authorize this accelerator. */
+    forceRefresh?: boolean;
+  }
 ) {
   const read = () =>
     runWithTenantDatabaseScope(deps.db, deps.tenantId, async (db) => {
@@ -61,9 +64,10 @@ export async function acquireMCPOAuthGrant(
   const grant = await read();
   if (!grant) return null;
   if (grant.refresh_status === 'ambiguous') throw new AmbiguousRefreshError();
+  if (deps.forceRefresh && !grant.oauth_refresh_token) throw new MissingRefreshTokenError();
   if (
     grant.refresh_status === 'refreshing' ||
-    (needsRefresh(grant.oauth_token_expires_at) && grant.oauth_refresh_token)
+    ((deps.forceRefresh || needsRefresh(grant.oauth_token_expires_at)) && grant.oauth_refresh_token)
   ) {
     await runWithTenantDatabaseScope(deps.db, deps.tenantId, (db) =>
       assertMcpGrantSubjectEntitled({

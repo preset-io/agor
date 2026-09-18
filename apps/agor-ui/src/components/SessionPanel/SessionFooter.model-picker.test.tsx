@@ -218,3 +218,27 @@ describe('SessionFooter model picker persistence boundary', () => {
     expect(onModelConfigCommit).not.toHaveBeenCalled();
   });
 });
+
+it('opens the full model editor in the mobile sheet and commits only a completed edit', async () => {
+  const viewport = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+  try {
+    const onModelConfigCommit = vi.fn();
+    render(<SessionFooter {...baseProps} onModelConfigCommit={onModelConfigCommit} />, {
+      wrapper: Wrapper,
+    });
+    const trigger = screen.getByTestId('model-chip');
+    expect(trigger.tagName).toBe('BUTTON');
+    fireEvent.click(trigger);
+    expect(await screen.findByText('Session controls')).toBeInTheDocument();
+    const input = await screen.findByDisplayValue(exactModel);
+    fireEvent.change(input, { target: { value: 'fictional-model' } });
+    expect(onModelConfigCommit).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onModelConfigCommit).toHaveBeenCalledExactlyOnceWith({
+      mode: 'exact',
+      model: 'fictional-model',
+    });
+  } finally {
+    viewport.mockRestore();
+  }
+});

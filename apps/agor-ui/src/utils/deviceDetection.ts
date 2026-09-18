@@ -1,34 +1,30 @@
 /**
- * Device detection utilities for mobile site routing
+ * Viewport-based shell selection for the responsive web app.
+ *
+ * The shell is chosen by viewport WIDTH, not device user-agent, so a landscape
+ * iPad / laptop gets the desktop 3-pane shell while a phone or portrait iPad
+ * gets the touch shell. Rotating a tablet changes `innerWidth`, so width alone
+ * also captures orientation.
  */
 
 /**
- * Detect if the current device is mobile based on screen size and user agent
- * Uses 768px as the breakpoint (standard mobile/tablet boundary)
+ * Viewports narrower than this (px) use the mobile shell; this width and wider
+ * use the desktop shell. 1024 keeps a landscape iPad on desktop and a portrait
+ * iPad on mobile. Single source of truth for the shell breakpoint.
  */
-export function isMobileDevice(): boolean {
-  // Check screen width first (most reliable)
-  if (typeof window !== 'undefined') {
-    const width = window.innerWidth;
-    if (width < 768) {
-      return true;
-    }
-  }
+export const MOBILE_SHELL_MAX_WIDTH = 1024;
 
-  // Fallback to user agent detection
-  if (typeof navigator !== 'undefined') {
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-      navigator.userAgent
-    );
-  }
+/** Media query matching mobile-shell viewports (`< MOBILE_SHELL_MAX_WIDTH`). */
+export const MOBILE_SHELL_MEDIA_QUERY = `(max-width: ${MOBILE_SHELL_MAX_WIDTH - 1}px)`;
 
-  return false;
-}
+/** The exact complement of AntD's `md` query, so it agrees with `!screens.md` at fractional widths too. */
+export const COMPACT_SETTINGS_MEDIA_QUERY = 'not all and (min-width: 768px)';
 
-/**
- * Check if we're currently on a mobile route
- */
-export function isOnMobileRoute(): boolean {
+/** Minimum touch-target size (px) for interactive controls on mobile-shell viewports. */
+export const MOBILE_TOUCH_TARGET = 44;
+
+/** Whether the current viewport should render the mobile shell. */
+export function isMobileViewport(): boolean {
   if (typeof window === 'undefined') return false;
-  return window.location.pathname.includes('/m');
+  return window.innerWidth < MOBILE_SHELL_MAX_WIDTH;
 }

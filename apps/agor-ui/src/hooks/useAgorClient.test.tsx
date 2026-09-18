@@ -117,10 +117,74 @@ function makeSeamClient() {
 
 describe('useAgorClient authenticated handshake lifecycle', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     refreshTokensMock.mockReset();
     resetRefreshFailureState();
     localStorage.clear();
+  });
+
+  it('uses neutral copy for initial and repeated failures, then recovers on manual retry', async () => {
+    const { client, io, fireIo, rejectNextConnect } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    const transportError = new Error('Cannot reach https://internal.test:4444/?token=secret');
+    rejectNextConnect(transportError);
+
+    const { result } = renderHook(() =>
+      useAgorClient({
+        url: 'https://configured.test:8443',
+        accessToken: 'access-token',
+        authorityGeneration: 1,
+      })
+    );
+
+    await waitFor(() => expect(result.current.connecting).toBe(false));
+    expect(result.current.connected).toBe(false);
+    expect(result.current.error).toBe('Failed to connect to Agor daemon');
+    // This second event exercises the persistent listener without the initial
+    // promise's catch overwriting its copy.
+    act(() => fireIo('connect_error', transportError));
+    expect(result.current.error).toBe('Failed to connect to Agor daemon');
+    expect(result.current.error).not.toMatch(/3030|pnpm dev|cd apps|internal.test|secret/);
+
+    act(() => result.current.retryConnection());
+    expect(result.current.error).toBeNull();
+    expect(result.current.connecting).toBe(true);
+    await waitFor(() => expect(result.current.connected).toBe(true));
+    expect(result.current.connecting).toBe(false);
+    expect(io.connect).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', transportError);
+    });
+    expect(result.current.connecting).toBe(true);
+    expect(result.current.error).toBeNull();
+    act(() => io.connect());
+    await waitFor(() => expect(result.current.connected).toBe(true));
+  });
+
+  it('uses the same neutral copy on initial timeout and accepts a later connection', async () => {
+    vi.useFakeTimers();
+    const { client, io, fireIo } = makeSeamClient();
+    vi.mocked(io.connect).mockImplementation(() => {});
+    vi.mocked(createClient).mockReturnValue(client as never);
+    const { result } = renderHook(() =>
+      useAgorClient({ accessToken: 'access-token', authorityGeneration: 1 })
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(result.current.error).toBe('Failed to connect to Agor daemon');
+    expect(result.current.connecting).toBe(false);
+    expect(result.current.connected).toBe(false);
+
+    act(() => {
+      io.connected = true;
+      fireIo('connect');
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.connected).toBe(true);
   });
 
   it('announces session-streams capability after the authenticated handshake without live reauthentication', async () => {

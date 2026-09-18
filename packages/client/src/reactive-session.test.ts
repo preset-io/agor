@@ -1246,3 +1246,207 @@ describe('session-streams capability announce', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('snapshot reconciliation of persisted streams', () => {
+  it.each(['lazy', 'eager'] as const)(
+    'cleans persisted duplicates on %s resync without clearing active/unloaded streams',
+    async (taskHydration) => {
+      const message = makeMessage('task-2', 1);
+      const opts: MockClientOptions = {
+        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.RUNNING)],
+        messagesByTask: { 'task-1': [makeMessage('task-1', 1)], 'task-2': [message] },
+      };
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      await handle.ready();
+      for (const [id, taskId] of [
+        [message.message_id, 'task-2'],
+        ['active', 'task-2'],
+        ['task-1-msg-1', 'task-1'],
+      ]) {
+        mock.emitServiceEvent('messages', 'streaming:start', {
+          message_id: id,
+          session_id: SESSION_ID,
+          task_id: taskId,
+        });
+        mock.emitServiceEvent('messages', 'streaming:chunk', {
+          message_id: id,
+          session_id: SESSION_ID,
+          chunk: 'retained',
+        });
+      }
+      await handle.resync();
+      expect(handle.state.streamingMessages.has(message.message_id)).toBe(false);
+      expect(handle.state.streamingMessages.get('active')?.content).toBe('retained');
+      expect(handle.state.streamingMessages.has('task-1-msg-1')).toBe(taskHydration === 'lazy');
+      handle.dispose();
+    }
+  );
+
+  it('preserves an unload during bootstrap and reconciles only after later hydration', async () => {
+    const message = makeMessage('task-1', 1);
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [message] },
+      deferSessionGet: true,
+      deferTaskMessageFetch: 'task-1',
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID);
+    await vi.waitFor(() => expect(mock.order).toContain('hydrate'));
+    mock.emitServiceEvent('messages', 'streaming:start', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      task_id: 'task-1',
+    });
+    mock.releaseSessionGet();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(1));
+    handle.unloadTaskMessages('task-1');
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.loadedTaskIds.has('task-1')).toBe(false);
+    expect(handle.state.messagesByTask.has('task-1')).toBe(false);
+    expect(handle.state.streamingMessages.has(message.message_id)).toBe(true);
+    opts.deferTaskMessageFetch = undefined;
+    await handle.loadTaskMessages('task-1');
+    expect(handle.state.streamingMessages.size).toBe(0);
+    handle.dispose();
+  });
+
+  it('reconciles a persisted stream during bootstrap', async () => {
+    const message = makeMessage('task-1', 1);
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [message] },
+      deferSessionGet: true,
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID);
+    await vi.waitFor(() => expect(mock.order).toContain('hydrate'));
+    mock.emitServiceEvent('messages', 'streaming:start', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      task_id: 'task-1',
+    });
+    mock.releaseSessionGet();
+    await handle.ready();
+    expect(handle.state.streamingMessages.size).toBe(0);
+    handle.dispose();
+  });
+
+  it('preserves a stream changed while a stale snapshot was in flight, then reconciles on the next fetch', async () => {
+    const message = makeMessage('task-1', 1);
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [message] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID);
+    await handle.ready();
+    mock.emitServiceEvent('messages', 'streaming:start', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      task_id: 'task-1',
+    });
+    opts.deferTaskMessageFetch = 'task-1';
+    const sync = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      chunk: 'newer than snapshot',
+    });
+    mock.releaseMessageFetch();
+    await sync;
+    expect(handle.state.streamingMessages.get(message.message_id)?.content).toBe(
+      'newer than snapshot'
+    );
+    opts.deferTaskMessageFetch = undefined;
+    await handle.resync();
+    expect(handle.state.streamingMessages.size).toBe(0);
+    handle.dispose();
+  });
+});
+
+describe('stream reconciliation authority and lazy cache boundaries', () => {
+  it('does not use unrefreshed cache rows in none hydration mode', async () => {
+    const message = makeMessage('task-1', 1);
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [message] },
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    await handle.loadTaskMessages('task-1');
+    mock.emitServiceEvent('messages', 'streaming:start', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      task_id: 'task-1',
+    });
+    await handle.resync();
+    expect(handle.state.streamingMessages.has(message.message_id)).toBe(true);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(1);
+    await handle.loadTaskMessages('task-1');
+    expect(handle.state.streamingMessages.size).toBe(0);
+    handle.dispose();
+  });
+
+  it.each(['foreign-session', 'foreign-task'])(
+    'does not reconcile from a %s row with a matching message ID',
+    async (boundary) => {
+      const message = makeMessage('task-1', 1);
+      const opts: MockClientOptions = {
+        tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+        messagesByTask: { 'task-1': [] },
+      };
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID);
+      await handle.ready();
+      mock.emitServiceEvent('messages', 'streaming:start', {
+        message_id: message.message_id,
+        session_id: SESSION_ID,
+        task_id: 'task-1',
+      });
+      opts.messagesByTask['task-1'] = [
+        {
+          ...message,
+          ...(boundary === 'foreign-session'
+            ? { session_id: 'other-session' }
+            : { task_id: 'other-task' }),
+        } as Message,
+      ];
+      await handle.resync();
+      expect(handle.state.streamingMessages.has(message.message_id)).toBe(true);
+      mock.emitServiceEvent('messages', 'created', { ...message, session_id: 'other-session' });
+      expect(handle.state.streamingMessages.has(message.message_id)).toBe(true);
+      handle.dispose();
+    }
+  );
+
+  it('preserves concurrent unload membership and removes a duplicate on later explicit hydration', async () => {
+    const message = makeMessage('task-1', 1);
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [message] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID);
+    await handle.ready();
+    mock.emitServiceEvent('messages', 'streaming:start', {
+      message_id: message.message_id,
+      session_id: SESSION_ID,
+      task_id: 'task-1',
+    });
+    opts.deferTaskMessageFetch = 'task-1';
+    const sync = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll).toHaveBeenCalledTimes(2));
+    handle.unloadTaskMessages('task-1');
+    mock.releaseMessageFetch();
+    await sync;
+    expect(handle.state.loadedTaskIds.has('task-1')).toBe(false);
+    expect(handle.state.streamingMessages.has(message.message_id)).toBe(true);
+    opts.deferTaskMessageFetch = undefined;
+    await handle.loadTaskMessages('task-1');
+    expect(handle.state.streamingMessages.size).toBe(0);
+    handle.dispose();
+  });
+});

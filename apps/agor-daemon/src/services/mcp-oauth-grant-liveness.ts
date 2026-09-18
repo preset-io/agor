@@ -16,13 +16,30 @@
  * longer bound to the server's current OAuth configuration is not something an
  * agent's next turn can spend, so none of them count.
  *
- * Exactly one surface wants a looser answer, and it gets it from this same
- * read rather than from its own: the gateway's "not authenticated" warning
+ * Two surfaces want a looser answer, and both take it from this same read
+ * rather than from their own. The gateway's "not authenticated" warning
  * suppresses itself for a grant that is one JIT refresh away from usable,
  * because a spurious warning on a connection that will work is the costlier
- * error on a warning surface. That widening is `refreshable` below — a named
- * field on the one answer, not a second rule. Nothing that grants anything
- * reads it.
+ * error on a warning surface. `agor_mcp_servers_auth_status` reports that same
+ * grant as authenticated, because its `oauth_authenticated: false` is exactly
+ * what tells an agent to offer a Connect button, and offering one for a server
+ * the next refresh will make work is the same costly error. It is also the
+ * rule `mcp-oauth-status.ts` applies to the UI's auth badge, through
+ * `oauthGrantCanAuthenticate`; badge and agent must not disagree about one
+ * grant.
+ *
+ * That widening is `refreshable` below — a named field on the one answer, not
+ * a second rule. `live || refreshable` is precisely
+ * `oauthGrantCanAuthenticate`. No surface that *grants* anything reads it: the
+ * `oauth` widget's mint short-circuit and its resolution gate both still
+ * require `live`.
+ *
+ * Which leaves one known residual disagreement, in exactly one state: a bound,
+ * expired, still-refreshable grant, which the agent-facing read now calls
+ * authenticated while the mint short-circuit would still render a Connect
+ * button for it. Closing that means widening the short-circuit, which is a
+ * change to a gate and belongs in its own reviewed commit with its own test.
+ * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  *
  * The lookup key is the *credential* user, never the Session owner: shared-mode
  * servers key on `null`, per-user servers on whoever is actually prompting. See
@@ -72,13 +89,22 @@ export interface MCPOAuthGrantLiveness {
    * Not live now, but a bound grant with a refresh token of known outcome is
    * on file, so the inject hook's JIT refresh is expected to make it usable.
    *
-   * ONLY the gateway's pre-prompt warning may act on this, and only to stay
-   * quiet. It is never evidence that a sign-in completed: a refresh that has
-   * not happened yet cannot resolve a widget, and treating it as a grant would
-   * let a POST resolve against a credential nobody has re-obtained.
+   * Only the two *reporting* surfaces may act on this: the gateway's
+   * pre-prompt warning, to stay quiet, and `agor_mcp_servers_auth_status`, to
+   * answer `oauth_authenticated`. Neither grants anything. It is never
+   * evidence that a sign-in completed — a refresh that has not happened yet
+   * cannot resolve a widget, and treating it as a grant would let a POST
+   * resolve against a credential nobody has re-obtained.
    */
   refreshable: boolean;
-  /** Expiry of the live grant, when it has one. Absent for non-expiring grants. */
+  /**
+   * The grant's stored `oauth_token_expires_at`, when it has one.
+   *
+   * Present whenever a grant row was found, including one that is not `live`:
+   * a `refreshable` grant's expiry is already in the past, and the agent-facing
+   * status surface reports it as-is rather than hiding it. Absent for a
+   * non-expiring grant, and for every verdict reached without a grant row.
+   */
   expiresAt?: Date;
 }
 
@@ -132,16 +158,18 @@ export async function resolveMCPOAuthGrantLiveness(
   // already consumed.
   const refreshable = grant.refresh_status !== 'ambiguous' && !!grant.oauth_refresh_token;
 
+  // Carried on every verdict from here down, not just the live one: a caller
+  // that reports a `refreshable` grant as authenticated still wants to say
+  // when the access token lapsed.
+  const expiresAt = grant.oauth_token_expires_at ?? undefined;
+
   // A refresh in flight or of unknown outcome is not a credential the next
   // turn can spend, and neither is one that has already expired.
-  if (grant.refresh_status !== 'idle') return { live: false, reason: 'refreshing', refreshable };
-  if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
-    return { live: false, reason: 'expired', refreshable };
+  if (grant.refresh_status !== 'idle') {
+    return { live: false, reason: 'refreshing', refreshable, expiresAt };
   }
-  return {
-    live: true,
-    reason: 'live',
-    refreshable: false,
-    expiresAt: grant.oauth_token_expires_at,
-  };
+  if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
+    return { live: false, reason: 'expired', refreshable, expiresAt };
+  }
+  return { live: true, reason: 'live', refreshable: false, expiresAt };
 }

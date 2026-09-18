@@ -1,248 +1,232 @@
 import type { Board, Branch, Session, User } from '@agor-live/client';
-import {
-  AppstoreAddOutlined,
-  AppstoreOutlined,
-  BulbOutlined,
-  PlusOutlined,
-  RobotOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import {
-  Badge,
-  Button,
-  Card,
-  Empty,
-  Flex,
-  Layout,
-  List,
-  Space,
-  Statistic,
-  Typography,
-  theme,
-} from 'antd';
+import { RightOutlined, RobotOutlined } from '@ant-design/icons';
+import { Button, Empty, Flex, List, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSessionDisplayTitle } from '@/utils/sessionTitle';
-import { formatRelativeTime } from '@/utils/time';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { pressableProps } from '../../utils/pressableProps';
 import { getBoardEmoji } from '../BoardTile';
+import { GlassPanel } from '../GlassSurface/GlassPanel';
+import { JumpBackInSection } from '../HomePage/JumpBackInSection';
+import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
-
-const { Content } = Layout;
-const { Text, Title } = Typography;
+import { MobileSessionRow } from './MobileSessionRow';
 
 interface MobileHomePageProps {
-  user?: User | null;
-  boardById: Map<string, Board>;
-  branchById: Map<string, Branch>;
   sessionById: Map<string, Session>;
-  onMenuClick: () => void;
-  onOpenSettings: (section: string) => void;
+  branchById: Map<string, Branch>;
+  boardById: Map<string, Board>;
+  currentUser?: User | null;
+  onAsk: () => void;
+  primaryTeammateName?: string;
+  primaryTeammateEmoji?: string;
+  /** Number of the primary assistant's own sessions (shown on the hero). */
+  assistantSessionCount?: number;
+  /** Opens the assistant's session list; when set, the hero body becomes tappable. */
+  onOpenAssistantSessions?: () => void;
+  /** Unread comments count for the header bell. */
+  commentsBadge?: number;
+  /** Opens comments/mentions from the header bell. */
+  onOpenComments?: () => void;
 }
 
+const RECENT_LIMIT = 5;
+
+/**
+ * Home landing: a thin composition of existing pieces. It owns no session/board
+ * data logic; it reuses the desktop JumpBackInSection (self-subscribing), the
+ * shared MobileSessionRow, board selectors, and the glass surface components.
+ */
 export const MobileHomePage: React.FC<MobileHomePageProps> = ({
-  user,
-  boardById,
-  branchById,
   sessionById,
-  onMenuClick,
-  onOpenSettings,
+  branchById,
+  boardById,
+  currentUser,
+  onAsk,
+  primaryTeammateName,
+  primaryTeammateEmoji,
+  assistantSessionCount,
+  onOpenAssistantSessions,
+  commentsBadge,
+  onOpenComments,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
+
+  const recent = useMemo(() => {
+    const userId = currentUser?.user_id;
+    return Array.from(sessionById.values())
+      .filter((s) => !s.archived && (!userId || s.created_by === userId))
+      .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))
+      .slice(0, RECENT_LIMIT);
+  }, [sessionById, currentUser?.user_id]);
+
   const boards = useMemo(
-    () => Array.from(boardById.values()).filter((board) => !board.archived),
+    () => Array.from(boardById.values()).filter((b) => !b.archived),
     [boardById]
   );
-  const sessions = useMemo(
-    () =>
-      Array.from(sessionById.values())
-        .filter((session) => !session.archived && (!user || session.created_by === user.user_id))
-        .sort((a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()),
-    [sessionById, user]
+
+  const greetingName = currentUser?.name?.split(' ')[0];
+  const askName = primaryTeammateName ?? 'your primary assistant';
+
+  // One inner padding for every card (header + body) so titles, rows, and the
+  // Ask hero content all line up on a single left edge. The outer 16px gutter
+  // lives once on the scroll Flex; rows inside defer to the body (paddingInline
+  // 0) instead of adding a second inset.
+  const cardStyles = {
+    header: { paddingInline: token.padding },
+    body: { padding: token.padding },
+  } as const;
+
+  const heroContent = (
+    <>
+      <span style={{ fontSize: token.fontSizeHeading2, lineHeight: 1 }}>
+        {primaryTeammateEmoji ?? <RobotOutlined />}
+      </span>
+      <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text strong>Ask {askName}</Typography.Text>
+        <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+          {assistantSessionCount && assistantSessionCount > 0
+            ? `${assistantSessionCount} session${assistantSessionCount === 1 ? '' : 's'} · tap to view`
+            : 'Kick off a task, ask a question, or get help.'}
+        </Typography.Text>
+      </Flex>
+    </>
   );
-  const { activeBranches, branchCountByBoard } = useMemo(() => {
-    let count = 0;
-    const byBoard = new Map<string, number>();
-    for (const branch of branchById.values()) {
-      if (branch.archived) continue;
-      count += 1;
-      if (branch.board_id) {
-        byBoard.set(branch.board_id, (byBoard.get(branch.board_id) ?? 0) + 1);
-      }
-    }
-    return { activeBranches: count, branchCountByBoard: byBoard };
-  }, [branchById]);
-  const running = sessions.filter((session) => session.status === 'running').length;
 
   return (
-    <>
-      <MobileHeader showLogo user={user} onMenuClick={onMenuClick} />
-      <Content style={{ overflowY: 'auto', padding: token.paddingMD, paddingBottom: 40 }}>
-        <Flex vertical gap={token.marginLG} style={{ maxWidth: 680, margin: '0 auto' }}>
-          <div>
-            <Title level={4} style={{ margin: 0 }}>
-              Hi, {user?.name || 'there'}! 👋
-            </Title>
-            <Text type="secondary">Here’s an overview of your workspace.</Text>
-          </div>
-          <Flex gap={token.marginSM} wrap>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => onOpenSettings('teammates')}
-            >
-              New teammate
-            </Button>
-            <Button icon={<AppstoreAddOutlined />} onClick={() => onOpenSettings('branches')}>
-              New branch
-            </Button>
-            <Button icon={<AppstoreOutlined />} onClick={() => onOpenSettings('boards')}>
-              New board
-            </Button>
-          </Flex>
-          <Flex gap={token.marginSM} wrap>
-            <Card size="small" style={{ flex: '1 1 140px' }}>
-              <Statistic title="Boards" value={boards.length} prefix={<AppstoreOutlined />} />
-            </Card>
-            <Card size="small" style={{ flex: '1 1 140px' }}>
-              <Statistic
-                title="Active branches"
-                value={activeBranches}
-                prefix={<AppstoreAddOutlined />}
-              />
-            </Card>
-            <Card size="small" style={{ flex: '1 1 140px' }}>
-              <Statistic title="Running now" value={running} prefix={<ThunderboltOutlined />} />
-            </Card>
-          </Flex>
-          <section aria-labelledby="mobile-home-sessions">
-            <Flex justify="space-between" align="center" style={{ marginBottom: token.marginSM }}>
-              <Title id="mobile-home-sessions" level={5} style={{ margin: 0 }}>
-                My sessions
-              </Title>
-              <Text type="secondary">{sessions.length} total</Text>
-            </Flex>
-            <Card size="small" styles={{ body: { padding: 0 } }}>
-              {sessions.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No sessions yet" />
-              ) : (
-                <List
-                  dataSource={sessions.slice(0, 8)}
-                  renderItem={(session) => {
-                    const branch = branchById.get(session.branch_id);
-                    return (
-                      <List.Item style={{ padding: 0 }}>
-                        <Button
-                          type="text"
-                          block
-                          onClick={() => navigate(`/m/session/${session.session_id}`)}
-                          style={{ height: 'auto', padding: token.paddingSM, textAlign: 'start' }}
-                        >
-                          <List.Item.Meta
-                            avatar={
-                              <Badge
-                                status={session.status === 'running' ? 'processing' : 'default'}
-                              />
-                            }
-                            title={
-                              <Text ellipsis>
-                                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                              </Text>
-                            }
-                            description={
-                              <Space size={token.marginXS} wrap>
-                                {branch && <Text type="secondary">{branch.name}</Text>}
-                                <Text type="secondary">
-                                  {formatRelativeTime(session.last_updated)}
-                                </Text>
-                              </Space>
-                            }
-                          />
-                        </Button>
-                      </List.Item>
-                    );
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <MobileHeader
+        title={greetingName ? `Welcome back, ${greetingName}` : 'Home'}
+        onSearch={() => navigate('/m/search')}
+        commentsBadge={commentsBadge}
+        onOpenComments={onOpenComments}
+      />
+      <div
+        style={{
+          ...mobileScrollAreaStyle,
+          paddingBlock: token.paddingMD,
+          paddingBottom: `calc(${token.paddingXL}px + env(safe-area-inset-bottom))`,
+        }}
+      >
+        <Flex vertical gap={token.marginLG} style={{ paddingInline: token.padding }}>
+          {/* Ask primary assistant hero */}
+          <GlassPanel
+            size="small"
+            blur={false}
+            highlights={{ intensity: 'subtle' }}
+            styles={cardStyles}
+          >
+            <Flex align="center" gap={token.margin}>
+              {/* Body opens the assistant's session list; the Ask button stays
+                  the quick-compose action. */}
+              {onOpenAssistantSessions ? (
+                <button
+                  type="button"
+                  aria-label={`View ${askName}'s sessions`}
+                  onClick={onOpenAssistantSessions}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: token.margin,
+                    flex: 1,
+                    minWidth: 0,
+                    minHeight: MOBILE_TOUCH_TARGET,
+                    cursor: 'pointer',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    textAlign: 'left',
+                    font: 'inherit',
+                    color: 'inherit',
                   }}
-                />
+                >
+                  {heroContent}
+                  <RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />
+                </button>
+              ) : (
+                <Flex align="center" gap={token.margin} style={{ flex: 1, minWidth: 0 }}>
+                  {heroContent}
+                </Flex>
               )}
-            </Card>
-          </section>
-          <section aria-labelledby="mobile-home-boards">
-            <Flex justify="space-between" align="center" style={{ marginBottom: token.marginSM }}>
-              <Title id="mobile-home-boards" level={5} style={{ margin: 0 }}>
-                Boards
-              </Title>
-              <Button type="link" onClick={() => onOpenSettings('boards')}>
-                Manage
+              <Button type="primary" onClick={onAsk} style={{ minHeight: MOBILE_TOUCH_TARGET }}>
+                Ask
               </Button>
             </Flex>
-            {boards.length === 0 ? (
-              <Card>
-                <Empty description="No boards yet" />
-              </Card>
+          </GlassPanel>
+
+          {/* Awaiting sessions (reused desktop section; renders nothing when none) */}
+          <JumpBackInSection
+            currentUserId={currentUser?.user_id}
+            onSessionClick={(id) => navigate(`/m/session/${id}`)}
+          />
+
+          <GlassPanel
+            size="small"
+            blur={false}
+            title="Recent sessions"
+            extra={
+              recent.length > 0 ? (
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => navigate('/m/sessions')}
+                  style={{ minHeight: MOBILE_TOUCH_TARGET }}
+                >
+                  All sessions
+                </Button>
+              ) : undefined
+            }
+            styles={cardStyles}
+          >
+            {recent.length > 0 ? (
+              <List
+                dataSource={recent}
+                renderItem={(session) => (
+                  <MobileSessionRow
+                    session={session}
+                    branch={session.branch_id ? branchById.get(session.branch_id) : undefined}
+                  />
+                )}
+              />
             ) : (
-              <Flex vertical gap={token.marginSM}>
-                {boards.map((board) => {
-                  const branchCount = branchCountByBoard.get(board.board_id) ?? 0;
-                  return (
-                    <Card
-                      key={board.board_id}
-                      size="small"
-                      hoverable
-                      styles={{ body: { padding: 0 } }}
-                    >
-                      <Button
-                        type="text"
-                        block
-                        onClick={() => navigate(`/m/board/${board.board_id}`)}
-                        style={{ height: 'auto', padding: token.paddingSM, textAlign: 'start' }}
-                      >
-                        <Flex align="center" gap={token.marginSM}>
-                          <span aria-hidden style={{ fontSize: 28 }}>
-                            {getBoardEmoji(board, branchById)}
-                          </span>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <Text strong ellipsis style={{ display: 'block' }}>
-                              {board.name}
-                            </Text>
-                            <Text type="secondary">
-                              {branchCount} {branchCount === 1 ? 'branch' : 'branches'}
-                            </Text>
-                          </div>
-                        </Flex>
-                      </Button>
-                    </Card>
-                  );
-                })}
-              </Flex>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={`No sessions yet. Ask ${askName} to get started.`}
+              />
             )}
-          </section>
-          <Card size="small">
-            <Flex align="center" justify="space-between" gap={token.marginSM}>
-              <Space>
-                <BulbOutlined />
-                <div>
-                  <Text strong>Knowledge Base</Text>
-                  <br />
-                  <Text type="secondary">Browse team context and documentation</Text>
-                </div>
-              </Space>
-              <Button type="link" onClick={() => navigate('/knowledge')}>
-                Open
-              </Button>
-            </Flex>
-          </Card>
-          <Card size="small" title="Workspace setup">
-            <Flex vertical gap={token.marginXS}>
-              <Button block icon={<AppstoreOutlined />} onClick={() => onOpenSettings('repos')}>
-                Connect a repository
-              </Button>
-              <Button block icon={<RobotOutlined />} onClick={() => onOpenSettings('mcp')}>
-                Configure MCP tools
-              </Button>
-            </Flex>
-          </Card>
+          </GlassPanel>
+
+          {boards.length > 0 && (
+            <GlassPanel size="small" blur={false} title="Your boards" styles={cardStyles}>
+              <List
+                dataSource={boards}
+                renderItem={(board) => (
+                  <List.Item
+                    {...pressableProps(() => navigate(`/m/board/${board.board_id}`))}
+                    aria-label={`Open ${board.name}`}
+                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: MOBILE_TOUCH_TARGET }}
+                  >
+                    <List.Item.Meta
+                      avatar={
+                        <span aria-hidden style={{ fontSize: token.fontSizeHeading4 }}>
+                          {getBoardEmoji(board, branchById)}
+                        </span>
+                      }
+                      title={
+                        <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
+                          {board.name}
+                        </Typography.Text>
+                      }
+                    />
+                    <RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />
+                  </List.Item>
+                )}
+              />
+            </GlassPanel>
+          )}
         </Flex>
-      </Content>
-    </>
+      </div>
+    </div>
   );
 };

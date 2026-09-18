@@ -10,7 +10,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -26,6 +25,7 @@ import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTi
 import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface ArtifactsTableProps {
@@ -312,7 +312,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           </Empty>
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
           dataSource={dataSource}
           columns={columns}
           rowKey="artifact_id"

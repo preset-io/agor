@@ -1,9 +1,7 @@
-import { getTeammateConfig } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import type React from 'react';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
-import { formatRelativeTimeSafe } from '../../utils/time';
 import { HighlightMatch } from '../HighlightMatch';
+import { describeSearchResult } from './describeSearchResult';
 import type { SearchResultItem } from './types';
 
 const { Text } = Typography;
@@ -36,7 +34,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
   tokens = [],
 }) => {
   const { token } = theme.useToken();
-  const { title, tag, secondary, time, icon } = renderResult(result);
+  const { title, tag, secondary, time, icon } = describeSearchResult(result);
 
   return (
     <button
@@ -120,62 +118,3 @@ export const SearchResult: React.FC<SearchResultProps> = ({
     </button>
   );
 };
-
-function renderResult(result: SearchResultItem): {
-  title: string;
-  tag?: string;
-  secondary?: string;
-  time?: string;
-  /** Only set when the entity itself has an emoji (teammate config).
-   * Generic per-type emojis are dropped — section headers carry the
-   * entity-kind affordance instead. */
-  icon?: string;
-} {
-  switch (result.type) {
-    case 'session': {
-      const title = getSessionDisplayTitle(result.item, { includeAgentFallback: true });
-      return {
-        title,
-        tag: result.item.agentic_tool,
-        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
-        time: formatRelativeTimeSafe(result.item.last_updated),
-      };
-    }
-    case 'branch': {
-      return {
-        title: result.item.name,
-        tag: result.item.ref,
-        time: formatRelativeTimeSafe(result.item.updated_at),
-      };
-    }
-    case 'teammate': {
-      const config = getTeammateConfig(result.item);
-      return {
-        icon: config?.emoji,
-        title: config?.displayName ?? result.item.name,
-        time: formatRelativeTimeSafe(result.item.updated_at),
-      };
-    }
-    case 'artifact': {
-      return {
-        title: result.item.name,
-        tag: result.item.template,
-        secondary: result.parentBranch ? `in ${result.parentBranch.name}` : undefined,
-        time: formatRelativeTimeSafe(result.item.updated_at),
-      };
-    }
-    case 'board': {
-      return {
-        title: result.item.name,
-        time: formatRelativeTimeSafe(result.item.last_updated),
-      };
-    }
-    case 'mcp': {
-      return {
-        title: result.item.display_name || result.item.name,
-        tag: result.item.transport,
-        secondary: result.item.description,
-      };
-    }
-  }
-}
