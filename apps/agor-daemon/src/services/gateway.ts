@@ -2551,7 +2551,7 @@ export class GatewayService {
     // re-render the card on every repair tick.
     const willReissue =
       binding.ok && !grantLive && mcpSlackConnectMayReissue(widget, delivery, now);
-    const state = mcpSlackConnectRenderedState(
+    let state = mcpSlackConnectRenderedState(
       {
         widget,
         delivery,
@@ -2561,6 +2561,31 @@ export class GatewayService {
       },
       now
     );
+
+    // Re-seal HERE, above the steady-state shortcut, because whether a finish
+    // link can be produced at all is part of which state this card is in —
+    // `finish_required` means "there is a button to offer" and
+    // `finish_stalled` means "there is not". Deciding it later would leave the
+    // shortcut, the claim and the expiry timer all reasoning about a state the
+    // card then could not render, and would re-render a settled
+    // `finish_stalled` card on every tick.
+    //
+    // Unlike `issueMCPOAuthConnectLink` below — which is deliberately left
+    // until a post is certain, because minting starts a ten-minute clock —
+    // this writes nothing and starts nothing. It re-derives a link from a
+    // record that already exists, so running it on a tick that turns out to
+    // be a no-op costs one seal and changes nothing.
+    let finishUrl: string | undefined;
+    if (state === 'finish_required' && delivery) {
+      // Re-seal, never re-issue. The sign-in already happened, the one-use
+      // token already did its job, and a re-issue would clear the
+      // `oauth_succeeded_at` that is the record of it.
+      finishUrl = binding.ok
+        ? (resealMCPOAuthConnectLink(deps, binding, requireCurrentTenantId(), new Date()) ??
+          undefined)
+        : undefined;
+      if (!finishUrl) state = 'finish_stalled';
+    }
     this.scheduleMcpSlackConnectExpiry(widgetId, delivery, state);
 
     // The binding moved under a card that is already in the thread. Record it
@@ -2625,27 +2650,7 @@ export class GatewayService {
     // appears rather than on every repair tick. On the first card the mint IS
     // the claim — there is no record to claim beforehand, and two daemons
     // minting concurrently would otherwise each post one.
-    let url: string | undefined;
-    if (state === 'finish_required' && delivery) {
-      if (!binding.ok) return;
-      // Re-seal, never re-issue. The sign-in already happened, the one-use
-      // token already did its job, and a re-issue would clear the
-      // `oauth_succeeded_at` that is the record of it.
-      url =
-        resealMCPOAuthConnectLink(deps, binding, requireCurrentTenantId(), new Date()) ?? undefined;
-      if (!url) {
-        // The link lapsed between the state read and this line. Hand the card
-        // straight back to a fresh render, which now reads `finish_stalled`
-        // and posts the same card without a button. It cannot bounce a third
-        // time: the second read's clock is strictly past the expiry that
-        // produced this one.
-        await this.releaseMcpSlackConnectClaim(widgetId, claimId);
-        if (attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
-          await this.deliverMcpSlackConnectCard(widgetId, attempt + 1);
-        }
-        return;
-      }
-    }
+    let url: string | undefined = finishUrl;
     if (state === 'connect_required' || (state === 'finish_required' && !delivery)) {
       if (!binding.ok) return;
       const issued = await issueMCPOAuthConnectLink(deps, {
