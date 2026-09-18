@@ -115,6 +115,11 @@ export type GatewayTokenSubmit = z.infer<typeof gatewayTokenSubmitSchema>;
  * auto-resume prompt. Carries the channel identity, which fields were set, and
  * the enable/test outcome — but NEVER a token value, prefix, length, or
  * last-four.
+ *
+ * `applySubmit` returns this directly. None of it can be derived from the
+ * submit body alone — the channel identity comes from the bound row and the
+ * enable decision from the probe — which is exactly the case the registry's
+ * optional handler return exists for.
  */
 export interface GatewayTokenResultMeta {
   channelId: string;
@@ -130,24 +135,6 @@ export interface GatewayTokenResultMeta {
   unverified: boolean;
   test: { ok: boolean; summary: string };
 }
-
-/**
- * `buildResultMeta` receives only the submit body (registry contract), yet the
- * enable decision and channel identity are computed inside `applySubmit`. This
- * WeakMap carries that outcome across the two calls — keyed on the shared
- * submit object identity, which `resolveWidget` passes to both in sequence.
- * Nothing here is secret; the token values stay out of it entirely.
- */
-interface GatewayTokenOutcome {
-  channelId: string;
-  channelName: string;
-  channelType: ChannelType;
-  enabled: boolean;
-  unverified: boolean;
-  test: { ok: boolean; summary: string };
-}
-
-const submitOutcomes = new WeakMap<GatewayTokenSubmit, GatewayTokenOutcome>();
 
 /**
  * Slack error codes that mean the submitted credential itself is bad — the
@@ -327,7 +314,7 @@ async function applyGatewayTokenSubmit(
   ctx: WidgetSubmitCtx,
   submit: GatewayTokenSubmit,
   params: GatewayTokenParams
-): Promise<void> {
+): Promise<GatewayTokenResultMeta> {
   // a. Admin guard FIRST.
   assertGatewayTokenAdmin(ctx);
 
@@ -426,14 +413,18 @@ async function applyGatewayTokenSubmit(
     );
   }
 
-  submitOutcomes.set(submit, {
+  // The outcome this handler established, returned as the widget's
+  // `result_meta`. Every value is a name, a flag, or a probe summary — the
+  // token values are read above and go no further than the channel patch.
+  return {
     channelId: channel.id,
     channelName: channel.name,
     channelType: channel.channel_type,
+    fieldsSet: orderedFields(Object.keys(submit.tokens)),
     enabled: enable,
     unverified: status === 'unverifiable',
     test: { ok: testResult.ok, summary },
-  });
+  };
 }
 
 export const gatewayTokenWidget: WidgetRegistryEntry<
@@ -445,18 +436,8 @@ export const gatewayTokenWidget: WidgetRegistryEntry<
   schemaVersion: 1,
   paramsSchema: gatewayTokenParamsSchema,
   submitSchema: gatewayTokenSubmitSchema,
-  buildResultMeta: (submit) => {
-    const outcome = submitOutcomes.get(submit);
-    return {
-      channelId: outcome?.channelId ?? '',
-      channelName: outcome?.channelName ?? '',
-      channelType: outcome?.channelType ?? 'slack',
-      fieldsSet: orderedFields(Object.keys(submit.tokens)),
-      enabled: outcome?.enabled ?? false,
-      unverified: outcome?.unverified ?? false,
-      test: outcome?.test ?? { ok: false, summary: '' },
-    };
-  },
+  // No `buildResultMeta`: this widget's outcome is decided by a credential
+  // probe inside `applySubmit`, not by the body, so the handler returns it.
   applySubmit: applyGatewayTokenSubmit,
   buildAutoResumePrompt: (rm, params) => {
     const fields = orderedFields(rm.fieldsSet).join(', ');

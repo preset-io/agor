@@ -6,17 +6,19 @@
  * the system-authored auto-resume / dismissal prompts.
  *
  * A widget is *resolved*, and "resolved" is deliberately broader than
- * "submitted". Two resolution kinds exist:
+ * "submitted". The registry is a union of exactly two kinds, and what
+ * separates them is **whether the entry accepts a request body**:
  *
  *   - `'submit'` (the default) — the browser POSTs a form body to
- *     `POST /widgets/:id/submit`, the entry validates it with `submitSchema`
+ *     `POST /widgets/:id/submit`. The entry validates it with `submitSchema`
  *     and applies it through `applySubmit`. `env_vars` and `gateway_token`
  *     work this way.
- *   - `'daemon_verified'` — there is no form body to trust. The client reports
- *     that something finished and the entry's `resolveFromDaemonVerification`
- *     re-derives the outcome from durable daemon state rather than from
- *     anything the client asserted. `oauth` works this way, via
- *     `POST /widgets/:id/oauth-resolve` and the persisted grant.
+ *   - `'daemon_verified'` — there is no form body to trust, and none is
+ *     accepted. The client reports that something finished and the entry's
+ *     `resolveFromDaemonVerification` re-derives the outcome from durable
+ *     daemon state rather than from anything the client asserted. `oauth`
+ *     works this way, via `POST /widgets/:id/oauth-resolve` and the persisted
+ *     grant.
  *
  *     The name is deliberately kind-neutral. Nothing about this machinery is
  *     OAuth-specific — a GitHub App install or a device-code flow is the same
@@ -25,6 +27,21 @@
  *     `'oauth_callback'`: that names the endpoint the request arrived at and is
  *     persisted in `resolution_claim.action`, so it is a route/compatibility
  *     value rather than a statement about the machinery.)
+ *
+ * Body-or-no-body is the axis that carries weight, because it is what decides
+ * the two things the resolver must get right: whether a payload is validated
+ * at all, and which endpoint may resolve this type (`submissions.ts` refuses
+ * the mismatch in both directions).
+ *
+ * Where `result_meta` comes from is NOT that axis, and used to be conflated
+ * with it: only the bodiless variant could return its own. The result was that
+ * `gateway_token` — whose outcome is decided by a probe inside `applySubmit`,
+ * not by the body — had to smuggle that outcome to `buildResultMeta` through a
+ * module-level `WeakMap` keyed on submit-object identity, and the next
+ * form-backed, externally-verified widget would have needed a second one. Now
+ * **either** handler may return the sanitized `result_meta`, and
+ * `buildResultMeta` is the fallback for the case it was always right for: a
+ * meta that is a pure projection of the body (`env_vars`).
  *
  * Everything downstream of the handler — the durable claim, the auto-resume
  * task, the terminal status patch, the `widget:resolved` broadcast — is the
@@ -41,7 +58,10 @@
  *
  * Critical invariant: `buildAutoResumePrompt` receives only
  * `(result_meta, params)` — never the raw submit body. This is what
- * guarantees the secret-doesn't-enter-context property (§5.1).
+ * guarantees the secret-doesn't-enter-context property (§5.1). It holds
+ * whichever source produced the `result_meta`: a handler return is under the
+ * same sanitization rule as `buildResultMeta`, and neither is ever handed the
+ * body to pass through.
  */
 
 import type { Application } from '@agor/core/feathers';
@@ -186,15 +206,33 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
   /** Validates `POST /widgets/:widget_id/submit` body. */
   submitSchema: z.ZodType<TSubmit>;
   /**
-   * Build the sanitized `result_meta` written to the message row and fed
-   * into `buildAutoResumePrompt`. MUST NOT include secret values from the
-   * submit body — only names, scope, labels, etc.
+   * Build the sanitized `result_meta` from the submit body alone — the
+   * FALLBACK, used only when `applySubmit` returns nothing.
+   *
+   * Right for a meta that is a pure projection of what was submitted
+   * (`env_vars` reports the names it saved and their scope). A handler whose
+   * outcome depends on what its side-effect DID should return that outcome
+   * instead; deriving it here would mean carrying it across two calls.
+   *
+   * Either way the rule is the same and is not negotiable: MUST NOT include
+   * secret values from the submit body — only names, scope, labels, etc.
    */
-  buildResultMeta: (submit: TSubmit) => TResultMeta;
+  buildResultMeta?: (submit: TSubmit) => TResultMeta;
   /**
    * Apply the submission's side-effect (encrypt + write env var,
    * attach MCP server, finalize OAuth, etc.). The submit endpoint runs
    * this BEFORE patching the widget message status to 'submitted'.
+   *
+   * May RETURN the sanitized `result_meta`, which wins over
+   * `buildResultMeta`. That is what a handler should do whenever the outcome
+   * is decided by the side-effect rather than by the body — a credential
+   * probe's verdict, the row an upsert settled on — because the alternative is
+   * carrying the value from one call to the other outside the type.
+   *
+   * What it returns is `result_meta` and therefore reaches the agent's context
+   * through `buildAutoResumePrompt`, so it is under exactly the sanitization
+   * rule `buildResultMeta` is under: names, scopes, labels and outcomes, never
+   * a submitted value.
    *
    * `params` is the original agent-provided params stored on the widget row —
    * available so the handler can cross-check the submit body against what was
@@ -206,7 +244,12 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
    * idempotently). Daemon death after an unknown outcome is different: the
    * claim stays `resolving` and is not replayed.
    */
-  applySubmit: (ctx: WidgetSubmitCtx, submit: TSubmit, params: TParams) => Promise<void>;
+  applySubmit: (
+    ctx: WidgetSubmitCtx,
+    submit: TSubmit,
+    params: TParams
+    // biome-ignore lint/suspicious/noConfusingVoidType: `undefined` would reject a handler declared `Promise<void>`, which is every handler that computes no meta
+  ) => Promise<TResultMeta | void>;
 }
 
 /**
@@ -220,9 +263,11 @@ export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
  * durable state is the persisted grant; the handler below is the only thing
  * that decides whether it really did.
  *
- * `resolveFromDaemonVerification` therefore RETURNS the `result_meta` rather than
- * having it derived from a submit body — the sanitized facts come from the
- * durable rows the handler just read, not from the request.
+ * `resolveFromDaemonVerification` therefore MUST return the `result_meta`:
+ * there is no body for a fallback builder to project, and the sanitized facts
+ * come from the durable rows the handler just read. (Returning it is no longer
+ * what makes this variant different — `applySubmit` may return one too. What
+ * makes it different is that here it is the only source.)
  *
  * Retry safety is the same contract as `applySubmit`: a thrown error releases
  * the claim back to `pending`, so the handler must be idempotent (the OAuth
@@ -278,6 +323,23 @@ export interface DaemonVerifiedWidgetRegistryEntry<TParams, TResultMeta>
  * duplicates nothing.
  */
 export type WidgetResolutionRecoveryPolicy = 'none' | 'reclaimable';
+
+/**
+ * Whether this entry accepts a request body — the union's actual axis.
+ *
+ * A type predicate rather than a comparison at each call site, so the two
+ * questions that follow from it stay together: whether a payload is validated,
+ * and which of `/submit` and `/oauth-resolve` may resolve this type. The
+ * resolver refuses the mismatch in both directions, because a bodiless entry
+ * reached through `/submit` would be resolved on a client's say-so and a
+ * body-taking entry reached through `/oauth-resolve` would skip its payload
+ * validation entirely.
+ */
+export function widgetAcceptsSubmitBody<TParams, TSubmit, TResultMeta>(
+  entry: WidgetRegistryEntry<TParams, TSubmit, TResultMeta>
+): entry is SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta> {
+  return entry.resolution !== 'daemon_verified';
+}
 
 /** The recovery policy an entry declares, defaulting to the generic one. */
 export function widgetRecoveryPolicy(
