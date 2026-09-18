@@ -35,6 +35,8 @@ import { getMcpOAuthConnectUrl } from '@agor/core/utils/url';
 import {
   issueMCPOAuthConnectToken,
   MCP_OAUTH_CONNECT_TOKEN_TTL_MS,
+  mcpOAuthConnectClaimsMatchDelivery,
+  verifyMCPOAuthConnectToken,
 } from '../utils/mcp-oauth-connect-token.js';
 import type { OAuthWidgetParams } from '../widgets/oauth/index.js';
 import {
@@ -331,9 +333,11 @@ export async function resolveSlackConnectBinding(
  * compares — and grants strictly less than an issue: nothing is minted,
  * nothing is invalidated, and the result dies on the original clock.
  *
- * Returns `null` once that clock has run out. There is deliberately no
- * extension: a lapsed finish link is `finish_stalled`, whose answer is to ask
- * again in the thread, which costs no second sign-in.
+ * Returns `null` whenever it cannot produce a link redemption would accept —
+ * the clock has run out, or the record is not one an acceptable token can be
+ * built from (see the check at the end). There is deliberately no extension: a
+ * finish link that cannot be offered is `finish_stalled`, whose answer is to
+ * ask again in the thread, which costs no second sign-in.
  *
  * The authority-derived claims (`session_owner_user_id`, the server's
  * `config_version`) come from the binding proved for THIS call rather than
@@ -382,6 +386,34 @@ export function resealMCPOAuthConnectLink(
     deps.masterSecret,
     issuedAt
   );
+
+  // Prove the link before offering it, using redemption's own two steps rather
+  // than a second opinion about what they will say.
+  //
+  // The card's whole promise in this state is that it never shows a finish
+  // `/oauth-resolve` would refuse, and that promise rests here on an invariant
+  // this function cannot see: `mcpOAuthConnectClaimsMatchDelivery` compares
+  // whole-second `iat`/`exp` for EQUALITY against the record's ISO timestamps,
+  // so a record whose clocks carry milliseconds yields a token refused every
+  // time. `issueMCPOAuthConnectLink` second-aligns its clock for exactly that
+  // reason — one function away, in a comment, with nothing binding the two
+  // together. Re-reading what we just sealed makes the promise structural
+  // instead: any record this cannot produce an acceptable link for degrades to
+  // `finish_stalled`, whose answer — ask again in the thread, at no second
+  // sign-in — is true and recoverable, rather than to a button that fails.
+  try {
+    if (
+      !mcpOAuthConnectClaimsMatchDelivery(
+        verifyMCPOAuthConnectToken(token, deps.masterSecret, now),
+        delivery,
+        tenantId
+      )
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
   return `${getMcpOAuthConnectUrl(deps.baseUrl)}#token=${encodeURIComponent(token)}`;
 }
 

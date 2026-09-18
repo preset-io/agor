@@ -30,6 +30,10 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  mcpOAuthConnectClaimsMatchDelivery,
+  verifyMCPOAuthConnectToken,
+} from '../utils/mcp-oauth-connect-token.js';
 
 // A channel whose `provider_config_generation` moved is deliberately delivered
 // through a freshly constructed connector rather than the process-local
@@ -1355,10 +1359,17 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
    * link has lapsed — so these have to be positioned around the real one.
    */
   const liveLink = (fields: Partial<MCPSlackConnectDelivery> = {}) => ({
-    issued_at: new Date(Date.now() - 5 * 60_000).toISOString(),
-    expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    // Second-aligned, because `issueMCPOAuthConnectLink` second-aligns and
+    // this stands in for a record it wrote. The alignment is not cosmetic:
+    // redemption compares whole-second `iat`/`exp` against these strings for
+    // equality, so an unaligned record is one no link can be re-sealed from.
+    // Pinned directly by the two tests below.
+    issued_at: new Date(alignedNow() - 5 * 60_000).toISOString(),
+    expires_at: new Date(alignedNow() + 5 * 60_000).toISOString(),
     ...fields,
   });
+
+  const alignedNow = () => Math.floor(Date.now() / 1_000) * 1_000;
 
   it('edits the dead sign-in card into one that finishes, on the link it already has', async () => {
     const harness = deliveryHarness({
@@ -1394,6 +1405,70 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
     expect(after?.token_jti).toBe('jti-1');
     expect(after?.oauth_succeeded_at).toBe('2026-09-16T12:02:00.000Z');
     expect(after?.token_consumed_at).toBe('2026-09-16T12:01:00.000Z');
+  });
+
+  it('posts a finish link redemption will actually accept', async () => {
+    // The promise this whole state rests on is that a card never offers a
+    // finish `/oauth-resolve` would refuse. Every other test here checks that
+    // a button is PRESENT; this one checks that pressing it works, by taking
+    // the URL apart and asking the redemption path's own comparison.
+    //
+    // It is not a theoretical worry. `mcpOAuthConnectClaimsMatchDelivery`
+    // compares the sealed `iat`/`exp` — whole seconds — for EQUALITY against
+    // the record's ISO timestamps, so a record whose clocks carry milliseconds
+    // produces a token that is refused every time. `issueMCPOAuthConnectLink`
+    // second-aligns for exactly that reason, one function away and in a
+    // comment; this is what binds the two together.
+    const harness = deliveryHarness({
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      blocks: { type: string; elements?: { url?: string }[] }[];
+    };
+    const url = request.blocks.find((block) => block.type === 'actions')?.elements?.[0]?.url;
+    const token = decodeURIComponent(new URL(url!).hash.replace('#token=', ''));
+    const claims = verifyMCPOAuthConnectToken(token, SECRET);
+    expect(mcpOAuthConnectClaimsMatchDelivery(claims, harness.current(), 'tenant-a')).toBe(true);
+  });
+
+  it('shows no button at all rather than one that cannot be redeemed', async () => {
+    // The other side of the same promise. A record whose clocks are not
+    // second-aligned is one no acceptable link can be re-sealed from — today
+    // only `issueMCPOAuthConnectLink` writes these, and it aligns, so this is
+    // the guard rather than a reachable state. It degrades to the honest
+    // answer, not to a button that fails: `finish_stalled` tells the reader to
+    // ask again in the thread, and asking again costs no second sign-in.
+    const harness = deliveryHarness({
+      delivery: {
+        issued_at: new Date(alignedNow() - 5 * 60_000 + 321).toISOString(),
+        expires_at: new Date(alignedNow() + 5 * 60_000 + 321).toISOString(),
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      },
+    });
+    await withSecret(() => harness.deliver());
+
+    const request = harness.sendMessage.mock.calls.at(-1)![0] as {
+      text: string;
+      blocks: { type: string }[];
+    };
+    expect(request.blocks.some((block) => block.type === 'actions')).toBe(false);
+    expect(request.text).toMatch(/will not have to sign in again/i);
+    expect(harness.current()).toMatchObject({ rendered_state: 'finish_stalled' });
+    // And it settles there. Deciding this before the steady-state shortcut is
+    // what stops a card the lane cannot produce a link for from being redrawn
+    // on every repair tick.
+    await withSecret(() => harness.deliver());
+    expect(harness.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('drops the button once the link lapses, and says asking again is free', async () => {
