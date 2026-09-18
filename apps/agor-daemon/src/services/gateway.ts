@@ -161,6 +161,16 @@ import {
   mcpSlackConnectSharedThreadWarning,
   slackConversationIsDirectMessage,
 } from './mcp-slack-connect-card.js';
+import {
+  applySlackDeliveryFailure,
+  clearSlackRenderedState,
+  MCP_SLACK_DELIVERY_MAX_ATTEMPTS,
+  MCP_SLACK_REPAINT_ATTEMPTS,
+  slackDeliveryClaim,
+  slackDeliveryClaimIsLive,
+  slackDeliveryRepairAt,
+  slackRenderWasLost,
+} from './mcp-slack-delivery-engine.js';
 import type { SessionParams } from './sessions.js';
 
 /**
@@ -235,10 +245,6 @@ const MCP_SLACK_CONNECT_REPAIR_PAGES = 4;
 const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
 const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
 const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
-const MCP_SLACK_ACTIVE_BACKSTOP_MS = 60_000;
-const MCP_SLACK_DELIVERY_RETRY_WINDOW_MS = 15 * 60_000;
-const MCP_SLACK_DELIVERY_MAX_ATTEMPTS = 6;
-const MCP_SLACK_DELIVERY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000] as const;
 
 /**
  * Why one Slack delivery attempt failed, in Agor's own words.
@@ -255,7 +261,6 @@ type MCPSlackDeliveryFailureReason =
   | 'app_identity_unavailable'
   /** The post or edit itself was refused. */
   | 'slack_write_failed';
-/** Lease one daemon holds while posting or editing one connect card. */
 /** Agor-owned reason a gateway read failed. Never a provider's, never the exception. */
 type GatewayReadFailureCategory = 'missing_tenant_scope' | 'unexpected';
 
@@ -266,10 +271,6 @@ interface McpSlackRepairFailureTally {
   /** First item that failed this way, for correlation. */
   entityId: string;
 }
-
-const MCP_SLACK_CONNECT_CLAIM_MS = 30_000;
-/** In-process repaints of a card whose render lost its claim. See §7.1.5. */
-const MCP_SLACK_CONNECT_REPAINT_ATTEMPTS = 2;
 
 async function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -1467,38 +1468,7 @@ export class GatewayService {
     now = Date.now()
   ): string | undefined {
     if (state !== 'reconnect_required' && state !== 'sign_in_pending') return undefined;
-    const expiryDelay = mcpSlackRecoveryExpiryDelay(state, notice, now);
-    return new Date(
-      now + Math.min(expiryDelay ?? MCP_SLACK_ACTIVE_BACKSTOP_MS, MCP_SLACK_ACTIVE_BACKSTOP_MS)
-    ).toISOString();
-  }
-
-  private mcpSlackFailedDeliveryNotice(
-    notice: MCPSlackRecoveryNotice,
-    now = new Date()
-  ): MCPSlackRecoveryNotice {
-    const attempt = (notice.delivery_attempt_count ?? 0) + 1;
-    const retryUntil = notice.delivery_retry_until
-      ? new Date(notice.delivery_retry_until)
-      : new Date(now.getTime() + MCP_SLACK_DELIVERY_RETRY_WINDOW_MS);
-    const backoff =
-      MCP_SLACK_DELIVERY_BACKOFF_MS[
-        Math.min(attempt - 1, MCP_SLACK_DELIVERY_BACKOFF_MS.length - 1)
-      ]!;
-    const next = new Date(now.getTime() + backoff);
-    const canRetry =
-      attempt < MCP_SLACK_DELIVERY_MAX_ATTEMPTS &&
-      Number.isFinite(retryUntil.getTime()) &&
-      next.getTime() <= retryUntil.getTime();
-    return {
-      ...notice,
-      delivery_claim: undefined,
-      delivery_attempt_count: attempt,
-      delivery_last_failed_at: now.toISOString(),
-      delivery_retry_until: retryUntil.toISOString(),
-      delivery_next_retry_at: canRetry ? next.toISOString() : undefined,
-      next_repair_at: canRetry ? next.toISOString() : undefined,
-    };
+    return slackDeliveryRepairAt(mcpSlackRecoveryExpiryDelay(state, notice, now), now);
   }
 
   /**
@@ -1596,7 +1566,7 @@ export class GatewayService {
     const failed = await this.taskRepo
       .mutateMCPSlackRecoveryNotice(taskId, (current) =>
         current?.notice_id === noticeId && current.delivery_claim?.claim_id === claimId
-          ? this.mcpSlackFailedDeliveryNotice(current)
+          ? applySlackDeliveryFailure(current)
           : null
       )
       .catch(() => undefined);
@@ -1636,37 +1606,21 @@ export class GatewayService {
     }
     const claimId = randomUUID();
     const now = new Date();
-    const claimExpiresAt = new Date(now.getTime() + 30_000).toISOString();
+    const claim = slackDeliveryClaim(claimId, now.getTime());
+    const claimExpiresAt = claim.expires_at;
     const claimed = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) => {
       if (!current || current.notice_id !== initial.notice_id) return null;
       if (current.slack_message_ts && current.rendered_state === state) return null;
-      if (
-        current.delivery_claim &&
-        new Date(current.delivery_claim.expires_at).getTime() > now.getTime()
-      ) {
-        return null;
-      }
-      return {
-        ...current,
-        delivery_claim: {
-          claim_id: claimId,
-          claimed_at: now.toISOString(),
-          expires_at: claimExpiresAt,
-        },
-        next_repair_at: claimExpiresAt,
-      };
+      if (slackDeliveryClaimIsLive(current, now.getTime())) return null;
+      return { ...current, delivery_claim: claim, next_repair_at: claimExpiresAt };
     });
     const notice = claimed.task.metadata?.mcp_slack_recovery_notice;
     if (!claimed.changed || notice?.delivery_claim?.claim_id !== claimId) {
-      if (
-        notice?.notice_id === initial.notice_id &&
-        notice.delivery_claim &&
-        new Date(notice.delivery_claim.expires_at).getTime() > Date.now()
-      ) {
+      if (notice?.notice_id === initial.notice_id && slackDeliveryClaimIsLive(notice, Date.now())) {
         this.scheduleMcpSlackDeliveryRetry(
           task.task_id,
           notice.notice_id,
-          Math.max(100, new Date(notice.delivery_claim.expires_at).getTime() - Date.now() + 100)
+          Math.max(100, new Date(notice.delivery_claim!.expires_at).getTime() - Date.now() + 100)
         );
       }
       return;
@@ -1892,16 +1846,13 @@ export class GatewayService {
     attempt: number
   ): Promise<void> {
     const cleared = await this.taskRepo
-      .mutateMCPSlackRecoveryNotice(taskId, (current) => {
-        if (current?.notice_id !== noticeId || current.slack_message_ts !== editedTs) return null;
-        if (current.rendered_state === undefined || current.rendered_state === renderedState) {
-          return null;
-        }
-        const { rendered_state: _state, rendered_at: _at, ...rest } = current;
-        return { ...rest, next_repair_at: new Date().toISOString() };
-      })
+      .mutateMCPSlackRecoveryNotice(taskId, (current) =>
+        current?.notice_id === noticeId && slackRenderWasLost(current, editedTs, renderedState)
+          ? clearSlackRenderedState(current)
+          : null
+      )
       .catch(() => undefined);
-    if (cleared?.changed && attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
+    if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
       await this.deliverMcpSlackRecoveryNotice(cleared.task, attempt + 1);
     }
   }
@@ -2293,38 +2244,7 @@ export class GatewayService {
     ) {
       return undefined;
     }
-    const expiryDelay = mcpSlackConnectExpiryDelay(state, delivery, now);
-    return new Date(
-      now + Math.min(expiryDelay ?? MCP_SLACK_ACTIVE_BACKSTOP_MS, MCP_SLACK_ACTIVE_BACKSTOP_MS)
-    ).toISOString();
-  }
-
-  private mcpSlackConnectFailedDelivery(
-    delivery: MCPSlackConnectDelivery,
-    now = new Date()
-  ): MCPSlackConnectDelivery {
-    const attempt = (delivery.delivery_attempt_count ?? 0) + 1;
-    const retryUntil = delivery.delivery_retry_until
-      ? new Date(delivery.delivery_retry_until)
-      : new Date(now.getTime() + MCP_SLACK_DELIVERY_RETRY_WINDOW_MS);
-    const backoff =
-      MCP_SLACK_DELIVERY_BACKOFF_MS[
-        Math.min(attempt - 1, MCP_SLACK_DELIVERY_BACKOFF_MS.length - 1)
-      ]!;
-    const next = new Date(now.getTime() + backoff);
-    const canRetry =
-      attempt < MCP_SLACK_DELIVERY_MAX_ATTEMPTS &&
-      Number.isFinite(retryUntil.getTime()) &&
-      next.getTime() <= retryUntil.getTime();
-    return {
-      ...delivery,
-      delivery_claim: undefined,
-      delivery_attempt_count: attempt,
-      delivery_last_failed_at: now.toISOString(),
-      delivery_retry_until: retryUntil.toISOString(),
-      delivery_next_retry_at: canRetry ? next.toISOString() : undefined,
-      next_repair_at: canRetry ? next.toISOString() : undefined,
-    };
+    return slackDeliveryRepairAt(mcpSlackConnectExpiryDelay(state, delivery, now), now);
   }
 
   private async recordMcpSlackConnectDeliveryFailure(
@@ -2333,9 +2253,7 @@ export class GatewayService {
     reason: MCPSlackDeliveryFailureReason
   ): Promise<void> {
     const failed = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (current) =>
-      current?.delivery_claim?.claim_id === claimId
-        ? this.mcpSlackConnectFailedDelivery(current)
-        : null
+      current?.delivery_claim?.claim_id === claimId ? applySlackDeliveryFailure(current) : null
     ).catch(() => undefined);
     const retrying = !!failed?.changed && !!failed.delivery?.delivery_next_retry_at;
     this.logMcpSlackDeliveryFailure(
@@ -2618,33 +2536,24 @@ export class GatewayService {
     }
 
     const claimId = randomUUID();
-    const claimExpiresAt = new Date(now + MCP_SLACK_CONNECT_CLAIM_MS).toISOString();
+    const claim = slackDeliveryClaim(claimId, now);
+    const claimExpiresAt = claim.expires_at;
     let current = delivery;
     if (delivery) {
       const result = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
         if (!latest || latest.delivery_id !== delivery.delivery_id) return null;
         if (latest.slack_message_ts && latest.rendered_state === state && !willReissue) return null;
-        if (latest.delivery_claim && new Date(latest.delivery_claim.expires_at).getTime() > now) {
-          return null;
-        }
-        return {
-          ...latest,
-          delivery_claim: {
-            claim_id: claimId,
-            claimed_at: new Date(now).toISOString(),
-            expires_at: claimExpiresAt,
-          },
-          next_repair_at: claimExpiresAt,
-        };
+        if (slackDeliveryClaimIsLive(latest, now)) return null;
+        return { ...latest, delivery_claim: claim, next_repair_at: claimExpiresAt };
       });
       if (!result.changed || result.delivery?.delivery_claim?.claim_id !== claimId) {
         // Another daemon owns this render. Come back once its lease lapses, so
         // a claimant that died mid-delivery does not strand the card.
         const live = result.delivery?.delivery_claim;
-        if (live && new Date(live.expires_at).getTime() > Date.now()) {
+        if (slackDeliveryClaimIsLive(result.delivery, Date.now())) {
           this.scheduleMcpSlackConnectRetry(
             widgetId,
-            Math.max(100, new Date(live.expires_at).getTime() - Date.now() + 100)
+            Math.max(100, new Date(live!.expires_at).getTime() - Date.now() + 100)
           );
         }
         return;
@@ -2917,18 +2826,15 @@ export class GatewayService {
     renderedState: MCPSlackConnectRenderedState,
     attempt: number
   ): Promise<void> {
-    const cleared = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
-      if (!latest || latest.slack_message_ts !== editedTs) return null;
-      if (latest.rendered_state === undefined || latest.rendered_state === renderedState) {
-        return null;
-      }
-      const { rendered_state: _state, rendered_at: _at, ...rest } = latest;
-      return { ...rest, next_repair_at: new Date().toISOString() };
-    }).catch(() => undefined);
+    const cleared = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) =>
+      latest && slackRenderWasLost(latest, editedTs, renderedState)
+        ? clearSlackRenderedState(latest)
+        : null
+    ).catch(() => undefined);
     // Bounded in process: losing the claim again means a third daemon is
     // still writing this row, and `next_repair_at` above already hands the
     // card to the sweep. Repainting in a loop would just race it harder.
-    if (cleared?.changed && attempt < MCP_SLACK_CONNECT_REPAINT_ATTEMPTS) {
+    if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
       await this.deliverMcpSlackConnectCard(widgetId, attempt + 1);
     }
   }
