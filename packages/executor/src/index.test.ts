@@ -197,7 +197,7 @@ describe('AgorExecutor watchdog handoff', () => {
   it('reports quiescence for a stop claimed before this executor could connect', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
-    const get = vi.fn().mockResolvedValue({
+    const getTerminationState = vi.fn().mockResolvedValue({
       task_id: 'task-1',
       status: 'stopping',
       executor_mode: 'templated',
@@ -217,17 +217,17 @@ describe('AgorExecutor watchdog handoff', () => {
       client: {
         service: () => {
           reportTerminationComplete: typeof reportTerminationComplete;
-          get: typeof get;
+          getTerminationState: typeof getTerminationState;
         };
       };
       recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
-    executor.client = { service: () => ({ reportTerminationComplete, get }) };
+    executor.client = { service: () => ({ reportTerminationComplete, getTerminationState }) };
 
     // connectExecutor rejected with Conflict because the task was already
     // stopping; no termination request had been observed over the socket.
     await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
-    expect(get).toHaveBeenCalledOnce();
+    expect(getTerminationState).toHaveBeenCalledWith({ task_id: 'task-1' });
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',

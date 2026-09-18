@@ -381,6 +381,7 @@ export const tasks = sqliteTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        tenant_restriction_hold?: Task['tenant_restriction_hold'];
         /**
          * Immutable filesystem authority projected when this executor was
          * launched. Internal repository fact; deliberately omitted from the
@@ -1496,6 +1497,17 @@ export const boardGroupGrants = sqliteTable(
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
   })
 );
+
+// Schema parity only: tenant restriction operations explicitly require PostgreSQL.
+export const tenantRestrictions = sqliteTable('tenant_restrictions', {
+  controller_id: text('controller_id').primaryKey(),
+  placement_id: text('placement_id').notNull(),
+  operation_id: text('operation_id').notNull(),
+  revision: integer('revision').notNull(),
+  phase: text('phase').notNull(),
+  protocol_version: integer('protocol_version').notNull().default(1),
+  updated_at: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+});
 
 /**
  * App Variables - daemon-owned application settings and secrets.

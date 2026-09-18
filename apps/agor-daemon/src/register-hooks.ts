@@ -3485,6 +3485,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ensureCanPromptInSession({ ...superadminOpts, branchRepository }),
       ],
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
+      getTerminationState: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireTaskScopedExecutorRuntimeToken()],

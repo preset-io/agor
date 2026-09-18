@@ -25,6 +25,7 @@ import {
 } from '@agor/core/types';
 import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import * as tenantAccess from '../auth/tenant-access.js';
 import {
   materializeScheduleAgenticToolConfig,
   renderSchedulePrompt,
@@ -154,6 +155,34 @@ function createSchedulerApp(db: SchedulerDb) {
 }
 
 describe('scheduler HA occurrence recovery', () => {
+  dbTest('skips a restricted occurrence without disabling its future schedule', async ({ db }) => {
+    const { schedule } = await seedRunnableSchedule(
+      db,
+      { email: `suspended-${generateId()}@example.test`, name: 'Scheduler' },
+      { agentic_tool: 'claude-code' }
+    );
+    const { app, prompt } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app);
+    const admission = vi
+      .spyOn(tenantAccess, 'isCurrentTenantEventAdmitted')
+      .mockResolvedValue(false);
+    try {
+      await (
+        scheduler as unknown as { processSchedule(schedule: Schedule, now: number): Promise<void> }
+      ).processSchedule(schedule, NOW + 30_000);
+      const updated = await new ScheduleRepository(db).findById(schedule.schedule_id);
+      expect(updated?.enabled).toBe(true);
+      expect(updated?.next_run_at).toBeGreaterThan(NOW + 30_000);
+      expect(updated?.last_run_at).toBeUndefined();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
+    } finally {
+      admission.mockRestore();
+    }
+  });
+
   const killStages = [
     'afterSessionAdmission',
     'afterMcpAttachments',
@@ -241,50 +270,57 @@ describe('scheduler HA occurrence recovery', () => {
     });
   }
 
-  dbTest('background recovery is independent of cron grace and manual retry', async ({ db }) => {
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
-    try {
-      const { creator, schedule } = await seedRunnableSchedule(
-        db,
-        {
-          email: `scheduler-late-recovery-${Math.random()}@example.com`,
-          name: 'Schedule creator',
-        },
-        { agentic_tool: 'claude-code' }
-      );
-      const { app, prompt } = createSchedulerApp(db);
-      const killed = new SchedulerService(db, app, {
-        tenantId: 'default',
-        testHooks: {
-          afterSessionAdmission: () => {
-            throw new Error('simulated process death');
+  dbTest(
+    'recovers a fresh same-minute manual run after activation without using rounded cron time',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW + 30_000);
+      const admission = vi
+        .spyOn(tenantAccess, 'isCurrentTenantEventAdmitted')
+        .mockImplementation(async (_db, at) => at > NOW + 10_000);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `scheduler-late-recovery-${Math.random()}@example.com`,
+            name: 'Schedule creator',
           },
-        },
-      });
-      await expect(
-        killed.executeScheduleNow({
-          scheduleId: schedule.schedule_id,
-          triggeredBy: creator.user_id,
-        })
-      ).rejects.toThrow('simulated process death');
+          { agentic_tool: 'claude-code' }
+        );
+        const { app, prompt } = createSchedulerApp(db);
+        const killed = new SchedulerService(db, app, {
+          tenantId: 'default',
+          testHooks: {
+            afterSessionAdmission: () => {
+              throw new Error('simulated process death');
+            },
+          },
+        });
+        await expect(
+          killed.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow('simulated process death');
 
-      nowSpy.mockReturnValue(NOW + 10 * 60_000);
-      const replacement = new SchedulerService(db, app, { tenantId: 'default' });
-      await (
-        replacement as unknown as {
-          tick(): Promise<unknown>;
-        }
-      ).tick();
+        nowSpy.mockReturnValue(NOW + 10 * 60_000);
+        const replacement = new SchedulerService(db, app, { tenantId: 'default' });
+        await (
+          replacement as unknown as {
+            tick(): Promise<unknown>;
+          }
+        ).tick();
 
-      expect(prompt).toHaveBeenCalledOnce();
-      const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
-      expect(
-        await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
-      ).toBe(true);
-    } finally {
-      nowSpy.mockRestore();
+        expect(prompt).toHaveBeenCalledOnce();
+        const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+        ).toBe(true);
+      } finally {
+        admission.mockRestore();
+        nowSpy.mockRestore();
+      }
     }
-  });
+  );
 
   dbTest(
     'already-dispatched recovery does not reload mutable creator launch state',

@@ -1,3 +1,8 @@
+import {
+  gatewayOccurrenceTime,
+  isCurrentTenantEventAdmitted,
+  isCurrentTenantRuntimeActive,
+} from '../auth/tenant-access.js';
 /**
  * Gateway Service
  *
@@ -3062,6 +3067,8 @@ export class GatewayService {
    * for the given thread, and sends the prompt to the session.
    */
   async create(data: PostMessageData): Promise<PostMessageResult> {
+    if (!(await isCurrentTenantRuntimeActive(this.db)))
+      throw new Forbidden('Tenant access is restricted');
     const durableListenerOwnership = await this.detectDurableListenerOwnership();
     // 1. Authenticate via channel_key
     const channel = await this.channelRepo.findByKey(data.channel_key);
@@ -5468,6 +5475,25 @@ export class GatewayService {
             !(await this.channelRepo.listenerClaimIsCurrent(channel.id, lease.claim_token))
           ) {
             throw new Error('Gateway listener ownership lost before provider acknowledgement');
+          }
+          if (
+            !(await isCurrentTenantEventAdmitted(this.db, gatewayOccurrenceTime(msg.timestamp)))
+          ) {
+            // Consume the durable delivery without creating a prompt, downloading
+            // attachments, or materializing a provider thread. Retry dedup remains.
+            if (eventId && lease) {
+              const completed = await this.inboundEventRepo.complete({
+                eventId,
+                channelId: channel.id,
+                processingToken: lease.claim_token,
+                requireListenerClaim: true,
+              });
+              if (!completed)
+                throw new Error(
+                  'Gateway listener ownership lost before restricted event completion'
+                );
+            }
+            return;
           }
           let skipProviderThreadMaterialization = false;
           if (

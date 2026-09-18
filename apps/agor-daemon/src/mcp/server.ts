@@ -29,13 +29,14 @@ import {
   shortId,
   UserApiKeysRepository,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, Unavailable } from '@agor/core/feathers';
 import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
+import { assertRuntimeTenantAccess } from '../auth/tenant-access.js';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
@@ -712,6 +713,17 @@ export function setupMCPRoutes(
         return res.status(401).json({
           ...jsonRpcError(req, -32001, 'Authenticated identity is not valid for this tenant'),
         });
+      }
+
+      // MCP can call repositories without traversing a Feathers service hook.
+      // Revalidate on every request, including an already-issued session token.
+      try {
+        await assertRuntimeTenantAccess(db, tenant.tenant_id);
+      } catch (error) {
+        if (error instanceof Forbidden || error instanceof Unavailable) {
+          return res.status(error.code).json(jsonRpcError(req, -32001, error.message));
+        }
+        throw error;
       }
 
       // Keep tenant identity ambient for the complete MCP request without

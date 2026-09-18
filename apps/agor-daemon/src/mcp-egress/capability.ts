@@ -14,6 +14,7 @@ const TAG_BYTES = 16;
  */
 export interface MCPEgressCapabilityClaims {
   type: 'mcp-egress-capability';
+  tenant_credential_epoch?: string;
   tid: string;
   task_id: string;
   session_id: string;
@@ -43,6 +44,13 @@ function capabilityKey(secret: string): Buffer {
 function validateClaims(value: unknown): MCPEgressCapabilityClaims {
   if (!value || typeof value !== 'object') throw new Error('Invalid MCP egress capability');
   const claims = value as MCPEgressCapabilityClaims;
+  if (
+    claims.tenant_credential_epoch !== undefined &&
+    (typeof claims.tenant_credential_epoch !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(claims.tenant_credential_epoch))
+  ) {
+    throw new Error('Invalid MCP tenant credential epoch');
+  }
   if (claims.type !== 'mcp-egress-capability') throw new Error('Invalid MCP egress capability');
   for (const item of [
     claims.tid,

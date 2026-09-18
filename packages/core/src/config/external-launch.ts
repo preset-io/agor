@@ -21,6 +21,7 @@ export const EXTERNAL_LAUNCH_ENV = {
   ISSUER: 'AGOR_EXTERNAL_LAUNCH_ISSUER',
   AUDIENCE: 'AGOR_EXTERNAL_LAUNCH_AUDIENCE',
   INSTANCE_ID: 'AGOR_EXTERNAL_LAUNCH_INSTANCE_ID',
+  RESTRICTION_CONTROLLER_ID: 'AGOR_EXTERNAL_LAUNCH_RESTRICTION_CONTROLLER_ID',
   FORWARD_REQUEST_HOST: 'AGOR_EXTERNAL_LAUNCH_FORWARD_REQUEST_HOST',
   SERVICE_CREDENTIAL: 'AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN',
   DEV_SHARED_SECRET: 'AGOR_EXTERNAL_LAUNCH_SHARED_SECRET',
@@ -154,6 +155,7 @@ export interface ResolvedExternalLaunchProvider {
   readonly issuer?: string;
   readonly instanceId?: string;
   readonly providerId?: string;
+  readonly restrictionControllerId?: string;
   readonly jwksUrl?: string;
   /** Parsed once after environment projection; the PEM is not retained. */
   readonly publicKey?: KeyObject;
@@ -187,6 +189,13 @@ function parseExternalLaunchSettings(
   const audience = requiredString(raw, 'audience');
   const instanceId = requiredString(raw, 'instance_id');
   const providerId = requiredString(raw, 'provider_id');
+  const restrictionControllerId = requiredString(raw, 'restriction_controller_id');
+  if (
+    restrictionControllerId &&
+    !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(restrictionControllerId)
+  ) {
+    throw new Error('external_launch.restriction_controller_id is invalid');
+  }
   const jwksUrl = httpUrl(requiredString(raw, 'jwks_url'), 'external_launch.jwks_url', {
     rejectUserinfo: true,
   });
@@ -299,6 +308,7 @@ function parseExternalLaunchSettings(
     audience,
     instanceId,
     providerId,
+    restrictionControllerId,
     jwksUrl,
     publicKey,
     devSharedSecret,
@@ -374,6 +384,7 @@ export function resolveEffectiveExternalLaunchConfig(
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.ISSUER]),
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.AUDIENCE]),
     nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.INSTANCE_ID]),
+    nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.RESTRICTION_CONTROLLER_ID]),
   ].some((value) => value !== undefined);
 
   if (configured === undefined && !hasLaunchEnvironment) return undefined;
@@ -394,6 +405,13 @@ export function resolveEffectiveExternalLaunchConfig(
       : {}),
     ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.AUDIENCE])
       ? { audience: nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.AUDIENCE]) }
+      : {}),
+    ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.RESTRICTION_CONTROLLER_ID])
+      ? {
+          restriction_controller_id: nonEmptyEnvironmentValue(
+            env[EXTERNAL_LAUNCH_ENV.RESTRICTION_CONTROLLER_ID]
+          ),
+        }
       : {}),
     ...(nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.INSTANCE_ID])
       ? { instance_id: nonEmptyEnvironmentValue(env[EXTERNAL_LAUNCH_ENV.INSTANCE_ID]) }

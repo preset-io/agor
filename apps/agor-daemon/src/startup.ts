@@ -52,6 +52,7 @@ import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexe
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
+import { TenantRestrictionReconciler } from './services/tenant-restriction-reconciler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
@@ -824,6 +825,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
     dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
   });
   taskRuntimeReconciler.start();
+  const tenantRestrictionReconciler = new TenantRestrictionReconciler(
+    db,
+    app,
+    startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined
+  );
+  tenantRestrictionReconciler.start();
   console.log(
     heartbeatConfig.enabled
       ? `💓 Task runtime reconciler started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms, policy: ${ctx.taskRuntimePolicy})`
@@ -929,6 +936,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       await healthMonitor?.cleanup();
 
       // Stop Task runtime discovery before closing services.
+      tenantRestrictionReconciler.stop();
       taskRuntimeReconciler?.stop();
 
       // Stop durable Session queue discovery. Any in-flight database claim is

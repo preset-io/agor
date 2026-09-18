@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
+import { Forbidden, Unavailable } from '@agor/core/feathers';
 import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import { Server as SdkServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
@@ -10,6 +11,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import * as tenantAccess from '../auth/tenant-access.js';
 import { createUsersService } from '../services/users.js';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
@@ -648,6 +650,36 @@ describe('POST /mcp with personal API keys', () => {
       });
     }
   );
+
+  it.each([
+    new Forbidden('Tenant access is restricted'),
+    new Unavailable('Tenant access cannot be verified'),
+  ])('rejects MCP before tool/session access when tenant admission fails: %s', async (error) => {
+    await mockPersonalApiKeyUser();
+    const admission = vi.spyOn(tenantAccess, 'assertRuntimeTenantAccess').mockRejectedValue(error);
+    const getSession = vi.fn();
+    await withMcpServer(
+      {
+        users: { get: vi.fn(async () => ({ user_id: 'user-1', role: 'member' })) },
+        sessions: { get: getSession },
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'X-Agor-Session-Id': 'session-short',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        });
+        expect(response.status).toBe(error.code);
+        expect((await response.json()).error.message).toBe(error.message);
+        expect(admission).toHaveBeenCalledOnce();
+        expect(getSession).not.toHaveBeenCalled();
+      }
+    );
+  });
 
   it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {
     await mockPersonalApiKeyUser();

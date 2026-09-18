@@ -11,6 +11,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  assertTenantExecutionAdmission,
   eq,
   generateId,
   hash,
@@ -21,6 +22,7 @@ import {
   seedInitialDataInTransaction,
   select,
   TenantPublicRoutingRepository,
+  TenantRestrictedError,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserExternalIdentitiesRepository,
@@ -35,6 +37,11 @@ import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebt
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
+import {
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
+import { assertTenantLaunchRevision } from './tenant-launch-revision.js';
 import {
   assertAuthenticationUserAuthMetadata,
   authCredentialGenerationClaim,
@@ -319,6 +326,23 @@ async function projectLaunchUser(
   // current row so a launch assertion cannot interleave a stale authorization
   // decision on another replica.
   await lockTenantAuthorizationFence(db);
+  try {
+    await assertTenantExecutionAdmission(db);
+    const tenantId = resolveTenantContext(resolveMultiTenancyConfig(options.config), {
+      authPayload: claims,
+    }).tenant_id;
+    await assertTenantLaunchRevision(
+      db,
+      tenantId,
+      claims.tenant_restriction,
+      settings.restrictionControllerId
+    );
+  } catch (error) {
+    if (error instanceof TenantRestrictedError) {
+      throw new NotAuthenticated('Invalid one-time launch assertion');
+    }
+    throw error;
+  }
 
   const identityRepository = new UserExternalIdentitiesRepository(db);
   await identityRepository.lockProvisioningKey(`identity:${key}`);
@@ -692,10 +716,12 @@ function issueRuntimeTokens(
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn'],
   tenantClaim = 'tenant_id',
-  tenantId?: string
+  tenantId?: string,
+  credentialEpoch?: string
 ): LaunchAuthResult {
   assertAuthenticationUserAuthMetadata(user);
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
+    ...tenantCredentialEpochClaims(credentialEpoch),
     ...authCredentialGenerationClaim(user),
     ...authTokenIssuedAtClaim(Date.now(), user),
     ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
@@ -789,7 +815,10 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
               // still serializes first-user projection. Immutable ownership
               // can therefore never be won by a later concurrent launch.
               await seedInitialDataInTransaction(scopedDb, current.userId);
-              return current;
+              // Preserve the fenced generation across the later user lookup;
+              // never upgrade an issuance that raced a restriction transition.
+              const credentialEpoch = await readTenantCredentialEpoch(scopedDb, tenant.tenant_id);
+              return { ...current, credentialEpoch };
             }
           );
           if (projected.authorizationChanged) {
@@ -810,7 +839,8 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           options.accessTokenTtl,
           options.refreshTokenTtl,
           tenantClaim,
-          tenant.tenant_id
+          tenant.tenant_id,
+          projection.credentialEpoch
         );
       } catch (error) {
         // Every launch failure — expected or unexpected — emits exactly one

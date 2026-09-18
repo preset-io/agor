@@ -39,3 +39,21 @@ export function createRequireAuthHook(
     }
   };
 }
+
+/**
+ * Tenant admission after authentication. The caller must preserve narrowly
+ * authorized containment reads and lifecycle acknowledgements; never replace
+ * those with a provider/role exemption or customer-controlled bypass flag.
+ */
+export function createTenantRestrictedAuthHook(
+  authenticatedHook: AuthHook,
+  multiTenancy: ResolvedMultiTenancyConfig,
+  assertTenantAccess: (tenantId: string, context: HookContext) => Promise<void>
+): AuthHook {
+  const identity = createRequireAuthHook(authenticatedHook, multiTenancy);
+  return async (context) => {
+    const authed = await identity(context);
+    await assertTenantAccess(authed.params.tenant!.tenant_id, authed);
+    return authed;
+  };
+}
