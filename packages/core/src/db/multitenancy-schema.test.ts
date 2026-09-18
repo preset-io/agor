@@ -53,6 +53,9 @@ function migrationTenantTables(): string[] {
   const discordGatewayHybridMigration = readRepoFile(
     'packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'
   );
+  const completionSubscriptionsMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0111_transitive_completion_subscriptions.sql'
+  );
   const externalIdentitiesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0090_external_user_identities.sql'
   );
@@ -81,6 +84,9 @@ function migrationTenantTables(): string[] {
         ),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...discordGatewayHybridMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...completionSubscriptionsMigration.matchAll(
+          /CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g
+        ),
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
@@ -103,6 +109,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0111_transitive_completion_subscriptions.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
@@ -201,6 +208,19 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("current_setting('agor.system_scope', true)");
     expect(migration).toContain("= 'task_runtime_discovery'");
     expect(migration).not.toContain('WITH CHECK');
+  });
+
+  it('retires root discovery without deleting compatibility rows or tenant isolation', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0112_retire_completion_discovery.sql'
+    );
+    expect(migration).toContain(
+      'DROP POLICY IF EXISTS "completion_callback_task_discovery" ON "tasks"'
+    );
+    expect(migration).toContain(
+      'DROP POLICY IF EXISTS "completion_callback_discovery" ON "completion_subscriptions"'
+    );
+    expect(migration).not.toMatch(/DROP TABLE|DELETE FROM|tenant_isolation/);
   });
 
   it('limits Knowledge embedding discovery to routing-only candidate rows', () => {

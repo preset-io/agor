@@ -109,7 +109,7 @@ function makeService(
   const createPending = vi.fn(async (data: Partial<Task>) => ({ ...callbackTask, ...data }));
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
-    const target = id === parentSessionId ? parentSession : childSession;
+    const target = id === parentSession.session_id ? parentSession : childSession;
     Object.assign(target, updates);
     return { ...target };
   });
@@ -142,7 +142,9 @@ function makeService(
     service: vi.fn((name: string) => {
       if (name === 'sessions') {
         return {
-          get: vi.fn(async (id: string) => (id === parentSessionId ? parentSession : childSession)),
+          get: vi.fn(async (id: string) =>
+            id === parentSession.session_id ? parentSession : childSession
+          ),
           patch: sessionsPatch,
           triggerQueueProcessing,
         };
@@ -167,6 +169,102 @@ function makeService(
 }
 
 describe('TasksService completion callbacks', () => {
+  it.each(['persistent', 'once', 'exact-task'] as const)(
+    'composes C → B → A without descendant transfer (%s)',
+    async (mode) => {
+      const b = makeService({
+        childSession: {
+          callback_config: {
+            enabled: mode !== 'exact-task',
+            callback_session_id: parentSessionId,
+            callback_created_by: userId,
+            callback_mode: mode === 'once' ? 'once' : 'persistent',
+          },
+        },
+        task:
+          mode === 'exact-task'
+            ? {
+                metadata: {
+                  completion_callback: {
+                    target_session_id: parentSessionId as Session['session_id'],
+                    requested_from_session_id: parentSessionId as Session['session_id'],
+                    requested_by_user_id: userId,
+                  },
+                },
+              }
+            : {},
+      });
+      // B's initial delegation turn reports to A in all three modes.
+      await b.service.patch(taskId, { status: TaskStatus.COMPLETED });
+      await vi.waitFor(() => expect(b.createPending).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() =>
+        expect(b.getStoredTask()?.metadata?.callback_dispatches).toHaveLength(1)
+      );
+      if (mode === 'once')
+        await vi.waitFor(() => expect(b.childSession.callback_config?.enabled).toBe(false));
+
+      const cSessionId = '018f0000-0000-7000-8000-000000000103';
+      const c = makeService({
+        childSession: {
+          session_id: cSessionId as Session['session_id'],
+          callback_config: {
+            enabled: true,
+            callback_session_id: childSessionId,
+            callback_mode: 'once',
+            callback_created_by: userId,
+          },
+        },
+        parentSession: { session_id: childSessionId as Session['session_id'] },
+        task: { session_id: cSessionId as Session['session_id'] },
+      });
+      await c.service.patch(taskId, { status: TaskStatus.COMPLETED });
+      await vi.waitFor(() => expect(c.createPending).toHaveBeenCalledTimes(1));
+      const processingTask = c.createPending.mock.calls[0][0];
+      expect(processingTask).toMatchObject({
+        session_id: childSessionId,
+        metadata: { is_agor_callback: true },
+      });
+      expect(c.createPending).not.toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: parentSessionId })
+      );
+      expect(b.createPending).toHaveBeenCalledTimes(1); // C's completion cannot complete B.
+
+      b.childSession.tasks.push(processingTask.task_id!);
+      await b.repository.update(processingTask.task_id!, {
+        ...processingTask,
+        status: TaskStatus.RUNNING,
+      });
+      await b.service.patch(processingTask.task_id!, { status: TaskStatus.COMPLETED });
+      // Drain deferred work by observing callback processing, not an arbitrary sleep.
+      await vi.waitFor(() =>
+        expect(
+          b.triggerQueueProcessing.mock.calls.filter(([id]) => id === childSessionId)
+        ).toHaveLength(2)
+      );
+      expect(b.createPending).toHaveBeenCalledTimes(mode === 'persistent' ? 2 : 1);
+      if (mode === 'persistent') {
+        expect(b.createPending).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            session_id: parentSessionId,
+            metadata: expect.objectContaining({ child_task_id: processingTask.task_id }),
+          })
+        );
+        expect(b.childSession.callback_config?.enabled).toBe(true);
+      }
+    }
+  );
+
+  it('does not recover failed local admission by replaying a terminal patch', async () => {
+    const { service, createPending, getStoredTask } = makeService();
+    createPending.mockRejectedValueOnce(new Error('fictional callback admission failure'));
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledOnce());
+    expect(getStoredTask()?.status).toBe(TaskStatus.COMPLETED);
+    expect(getStoredTask()?.metadata?.callback_dispatches).toBeUndefined();
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    expect(createPending).toHaveBeenCalledOnce();
+  });
+
   it('retires the exact executor Task lease on ordinary and coordinator terminality', async () => {
     const { service, revokeTaskTokens } = makeService();
 

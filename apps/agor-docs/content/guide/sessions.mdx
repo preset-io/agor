@@ -183,6 +183,45 @@ When spawning, you can override:
 - **MCP servers**: Different tool sets (Codex MCP support pending)
 - **Callback content**: Include last message (default on), include original prompt (default off), extra formatting instructions
 
+### Persistent one-hop coordination
+
+In **Session Settings → Callbacks → Callback mode**, choose **Persistent** for a
+coordinator that expects later child results. Each session reports its own task
+completion to its configured target:
+
+```text
+C completes → callback prompts B → B processes the result and completes → callback prompts A
+```
+
+B's initial delegation turn can also notify A. Persistent mode keeps B's callback
+linked for the later processing turn; it does not wait for descendants or send
+C's outcome directly to A. Configure each hop explicitly.
+
+With MCP, use `agor_sessions_create` with `enableCallback: true` and
+`callbackMode: "persistent"` (the remote-create default), or
+`agor_sessions_update` with `callbackMode: "persistent"` to change an existing
+registration. Omit `callbackSessionId` on create to target the current caller.
+Spawned subsessions remain one-shot by default; explicitly change their mode
+when they need to report more than one turn.
+
+**Once** is consumed by the next completion, which may only be B's initial
+delegation turn. A `callback: true` on `agor_sessions_prompt` covers that exact
+task, not a later task processing a child's callback. Neither follows descendants.
+Unlinking disables session callbacks without deleting the relationship; exact-task
+callbacks have their own scope. `btw` retains its separate one-shot behavior.
+
+Callbacks are admitted after the completed task commits. This is not an
+exactly-once or crash-recovery guarantee: a daemon loss before callback admission
+can leave a terminal task without a queued callback. Once admitted, the callback
+is a durable queued task. Do not infer aggregate completion from genealogy.
+
+The withdrawn root-propagation draft's `callbackPropagation`, `continueCompletion`,
+and completion-subscription lookup tool are not supported. Its migration ledger
+and tenant-isolated stored rows are retained only for compatibility and portability;
+no worker creates or delivers subscriptions. PostgreSQL retirement removes the old
+cross-tenant discovery policies without deleting rows. Do not run mixed versions
+or expect an older draft binary to leave those rows inert.
+
 ### Comparison with Claude Code's native subagents
 
 If you've used [Claude Code's subagent feature](https://docs.claudecode.com/subagents), Agor's subsessions go further:

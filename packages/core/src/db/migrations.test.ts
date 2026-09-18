@@ -26,6 +26,22 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('preserves the draft completion watermark and appends PostgreSQL retirement', async () => {
+    const journals = await readJournals();
+    for (const [index, journal] of journals.entries()) {
+      expect(
+        journal.entries.find((entry) => entry.tag === '0111_transitive_completion_subscriptions')
+      ).toMatchObject({
+        idx: 110,
+        when: 1789344000005,
+      });
+      expect(classifyMigrationWatermark(journal.entries, 1789344000004).pending).toEqual([
+        '0111_transitive_completion_subscriptions',
+        ...(index === 0 ? ['0112_retire_completion_discovery'] : []),
+      ]);
+    }
+  });
+
   it('keeps provider grants pending and offline after the shipped branch-cleanup watermark', async () => {
     const journals = await readJournals();
     for (const [index, dialect] of (['postgresql', 'sqlite'] as const).entries()) {
