@@ -446,3 +446,112 @@ export async function retireOrphanedSlackCard(
     console.warn(`[gateway] MCP ${orphan.lane} duplicate Slack card could not be retired`);
   }
 }
+
+/** What one compare-and-set against a lane's delivery record resolved to. */
+export interface SlackDeliveryWrite<TRecord extends SlackDeliveryRecord> {
+  changed: boolean;
+  /** The record as it stands AFTER the attempt, written or not. */
+  record?: TRecord;
+}
+
+/**
+ * Where one lane keeps its delivery record, and how to tell it is still the
+ * one this delivery started on.
+ *
+ * The two lanes store the same discipline in two different places: the
+ * recovery notice hangs off the Task's metadata and is written through
+ * `TaskRepository.mutateMCPSlackRecoveryNotice`; the connect delivery hangs
+ * off the widget MESSAGE's metadata and is written through
+ * `mutateSlackConnectDelivery`. Both are compare-and-set inside one short row
+ * lock, which is the only property the shared mechanics need.
+ *
+ * `TWrite` is open because the recovery lane's re-render needs the whole
+ * mutated Task back — its rendered state reads the task's status, not just the
+ * notice — while the connect lane re-reads everything from the widget row
+ * anyway. An adapter may therefore hand back more than the record.
+ *
+ * `identifies` is the lane's, not the engine's: the recovery lane fences every
+ * write on `notice_id` because a Task's notice can be REPLACED in place by a
+ * later recovery generation, whereas a widget's delivery record is the widget's
+ * for as long as the widget exists. Folding one lane's identity check onto the
+ * other would be inventing a guarantee.
+ */
+export interface SlackDeliveryStore<
+  TRecord extends SlackDeliveryRecord,
+  TWrite extends SlackDeliveryWrite<TRecord> = SlackDeliveryWrite<TRecord>,
+> {
+  /** Agor-owned ids naming this record in a log line. Never a provider's. */
+  readonly logIds: Record<string, string | undefined>;
+  /** Is this still the record this delivery started on? */
+  identifies(current: TRecord | undefined): boolean;
+  /** Compare-and-set in one short row lock. Returning `null` writes nothing. */
+  write(mutate: (current: TRecord | undefined) => TRecord | null): Promise<TWrite>;
+}
+
+/**
+ * Account for one failed Slack write against the record that owns the claim.
+ *
+ * Fenced on the claim rather than merely on the record: the claim is a short
+ * lease, so a write that outlives it can report a failure against an attempt
+ * another daemon has since taken over, inflating a healthy card's attempt
+ * count toward `stranded`.
+ *
+ * Best effort on the write itself — every caller is already reporting an
+ * earlier failure and has nothing better to do with a second one — but never
+ * silent: the log line goes out regardless, which is the §7.1.6 rule that a
+ * repair failing before any Slack call still has to be visible.
+ */
+export async function recordSlackDeliveryFailure<TRecord extends SlackDeliveryRecord>(
+  store: SlackDeliveryStore<TRecord, SlackDeliveryWrite<TRecord>>,
+  params: {
+    lane: MCPSlackLane;
+    reason: MCPSlackDeliveryFailureReason;
+    claimId: string;
+    scheduleRetry: (delayMs: number) => void;
+  }
+): Promise<void> {
+  const failed = await store
+    .write((current) =>
+      store.identifies(current) && current?.delivery_claim?.claim_id === params.claimId
+        ? applySlackDeliveryFailure(current)
+        : null
+    )
+    .catch(() => undefined);
+  const nextRetryAt = failed?.changed ? failed.record?.delivery_next_retry_at : undefined;
+  logSlackDeliveryFailure(
+    params.lane,
+    params.reason,
+    store.logIds,
+    failed?.record?.delivery_attempt_count,
+    !!nextRetryAt
+  );
+  if (nextRetryAt) {
+    params.scheduleRetry(Math.max(100, new Date(nextRetryAt).getTime() - Date.now()));
+  }
+}
+
+/**
+ * Stop the record claiming a render this daemon no longer owns.
+ *
+ * The durable half of both lanes' lost-edit repair; the caller decides whether
+ * to re-render in process, because only it knows how many times it already has
+ * and `MCP_SLACK_REPAINT_ATTEMPTS` bounds that. A `changed` result means the
+ * record had a render that was undone; anything else is a no-op, including the
+ * common case where the winning claimant happened to render the same state.
+ */
+export async function clearLostSlackRender<
+  TRecord extends SlackDeliveryRecord,
+  TWrite extends SlackDeliveryWrite<TRecord>,
+>(
+  store: SlackDeliveryStore<TRecord, TWrite>,
+  editedTs: string,
+  renderedState: string
+): Promise<TWrite | undefined> {
+  return store
+    .write((current) =>
+      store.identifies(current) && slackRenderWasLost(current, editedTs, renderedState)
+        ? clearSlackRenderedState(current as TRecord)
+        : null
+    )
+    .catch(() => undefined);
+}
