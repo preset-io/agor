@@ -51,6 +51,7 @@ Step-by-step implementation guides referenced from code.
 - [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
 - [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
+- [`agentic-qa.md`](guidelines/agentic-qa.md) — repeatable feature QA, evidence, and regression promotion; [templates and profiles](../qa/README.md).
 - [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
 - [`onboarding-design.md`](guidelines/onboarding-design.md) — Onboarding wizard: goal-over-role framing, the locked goal cards, and composable-block recs.
 
