@@ -42,6 +42,7 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
+  gitEnvironmentForRemote,
   isRemoteRefVisibleForClone,
   isValidGitRepo,
   redactGitUrlCredentials,
@@ -962,8 +963,10 @@ export async function handleGitBranchAdd(
     // A local home is sourced from the canonical template, never cached refs
     // or remotes belonging to an existing repository workspace.
     const sourceRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : baseRemoteUrl;
+    const resolutionPath =
+      storageMode === 'clone' && (!repoPath || !existsSync(repoPath)) ? undefined : repoPath;
     const resolveStartingRef = () =>
-      resolveGitRef(repoPath, requestedStartingRef, {
+      resolveGitRef(resolutionPath, requestedStartingRef, {
         refType: refType || 'branch',
         ...(sourceRemoteUrl
           ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
@@ -972,7 +975,7 @@ export async function handleGitBranchAdd(
             : {}),
         env,
       });
-    const resolvedStartingRef =
+    let resolvedStartingRef =
       restoreMode || alreadyMaterialized ? undefined : await resolveStartingRef();
 
     if (resolvedStartingRef) {
@@ -1008,7 +1011,6 @@ export async function handleGitBranchAdd(
       let cloneRef = resolvedStartingRef?.name ?? branch;
       let cloneRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : remoteUrl;
       let newBranchName: string | undefined;
-      const detached = resolvedStartingRef?.kind === 'commit';
 
       if (shouldCreateBranch) {
         const restoreFromDestination = restoreMode
@@ -1021,6 +1023,7 @@ export async function handleGitBranchAdd(
           : false;
 
         if (!restoreFromDestination) {
+          resolvedStartingRef ??= await resolveStartingRef();
           cloneRef = resolvedStartingRef?.name ?? sourceBranch ?? branch;
           cloneRemoteUrl = localHome
             ? TEAMMATE_FRAMEWORK_REPO_URL
@@ -1058,14 +1061,14 @@ export async function handleGitBranchAdd(
         targetPath: branchPath,
         ref: cloneRef,
         ...(newBranchName ? { newBranchName } : {}),
-        ...(detached ? { detached: true } : {}),
+        ...(resolvedStartingRef?.kind === 'commit' ? { detached: true } : {}),
         ...(resolvedStartingRef ? { expectedSha: resolvedStartingRef.sha } : {}),
         depth: cloneDepth,
         // Pass the daemon's hint through unconditionally. The helper does
         // the existsSync check on the executor's filesystem and falls back
         // gracefully if the path isn't actually mounted here.
         ...(referencePath ? { referencePath } : {}),
-        env,
+        env: gitEnvironmentForRemote(cloneRemoteUrl, [remoteUrl, sourceRemoteUrl], env),
       });
     } else if (restoreMode && sourceBranch) {
       // Restore mode: smart branch detection — checks if branch exists on remote,
@@ -1092,15 +1095,29 @@ export async function handleGitBranchAdd(
       await createBranch(
         repoPath,
         branchPath,
-        shouldCreateBranch ? branch : (resolvedStartingRef?.ref ?? branch),
+        shouldCreateBranch
+          ? branch
+          : resolvedStartingRef?.kind === 'remote_branch' ||
+              resolvedStartingRef?.kind === 'local_branch'
+            ? resolvedStartingRef.name
+            : (resolvedStartingRef?.ref ?? branch),
         shouldCreateBranch,
         true, // pullLatest
-        shouldCreateBranch ? resolvedStartingRef?.ref : undefined,
+        resolvedStartingRef?.remoteUrl
+          ? resolvedStartingRef.name
+          : shouldCreateBranch
+            ? resolvedStartingRef?.ref
+            : undefined,
         env,
         refType,
-        baseRemoteUrl,
+        resolvedStartingRef?.remoteUrl ?? baseRemoteUrl,
         remoteUrl,
-        resolvedStartingRef?.sha
+        resolvedStartingRef?.sha,
+        gitEnvironmentForRemote(
+          resolvedStartingRef?.remoteUrl ?? baseRemoteUrl ?? '',
+          [remoteUrl, sourceRemoteUrl],
+          env
+        ) ?? {}
       );
     }
 

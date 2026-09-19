@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveGitRef } from './index.js';
+import { createBranch, resolveGitRef, restoreBranchFilesystem } from './index.js';
 
 describe('resolveGitRef', () => {
   let root: string;
@@ -194,5 +195,166 @@ describe('resolveGitRef', () => {
     await expect(resolveGitRef(repoPath, 'does-not-exist')).rejects.toThrow(
       /does not exist.*explicit remote-qualified ref/i
     );
+  });
+  it('does not send managed credentials to an unrelated configured remote', async () => {
+    const authorization: Array<string | undefined> = [];
+    const server = createServer((req, res) => {
+      authorization.push(req.headers.authorization);
+      res.setHeader('Content-Type', 'text/plain');
+      res.end(
+        req.url?.includes('info/refs')
+          ? `${secondSha}\trefs/heads/topic\n`
+          : 'ref: refs/heads/topic\n'
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing server address');
+      const attackerUrl = `http://127.0.0.1:${address.port}/repo.git`;
+      await simpleGit(repoPath).remote(['set-url', 'personal', attackerUrl]);
+      await expect(
+        resolveGitRef(repoPath, 'personal/topic', {
+          remote: { name: 'origin', url: 'https://authorized.example/repo.git' },
+          env: {
+            GITHUB_TOKEN: 'synthetic-tenant-a-token',
+            HTTPS_PROXY: 'http://user:password@unrelated.invalid',
+          },
+        })
+      ).resolves.toMatchObject({ sha: secondSha, remoteUrl: attackerUrl });
+      expect(authorization.length).toBeGreaterThan(0);
+      expect(authorization.every((header) => header === undefined)).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+  });
+
+  it('keeps slash-containing tags in the tag namespace', async () => {
+    const git = simpleGit(repoPath);
+    await git.addTag('origin/release');
+    await git.push('origin', 'refs/tags/origin/release');
+    for (const remoteOnly of [false, true]) {
+      await expect(
+        resolveGitRef(repoPath, 'origin/release', {
+          refType: 'tag',
+          remoteOnly,
+          remote: { name: 'origin', url: join(root, 'origin.git') },
+        })
+      ).resolves.toMatchObject({ kind: 'tag', name: 'origin/release', sha: firstSha });
+    }
+  });
+
+  it('resolves remotely without constructing a client at an unavailable cache', async () => {
+    await simpleGit(repoPath).push('origin', 'main');
+    await expect(
+      resolveGitRef(join(root, 'unmounted'), 'main', {
+        remoteOnly: true,
+        remote: { name: 'origin', url: join(root, 'origin.git') },
+      })
+    ).resolves.toMatchObject({ sha: firstSha, name: 'main' });
+  });
+
+  it('acquires a non-origin source object absent from the cache and destination', async () => {
+    const git = simpleGit(repoPath);
+    await git.push('origin', 'main');
+    const producer = join(root, 'producer');
+    await simpleGit().clone(repoPath, producer);
+    const writer = simpleGit(producer);
+    await writer.addConfig('user.name', 'Test');
+    await writer.addConfig('user.email', 'test@example.test');
+    await writer.checkoutLocalBranch('topic');
+    await writeFile(join(producer, 'only-personal.txt'), 'remote-only content');
+    await writer.add('only-personal.txt').commit('personal-only object');
+    await writer.push(join(root, 'personal.git'), 'topic');
+    const selected = await resolveGitRef(repoPath, 'personal/topic', {
+      remote: { name: 'origin', url: join(root, 'origin.git') },
+    });
+    await expect(git.revparse(['--verify', `${selected.sha}^{commit}`])).rejects.toThrow();
+    const target = join(root, 'worktree');
+    await createBranch(
+      repoPath,
+      target,
+      'feature',
+      true,
+      true,
+      selected.name,
+      {},
+      'branch',
+      selected.remoteUrl,
+      join(root, 'origin.git'),
+      selected.sha,
+      {}
+    );
+    expect((await simpleGit(target).revparse(['HEAD'])).trim()).toBe(selected.sha);
+    expect((await git.raw(['for-each-ref', 'refs/agor/base'])).trim()).toBe('');
+  });
+
+  it('attaches an existing remote-only branch to its local branch identity', async () => {
+    await simpleGit(repoPath).push('origin', 'different:refs/heads/topic');
+    const selected = await resolveGitRef(repoPath, 'topic', {
+      remote: { name: 'origin', url: join(root, 'origin.git') },
+    });
+    const target = join(root, 'existing');
+    await createBranch(
+      repoPath,
+      target,
+      selected.name,
+      false,
+      true,
+      selected.name,
+      {},
+      'branch',
+      selected.remoteUrl,
+      join(root, 'origin.git'),
+      selected.sha,
+      {}
+    );
+    expect((await simpleGit(target).revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('topic');
+    expect((await simpleGit(target).revparse(['HEAD'])).trim()).toBe(secondSha);
+  });
+
+  it('fast-forwards a stale cached branch when restoring from the destination', async () => {
+    const git = simpleGit(repoPath);
+    await git.branch(['topic', firstSha]);
+    await git.push('origin', 'different:refs/heads/topic');
+    const target = join(root, 'restored');
+    await expect(
+      restoreBranchFilesystem(
+        repoPath,
+        target,
+        'topic',
+        'main',
+        {},
+        undefined,
+        'branch',
+        join(root, 'origin.git')
+      )
+    ).resolves.toEqual({ success: true, strategy: 'checkout' });
+    expect((await simpleGit(target).revparse(['HEAD'])).trim()).toBe(secondSha);
+    expect((await simpleGit(target).revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('topic');
+  });
+
+  it('refuses destination restore that would discard local-only commits', async () => {
+    const git = simpleGit(repoPath);
+    await git.branch(['topic', secondSha]);
+    await git.push('origin', 'main:refs/heads/topic');
+    await expect(
+      restoreBranchFilesystem(
+        repoPath,
+        join(root, 'refused'),
+        'topic',
+        'main',
+        {},
+        undefined,
+        'branch',
+        join(root, 'origin.git')
+      )
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('refusing to discard local work'),
+    });
+    expect((await git.revparse(['topic'])).trim()).toBe(secondSha);
   });
 });
