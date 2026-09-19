@@ -85,6 +85,7 @@ import {
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
+import { DeviceRouter } from './surfaces/DeviceRouter';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -92,7 +93,6 @@ import {
   KNOWLEDGE_ROUTE_PATHS,
   MCP_RECOVERY_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
-  routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
@@ -101,7 +101,6 @@ import {
   enrichAuthenticatedUser,
   hasObservedOnboardingCompletion,
 } from './utils/currentUserAuthority';
-import { isMobileViewport } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
@@ -120,7 +119,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
-import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
+import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -271,59 +270,6 @@ function getRouteModuleKey(surfaceId: RouteSurfaceId, pathname: string): RouteMo
 function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
   if (loadedRouteModuleKeys.has(moduleKey)) return Promise.resolve();
   return routeModuleLoaders[moduleKey]();
-}
-
-/**
- * DeviceRouter - Redirects users to mobile or desktop site based on device detection
- * Responds to window resize events for responsive switching
- */
-function DeviceRouter() {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  // Reads the pathname explicitly so the resize subscription below can stay
-  // mounted across navigations instead of re-subscribing on every route change.
-  const checkAndRoute = useCallback(
-    (pathname: string) => {
-      if (!routeUsesDeviceRouter(pathname)) return;
-      const isMobile = isMobileViewport();
-      const isOnMobilePath = pathname.startsWith('/m');
-
-      const state = agorStore.getState();
-      const routeEntities = {
-        boards: state.boardById.values(),
-        sessions: state.sessionById.values(),
-      };
-
-      if (isMobile && !isOnMobilePath) {
-        navigate(responsiveRoutePath(pathname, 'mobile', routeEntities), { replace: true });
-      } else if (!isMobile && isOnMobilePath) {
-        navigate(responsiveRoutePath(pathname, 'desktop', routeEntities), { replace: true });
-      }
-    },
-    [navigate]
-  );
-
-  // Route change / mount.
-  useEffect(() => {
-    checkAndRoute(location.pathname);
-  }, [location.pathname, checkAndRoute]);
-
-  // Resize subscription — mounted once, not re-created on navigation.
-  useEffect(() => {
-    let resizeTimeout: ReturnType<typeof setTimeout>;
-    const handleResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => checkAndRoute(window.location.pathname), 200);
-    };
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      clearTimeout(resizeTimeout);
-    };
-  }, [checkAndRoute]);
-
-  return null;
 }
 
 function AppContent() {
@@ -2400,6 +2346,7 @@ function AppContent() {
                   client={client}
                   user={user}
                   authGeneration={authenticationGeneration}
+                  isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
                   topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
                   onCreateSession={handleCreateSession}
@@ -2409,6 +2356,7 @@ function AppContent() {
                   onUpdateSession={handleUpdateSession}
                   onDeleteSession={handleDeleteSession}
                   onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}

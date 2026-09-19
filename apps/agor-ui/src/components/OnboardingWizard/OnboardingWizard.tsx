@@ -153,6 +153,7 @@ const LLM_OPTIONS: LlmOption[] = [
     placeholder: 'sk-proj-…',
     keyLink: 'https://platform.openai.com/api-keys',
     keyLinkLabel: 'platform.openai.com/api-keys',
+    recommended: true,
   },
   {
     id: 'gemini',

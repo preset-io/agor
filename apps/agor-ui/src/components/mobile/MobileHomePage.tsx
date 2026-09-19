@@ -4,12 +4,13 @@ import { Button, Empty, Flex, List, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
-import { pressableProps } from '../../utils/pressableProps';
+import { isOwnActiveSession, sortSessions } from '../../utils/sessionSearch';
 import { getBoardEmoji } from '../BoardTile';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
 import { JumpBackInSection } from '../HomePage/JumpBackInSection';
-import { mobileScrollAreaStyle } from './constants';
+import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
+import { MobileListRow } from './MobileListRow';
 import { MobileSessionRow } from './MobileSessionRow';
 
 interface MobileHomePageProps {
@@ -18,6 +19,8 @@ interface MobileHomePageProps {
   boardById: Map<string, Board>;
   currentUser?: User | null;
   onAsk: () => void;
+  /** A session is being created for Ask; the button shows it and refuses a repeated tap. */
+  askPending?: boolean;
   primaryTeammateName?: string;
   primaryTeammateEmoji?: string;
   /** Number of the primary assistant's own sessions (shown on the hero). */
@@ -43,6 +46,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   boardById,
   currentUser,
   onAsk,
+  askPending,
   primaryTeammateName,
   primaryTeammateEmoji,
   assistantSessionCount,
@@ -54,11 +58,10 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   const { token } = theme.useToken();
 
   const recent = useMemo(() => {
-    const userId = currentUser?.user_id;
-    return Array.from(sessionById.values())
-      .filter((s) => !s.archived && (!userId || s.created_by === userId))
-      .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))
-      .slice(0, RECENT_LIMIT);
+    const own = Array.from(sessionById.values()).filter((s) =>
+      isOwnActiveSession(s, currentUser?.user_id)
+    );
+    return sortSessions(own, 'recent').slice(0, RECENT_LIMIT);
   }, [sessionById, currentUser?.user_id]);
 
   const boards = useMemo(
@@ -95,7 +98,7 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
   );
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={mobilePageStyle}>
       <MobileHeader
         title={greetingName ? `Welcome back, ${greetingName}` : 'Home'}
         onSearch={() => navigate('/m/search')}
@@ -149,7 +152,12 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
                   {heroContent}
                 </Flex>
               )}
-              <Button type="primary" onClick={onAsk} style={{ minHeight: MOBILE_TOUCH_TARGET }}>
+              <Button
+                type="primary"
+                onClick={onAsk}
+                loading={askPending}
+                style={{ minHeight: MOBILE_TOUCH_TARGET }}
+              >
                 Ask
               </Button>
             </Flex>
@@ -202,25 +210,19 @@ export const MobileHomePage: React.FC<MobileHomePageProps> = ({
               <List
                 dataSource={boards}
                 renderItem={(board) => (
-                  <List.Item
-                    {...pressableProps(() => navigate(`/m/board/${board.board_id}`))}
-                    aria-label={`Open ${board.name}`}
-                    style={{ cursor: 'pointer', paddingInline: 0, minHeight: MOBILE_TOUCH_TARGET }}
-                  >
-                    <List.Item.Meta
-                      avatar={
-                        <span aria-hidden style={{ fontSize: token.fontSizeHeading4 }}>
-                          {getBoardEmoji(board, branchById)}
-                        </span>
-                      }
-                      title={
-                        <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
-                          {board.name}
-                        </Typography.Text>
-                      }
-                    />
-                    <RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />
-                  </List.Item>
+                  <MobileListRow
+                    title={board.name}
+                    ariaLabel={`Open ${board.name}`}
+                    onPress={() => navigate(`/m/board/${board.board_id}`)}
+                    avatar={
+                      <span aria-hidden style={{ fontSize: token.fontSizeHeading4 }}>
+                        {getBoardEmoji(board, branchById)}
+                      </span>
+                    }
+                    trailing={
+                      <RightOutlined aria-hidden style={{ color: token.colorTextTertiary }} />
+                    }
+                  />
                 )}
               />
             </GlassPanel>

@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { getBoardEmoji } from '../BoardTile';
 import { CommentsPanel } from '../CommentsPanel';
+import { mobilePageStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 
 interface MobileCommentsPageProps {
@@ -67,7 +68,7 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={mobilePageStyle}>
       <MobileHeader
         title={board.name}
         onBack={onBack}

@@ -182,6 +182,19 @@ function createPatchHarness(opts: {
     create: vi.fn(),
     findAll: vi.fn(async () => []),
     delete: vi.fn(),
+    acknowledgeProvisioningAttempt: vi.fn(async (_id, acknowledgement, expectedAttemptId) => {
+      const currentAttemptId = opts.current.provisioning_attempt_id;
+      const applied =
+        opts.current.archived !== true &&
+        opts.current.filesystem_status === 'creating' &&
+        (expectedAttemptId
+          ? expectedAttemptId === currentAttemptId
+          : currentAttemptId === undefined);
+      return {
+        applied,
+        branch: applied ? { ...opts.current, ...acknowledgement } : opts.current,
+      };
+    }),
   };
   const boardRepo = {
     findById: vi.fn(async (boardId: string) => ({ board_id: boardId })),
@@ -201,8 +214,9 @@ function createPatchHarness(opts: {
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
-  (service as unknown as { branchRepo: { enrichWithZoneInfo: typeof vi.fn } }).branchRepo = {
+  (service as unknown as { branchRepo: Record<string, unknown> }).branchRepo = {
     enrichWithZoneInfo: vi.fn(async (branch) => branch),
+    acknowledgeProvisioningAttempt: repository.acknowledgeProvisioningAttempt,
   } as never;
   vi.spyOn(service as never, 'computeDefaultBoardPositionForBranch').mockResolvedValue({
     x: 10,
@@ -1380,6 +1394,63 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 
 describe('BranchesService.unarchive', () => {
   const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
+
+  it.each([
+    [true, 'spawn'],
+    [false, 'spawn'],
+    [true, 'missing-remote'],
+    [false, 'missing-remote'],
+    [true, 'local-home'],
+    [false, 'local-home'],
+  ] as const)(
+    'publishes restore failure only after an applied CAS (%s, %s)',
+    async (applied, failure) => {
+      const { service, branchRepo, branchesService } = createServiceHarness();
+      const branchId = 'restore-failure' as BranchID;
+      const current = {
+        branch_id: branchId,
+        repo_id: 'repo-1',
+        name: 'Restore',
+        path: '/tmp/restore',
+        archived: true,
+        storage_mode: failure === 'missing-remote' ? 'clone' : 'worktree',
+        ...(failure === 'local-home'
+          ? { custom_context: { teammate: { ...teammateContext.teammate, localHome: true } } }
+          : {}),
+      };
+      vi.spyOn(service, 'get').mockResolvedValue(current as never);
+      vi.spyOn(service, 'patch').mockImplementation(
+        async (_id, data) => ({ ...current, ...data }) as never
+      );
+      mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
+      mockedSpawnExecutor.mockImplementation(() => {
+        throw new Error('launcher unavailable');
+      });
+      vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
+        applied,
+        branch: {
+          ...current,
+          archived: false,
+          filesystem_status: applied ? 'failed' : 'ready',
+        } as never,
+      });
+      vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(
+        async (branch) => branch as never
+      );
+      await service.unarchive(branchId, undefined, userParams);
+      expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+        branchId,
+        expect.objectContaining({ filesystem_status: 'failed' }),
+        expect.any(String)
+      );
+      const failures = branchesService.emit.mock.calls.filter(
+        (args) => args[1]?.filesystem_status === 'failed'
+      );
+      expect(failures).toHaveLength(applied ? 1 : 0);
+      if (applied)
+        expect(failures[0][2].params.user).toEqual({ user_id: 'user-1', role: 'member' });
+    }
+  );
 
   it('preserves existing board_id when options.boardId is not provided', async () => {
     const { service, boardObjectsService, sessionsService } = createServiceHarness();
@@ -2992,6 +3063,142 @@ describe('BranchesService environment health requests', () => {
   });
 });
 
+describe('BranchesService.patch provisioning attempt fence', () => {
+  // `git.branch.add` is fire-and-forget and can be slow. If a user retries
+  // while an older attempt is still running, that older executor eventually
+  // patches its own outcome — and without a fence it lands on the *newer*
+  // attempt: a stale success reported as ready, or a healthy in-flight
+  // materialization marked failed. Each dispatch carries a generation id,
+  // echoed back on the ack; a mismatch drops just the provisioning fields.
+  const branchId = 'branch-fence' as BranchID;
+
+  function harness(currentAttemptId?: string) {
+    return createPatchHarness({
+      current: {
+        branch_id: branchId,
+        board_id: undefined,
+        filesystem_status: 'creating',
+        ...(currentAttemptId ? { provisioning_attempt_id: currentAttemptId } : {}),
+      },
+      updated: { branch_id: branchId, filesystem_status: 'creating' },
+    });
+  }
+
+  it.each([{ start_command: 'pnpm dev' }, { board_id: 'other-board' }, { name: 'renamed' }])(
+    'rejects metadata mixed into a terminal acknowledgement: %s',
+    async (metadata) => {
+      const { service, repository } = harness('attempt-B');
+      await expect(
+        service.patch(branchId, {
+          filesystem_status: 'ready',
+          provisioning_attempt_id: 'attempt-B',
+          ...metadata,
+        } as never)
+      ).rejects.toThrow(/terminal outcome/);
+      expect(repository.acknowledgeProvisioningAttempt).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('drops a superseded failure ack so it cannot fail the newer attempt', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, {
+      filesystem_status: 'failed',
+      error_message: 'attempt A blew up',
+      provisioning_attempt_id: 'attempt-A',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt.mock.results.at(-1)?.value).toBeDefined();
+  });
+
+  it('applies the ack from the attempt that currently owns the row', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, {
+      filesystem_status: 'ready',
+      provisioning_attempt_id: 'attempt-B',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      'attempt-B'
+    );
+  });
+
+  it('rejects an unfenced legacy ack when the row has a generation', async () => {
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(branchId, { filesystem_status: 'ready' } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      undefined
+    );
+  });
+
+  it('rejects a fenced ack when the legacy row carries no generation', async () => {
+    const { service, repository } = harness(undefined);
+
+    await service.patch(branchId, {
+      filesystem_status: 'ready',
+      provisioning_attempt_id: 'attempt-A',
+    } as never);
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      'attempt-A'
+    );
+  });
+
+  it('reads the generation authoritatively rather than trusting the RBAC prefetch', async () => {
+    // The tests above call `patch` bare, so the adapter always reads the row.
+    // Through the real hook chain it does not: with `branch_rbac` enabled,
+    // `loadBranch` stashes the row it authorized against as
+    // `_agorPrefetchedRecord`, and the adapter serves `patch`'s existence read
+    // from that instead of the database. The stashed row is as old as the
+    // *start* of the request, so a retry whose CAS commits during this
+    // request's authorization work is invisible to a fence that trusts it —
+    // the generations compare equal and the superseded ack lands on the newer
+    // attempt, which is precisely what the fence exists to stop.
+    //
+    // Here the committed row already owns attempt-B while the prefetch still
+    // reports attempt-A, matching the incoming ack. The fence must ignore the
+    // prefetch and drop the ack anyway.
+    const { service, repository } = harness('attempt-B');
+
+    await service.patch(
+      branchId,
+      {
+        filesystem_status: 'ready',
+        provisioning_attempt_id: 'attempt-A',
+      } as never,
+      {
+        _agorPrefetchedRecord: {
+          id: branchId,
+          idField: 'branch_id',
+          record: {
+            branch_id: branchId,
+            board_id: undefined,
+            filesystem_status: 'creating',
+            provisioning_attempt_id: 'attempt-A',
+          },
+        },
+      } as never
+    );
+
+    expect(repository.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
+      branchId,
+      expect.objectContaining({ filesystem_status: 'ready' }),
+      'attempt-A'
+    );
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('server-selected local teammate homes', () => {
   function harness(remote_url?: string, config = {}) {
     const get = vi.fn(async () => ({ remote_url }));
@@ -3145,7 +3352,7 @@ describe('server-selected local teammate homes', () => {
   });
 
   it('does not recreate a lost marked home during unarchive', async () => {
-    const { service } = createServiceHarness();
+    const { service, branchRepo } = createServiceHarness();
     const branchId = 'lost-home' as BranchID;
     const branch = {
       branch_id: branchId,
@@ -3156,21 +3363,27 @@ describe('server-selected local teammate homes', () => {
       custom_context: { teammate: { ...teammateContext.teammate, localHome: true } },
     };
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    const patch = vi
-      .spyOn(service, 'patch')
-      .mockImplementation(async (_id, data) => ({ ...branch, ...data }) as never);
+    vi.spyOn(service, 'patch').mockImplementation(
+      async (_id, data) => ({ ...branch, ...data }) as never
+    );
     vi.mocked(requestExecutor).mockResolvedValueOnce({
       success: true,
       data: { exists: false },
     } as never);
     vi.mocked(spawnExecutor).mockClear();
+    vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
+      applied: true,
+      branch: { ...branch, archived: false, filesystem_status: 'failed' } as never,
+    });
+    vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(async (row) => row as never);
     const result = await service.unarchive(branchId, undefined, {
       user: { user_id: 'user-1' as UUID, role: 'member' },
     } as never);
     expect(result.filesystem_status).toBe('failed');
-    expect(patch).toHaveBeenLastCalledWith(
+    expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
       branchId,
       expect.objectContaining({
+        filesystem_status: 'failed',
         error_message: expect.stringContaining('cannot recover personal state'),
       }),
       expect.anything()

@@ -13,7 +13,7 @@
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
 import { type BoardID, boardPath, type User } from '@agor-live/client';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import { type ComponentProps, useEffect, useState } from 'react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
@@ -267,6 +267,28 @@ describe('OnboardingWizard layout (real browser)', () => {
     }
 
     expect(offenders, `goal titles must stay one line:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps Claude and Codex recommendation labels accessible and inside their option buttons', async () => {
+    renderWizardAt('llm');
+    await screen.findByText('Connect your AI');
+
+    expect(screen.getAllByText('Recommended')).toHaveLength(2);
+    for (const title of ['Claude', 'GPT']) {
+      const button = screen.getByRole('button', { name: new RegExp(`${title}.*Recommended`) });
+      const badge = within(button).getByText('Recommended');
+      await waitFor(() => expect(badge).toBeVisible());
+      const badgeRect = badge.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      expect(badgeRect.left).toBeGreaterThanOrEqual(buttonRect.left);
+      expect(badgeRect.right).toBeLessThanOrEqual(buttonRect.right);
+      expect(badgeRect.top).toBeGreaterThanOrEqual(buttonRect.top);
+      expect(badgeRect.bottom).toBeLessThanOrEqual(buttonRect.bottom);
+    }
+    for (const title of ['Gemini', 'Custom']) {
+      const button = screen.getByRole('button', { name: new RegExp(title) });
+      expect(within(button).queryByText('Recommended')).not.toBeInTheDocument();
+    }
   });
 
   it('keeps all three Claude sign-in methods in an even row or narrow stacked layout', async () => {

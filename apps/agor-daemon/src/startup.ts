@@ -29,7 +29,12 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
-import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import type {
+  Application,
+  ReposServiceImpl,
+  SessionsServiceImpl,
+  TasksServiceImpl,
+} from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import {
@@ -691,6 +696,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
       'daemon-restart-notices',
       () => injectRestartNotices(ctx, orphanCleanupResult),
       metrics
+    );
+  }
+
+  // Standalone-only, bootstrap-tenant provisioning safety net. This is not HA
+  // owner-death detection or a cross-tenant sweep: another daemon may still own
+  // a `creating` attempt, so HA startup must leave it alone. Failed rows require
+  // explicit retry; this job never re-dispatches or inspects local worktrees.
+  if (ctx.taskRuntimePolicy === 'standalone') {
+    runPostStartJob('branch-provisioning-watchdog', () =>
+      runStartupTenantDatabaseScope(ctx, async () => {
+        const reposService = app.service('repos') as unknown as ReposServiceImpl;
+        await reposService.reconcileStuckCreatingBranches(startupTenantParams(config));
+      })
     );
   }
 

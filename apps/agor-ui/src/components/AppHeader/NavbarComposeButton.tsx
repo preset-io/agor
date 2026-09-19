@@ -18,6 +18,7 @@ import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessi
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
@@ -91,9 +92,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
 
   const [open, setOpen] = useState(false);
-  const [resolving, setResolving] = useState(false);
-  const [resolveFailed, setResolveFailed] = useState(false);
-  const [primaryBranch, setPrimaryBranch] = useState<Branch | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_AGENTIC_TOOL_NAME);
   const [prompt, setPrompt] = useState('');
   const [pendingSend, setPendingSend] = useState<SendMode | null>(null);
@@ -137,31 +135,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   // teammate's emoji before first open) and re-resolve on open to catch changes
   // made elsewhere. The preference is optional; null asks for a target only
   // when the caller actually uses quick compose.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reopen and caller changes deliberately invalidate the caller-scoped preference
-  useEffect(() => {
-    if (!client) return;
-    let cancelled = false;
-    setResolving(true);
-    setResolveFailed(false);
-    client
-      .service('users')
-      .getPrimaryTeammate()
-      .then((branch) => {
-        if (!cancelled) {
-          setPrimaryBranch(branch);
-          setResolveFailed(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setResolveFailed(true);
-      })
-      .finally(() => {
-        if (!cancelled) setResolving(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, client, currentUser?.user_id, authenticationGeneration]);
+  const {
+    branch: primaryBranch,
+    setBranch: setPrimaryBranch,
+    resolving,
+    failed: resolveFailed,
+  } = usePrimaryTeammate(client, currentUser?.user_id, authenticationGeneration, open);
 
   // Seed the chip-row form from the user's default on open. Only keyed on `open`
   // so a live user refresh can't wipe edits made while the popover is up.
