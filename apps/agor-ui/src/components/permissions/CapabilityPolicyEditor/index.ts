@@ -7,8 +7,8 @@ export {
   BranchCapabilityPolicyModalEditor,
 } from './CapabilityPolicyModalEditor';
 export { EffectiveAccessPreview } from './EffectiveAccessPreview';
-export { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
 export { PolicyModeSelector } from './PolicyModeSelector';
+export { PrimaryOwner } from './PrimaryOwner';
 export {
   BOARD_ACCESS_EDITOR_CONTEXT,
   BRANCH_ACCESS_EDITOR_CONTEXT,

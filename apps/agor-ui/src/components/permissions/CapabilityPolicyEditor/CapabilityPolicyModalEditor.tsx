@@ -60,6 +60,7 @@ const Frame: React.FC<{ children: React.ReactNode; membershipPreviewAvailable: b
 };
 
 export const BoardCapabilityPolicyModalEditor: React.FC<{
+  ownershipAction?: React.ReactNode;
   value: BoardCapabilityPolicies;
   onChange: (value: BoardCapabilityPolicies) => void;
   client: AgorClient | null;
@@ -67,7 +68,16 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
   groups: Group[];
   currentUser?: User | null;
   workspacePreferences: CapabilityPolicyWorkspacePreferences;
-}> = ({ value, onChange, client, users, groups, currentUser, workspacePreferences }) => {
+}> = ({
+  value,
+  onChange,
+  client,
+  users,
+  groups,
+  currentUser,
+  workspacePreferences,
+  ownershipAction,
+}) => {
   const { memberships, available } = useMemberships(client);
   const currentUserId = (currentUser?.user_id ?? value.primary_owner_user_id) as UserID;
   const directory = useMemo(
@@ -104,6 +114,7 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
   return (
     <Frame membershipPreviewAvailable={available}>
       <BoardCapabilityPolicyForm
+        ownershipAction={ownershipAction}
         value={value}
         onChange={onChange}
         principals={directory.principals}
@@ -117,6 +128,7 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
 };
 
 export const BranchCapabilityPolicyModalEditor: React.FC<{
+  ownershipAction?: React.ReactNode;
   value: BranchCapabilityPolicy;
   onChange: (value: BranchCapabilityPolicy) => void;
   client: AgorClient | null;
@@ -136,6 +148,7 @@ export const BranchCapabilityPolicyModalEditor: React.FC<{
   sessions = [],
   workspacePreferences,
   canManageAccess,
+  ownershipAction,
 }) => {
   const { memberships, available } = useMemberships(client);
   const currentUserId = (currentUser?.user_id ?? value.primary_owner_user_id) as UserID;
@@ -154,6 +167,7 @@ export const BranchCapabilityPolicyModalEditor: React.FC<{
   return (
     <Frame membershipPreviewAvailable={available}>
       <BranchCapabilityPolicyForm
+        ownershipAction={ownershipAction}
         value={value}
         onChange={onChange}
         principals={directory.principals}

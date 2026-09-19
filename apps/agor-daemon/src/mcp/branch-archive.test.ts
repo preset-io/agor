@@ -238,9 +238,24 @@ dbTest(
         ).rejects.toThrow('filesystem_status is managed');
       }
       await runWithTenantDatabaseScope(db, 'default', async () => {
+        const branches = new BranchRepository(db);
+        // A valid command token cannot overwrite an already-terminal branch.
+        await expect(
+          fixture.service.patch(branch.branch_id, { filesystem_status: 'failed' }, params(payload))
+        ).resolves.toMatchObject({ filesystem_status: 'ready' });
+        await branches.update(branch.branch_id, { filesystem_status: 'failed' });
         for (const filesystem_status of ['failed', 'ready'] as const) {
+          // Each terminal acknowledgement must belong to its own active attempt.
+          const attemptId = generateId();
+          expect(
+            (await branches.claimFailedForProvisioningRetry(branch.branch_id, attemptId)).claimed
+          ).toBe(true);
           await expect(
-            fixture.service.patch(branch.branch_id, { filesystem_status }, params(payload))
+            fixture.service.patch(
+              branch.branch_id,
+              { filesystem_status, provisioning_attempt_id: attemptId },
+              params(payload)
+            )
           ).resolves.toMatchObject({ filesystem_status });
         }
       });

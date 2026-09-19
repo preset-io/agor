@@ -2,6 +2,7 @@ import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  OWNERSHIP_TRANSFER_SERVICES,
   type UserRole,
 } from '@agor/core/types';
 
@@ -141,6 +142,14 @@ export const REALTIME_PUBLISH_POLICY = {
   'boards/:id/permissions': {
     audience: 'none',
     why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
+  },
+  [OWNERSHIP_TRANSFER_SERVICES.board]: {
+    audience: 'none',
+    why: 'Transfer results are caller-only; canonical board updates publish to the new audience after authorization invalidation.',
+  },
+  [OWNERSHIP_TRANSFER_SERVICES.branch]: {
+    audience: 'none',
+    why: 'Transfer results are caller-only; canonical branch updates publish to the new audience after authorization invalidation.',
   },
   'workspace-preferences': {
     audience: 'none',

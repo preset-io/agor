@@ -2413,3 +2413,35 @@ describe('agor_branches_clean', () => {
     expect(JSON.stringify(result)).not.toContain('cleaned successfully');
   });
 });
+
+describe('management ownership transfer tool', () => {
+  it('forwards the actual caller and tenant to the explicit transfer service', async () => {
+    const patch = vi.fn().mockResolvedValue({ scope: 'management_only' });
+    const service = vi.fn().mockReturnValue({ patch });
+    const baseServiceParams = {
+      provider: 'mcp',
+      authenticated: true,
+      user: { user_id: 'caller', role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    };
+    const handler = registerAndCaptureHandler('agor_branches_transfer_ownership', {
+      app: { service },
+      userId: 'caller',
+      baseServiceParams,
+    });
+    await handler({
+      branchId: 'resource-id',
+      expectedOwnerUserId: 'old-owner',
+      targetUserId: 'new-owner',
+    });
+    expect(service).toHaveBeenCalledWith('branches/:id/ownership');
+    expect(patch).toHaveBeenCalledWith(
+      null,
+      {
+        expected_owner_user_id: 'old-owner',
+        target_user_id: 'new-owner',
+      },
+      { ...baseServiceParams, route: { id: 'resource-id' } }
+    );
+  });
+});
