@@ -15,6 +15,7 @@ import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
+import { OwnershipTransfer } from '../permissions/CapabilityPolicyEditor/OwnershipTransfer';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -211,15 +212,27 @@ export function BoardEditModal({
             canEditGeneral={canEditGeneral}
             capabilityPolicyEditor={
               policy ? (
-                <BoardCapabilityPolicyModalEditor
-                  value={policy}
-                  onChange={setPolicy}
-                  client={client}
-                  users={permissionUsers}
-                  groups={allGroups}
-                  currentUser={currentUser}
-                  workspacePreferences={workspacePreferences}
-                />
+                <>
+                  <OwnershipTransfer
+                    kind="board"
+                    resourceId={loadedBoard.board_id}
+                    ownerUserId={policy.primary_owner_user_id}
+                    client={client}
+                    users={permissionUsers}
+                    currentUser={currentUser}
+                    disabled={saving || loading}
+                    onTransferred={close}
+                  />
+                  <BoardCapabilityPolicyModalEditor
+                    value={policy}
+                    onChange={setPolicy}
+                    client={client}
+                    users={permissionUsers}
+                    groups={allGroups}
+                    currentUser={currentUser}
+                    workspacePreferences={workspacePreferences}
+                  />
+                </>
               ) : (
                 <Alert type="error" showIcon description="Permissions are unavailable." />
               )

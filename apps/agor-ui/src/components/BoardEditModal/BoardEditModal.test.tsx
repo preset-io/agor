@@ -1,7 +1,6 @@
 import type { AgorClient, Board, BoardCapabilityPolicies, UserID } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
-import { isValidElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardEditModal } from './BoardEditModal';
 
@@ -13,6 +12,39 @@ vi.mock('../JSONEditor', () => ({
   JSONEditor: () => <textarea aria-label="Custom Context (JSON)" />,
   validateJSON: () => Promise.resolve(),
 }));
+vi.mock('../permissions/CapabilityPolicyEditor', () => ({
+  BoardCapabilityPolicyModalEditor: ({
+    value,
+    onChange,
+    groups,
+  }: {
+    value: BoardCapabilityPolicies;
+    onChange: (value: BoardCapabilityPolicies) => void;
+    groups: Array<{ name: string }>;
+  }) => (
+    <>
+      <button
+        type="button"
+        data-sharing-mode={value.board_access.sharing_mode}
+        onClick={() =>
+          onChange({
+            ...value,
+            board_access: {
+              ...value.board_access,
+              sharing_mode: value.board_access.sharing_mode === 'shared' ? 'private' : 'shared',
+            },
+          })
+        }
+      >
+        Change board access
+      </button>
+      <div
+        data-testid="board-modal-policy-editor"
+        data-group-names={groups.map((group) => group.name).join(',')}
+      />
+    </>
+  ),
+}));
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
@@ -20,55 +52,15 @@ vi.mock('../forms/BoardFormFields', () => ({
   }: {
     capabilityPolicyEditor?: React.ReactNode;
     canEditGeneral?: boolean;
-  }) => {
-    const editor = isValidElement<{
-      value: BoardCapabilityPolicies;
-      onChange: (value: BoardCapabilityPolicies) => void;
-    }>(capabilityPolicyEditor)
-      ? capabilityPolicyEditor.props
-      : null;
-    // The edit modal passes groups straight to the capability-policy editor
-    // element; assert propagation by inspecting that element's props.
-    const editorGroups =
-      capabilityPolicyEditor &&
-      typeof capabilityPolicyEditor === 'object' &&
-      'props' in capabilityPolicyEditor
-        ? ((capabilityPolicyEditor as { props?: { groups?: Array<{ name: string }> } }).props
-            ?.groups ?? [])
-        : [];
-    return (
-      <>
-        <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-          <Input />
-        </Form.Item>
-        <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
-        {editor && (
-          <button
-            type="button"
-            data-sharing-mode={editor.value.board_access.sharing_mode}
-            onClick={() =>
-              editor.onChange({
-                ...editor.value,
-                board_access: {
-                  ...editor.value.board_access,
-                  sharing_mode:
-                    editor.value.board_access.sharing_mode === 'shared' ? 'private' : 'shared',
-                },
-              })
-            }
-          >
-            Change board access
-          </button>
-        )}
-        {capabilityPolicyEditor && (
-          <div
-            data-testid="board-modal-policy-editor"
-            data-group-names={editorGroups.map((group) => group.name).join(',')}
-          />
-        )}
-      </>
-    );
-  },
+  }) => (
+    <>
+      <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+        <Input />
+      </Form.Item>
+      <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
+      {capabilityPolicyEditor}
+    </>
+  ),
   extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
     name: form.getFieldValue('name'),
   }),

@@ -283,7 +283,7 @@ export interface Board {
   /** User ID of the user who created this board */
   created_by: string;
 
-  /** Immutable primary owner. This is intentionally independent of attribution. */
+  /** Primary owner, changed only by explicit ownership transfer; independent of attribution. */
   primary_owner_user_id?: string;
 
   /** Board-level visibility. Existing boards default/read as 'shared'. */

@@ -139,7 +139,52 @@ sudo.
 
 ## Board and branch permissions
 
-Every board and branch has one primary owner. Primary ownership cannot be reassigned.
+Every board and branch has one primary owner. The current owner or a workspace
+Admin/Superadmin can use **Transfer ownership** in its permission settings to
+choose another member of the same workspace. Managers cannot transfer ownership
+unless they are also the owner or a workspace administrator. Viewer-only accounts
+cannot receive ownership. This transfer authority is independent of the configured
+superadmin bypass for ordinary branch operations.
+
+Transfer changes management ownership of **one resource only**. A board transfer
+does not transfer its branches, and a branch transfer does not grant access to
+its board. Creators and historical authorship stay unchanged. Named access
+entries, groups, Others, inheritance/overrides, and session-sharing switches are
+preserved. The former owner loses the primary-owner shortcut but keeps any
+independent access or administrator privileges. The result shows their remaining
+resource-policy capabilities and branch file access.
+
+This is **not an assistant runtime handoff or offboarding**: sessions, schedules,
+gateway run-as, Knowledge namespace ownership, personal MCP connections, OAuth
+grants and credentials do not move. Existing work keeps its execution identity;
+normal authorization rechecks may stop it if that identity loses access. Transfer
+does not pause work or guarantee immediate credential/process revocation.
+The successor must configure their own connections. Execution-home Sessions
+remain unshareable; branch-home Sessions still require both sharing gates.
+
+The REST/Socket.IO commands are `PATCH /boards/:id/ownership` and
+`PATCH /branches/:id/ownership`, with full UUIDs in the route and body:
+
+```json
+{
+  "expected_owner_user_id": "<current owner UUID>",
+  "target_user_id": "<successor UUID>"
+}
+```
+
+Read the resource first. A stale expected owner is rejected; reload before
+retrying. Ordinary resource and permission patches cannot change ownership.
+MCP exposes `agor_boards_transfer_ownership` and
+`agor_branches_transfer_ownership`. Bulk transfer, runtime handoff and user
+soft/hard deletion are not part of these commands.
+
+Upgrade the daemon and apply its normal database migrations before using transfer.
+The migration removes only the old ownership-immutability triggers; it does not
+rewrite existing owners. Authorization, successor eligibility and stale-owner
+checks run in the shared application transaction on SQLite and PostgreSQL.
+Existing database reference protections remain in place (SQLite owner-update
+eligibility is checked by the application, not a replacement trigger).
+Branches undergoing maintenance or permanent deletion reject transfer.
 
 A board has two separate settings:
 

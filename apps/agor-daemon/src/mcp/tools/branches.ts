@@ -21,6 +21,7 @@ import {
   getBranchCleanupBlockReason,
   getTeammateConfig,
   isTeammate,
+  OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
 } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
@@ -1232,11 +1233,40 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   );
 
   server.registerTool(
+    'agor_branches_transfer_ownership',
+    {
+      description:
+        'Transfer management ownership of one branch to another workspace member. Only the current owner or a workspace administrator may transfer. ' +
+        'Preserves authorship and access entries; does not transfer related resources, sessions, schedules, gateway run-as, memory ownership or credentials. ' +
+        'Existing work keeps its execution identity. This is not offboarding or a pause. Returns the previous owner’s remaining policy access.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.strictObject({
+        branchId: z.uuid().describe('Full branch UUID'),
+        expectedOwnerUserId: z
+          .uuid()
+          .describe('Current primary owner UUID from a fresh branch read'),
+        targetUserId: z.uuid().describe('Successor workspace member UUID'),
+      }),
+    },
+    async (args) =>
+      textResult(
+        await ctx.app.service(OWNERSHIP_TRANSFER_SERVICES.branch).patch(
+          null,
+          {
+            expected_owner_user_id: args.expectedOwnerUserId,
+            target_user_id: args.targetUserId,
+          },
+          { ...ctx.baseServiceParams, route: { id: args.branchId } }
+        )
+      )
+  );
+
+  server.registerTool(
     'agor_branches_permissions_update',
     {
       description:
         'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
-        'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
+        'Read the current revision with agor_branches_get first. Use agor_branches_transfer_ownership to change the primary owner separately.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),

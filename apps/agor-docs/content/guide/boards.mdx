@@ -149,7 +149,10 @@ Branch defaults use the same roles, file-access choices, and session-sharing edi
 
 Entries point to one person or group. Direct person entries override group membership; otherwise group entries combine. **Others** is a clearly labeled fallback for active workspace members who do not match any named entry.
 
-Primary ownership cannot be reassigned. Managers can maintain access and may
+Primary ownership can be changed separately by the current owner or a workspace
+administrator using **Transfer ownership**. This transfers only the board, not
+its branches or their execution identities; see [ownership transfer](/guide/multiplayer-unix-isolation#board-and-branch-permissions).
+Managers can maintain access and may
 enable shared prompting for branch-home Sessions, but do not become owners.
 The workspace preference must also be enabled, and execution-home Sessions are
 never shareable.
