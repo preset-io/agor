@@ -63,4 +63,35 @@ describe('tenant credential watermark', () => {
     postgres.mockReturnValueOnce(false);
     await expect(assertTenantCredentialEpoch(db, 'a', {})).resolves.toBeUndefined();
   });
+  it('gives a closed record the stable code and an unverifiable read none', async () => {
+    // Every JWT path checks the generation before tenant admission, so this is
+    // the only rejection a browser on a closed workspace ever sees. It stays a
+    // refusal; the code is what lets the tab show the suspended state instead
+    // of reporting the member's perfectly good credential as expired.
+    for (const phase of ['restricted', 'release_prepared']) {
+      read.mockResolvedValue([owner('a'), { ...owner('b'), phase }]);
+      const denial = await readTenantCredentialEpoch(db, 'a').catch((error) => error);
+      expect(denial).toMatchObject({ code: 401, data: { code: 'tenant_restricted' } });
+      // The code is the entire disclosure: no controller, placement, revision
+      // or phase may ride along.
+      expect(Object.keys(denial.data)).toEqual(['code']);
+      await expect(assertTenantCredentialEpoch(db, 'a', {})).rejects.toMatchObject({
+        data: { code: 'tenant_restricted' },
+      });
+    }
+    // An observation the daemon could not make is not a statement that the
+    // tenant is closed, so it keeps the codeless rejection.
+    read.mockRejectedValue(new Error('private connection details'));
+    const unverifiable = await readTenantCredentialEpoch(db, 'a').catch((error) => error);
+    expect(unverifiable).toMatchObject({ code: 401 });
+    expect(unverifiable.data).toBeUndefined();
+    // A stale generation against an open tenant is likewise uncoded: the
+    // credential really is the thing that was rejected.
+    read.mockResolvedValue([owner()]);
+    const stale = await assertTenantCredentialEpoch(db, 'a', {
+      tenant_credential_epoch: 'f'.repeat(64),
+    }).catch((error) => error);
+    expect(stale).toMatchObject({ code: 401 });
+    expect(stale.data).toBeUndefined();
+  });
 });

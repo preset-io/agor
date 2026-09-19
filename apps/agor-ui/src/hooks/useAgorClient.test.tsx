@@ -583,6 +583,50 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     expect(seam.io.disconnect).toHaveBeenCalled();
   });
 
+  it('enters the suspended state from the coded 401 the credential check raises', async () => {
+    // Every JWT path validates the credential generation before tenant
+    // admission, so a closed workspace answers the browser with a coded 401
+    // rather than the 403 above. Both mean the same thing here, and neither
+    // may start a token refresh: the credential is not what was rejected.
+    vi.useFakeTimers();
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    const seam = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(seam.client as never);
+    seam.rejectNextConnect(
+      Object.assign(new Error('Tenant credential cannot be verified'), {
+        code: 401,
+        className: 'not-authenticated',
+        data: { code: 'tenant_restricted' },
+      })
+    );
+    const { result } = renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'access-token',
+        authorityGeneration: 1,
+      })
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.tenantRestricted).toBe(true);
+    expect(result.current.connecting).toBe(false);
+    expect(result.current.error).toBeNull();
+    expect(refreshTokensMock).not.toHaveBeenCalled();
+
+    const observeError = vi.mocked(seam.client.hooks).mock.calls[0][0].error[0];
+    act(() => {
+      observeError({
+        error: Object.assign(new Error('Tenant credential cannot be verified'), {
+          code: 401,
+          data: { code: 'tenant_restricted' },
+        }),
+      });
+    });
+    expect(result.current.tenantRestricted).toBe(true);
+  });
+
   it('ignores an ordinary service failure', async () => {
     vi.useFakeTimers();
     const seam = makeSeamClient();

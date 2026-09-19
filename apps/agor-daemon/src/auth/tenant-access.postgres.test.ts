@@ -23,8 +23,10 @@ import {
 import {
   AuthenticationService,
   authenticate,
+  errorHandler,
   feathers,
   feathersExpress,
+  rest,
   socketio,
 } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
@@ -367,6 +369,175 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       }
     });
 
+    it('answers a browser socket and REST call on a closed tenant with the stable code', async () => {
+      // Packet 05 gave tenant admission a stable code, but every JWT path
+      // checks the credential generation first, so a browser never reached it:
+      // a suspended workspace looked exactly like an expired session. This is
+      // the real signed handshake and the real REST body for that member.
+      const tenantId = `browser-restricted-${generateId()}`;
+      const seeded = await seedTenant(tenantId);
+      const jwtSecret = 'disposable-restricted-browser-secret';
+      const app = feathersExpress(feathers());
+      app.set('config', {});
+      app.set('distributedWorkIdentity', {
+        instanceId: 'browser-restricted',
+        bootId: 'browser-restricted-boot',
+      });
+      const multiTenancy = {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      } as const;
+      app.configure(rest());
+      app.use('users', {
+        async get(id: string, params: { tenant?: { tenant_id: string } }) {
+          if (!params.tenant?.tenant_id) throw new Error('Missing authenticated tenant');
+          return runWithTenantDatabaseScope(db, params.tenant.tenant_id, (scoped) =>
+            new UsersRepository(scoped).findById(id as never)
+          );
+        },
+      });
+      app.set('authentication', {
+        secret: jwtSecret,
+        entity: 'user',
+        entityId: 'user_id',
+        service: 'users',
+        authStrategies: ['jwt'],
+        jwtOptions: {
+          audience: RUNTIME_JWT_AUDIENCE,
+          issuer: RUNTIME_JWT_ISSUER,
+          algorithm: 'HS256',
+        },
+      });
+      const authentication = new AuthenticationService(app);
+      authentication.register('jwt', new RuntimeJWTStrategy({ db, multiTenancy }));
+      app.use('authentication', authentication);
+      app.use('sessions', { get: (id: string) => new SessionRepository(db).findById(id) });
+      const requireAccess = createTenantRestrictedAuthHook(
+        authenticate('jwt') as never,
+        multiTenancy,
+        (id, context) => assertRuntimeTenantRequestAccess(db, id, context)
+      );
+      app.service('sessions').hooks({
+        around: {
+          all: [
+            async (context: HookContext, next: () => Promise<void>) => {
+              await requireAccess(context);
+              await runWithTenantDatabaseScope(db, context.params.tenant!.tenant_id, next);
+            },
+          ],
+        },
+      });
+      const socketConfig = createSocketIOConfig(app as never, {
+        corsOrigin: '*',
+        credentialsAllowed: false,
+        workIdentity: { instanceId: 'browser-restricted', bootId: 'browser-restricted-boot' },
+        multiTenancy,
+        assertTenantAccess: (id) => assertRuntimeTenantAccess(db, id),
+        assertTenantCredential: (id, payload) => assertTenantCredentialEpoch(db, id, payload),
+      });
+      app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
+      configureChannels(app as never);
+      // Feathers types app.use as a service path; this is Express middleware.
+      (app as unknown as { use: (middleware: unknown) => void }).use(
+        errorHandler({ logger: false })
+      );
+
+      const mintToken = async () =>
+        issueRuntimeTokenPair(seeded.user, jwtSecret, '1h', '1h', {
+          tenant_id: tenantId,
+          ...authCredentialGenerationClaim(seeded.user),
+          ...authTokenIssuedAtClaim(Date.now(), seeded.user),
+          ...tenantCredentialEpochClaims(await readTenantCredentialEpoch(db, tenantId)),
+        }).accessToken;
+      const restore = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+        applyTenantRestrictionIntent(raw, tenantId, {
+          version: 1,
+          controllerId: 'controller',
+          placementId: 'placement',
+          operationId: action === 'restrict' ? 'suspend' : 'reactivate',
+          revision,
+          action,
+        });
+
+      let server: HttpServer | undefined;
+      let client: AgorClient | undefined;
+      try {
+        server = await new Promise<HttpServer>((resolve) => {
+          const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+        });
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+        const origin = `http://127.0.0.1:${address.port}`;
+        const restSession = async (token: string) => {
+          const response = await fetch(`${origin}/sessions/${seeded.session.session_id}`, {
+            headers: { authorization: `Bearer ${token}` },
+          });
+          return { status: response.status, body: await response.json() };
+        };
+        client = createClient(origin, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
+        const handshake = async (token: string) => {
+          client!.io.auth = { token };
+          const settled = new Promise<Error | undefined>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Handshake timed out')), 5_000);
+            client!.io.once('connect', () => {
+              clearTimeout(timeout);
+              resolve(undefined);
+            });
+            client!.io.once('connect_error', (error) => {
+              clearTimeout(timeout);
+              resolve(error);
+            });
+          });
+          client!.io.connect();
+          const outcome = await settled;
+          client!.io.disconnect();
+          return outcome as (Error & { data?: Record<string, unknown> }) | undefined;
+        };
+
+        const open = await mintToken();
+        expect(await handshake(open)).toBeUndefined();
+        expect((await restSession(open)).status).toBe(200);
+
+        await restore(1, 'restrict');
+        // Socket.IO preserves a middleware error's `data` on connect_error, so
+        // the browser reads the same code on both transports. No status or
+        // class rides along: those are the client's cue to rotate a credential
+        // that is perfectly good.
+        expect((await handshake(open))?.data).toEqual({ code: 'tenant_restricted' });
+        const closedRest = await restSession(open);
+        expect(closedRest.status).toBe(401);
+        expect(closedRest.body.data).toEqual({ code: 'tenant_restricted' });
+        // The code is the entire disclosure.
+        expect(JSON.stringify(closedRest.body)).not.toMatch(
+          /controller|placement|revision|phase|suspend/i
+        );
+
+        await restore(2, 'prepare_release');
+        expect((await handshake(open))?.data).toEqual({ code: 'tenant_restricted' });
+
+        await restore(2, 'activate');
+        // The workspace is open, but the generation moved: the parked tab's
+        // credential is now genuinely stale, so it gets the plain rejection
+        // that makes the browser fail over to sign-in.
+        const stale = await handshake(open);
+        expect(stale?.data).toEqual({ code: 401, className: 'not-authenticated' });
+        const staleRest = await restSession(open);
+        expect(staleRest.status).toBe(401);
+        expect(staleRest.body.data).toBeUndefined();
+        // And a fresh sign-in works.
+        const reissued = await mintToken();
+        expect(await handshake(reissued)).toBeUndefined();
+        expect((await restSession(reissued)).status).toBe(200);
+      } finally {
+        client?.io.close();
+        if (server)
+          await new Promise<void>((resolve, reject) =>
+            server!.close((error) => (error ? reject(error) : resolve()))
+          );
+      }
+    });
+
     it('rejects old signed refresh and JWT re-login after reactivation without laundering epochs', async () => {
       const tenantId = `epoch-${generateId()}`;
       const seeded = await seedTenant(tenantId);
@@ -397,8 +568,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         action: 'restrict' as const,
       };
       await applyTenantRestrictionIntent(raw, tenantId, command);
+      // Refusal, with the closed-workspace code preserved through the
+      // service's generic catch: the holder of this signed refresh token is
+      // already entitled to that fact, and the browser needs it to tell a
+      // suspended workspace from a dead session.
       await expect(refresh.create({ refreshToken: old.refreshToken })).rejects.toMatchObject({
         code: 401,
+        data: { code: 'tenant_restricted' },
       });
       await applyTenantRestrictionIntent(raw, tenantId, {
         ...command,
@@ -413,14 +589,20 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         action: 'activate',
       });
       usersService.get.mockClear();
-      await expect(refresh.create({ refreshToken: old.refreshToken })).rejects.toMatchObject({
-        code: 401,
-      });
+      // Reopened, but this credential's generation is now genuinely stale, so
+      // the rejection carries no code and the browser falls over to sign-in.
+      const released = await refresh
+        .create({ refreshToken: old.refreshToken })
+        .catch((error) => error);
+      expect(released).toMatchObject({ code: 401 });
+      expect(released.data).toBeUndefined();
       expect(usersService.get).not.toHaveBeenCalled();
       const oldPayload = jwt.verify(old.accessToken, secret);
-      await expect(assertTenantCredentialEpoch(db, tenantId, oldPayload)).rejects.toMatchObject({
-        code: 401,
-      });
+      const staleAccess = await assertTenantCredentialEpoch(db, tenantId, oldPayload).catch(
+        (error) => error
+      );
+      expect(staleAccess).toMatchObject({ code: 401 });
+      expect(staleAccess.data).toBeUndefined();
       const hook = createIssueBrowserTokensHook({
         db,
         jwtSecret: secret,

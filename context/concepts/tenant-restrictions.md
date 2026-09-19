@@ -202,10 +202,15 @@ controller, placement, operation, revision or phase. The 503 and the deliberatel
 ambiguous per-packet `Forbidden` keep no code, because an unverifiable read is not
 a statement that the tenant is closed. Socket.IO has no server-settable disconnect
 reason, so a socket retired by the restriction monitor carries the code on its
-next handshake. agor-ui matches the code (never message text): `useAgorClient`
+next handshake. The same code also rides the earlier credential-generation
+rejection (see Credential generations), which is what a browser actually
+receives. agor-ui matches the code (never message text): `useAgorClient`
 closes the socket, renders the full-page `WorkspaceSuspended` state, closes the
 mutation gate, and re-probes with one handshake at 30s/1m/2m/4m/5m-cap until an
-accepted handshake clears it. The browser state is a presentation of the last
+accepted handshake clears it. `useAuth` reports the same code from a
+re-authentication, refresh or sign-in attempt, retains the stored credential and
+re-probes on that schedule; `App` renders the suspended state from either half,
+ahead of the sign-in gate. The browser state is a presentation of the last
 answer the daemon gave, not evidence of containment.
 
 `auth/termination-read-authority.ts` issues single-call, server-owned read grants
@@ -265,6 +270,21 @@ validated at issuance; refresh and JWT re-login never replace an old generation
 with the current one. Missing legacy claims work only without retained history.
 Fresh primary authentication (including existing API keys) is not permanent key
 revocation. Standalone SQLite remains outside hosted restriction support.
+
+A read that finds any record in a non-`active` phase rejects with
+`NotAuthenticated` carrying `data` of exactly
+`{ code: TENANT_RESTRICTED_ERROR_CODE }`; a failed, unavailable or corrupt read,
+and a stale supplied generation against an open tenant, stay codeless. Nothing is
+relaxed — the credential is refused on every path either way — but this check
+runs ahead of tenant admission on each JWT path, so without the code a suspended
+workspace was indistinguishable from an expired session in the browser and the
+admission 403 was unreachable there. Disclosure is bounded by who can reach the
+check: a holder of a signed runtime credential, or of valid primary credentials,
+for that exact tenant — and the code is the whole of it. The refresh service
+preserves that one code through its otherwise generic rejection for the same
+reason; every other refresh failure stays "invalid or expired". After activation
+the watermark moves, so a parked credential is rejected codelessly and the
+browser correctly fails over to sign-in.
 
 Ordinary service admission, bearer authentication, socket packets/publications,
 and egress dispatch compare the watermark. The bounded socket monitor also retires

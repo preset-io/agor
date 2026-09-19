@@ -121,4 +121,43 @@ describe('isTenantRestrictedError', () => {
     expect(isDefiniteAuthFailure(restricted)).toBe(false);
     expect(isTransientConnectionError(restricted)).toBe(false);
   });
+
+  it('holds for the coded 401 the credential check raises ahead of admission', () => {
+    // The daemon validates the credential generation before tenant admission,
+    // so this — not the 403 — is what a browser on a closed workspace gets on
+    // every JWT path: the socket handshake, a REST call, and refresh.
+    for (const coded of [
+      Object.assign(new Error('Tenant credential cannot be verified'), {
+        code: 401,
+        className: 'not-authenticated',
+        data: { code: 'tenant_restricted' },
+      }),
+      Object.assign(new Error('Tenant credential cannot be verified'), {
+        data: { code: 'tenant_restricted' },
+      }),
+    ]) {
+      expect(isTenantRestrictedError(coded)).toBe(true);
+      // The credential is still refused; it is just not the thing that failed,
+      // so the caller must not clear tokens or bounce the member to login.
+      expect(isDefiniteAuthFailure(coded)).toBe(false);
+      expect(isTransientConnectionError(coded)).toBe(false);
+    }
+  });
+
+  it('leaves an uncoded 401 a definite failure, including after release', () => {
+    // A released workspace rejects the parked tab's now-stale generation with
+    // no code. That one must still clear tokens and fail over to sign-in.
+    const stale = Object.assign(new Error('Tenant credential cannot be verified'), {
+      code: 401,
+      className: 'not-authenticated',
+    });
+    expect(isTenantRestrictedError(stale)).toBe(false);
+    expect(isDefiniteAuthFailure(stale)).toBe(true);
+    expect(
+      isDefiniteAuthFailure({
+        message: 'Invalid or expired authentication token',
+        data: { code: 401, className: 'not-authenticated' },
+      })
+    ).toBe(true);
+  });
 });

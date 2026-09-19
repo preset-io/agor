@@ -46,8 +46,15 @@ function statusOf(err: unknown): number | undefined {
  * were rejected with 401, or Feathers explicitly raised NotAuthenticated.
  * Callers should treat this as "session is dead" — clear tokens, bounce
  * to login, fast-fail pending refreshes.
+ *
+ * A coded restriction rejection is excluded even though it arrives as a 401.
+ * The daemon verifies the credential generation before tenant admission, so a
+ * closed workspace answers 401 on every JWT path — but the credential is not
+ * the thing that was rejected, and clearing tokens would log a member out of a
+ * workspace that an administrator may reopen in minutes.
  */
 export function isDefiniteAuthFailure(err: unknown): boolean {
+  if (isTenantRestrictedError(err)) return false;
   const status = statusOf(err);
   if (status === 401) return true;
   if (!err || typeof err !== 'object') return false;
@@ -63,6 +70,10 @@ export function isDefiniteAuthFailure(err: unknown): boolean {
  * stable code the daemon puts in `data` on both the REST/Feathers rejection and
  * the Socket.IO handshake rejection. Message text is never matched: the copy is
  * free to change and a message is not a contract.
+ *
+ * Status is deliberately not part of the test. The same code arrives as a 403
+ * from tenant admission and as a 401 from the credential-generation check that
+ * runs ahead of it, and both mean the one thing this classifier reports.
  *
  * A failed or unverifiable admission read (503) deliberately does not qualify —
  * the daemon does not know that the tenant is closed, so the UI must not say so.
