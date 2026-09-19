@@ -1,12 +1,12 @@
-import type { AgorClient, Board, BoardCapabilityPolicies, UserID } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { AgorClient, Board, BoardCapabilityPolicies, User, UserID } from '@agor-live/client';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardEditModal } from './BoardEditModal';
 
 const showError = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/message', () => ({
-  useThemedMessage: () => ({ showError }),
+  useThemedMessage: () => ({ showError, showSuccess: vi.fn() }),
 }));
 vi.mock('../JSONEditor', () => ({
   JSONEditor: () => <textarea aria-label="Custom Context (JSON)" />,
@@ -151,6 +151,55 @@ function makeClient(
 describe('BoardEditModal', () => {
   beforeEach(() => {
     showError.mockReset();
+  });
+
+  it('keeps a pending transfer and its completion result across same-board realtime updates', async () => {
+    const { client: baseClient, get } = makeClient();
+    const owner = { user_id: policy.primary_owner_user_id, role: 'admin', name: 'Owner' } as User;
+    const successor = { user_id: 'successor' as UserID, role: 'member', name: 'Reed' } as User;
+    let complete!: (value: unknown) => void;
+    const patch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        })
+    );
+    const client = {
+      service: (path: string) => {
+        if (path === 'boards/:id/ownership') return { patch };
+        if (path === 'users') return { findAll: vi.fn().mockResolvedValue([owner, successor]) };
+        return baseClient.service(path);
+      },
+    } as unknown as AgorClient;
+    const onClose = vi.fn();
+    const editor = (board: Board) => (
+      <BoardEditModal board={board} client={client} currentUser={owner} open onClose={onClose} />
+    );
+    const { rerender } = render(editor(listedBoard));
+    fireEvent.click(await screen.findByRole('button', { name: 'Transfer ownership' }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Successor owner' }));
+    fireEvent.click(await screen.findByText('Reed'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Transfer ownership' }).at(-1)!);
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+
+    // The canonical patched event can arrive before the command's reply.
+    rerender(editor({ ...freshBoard, primary_owner_user_id: successor.user_id }));
+    expect(screen.getByRole('combobox', { name: 'Successor owner' })).toBeInTheDocument();
+    await act(async () =>
+      complete({
+        scope: 'management_only',
+        previous_owner_access: { capabilities: ['board.view'], fs_access: 'none' },
+      })
+    );
+    await screen.findByRole('button', { name: 'Done' });
+    rerender(
+      editor({ ...freshBoard, primary_owner_user_id: successor.user_id, name: 'Realtime refresh' })
+    );
+    expect(screen.getByText(/board.view/)).toBeInTheDocument();
+    expect(get).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('passes canEditGeneral=false through to BoardFormFields when the caller lacks board.edit', async () => {
