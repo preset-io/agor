@@ -75,6 +75,28 @@ Keep the full value in the control's accessible name. Do not add a nested tab st
 a tooltip keyboard-triggerable; interactive library surfaces need a component-level focus pattern
 that has been tested with the library's own keyboard behavior.
 
+## Mobile and narrow viewports
+
+Agor has one set of feature components. Make them responsive; do not fork them.
+
+- A component that renders or mutates a domain entity (session, branch, board, comment, settings
+  section, MCP server) lives in its shared location and adapts to a narrow viewport with a small
+  branch or prop. The full-screen mobile session view is the shared `SessionPanel`, not a copy.
+- `components/mobile/` holds only what is structurally different on a phone: the shell, routing,
+  tab bar, headers, and page composition of shared components. A list view of a board is
+  legitimate there because the desktop board is a 2D canvas; re-implementing a card, a composer,
+  or a settings table is not.
+- Logic is never per-shell. Whatever a mobile surface needs — session-creation config
+  (`buildNewSessionConfig`), permission decisions, search matching and row text, navigation lists
+  (`buildSettingsNav`) — it calls the implementation desktop uses. If no shared one exists yet,
+  extract it from the desktop component instead of writing a second copy.
+- The shell switches at `MOBILE_SHELL_MAX_WIDTH` via `useIsMobileViewport()`. Settings-family
+  surfaces keep their existing AntD `md` compact layout; a component nested inside one follows
+  its container's breakpoint (`useMediaQuery(COMPACT_SETTINGS_MEDIA_QUERY)`) so the two switch
+  together.
+- Shared components must not import from `components/mobile/`. Cross-shell constants such as
+  `MOBILE_TOUCH_TARGET` live in `utils/`.
+
 ## Modal lifecycle
 
 Mount rare/heavy dialogs in lists or canvas nodes on demand. Keep the mounted entity separate
@@ -98,6 +120,8 @@ state; use `destroyOnHidden` when the wrapper must stay mounted but its contents
 - [ ] Existing AntD/Agor primitives were searched before adding UI.
 - [ ] The chosen AntD component owns the visual states instead of a styled `div` recreating it.
 - [ ] A repeated bespoke interaction was reused or extracted.
+- [ ] Mobile behavior adapts the shared component; nothing under `components/mobile/` re-implements
+      a feature component or its logic.
 - [ ] Styling deviations are small, inline where practical, and use `theme.useToken()`.
 - [ ] Any CSS is necessary, bounded, and carries a concrete `noFirstPartyCss` exception.
 - [ ] Raw `--ant-*` strings appear only in approved CSS or documented non-React boundaries.

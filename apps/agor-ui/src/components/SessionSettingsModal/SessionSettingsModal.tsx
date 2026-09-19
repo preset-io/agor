@@ -61,7 +61,8 @@ export interface SessionSettingsModalProps {
   /**
    * Called on save with the new list of env var names the session creator has
    * selected to export into the session's executor process. Only the session's
-   * creator or an admin can edit these.
+   * creator or an admin can edit these. The Environment Variables section is
+   * rendered only when this is wired, so an edit can never be silently dropped.
    */
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   /** Client for loading current env selections and the creator's env var list. */
@@ -355,7 +356,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     });
   }
 
-  if (canEditEnvSelections && client) {
+  if (canEditEnvSelections && client && onUpdateSessionEnvSelections) {
     secondaryItems.push({
       key: 'env-selections',
       label: (

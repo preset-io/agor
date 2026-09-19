@@ -20,6 +20,7 @@ import {
   userMcpOauthTokens,
 } from '../../db';
 import type { MCPServerID, UserID } from '../../types';
+import * as outbound from '../../utils/safe-outbound-fetch';
 import {
   AmbiguousRefreshError,
   FailedRefreshError,
@@ -382,6 +383,39 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       ).toBe(true);
     });
+
+    it.each([
+      ['https://oauth2.googleapis.com/token', 'idle'],
+      ['https://provider.example.test/token', 'ambiguous'],
+    ] as const)(
+      'preserves provider-specific settlement through the shared refresh protocol: %s',
+      async (endpoint, status) => {
+        const bound = await seed(`settlement-${status}`, endpoint);
+        const exchange = vi
+          .spyOn(outbound, 'safeOutboundFetch')
+          .mockRejectedValue(new Error('synthetic transport failure'));
+        try {
+          await expect(
+            refreshAndPersistToken({
+              db: dbA,
+              tenantId: bound.tenantId,
+              userId: bound.userId,
+              mcpServerId: bound.serverId,
+              observedRefreshVersion: initialRefreshVersion(bound),
+              validateGrant: async () => true,
+            })
+          ).rejects.toBeInstanceOf(OAuthRefreshExchangeError);
+          const saved = await runWithTenantDatabaseScope(dbB, bound.tenantId, (db) =>
+            new UserMCPOAuthTokenRepository(db, masterSecret).getToken(bound.userId, bound.serverId)
+          );
+          expect(saved?.refresh_status).toBe(status);
+          expect(saved?.oauth_refresh_token).toBe(`refresh-settlement-${status}-0`);
+          expect(exchange).toHaveBeenCalledOnce();
+        } finally {
+          exchange.mockRestore();
+        }
+      }
+    );
 
     it.each(['mixed-error', 'invalid-expiry'] as const)(
       'quarantines a GitLab-shaped %s response across replicas without replay',

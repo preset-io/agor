@@ -29,10 +29,20 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
-import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import type {
+  Application,
+  ReposServiceImpl,
+  SessionsServiceImpl,
+  TasksServiceImpl,
+} from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
-import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
+import {
+  type DaemonMetrics,
+  getDaemonMetrics,
+  getDaemonOperationalMetrics,
+  NOOP_METRICS,
+} from './metrics/index.js';
 import { BranchDeletionReconciler } from './services/branch-deletion-reconciler.js';
 import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
@@ -689,6 +699,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
     );
   }
 
+  // Standalone-only, bootstrap-tenant provisioning safety net. This is not HA
+  // owner-death detection or a cross-tenant sweep: another daemon may still own
+  // a `creating` attempt, so HA startup must leave it alone. Failed rows require
+  // explicit retry; this job never re-dispatches or inspects local worktrees.
+  if (ctx.taskRuntimePolicy === 'standalone') {
+    runPostStartJob('branch-provisioning-watchdog', () =>
+      runStartupTenantDatabaseScope(ctx, async () => {
+        const reposService = app.service('repos') as unknown as ReposServiceImpl;
+        await reposService.reconcileStuckCreatingBranches(startupTenantParams(config));
+      })
+    );
+  }
+
   // Non-blocking credential spill repair. If an agent/user wrote a PAT into a
   // git remote URL while the daemon was down, scrub persisted repo metadata
   // and Agor-managed repo/worktree git configs after the API is already
@@ -998,6 +1021,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       console.error('❌ Error during shutdown:', error);
       exitCode = 1;
     } finally {
+      getDaemonOperationalMetrics(app).stop();
       try {
         // A DogStatsD gauge is last-value, so explicitly overwrite this
         // instance's process-local executor count before closing the socket.
@@ -1018,4 +1042,5 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  getDaemonOperationalMetrics(app).start();
 }

@@ -1,18 +1,5 @@
-import type {
-  AgenticToolName,
-  AgorClient,
-  Branch,
-  CodexApprovalPolicy,
-  CodexSandboxMode,
-  EffortLevel,
-  PermissionMode,
-  User,
-} from '@agor-live/client';
-import {
-  DEFAULT_AGENTIC_TOOL_NAME,
-  getDefaultPermissionMode,
-  mapToCodexPermissionConfig,
-} from '@agor-live/client';
+import type { AgenticToolName, AgorClient, Branch, EffortLevel, User } from '@agor-live/client';
+import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -23,15 +10,15 @@ import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
-import { buildConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
 import {
-  getUserAgenticToolDefault,
-  getUserDefaultConfigurationSource,
-} from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
+  buildNewSessionConfig,
+  getNewSessionDefaultValues,
+  getNewSessionToolSwitchValues,
+} from '../AgenticToolConfigurationPicker/newSessionConfig';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
@@ -131,47 +118,25 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     setEnvVarNames([]);
     clearAttachments();
 
-    // Get default config for the selected agent
-    const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
-    const baseValues = getFormValuesFromConfig(primaryTool, agentDefaults);
-
-    // MCP inheritance: branch config > user defaults
-    const branchMcpIds = branch?.mcp_server_ids;
-
     form.resetFields();
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, primaryTool),
       // Never carry a checked save-as-default across opens — it could silently
       // overwrite the user's default on a later create.
       saveAsDefault: false,
-      ...baseValues,
-      mcpServerIds:
-        branchMcpIds && branchMcpIds.length > 0
-          ? branchMcpIds
-          : currentUser?.default_mcp_server_ids,
+      // Saved agent config, and MCP inheritance: branch config > user defaults
+      ...getNewSessionDefaultValues(currentUser, primaryTool, branch),
     });
   }, [open, form]);
 
   // Update permission mode and other defaults when agent changes
   useEffect(() => {
     if (selectedAgent) {
-      const tool = selectedAgent as AgenticToolName;
-      const agentDefaults = getUserAgenticToolDefault(currentUser, tool).configuration;
-      const baseValues = getFormValuesFromConfig(tool, agentDefaults);
-
-      // MCP inheritance: branch config > user defaults
-      form.setFieldsValue({
-        ...baseValues,
-        agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, tool),
-        // Clear codex fields when switching away from codex
-        ...(tool !== 'codex' && {
-          codexSandboxMode: undefined,
-          codexApprovalPolicy: undefined,
-          codexNetworkAccess: undefined,
-        }),
-      });
+      // Re-seeds the saved config and clears Codex fields when switching away from Codex
+      form.setFieldsValue(
+        getNewSessionToolSwitchValues(currentUser, selectedAgent as AgenticToolName)
+      );
     }
   }, [selectedAgent, form, currentUser]);
 
@@ -182,35 +147,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // Prevent duplicate submissions
       setIsCreating(true);
 
-      // Get user defaults for the selected agent (fallback if form fields weren't mounted)
-      const agentDefaults = getUserAgenticToolDefault(
-        currentUser,
-        selectedAgent as AgenticToolName
-      ).configuration;
-
-      // MCP fallback must respect branch > user defaults (same as open-reset effect)
-      const branchMcpIds = branch?.mcp_server_ids;
-      const fallbackMcpServerIds =
-        branchMcpIds && branchMcpIds.length > 0
-          ? branchMcpIds
-          : currentUser?.default_mcp_server_ids;
-
-      const permissionMode: PermissionMode =
-        (values.permissionMode as PermissionMode | undefined) ??
-        agentDefaults?.permissionMode ??
-        getDefaultPermissionMode(selectedAgent as AgenticToolName);
-
       const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
-      const inlineAgentConfig = isInline
-        ? buildConfigFromFormValues(selectedAgent as AgenticToolName, {
-            modelConfig: values.modelConfig,
-            effort: values.effort,
-            permissionMode: values.permissionMode,
-            codexSandboxMode: values.codexSandboxMode,
-            codexApprovalPolicy: values.codexApprovalPolicy,
-            codexNetworkAccess: values.codexNetworkAccess,
-          })
-        : undefined;
 
       // Promote the inline config to the user's default when requested. Fire and
       // forget — session creation shouldn't block on the profile patch.
@@ -231,41 +168,19 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         ).catch(() => showError('Failed to save your default configuration'));
       }
 
+      // Shared builder: unmounted fields fall back to saved defaults; MCP respects branch > user
       const config: NewSessionConfig = {
-        branch_id: branchId,
-        agent: selectedAgent,
-        agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
+        ...buildNewSessionConfig({
+          user: currentUser,
+          tool: selectedAgent as AgenticToolName,
+          branch: { branch_id: branchId, mcp_server_ids: branch?.mcp_server_ids },
+          values,
+          initialPrompt: values.initialPrompt,
+          attachmentFiles: attachments.map((attachment) => attachment.file),
+        }),
         title: values.title,
-        initialPrompt: values.initialPrompt,
-        // Daemon's applySessionConfigDefaults hook fills the tool default.
-        modelConfig: isInline
-          ? inlineAgentConfig?.modelConfig
-          : (values.modelConfig ?? agentDefaults?.modelConfig),
-        effort: isInline
-          ? undefined
-          : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
-        mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
-        permissionMode,
         envVarNames: envVarNames.length > 0 ? envVarNames : undefined,
-        attachmentFiles:
-          attachments.length > 0 ? attachments.map((attachment) => attachment.file) : undefined,
       };
-
-      if (selectedAgent === 'codex') {
-        const codexDefaults = mapToCodexPermissionConfig(permissionMode);
-        config.codexSandboxMode =
-          (values.codexSandboxMode as CodexSandboxMode | undefined) ??
-          agentDefaults?.codexSandboxMode ??
-          codexDefaults.sandboxMode;
-        config.codexApprovalPolicy =
-          (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
-          agentDefaults?.codexApprovalPolicy ??
-          codexDefaults.approvalPolicy;
-        config.codexNetworkAccess =
-          values.codexNetworkAccess ??
-          agentDefaults?.codexNetworkAccess ??
-          codexDefaults.networkAccess;
-      }
 
       void onCreate(config).catch(() => setIsCreating(false));
       // Note: isCreating will be reset when modal reopens via useEffect

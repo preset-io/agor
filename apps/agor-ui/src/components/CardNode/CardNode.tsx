@@ -13,21 +13,12 @@
 import type { CardWithType } from '@agor-live/client';
 import { DragOutlined, LinkOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
-
-function isSafeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
 import React, { useMemo } from 'react';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
+import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { MarkdownPreview } from '../MarkdownRenderer';
 
@@ -103,7 +94,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
         >
           {card.title}
         </Typography.Text>
-        {card.url && isSafeUrl(card.url) && (
+        {isSafeExternalUrl(card.url) && (
           <a
             href={card.url}
             target="_blank"

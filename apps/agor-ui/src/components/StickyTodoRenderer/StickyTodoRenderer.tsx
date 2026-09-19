@@ -9,10 +9,10 @@
  * - Caches result with useMemo (dependency: messages)
  * - Reuses existing TodoListRenderer for consistent styling
  * - Subtle visual distinction (dashed border, light background)
- * - Only renders when TODOs exist (returns null otherwise)
+ * - Renders tasks or an explicit notice when projection makes state unavailable
  */
 
-import { type Message, TaskStatus } from '@agor-live/client';
+import { type Message, TaskStatus, type TranscriptTruncation } from '@agor-live/client';
 import { theme } from 'antd';
 import { useMemo } from 'react';
 import {
@@ -21,6 +21,7 @@ import {
   type RenderableTodoStatus,
   TodoListRenderer,
 } from '../ToolUseRenderer/renderers/TodoListRenderer';
+import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 
 interface StickyTodoRendererProps {
   /**
@@ -69,6 +70,7 @@ interface TaskTodo extends RenderableTodoItem {
 interface TaskToolCall {
   name: TaskToolName;
   input: Record<string, unknown>;
+  inputTruncation?: TranscriptTruncation;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -131,17 +133,23 @@ function structuredToolResult(block: Record<string, unknown>) {
  * tool_use_id. This function is intentionally pure so hydrated and realtime
  * message arrays follow the same path.
  */
-export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | null {
+export function deriveLatestTodos(
+  messages: Message[]
+): RenderableTodoItem[] | { unavailable: TranscriptTruncation } | null {
   let mode: 'todo-write' | 'task-tools' | null = null;
   let todoWriteSnapshot: RenderableTodoItem[] = [];
   const tasks = new Map<string, TaskTodo>();
   const calls = new Map<string, TaskToolCall>();
+  // Missing projected fields are unknown, not empty or unchanged. Only a
+  // complete snapshot can recover from a gap in the incremental task history.
+  let unavailable: TranscriptTruncation | undefined;
 
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
 
     for (const rawBlock of message.content) {
       const block = rawBlock as Record<string, unknown>;
+      const truncation = rawBlock.transcript_truncation;
       if (block.type === 'tool_use' && typeof block.name === 'string') {
         const name = block.name.toLowerCase();
         const input = asRecord(block.input) ?? {};
@@ -152,6 +160,11 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
             calls.clear();
           }
           mode = 'todo-write';
+          if (truncation?.input) {
+            unavailable = { input: truncation.input };
+            continue;
+          }
+          unavailable = undefined;
           todoWriteSnapshot = parseTodosInput(input.todos);
           continue;
         }
@@ -165,6 +178,10 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
         const toolUseId = typeof block.id === 'string' ? block.id : undefined;
         const toolName = name as TaskToolName;
 
+        if ((toolName === 'taskcreate' || toolName === 'taskupdate') && truncation?.input) {
+          unavailable = { input: truncation.input };
+        }
+
         if (toolName === 'taskcreate' && toolUseId) {
           const subject = stringField(input, 'subject');
           if (subject) {
@@ -177,12 +194,16 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
           }
         }
 
-        if (toolName === 'taskupdate') {
-          if (toolUseId) calls.set(toolUseId, { name: toolName, input });
-          continue;
+        if (toolUseId) {
+          calls.set(toolUseId, {
+            name: toolName,
+            input,
+            inputTruncation:
+              (toolName === 'taskcreate' || toolName === 'taskupdate') && truncation?.input
+                ? { input: truncation.input }
+                : undefined,
+          });
         }
-
-        if (toolUseId) calls.set(toolUseId, { name: toolName, input });
         continue;
       }
 
@@ -192,6 +213,19 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
 
       if (block.is_error === true) {
         if (call.name === 'taskcreate') tasks.delete(`pending:${block.tool_use_id}`);
+        calls.delete(block.tool_use_id);
+        continue;
+      }
+
+      if (call.inputTruncation) unavailable = call.inputTruncation;
+
+      // Structured output is authoritative when present. A shortened text
+      // fallback or omitted structured output cannot establish task state.
+      if (
+        truncation?.tool_use_result ||
+        (truncation?.content && !asRecord(block.tool_use_result))
+      ) {
+        unavailable = truncation;
         calls.delete(block.tool_use_id);
         continue;
       }
@@ -218,6 +252,7 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
         const task = returned ? taskFromRecord(returned) : undefined;
         if (task) tasks.set(task.id, task);
       } else if (call.name === 'tasklist' && Array.isArray(result?.tasks)) {
+        unavailable = undefined;
         tasks.clear();
         for (const rawTask of result.tasks) {
           const taskRecord = asRecord(rawTask);
@@ -229,13 +264,14 @@ export function deriveLatestTodos(messages: Message[]): RenderableTodoItem[] | n
     }
   }
 
+  if (unavailable) return { unavailable };
   const latest = mode === 'task-tools' ? Array.from(tasks.values()) : todoWriteSnapshot;
   return latest.length > 0 ? latest : null;
 }
 
 /**
  * Virtual component that derives and displays the latest task list. Renders
- * nothing if neither provider has produced task state.
+ * nothing if neither provider has produced task state or the latest snapshot is empty.
  */
 export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererProps) {
   const { token } = theme.useToken();
@@ -246,13 +282,22 @@ export function StickyTodoRenderer({ messages, taskStatus }: StickyTodoRendererP
   // the parent task can no longer be making progress. Underlying message data
   // is untouched — historical tool blocks render the original status.
   const displayTodos = useMemo<RenderableTodoItem[] | null>(() => {
-    if (!latestTodo) return null;
+    if (!Array.isArray(latestTodo)) return null;
     const override = inProgressOverrideFor(taskStatus);
     if (!override) return latestTodo;
     return latestTodo.map((todo) =>
       todo.status === 'in_progress' ? { ...todo, status: override } : todo
     );
   }, [latestTodo, taskStatus]);
+
+  if (latestTodo && 'unavailable' in latestTodo) {
+    return (
+      <TranscriptTruncationNotice truncations={[latestTodo.unavailable]}>
+        Current task list unavailable because required task data was omitted. Waiting for a complete
+        snapshot.{' '}
+      </TranscriptTruncationNotice>
+    );
+  }
 
   // Don't render if no TODOs found
   if (!displayTodos) return null;

@@ -25,7 +25,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   Typography,
@@ -48,6 +47,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
@@ -365,7 +365,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
         )}
       />
 
-      <Table
+      <ResponsiveTable
         dataSource={users}
         columns={columns}
         rowKey="user_id"

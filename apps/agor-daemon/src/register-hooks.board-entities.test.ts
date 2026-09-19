@@ -200,3 +200,58 @@ dbTest(
   },
   30000
 );
+
+dbTest(
+  'placement PATCH correlation survives real HTTP/socket acknowledgements without persisting or granting access',
+  async ({ db }) => {
+    const fixture = await seedBoardEntities(db);
+    const server = await boardMetadataTestApp(
+      createTenantScopedDatabaseProxy(db),
+      {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'placement-correlation' },
+        execution: {},
+      } as RegisterHooksContext['config'],
+      true
+    );
+    const accessToken = server.headers(fixture.owner.user_id).authorization.slice(7);
+    const socket = createClient(server.url, true, {
+      socketAuthentication: { accessToken },
+      ackTimeout: 2000,
+    });
+    const rest = await createRestClient(server.url);
+    const events = vi.fn();
+    server.app.service('board-objects').on('patched', events);
+    try {
+      await rest.authenticate({ strategy: 'jwt', accessToken });
+      const objectId = fixture.entities[1].object_id;
+      for (const [index, client] of [rest, socket].entries()) {
+        const data = {
+          position: { x: 80 + index, y: 120 },
+          zone_id: null,
+          placement_write_id: `request-${index}`,
+        };
+        expect(await client.service('board-objects').patch(objectId, data)).toMatchObject(data);
+        expect(events.mock.calls.at(-1)?.[0]).toMatchObject({ object_id: objectId, ...data });
+        const stored = await new BoardObjectRepository(db).findByObjectId(objectId);
+        expect(stored?.position).toEqual(data.position);
+        expect(stored).not.toHaveProperty('placement_write_id');
+        const denied = await fetch(`${server.url}/board-objects/${objectId}`, {
+          method: 'PATCH',
+          headers: server.headers(fixture.other.user_id),
+          body: JSON.stringify(data),
+        });
+        expect(denied.status).toBe(403);
+      }
+      const untagged = await rest
+        .service('board-objects')
+        .patch(objectId, { position: { x: 90, y: 130 } });
+      expect(untagged).not.toHaveProperty('placement_write_id');
+      expect(events.mock.calls.at(-1)?.[0]).not.toHaveProperty('placement_write_id');
+    } finally {
+      socket.io.disconnect();
+      await server.close();
+    }
+  },
+  30000
+);

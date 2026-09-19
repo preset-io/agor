@@ -85,7 +85,6 @@ import {
   Spin,
   Steps,
   Switch,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -116,6 +115,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
 
@@ -4703,7 +4703,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           </Typography.Text>
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
           dataSource={channels}
           columns={columns}
           scroll={{ x: 1050 }}

@@ -24,6 +24,7 @@ const ALLOWED_TAG_KEYS = new Set([
   'method',
   'mode',
   'outcome',
+  'disconnect_reason',
   'route',
   'scope',
   'service',

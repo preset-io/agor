@@ -7,6 +7,7 @@ import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectSessionById } from '../../store/selectors';
 import {
+  isOwnActiveSession,
   isSessionSearchActive,
   SESSION_SORT_STORAGE_KEY,
   type SessionSort,
@@ -100,8 +101,8 @@ export const HomeSessionsSection: React.FC<
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
   const allSessions = useMemo(
     () =>
-      Array.from(sessionById.values()).filter(
-        (session) => !session.archived && (!currentUserId || session.created_by === currentUserId)
+      Array.from(sessionById.values()).filter((session) =>
+        isOwnActiveSession(session, currentUserId)
       ),
     [currentUserId, sessionById]
   );

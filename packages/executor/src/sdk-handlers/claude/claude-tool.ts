@@ -28,7 +28,6 @@ import type {
   SessionRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
-import { truncateContentIfNeeded } from '../../services/tool-result-truncator.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 // Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -766,20 +765,16 @@ export class ClaudeTool implements ITool {
             registerToolUses(completeEvent.toolUses);
           }
 
-          // Truncate oversized content before persisting
-          const { blocks: safeAssistantContent } = truncateContentIfNeeded(
-            completeEvent.isSynthesizedResult
-              ? buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE)
-              : completeEvent.content,
-            completeEvent.toolUses
-          );
+          const assistantContent = completeEvent.isSynthesizedResult
+            ? buildProviderFailureContent(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE)
+            : completeEvent.content;
 
           // Create assistant message with session guard (handles deleted sessions gracefully)
           const created = await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             const persisted = await createAssistantMessage(
               sessionId,
               assistantMessageId,
-              safeAssistantContent,
+              assistantContent,
               completeEvent.toolUses,
               taskId,
               nextIndex++,
@@ -813,19 +808,13 @@ export class ClaudeTool implements ITool {
           // Best-effort: enrich Edit/Write tool results with structuredPatch diff data
           enrichToolResults(completeEvent.content);
 
-          // Truncate oversized tool results before persisting
-          const { blocks: safeUserContent } = truncateContentIfNeeded(
-            completeEvent.content,
-            undefined
-          );
-
           // Create user message with session guard (handles deleted sessions gracefully)
           await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
             const userMessageId = generateId() as MessageID;
             await createUserMessageFromContent(
               sessionId,
               userMessageId,
-              safeUserContent,
+              completeEvent.content,
               taskId,
               nextIndex++,
               this.messagesService!,

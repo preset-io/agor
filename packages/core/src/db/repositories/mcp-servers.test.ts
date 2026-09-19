@@ -218,9 +218,28 @@ describe('MCPServerRepository.findAll', () => {
     const user1 = generateId() as UserID;
     const user2 = generateId() as UserID;
 
-    await repo.create(createMCPServerData({ name: 'shared' }));
-    await repo.create(createMCPServerData({ name: 'user1', owner_user_id: user1 }));
-    await repo.create(createMCPServerData({ name: 'user2', owner_user_id: user2 }));
+    // findAll uses ID order. Same-millisecond UUIDv7 generation is not
+    // insertion ordering; pin IDs so this visibility assertion is deterministic.
+    await repo.create(
+      createMCPServerData({
+        name: 'shared',
+        mcp_server_id: '00000000-0000-7000-8000-000000000001' as MCPServerID,
+      })
+    );
+    await repo.create(
+      createMCPServerData({
+        name: 'user1',
+        owner_user_id: user1,
+        mcp_server_id: '00000000-0000-7000-8000-000000000002' as MCPServerID,
+      })
+    );
+    await repo.create(
+      createMCPServerData({
+        name: 'user2',
+        owner_user_id: user2,
+        mcp_server_id: '00000000-0000-7000-8000-000000000003' as MCPServerID,
+      })
+    );
 
     const visible = await repo.findAll({ usableByUserId: user1 });
 
