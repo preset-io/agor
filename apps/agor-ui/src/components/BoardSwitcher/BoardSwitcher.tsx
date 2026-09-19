@@ -66,7 +66,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const { token } = useToken();
   const [filterText, setFilterText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // Keep the command's target stable if a transfer removes this board from
+  // the caller's inventory and navigation falls back to another board/Home.
+  const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [triggerActive, setTriggerActive] = useState(false);
   const [keyboardTooltipBoardId, setKeyboardTooltipBoardId] = useState<string | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -221,7 +223,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
           event.preventDefault();
           event.stopPropagation();
           setDropdownOpen(false);
-          setEditing(true);
+          setEditingBoard(currentBoard);
         }}
       />
     </Tooltip>
@@ -366,10 +368,10 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         )}
       </div>
       <BoardEditModal
-        board={currentBoard ?? null}
+        board={editingBoard}
         client={client}
-        open={editing && Boolean(currentBoard)}
-        onClose={() => setEditing(false)}
+        open={Boolean(editingBoard)}
+        onClose={() => setEditingBoard(null)}
         onUpdate={onUpdateBoard}
         currentUser={currentUser}
       />

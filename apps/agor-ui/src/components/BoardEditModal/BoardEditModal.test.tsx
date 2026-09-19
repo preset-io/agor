@@ -443,18 +443,24 @@ describe('BoardEditModal', () => {
   it('stays open when the board mutation reports failure', async () => {
     const { client } = makeClient({ code: 404 });
     const onClose = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(false);
     render(
       <BoardEditModal
         board={listedBoard}
         client={client}
         open
         onClose={onClose}
-        onUpdate={vi.fn().mockResolvedValue(false)}
+        onUpdate={onUpdate}
       />
     );
     await screen.findByDisplayValue('Fresh name');
-    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    const save = await screen.findByRole('button', { name: 'Save' });
+    fireEvent.click(save);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    // The loading icon temporarily changes the accessible name to "loading
+    // Save". Await the mutation and actual busy-state exit, not that label.
+    await waitFor(() => expect(save).not.toHaveClass('ant-btn-loading'));
+    expect(save).toBeEnabled();
     expect(onClose).not.toHaveBeenCalled();
   });
 });
