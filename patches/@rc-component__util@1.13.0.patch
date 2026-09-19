@@ -1,0 +1,22 @@
+diff --git a/es/hooks/useDelayState.js b/es/hooks/useDelayState.js
+index 219d9545c4630f3061e00cf3f764abfedf6a2f74..5c218c65aa1f61bad1a2389c5fd5f3fd2297c7eb 100644
+--- a/es/hooks/useDelayState.js
++++ b/es/hooks/useDelayState.js
+@@ -32,5 +32,6 @@ export default function useDelayState(defaultValue) {
+       delayRef.current = [true, raf(() => setValue(nextValue), delayConfig.frame)];
+     }
+   });
++  React.useEffect(() => cancelPending, [cancelPending]);
+   return [value, setDelayValue];
+ }
+diff --git a/lib/hooks/useDelayState.js b/lib/hooks/useDelayState.js
+index e59989e3820a7cdf8f8197c1308e29fe09bdd3d6..134b864ed7682b9a44047c51dc8543cb97ebc4db 100644
+--- a/lib/hooks/useDelayState.js
++++ b/lib/hooks/useDelayState.js
+@@ -41,5 +41,6 @@ function useDelayState(defaultValue) {
+       delayRef.current = [true, (0, _raf.default)(() => setValue(nextValue), delayConfig.frame)];
+     }
+   });
++  React.useEffect(() => cancelPending, [cancelPending]);
+   return [value, setDelayValue];
+ }
