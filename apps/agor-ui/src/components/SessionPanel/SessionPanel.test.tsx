@@ -4,6 +4,9 @@ import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { buildSessionMaps } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { MOBILE_SHELL_MAX_WIDTH } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
@@ -557,4 +560,61 @@ describe('SessionPanel mobile header', () => {
     expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
   });
+});
+
+describe('SessionPanel archive feedback', () => {
+  afterEach(() => {
+    setRealtimeAuthorityScope(null);
+    agorStore.getState().reset();
+    vi.restoreAllMocks();
+  });
+
+  it.each(['read-failure', 'mutation-failure', 'confirmed'] as const)(
+    'renders the correct archive outcome for %s',
+    async (outcome) => {
+      setRealtimeAuthorityScope('tenant-a:user-a:1');
+      agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps([session]) }));
+      const archived = { ...session, archived: true };
+      const create = vi.fn(async () => {
+        if (outcome === 'mutation-failure') throw new Error('Archive denied');
+        return { session: archived };
+      });
+      const get = vi.fn(async () => {
+        if (outcome === 'read-failure') throw new Error('Read unavailable');
+        return archived;
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const client = {
+        service: (name: string) => {
+          if (name === `sessions/${session.session_id}/archive`) return { create };
+          if (name === 'sessions') return { get };
+          if (name === 'tasks') return { on: vi.fn(), off: vi.fn() };
+          if (name.endsWith('/tasks/queue')) return { find: async () => ({ data: [] }) };
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      } as unknown as AgorClient;
+      const { onClose } = renderPanel({ client });
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Archive session/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Archive', exact: true }));
+      const expected =
+        outcome === 'read-failure'
+          ? 'Session and same-branch children archived; refresh required to update the session list.'
+          : outcome === 'mutation-failure'
+            ? 'Failed to archive session'
+            : 'Session and same-branch children archived';
+      expect(await screen.findByText(expected)).toBeVisible();
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(outcome === 'mutation-failure' ? 0 : 1);
+      if (outcome === 'confirmed') expect(onClose).toHaveBeenCalledTimes(1);
+      else expect(onClose).not.toHaveBeenCalled();
+      if (outcome === 'read-failure') {
+        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
+        expect(
+          screen.queryByText('Session and same-branch children archived')
+        ).not.toBeInTheDocument();
+        expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
+      }
+    }
+  );
 });
