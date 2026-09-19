@@ -104,6 +104,10 @@ allowBuilds:
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
 patchedDependencies:
+  # AntD Form's delayed-state hook must cancel timers/frames on unmount.
+  # Remove once upstream useDelayState includes effect cleanup; regression:
+  # apps/agor-ui/src/test/antdDelayState.test.tsx.
+  '@rc-component/util@1.13.0': patches/@rc-component__util@1.13.0.patch
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
 # These reviewed versions must remain installable when CI or an operator's
 # global pnpm config enforces minimumReleaseAge; this repo sets no age itself.

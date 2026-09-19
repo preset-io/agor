@@ -2,7 +2,7 @@ import { type MCPServer, shortId } from '@agor-live/client';
 import { ShopOutlined } from '@ant-design/icons';
 import { Button, Empty, Select, type SelectProps } from 'antd';
 import type { RefSelectProps } from 'antd/es/select';
-import { type Ref, useImperativeHandle } from 'react';
+import { type Ref, useImperativeHandle, useRef } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -118,6 +118,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
     : mcpServers;
 
   const popup = useMcpPopupLayout(selectProps);
+  const browseRef = useRef<HTMLButtonElement>(null);
   // Form.Item supplies a ref (React 19); preserve it without replacing the
   // geometry ref that owns list sizing.
   useImperativeHandle(forwardedRef, () => popup.ref.current!);
@@ -143,11 +144,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
       optionFilterProp="label"
       notFoundContent={
         onBrowseCatalog ? (
-          <Empty image={<ShopOutlined />} description="No matching MCP servers">
-            <Button type="link" onClick={onBrowseCatalog}>
-              Browse the MCP Catalog for all available MCPs
-            </Button>
-          </Empty>
+          <Empty image={<ShopOutlined />} description="No matching MCP servers" />
         ) : mcpServers.length === 0 ? (
           'No MCP servers available'
         ) : (
@@ -171,6 +168,44 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
         overflow: { adjustX: true, adjustY: false, shiftX: true, shiftY: false },
       }}
       {...selectProps}
+      popupRender={(menu) => (
+        <>
+          {selectProps.popupRender ? selectProps.popupRender(menu) : menu}
+          {onBrowseCatalog && (
+            // Keep the action mounted when Select clears search on input blur.
+            // Otherwise tabbing into a no-results action removes the focused node.
+            <Button
+              ref={browseRef}
+              type="link"
+              onClick={onBrowseCatalog}
+              onKeyDown={(event) => {
+                if (event.key === 'Tab' && event.shiftKey) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  popup.ref.current?.focus();
+                }
+              }}
+            >
+              Browse the MCP Catalog for all available MCPs
+            </Button>
+          )}
+        </>
+      )}
+      onInputKeyDown={(event) => {
+        selectProps.onInputKeyDown?.(event);
+        // Select treats Tab as option selection and closes even an empty list.
+        // The popup may precede the input in DOM order; transfer focus explicitly.
+        if (
+          !event.defaultPrevented &&
+          event.key === 'Tab' &&
+          !event.shiftKey &&
+          browseRef.current?.getClientRects().length
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          browseRef.current.focus();
+        }
+      }}
       styles={(info) => {
         const overrides = typeof styles === 'function' ? styles(info) : styles;
         return {

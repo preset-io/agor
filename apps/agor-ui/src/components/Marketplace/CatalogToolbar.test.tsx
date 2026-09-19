@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CatalogToolbar } from './CatalogToolbar';
 
@@ -122,7 +122,9 @@ describe('Marketplace catalog toolbar', () => {
 
     const capability = selectInput('Filter by capability');
     fireEvent.mouseEnter(capability.closest('.ant-select')!);
-    fireEvent.mouseDown(capability.closest('.ant-select')!.querySelector('.ant-select-clear')!);
+    fireEvent.click(
+      within(capability.closest('.ant-select')!).getByRole('button', { name: 'Clear' })
+    );
     expect(onCapabilityChange).toHaveBeenLastCalledWith(undefined);
 
     fireEvent.click(screen.getByText('All').closest('label')!);

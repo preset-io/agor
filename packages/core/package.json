@@ -530,9 +530,9 @@
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",
     "bcryptjs": "^2.4.3",
-    "cron-parser": "^5.7.0",
-    "cronstrue": "^3.24.0",
-    "discord-api-types": "^0.38.53",
+    "cron-parser": "^5.10.1",
+    "cronstrue": "^3.26.0",
+    "discord-api-types": "^0.38.55",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
     "js-yaml": "^4.3.2",
@@ -540,7 +540,7 @@
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
     "socket.io-client": "^4.8.3",
-    "uuid": "^14.0.1",
+    "uuid": "^14.0.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {

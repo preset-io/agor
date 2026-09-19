@@ -22,7 +22,7 @@
     "check:pack": "npm pack --dry-run"
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.26"
+    "@cursor/sdk": "1.0.31"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
@@ -30,7 +30,7 @@
     "typescript": "^6.0.3"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "repository": {
     "type": "git",

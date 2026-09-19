@@ -31,7 +31,7 @@
     "@lydell/node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
-    "@cursor/sdk": "^1.0.26",
+    "@cursor/sdk": "1.0.31",
     "@google/gemini-cli-core": "0.59.0",
     "@google/genai": "^1.52.0",
     "@modelcontextprotocol/sdk": "^1.30.0",

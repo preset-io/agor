@@ -239,8 +239,21 @@ dbTest(
       }
       await runWithTenantDatabaseScope(db, 'default', async () => {
         for (const filesystem_status of ['failed', 'ready'] as const) {
+          // Terminal acknowledgements only apply to an active provisioning attempt.
+          // Seed each attempt independently; a settled branch must not be rewritten.
+          await new BranchRepository(db).update(branch.branch_id, {
+            filesystem_status: 'creating',
+          });
           await expect(
             fixture.service.patch(branch.branch_id, { filesystem_status }, params(payload))
+          ).resolves.toMatchObject({ filesystem_status });
+          const staleOutcome = filesystem_status === 'ready' ? 'failed' : 'ready';
+          await expect(
+            fixture.service.patch(
+              branch.branch_id,
+              { filesystem_status: staleOutcome },
+              params(payload)
+            )
           ).resolves.toMatchObject({ filesystem_status });
         }
       });
