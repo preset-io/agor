@@ -46,7 +46,10 @@ describe('ownership transfer command', () => {
   });
   it('offers transfer to a tenant admin who is not the owner', () => {
     setup({ ...successor, role: 'admin' });
-    expect(screen.getByRole('button', { name: 'Transfer ownership' })).toBeEnabled();
+    const button = screen.getByRole('button', { name: 'Transfer ownership' });
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent('');
+    expect(button.querySelector('svg')).toBeInTheDocument();
   });
   it('requires a successor and confirmation, excludes viewers, and reports remaining access', async () => {
     const { patch, service, onTransferred } = setup();

@@ -1,6 +1,7 @@
 import type { AgorClient, OwnershipTransferResult, User, UserID } from '@agor-live/client';
 import { hasMinimumRole, OWNERSHIP_TRANSFER_SERVICES, ROLES } from '@agor-live/client';
-import { Alert, Button, Flex, Modal, Select, Typography } from 'antd';
+import { EditOutlined } from '@ant-design/icons';
+import { Alert, Button, Flex, Modal, Select, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 
@@ -72,17 +73,22 @@ export function OwnershipTransfer({
   };
   return (
     <>
-      <Button
-        disabled={disabled || !client}
-        onClick={() => {
-          setOpen(true);
-          setTarget(undefined);
-          setError(undefined);
-          setResult(undefined);
-        }}
-      >
-        Transfer ownership
-      </Button>
+      <Tooltip title="Transfer ownership">
+        <Button
+          type="text"
+          size="small"
+          style={{ flexShrink: 0 }}
+          icon={<EditOutlined />}
+          aria-label="Transfer ownership"
+          disabled={disabled || !client}
+          onClick={() => {
+            setOpen(true);
+            setTarget(undefined);
+            setError(undefined);
+            setResult(undefined);
+          }}
+        />
+      </Tooltip>
       <Modal
         title={`Transfer ${kind} ownership`}
         open={open}

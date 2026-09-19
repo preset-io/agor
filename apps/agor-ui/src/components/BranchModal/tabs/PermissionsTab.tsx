@@ -51,19 +51,22 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   }
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
-      {branchId && onTransferred && (
-        <OwnershipTransfer
-          kind="branch"
-          resourceId={branchId}
-          ownerUserId={capabilityPolicy.primary_owner_user_id}
-          client={client}
-          users={permissionUsers}
-          currentUser={currentUser}
-          disabled={saving}
-          onTransferred={onTransferred}
-        />
-      )}
       <BranchCapabilityPolicyModalEditor
+        ownershipAction={
+          branchId &&
+          onTransferred && (
+            <OwnershipTransfer
+              kind="branch"
+              resourceId={branchId}
+              ownerUserId={capabilityPolicy.primary_owner_user_id}
+              client={client}
+              users={permissionUsers}
+              currentUser={currentUser}
+              disabled={saving}
+              onTransferred={onTransferred}
+            />
+          )
+        }
         value={capabilityPolicy}
         onChange={onCapabilityPolicyChange}
         client={client}

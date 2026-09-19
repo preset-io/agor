@@ -8,7 +8,7 @@ import { Divider, Flex, Tabs, Typography, theme } from 'antd';
 import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
-import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
+import { PrimaryOwner } from './PrimaryOwner';
 import { BOARD_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
 
 interface BoardCapabilityPolicyFormProps {
@@ -19,6 +19,7 @@ interface BoardCapabilityPolicyFormProps {
   sampleBranchOwnerUserId: UserID;
   sessionSharingWorkspaceEnabled?: boolean;
   canManageAccess?: boolean;
+  ownershipAction?: React.ReactNode;
 }
 
 function findUserDescriptor(
@@ -39,6 +40,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
   sampleBranchOwnerUserId,
   sessionSharingWorkspaceEnabled = true,
   canManageAccess = true,
+  ownershipAction,
 }) => {
   const { token } = theme.useToken();
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
@@ -50,7 +52,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
           Board permissions
         </Typography.Title>
       </div>
-      <ImmutablePrimaryOwner owner={owner} resourceLabel="board" />
+      <PrimaryOwner action={ownershipAction} owner={owner} resourceLabel="board" />
       <Divider style={{ marginBlock: 0 }} />
       <Tabs
         defaultActiveKey="board-access"

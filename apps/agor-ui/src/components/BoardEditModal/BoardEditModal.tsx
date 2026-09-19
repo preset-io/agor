@@ -215,27 +215,27 @@ export function BoardEditModal({
             canEditGeneral={canEditGeneral}
             capabilityPolicyEditor={
               policy ? (
-                <>
-                  <OwnershipTransfer
-                    kind="board"
-                    resourceId={loadedBoard.board_id}
-                    ownerUserId={policy.primary_owner_user_id}
-                    client={client}
-                    users={permissionUsers}
-                    currentUser={currentUser}
-                    disabled={saving || loading}
-                    onTransferred={close}
-                  />
-                  <BoardCapabilityPolicyModalEditor
-                    value={policy}
-                    onChange={setPolicy}
-                    client={client}
-                    users={permissionUsers}
-                    groups={allGroups}
-                    currentUser={currentUser}
-                    workspacePreferences={workspacePreferences}
-                  />
-                </>
+                <BoardCapabilityPolicyModalEditor
+                  ownershipAction={
+                    <OwnershipTransfer
+                      kind="board"
+                      resourceId={loadedBoard.board_id}
+                      ownerUserId={policy.primary_owner_user_id}
+                      client={client}
+                      users={permissionUsers}
+                      currentUser={currentUser}
+                      disabled={saving || loading}
+                      onTransferred={close}
+                    />
+                  }
+                  value={policy}
+                  onChange={setPolicy}
+                  client={client}
+                  users={permissionUsers}
+                  groups={allGroups}
+                  currentUser={currentUser}
+                  workspacePreferences={workspacePreferences}
+                />
               ) : (
                 <Alert type="error" showIcon description="Permissions are unavailable." />
               )

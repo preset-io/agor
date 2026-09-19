@@ -17,12 +17,15 @@ vi.mock('../permissions/CapabilityPolicyEditor', () => ({
     value,
     onChange,
     groups,
+    ownershipAction,
   }: {
+    ownershipAction?: React.ReactNode;
     value: BoardCapabilityPolicies;
     onChange: (value: BoardCapabilityPolicies) => void;
     groups: Array<{ name: string }>;
   }) => (
     <>
+      {ownershipAction}
       <button
         type="button"
         data-sharing-mode={value.board_access.sharing_mode}
@@ -176,7 +179,8 @@ describe('BoardEditModal', () => {
       <BoardEditModal board={board} client={client} currentUser={owner} open onClose={onClose} />
     );
     const { rerender } = render(editor(listedBoard));
-    fireEvent.click(await screen.findByRole('button', { name: 'Transfer ownership' }));
+    const transferButton = await screen.findByRole('button', { name: 'Transfer ownership' });
+    fireEvent.click(transferButton);
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Successor owner' }));
     fireEvent.click(await screen.findByText('Reed'));
     fireEvent.click(screen.getAllByRole('button', { name: 'Transfer ownership' }).at(-1)!);
