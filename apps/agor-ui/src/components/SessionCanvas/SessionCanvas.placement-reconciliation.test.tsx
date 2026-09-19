@@ -16,6 +16,10 @@ import { boardObjectPatched, sessionPatched } from '../../store/agorRealtimeActi
 import { agorStore } from '../../store/agorStore';
 import SessionCanvas from './SessionCanvas';
 
+vi.mock('../../hooks/useCanManageBoard', () => ({
+  useCanManageBoard: () => true,
+}));
+
 interface FlowNode {
   id: string;
   type?: string;
@@ -29,9 +33,9 @@ interface FlowNode {
 
 interface CapturedFlowProps {
   nodes: FlowNode[];
-  onNodeDragStart?: (event: unknown, node: FlowNode) => void;
-  onNodeDrag?: (event: unknown, node: FlowNode) => void;
-  onNodeDragStop?: (event: unknown, node: FlowNode) => void;
+  onNodeDragStart?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
+  onNodeDrag?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
+  onNodeDragStop?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
 }
 
 let flowProps: CapturedFlowProps | null = null;
@@ -40,6 +44,7 @@ vi.mock('reactflow', async () => {
   const React = await import('react');
   return {
     Background: () => null,
+    BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
     Controls: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
     ControlButton: ({ children }: { children?: ReactNode }) => (
       <button type="button">{children}</button>
@@ -55,6 +60,7 @@ vi.mock('reactflow', async () => {
           getNode: (id: string) => flowProps?.nodes.find((node) => node.id === id),
           getNodes: () => flowProps?.nodes ?? [],
           getZoom: () => 1,
+          getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
           screenToFlowPosition: (position: { x: number; y: number }) => position,
         });
       }, []);
@@ -196,6 +202,46 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it('correlates every entity in a grouped drag and drops only superseded members', async () => {
+    vi.useFakeTimers();
+    const patch = vi.fn(async (_id: string, data: Partial<BoardEntityObject>) => {
+      const result = { ...reviewingCardPlacement, ...data };
+      boardObjectPatched(result);
+      return result;
+    });
+    const client = { service: () => ({ patch }) } as unknown as AgorClient;
+    render(
+      <ConnectionProvider value={connected}>
+        <SessionCanvas board={board} client={client} branches={[branch]} />
+      </ConnectionProvider>
+    );
+    await act(async () => {});
+    const dragged = [
+      { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1800, y: 1320 } },
+      { ...currentNode(`card-${card.card_id}`), positionAbsolute: { x: 3010, y: 480 } },
+    ];
+    act(() => {
+      flowProps?.onNodeDragStart?.({}, dragged[0], dragged);
+      flowProps?.onNodeDrag?.({}, dragged[0], dragged);
+      flowProps?.onNodeDragStop?.({}, dragged[0], dragged);
+    });
+    act(() =>
+      boardObjectPatched({
+        ...implementingPlacement,
+        zone_id: REVIEWING_ZONE_ID,
+        position: { x: 20, y: 100 },
+      })
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith('board-object-card', {
+      placement_write_id: expect.any(String),
+      position: { x: 120, y: 400 },
+      zone_id: REVIEWING_ZONE_ID,
+    });
   });
 
   it('persists a second drag after the first pending PATCH is acknowledged', async () => {

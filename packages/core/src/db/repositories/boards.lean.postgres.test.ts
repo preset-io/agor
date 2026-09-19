@@ -1,5 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { normalizeBoardLayoutSettings } from '../../layout/board-layout-options';
+import { normalizeZoneLayoutPolicy } from '../../layout/zone-layout';
 import { generateId } from '../../lib/ids';
 import type { BoardID, UserID } from '../../types/id';
 import { createDatabase, type Database } from '../client';
@@ -20,6 +22,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
     const tenantA = `board-lean-a-${generateId()}`;
     const tenantB = `board-lean-b-${generateId()}`;
     let foreignId: BoardID;
+    const defaults = normalizeZoneLayoutPolicy({ columnGap: 40, rowGap: 32, density: 'preserve' });
+    const layoutContext = {
+      scope: 'board' as const,
+      root_ids: ['zone'],
+      settings: normalizeBoardLayoutSettings({ columnGap: 37.5, rowGap: 53.25 }, 1),
+      cells: { zone: { x: 91.5, y: 91.5, width: 700, height: 740, row: 0, column: 0 } },
+    };
 
     beforeAll(async () => {
       db = createDatabase({ dialect: 'postgresql', url: url! });
@@ -48,6 +57,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
                 custom_css: '/* large */'.repeat(10000),
                 description: null,
                 future_field: { objects: 'keep nested', custom_css: null },
+                zone_layout_defaults: defaults,
+                layout_context: layoutContext,
               },
             })
             .where(eq(boards.board_id, board.board_id))
@@ -75,6 +86,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             decoder.mockClear();
             const rows = await read();
             expect(rows).toEqual([expected]);
+            expect(rows[0].zone_layout_defaults).toEqual(defaults);
+            expect(rows[0].layout_context).toEqual(layoutContext);
             expect(getHiddenTenantId(rows[0])).toBe(tenantA);
             expect(Object.keys(rows[0])).not.toContain('tenant_id');
             expect(decoder.mock.calls).toHaveLength(1);
