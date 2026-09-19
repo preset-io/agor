@@ -186,10 +186,30 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     expect(written).toMatchObject({ changed: true, record: { phase: 'active', revision: 4 } });
     await expect(assertTenantUnrestricted(db, seeded)).resolves.toBeUndefined();
     expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
-    // An at-least-once transport replay is a conflict, not a silent confirmation:
-    // the seed's whole safety argument is that it only ever writes to an empty history.
-    await expect(applyTenantRestrictionIntent(db, seeded, seed)).rejects.toThrow(
+    // An at-least-once transport replay of THIS seed is a no-op, not a conflict: the
+    // row is untouched and the caller is told the truth instead of being handed a
+    // failure for a runtime that is already correct.
+    const replayed = await applyTenantRestrictionIntent(db, seeded, seed);
+    expect(replayed).toEqual({ record: written.record, changed: false });
+    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    // Every other recorded state still refuses it — the seed writes on empty history only.
+    for (const patch of [
+      { operationId: 'other-operation' },
+      { revision: 5 },
+      { placementId: 'placement-two' },
+    ])
+      await expect(
+        applyTenantRestrictionIntent(db, seeded, command({ ...seed, ...patch }))
+      ).rejects.toThrow('revision_conflict');
+    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    // A CLOSED row at the seed's own revision is never reopened by a replay.
+    const closed = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, closed, command({ revision: 4 }));
+    await expect(applyTenantRestrictionIntent(db, closed, seed)).rejects.toThrow(
       'revision_conflict'
+    );
+    await expect(assertTenantUnrestricted(db, closed)).rejects.toBeInstanceOf(
+      TenantRestrictedError
     );
     // A runtime that already recorded anything is never seeded open.
     const recorded = `restriction-${generateId()}`;
@@ -200,13 +220,14 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     await expect(assertTenantUnrestricted(db, recorded)).rejects.toBeInstanceOf(
       TenantRestrictedError
     );
-    // Concurrent seeds on one empty history: exactly one row, exactly one winner.
+    // Concurrent seeds on one empty history: serialized by the advisory lock into
+    // exactly one WRITE and one replay no-op, leaving exactly one row.
     const raced = `restriction-${generateId()}`;
-    const results = await Promise.allSettled([
+    const results = await Promise.all([
       applyTenantRestrictionIntent(db, raced, seed),
       applyTenantRestrictionIntent(db, raced, seed),
     ]);
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
     expect(await readTenantRestrictionIntents(db, raced)).toMatchObject([{ phase: 'active' }]);
   });
 

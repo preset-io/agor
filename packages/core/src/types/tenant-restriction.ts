@@ -64,16 +64,22 @@ export class TenantRestrictionConflictError extends Error {
  * changed.
  *
  * `seed_active` is the one action that writes an OPEN record without a prepared
- * release, and it is deliberately the narrowest: it is accepted ONLY when this
- * runtime holds no record at all for the controller. It exists because the
- * restriction table is deployment-bound and never portable, so a tenant moved to
- * a fresh runtime arrives with an empty history that the launch-revision check
- * reads as a missing watermark. The orchestrator that moved the tenant restates
- * the watermark it already knows; it can never re-open a runtime that recorded
- * anything, because ANY existing record rejects with `revision_conflict`. That
- * includes an exact replay of a seed this runtime already accepted: a delivery
- * that lost its reply is reported as a conflict rather than silently confirmed,
- * since this action's whole safety argument is "empty history only".
+ * release, and it is deliberately the narrowest: it WRITES only when this runtime
+ * holds no record at all for the controller. It exists because the restriction
+ * table is deployment-bound and never portable, so a tenant moved to a fresh
+ * runtime arrives with an empty history that the launch-revision check reads as
+ * a missing watermark. The orchestrator that moved the tenant restates the
+ * watermark it already knows; it can never CHANGE a runtime that recorded
+ * anything.
+ *
+ * An EXACT replay of a seed this runtime already accepted — the same placement,
+ * operation and revision, still `active` — is a no-op returning `changed: false`,
+ * exactly like a replayed restrict/prepare/activate. The transport is
+ * at-least-once, so a delivery whose reply was lost must be able to ask again and
+ * be told the truth; reporting it as a conflict made a correct runtime look like
+ * a failed one. It writes nothing, so the safety argument is untouched. Every
+ * other existing record — a different operation or revision, a different
+ * placement, or any closed phase — is rejected with `revision_conflict`.
  *
  * Caller must authenticate and bind the controller, tenant and placement before
  * invoking this policy. Knowing an identity string is not authorization.
@@ -84,8 +90,21 @@ export function transitionTenantRestriction(
 ): { record: TenantRestrictionRecord; changed: boolean } {
   const command = TenantRestrictionCommandSchema.parse(input);
   if (command.action === 'seed_active') {
-    // Empty history only — never a repair, an override, or a release shortcut.
-    if (current) throw new TenantRestrictionConflictError('revision_conflict');
+    if (current) {
+      const recorded = TenantRestrictionRecordSchema.parse(current);
+      // Idempotent replay of THIS seed: same binding, same watermark, still open.
+      // Nothing is written, so this cannot repair, override or reopen anything.
+      if (
+        recorded.placementId === command.placementId &&
+        recorded.operationId === command.operationId &&
+        recorded.revision === command.revision &&
+        recorded.phase === 'active'
+      ) {
+        return { record: recorded, changed: false };
+      }
+      // Anything else recorded: never a seed. Empty history only.
+      throw new TenantRestrictionConflictError('revision_conflict');
+    }
     const { version, controllerId, placementId, operationId, revision: seeded } = command;
     return {
       record: {

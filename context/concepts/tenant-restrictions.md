@@ -42,18 +42,27 @@ serializes first writers even when no row exists, and rolls back with the
 surrounding transaction. No network/process wait belongs inside this lock.
 
 `seed_active` is the only action that writes an open record without a prepared
-release, and it is accepted **only when the controller has no record at all**.
-It exists because this table is deployment-bound and never portable: a tenant
-moved to a fresh runtime arrives with an empty history that the launch-revision
-check reads as a missing watermark (see Persistence and portability). The
-orchestrator that moved the tenant restates the revision it already carries — it
-cannot repair, override or reopen a runtime that recorded anything, because any
-existing record is rejected with `revision_conflict`. That includes an exact
-replay of a seed this runtime already accepted: an at-least-once delivery whose
-reply was lost is reported as a conflict rather than silently confirmed, so the
-"empty history only" argument never needs a same-command exception. A seeded row
-is an ordinary active record afterwards — a later restrict at a higher revision
-closes it like any other.
+release, and it **writes only when the controller has no record at all**. It
+exists because this table is deployment-bound and never portable: a tenant moved
+to a fresh runtime arrives with an empty history that the launch-revision check
+reads as a missing watermark (see Persistence and portability). The orchestrator
+that moved the tenant restates the revision it already carries — it cannot
+repair, override or reopen a runtime that recorded anything.
+
+An exact replay of a seed this runtime already accepted — same placement,
+operation and revision, still `active` — is a no-op returning `changed: false`,
+like every other same-command retry. The transport is at-least-once, so a
+delivery whose reply was lost has to be able to ask again; answering it with a
+conflict made a correct runtime look like a failed one. It writes nothing, so
+"empty history only" still holds. Every other recorded state — a different
+operation or revision, a different placement, or any closed phase, including a
+closed row at the seed's own revision — is rejected with `revision_conflict`.
+The comparison is against this controller's own record: the composite key is
+`(tenant_id, controller_id)`, so another controller's row is never what a seed is
+compared with, and composition across controllers keeps its usual OR meaning.
+
+A seeded row is an ordinary active record afterwards — a later restrict at a
+higher revision closes it like any other.
 
 Restriction composition is OR across controllers. Releasing one controller's
 restriction cannot clear another's, and never modifies the separate portability
@@ -128,11 +137,13 @@ agor tenant restriction inspect --tenant-id <workspaceId>
 `apply` prints `{"record":…,"changed":…}`; `inspect` prints the records array
 ordered by controller id. Flags are validated with
 `TenantRestrictionCommandSchema` before a connection is opened, so the CLI
-cannot accept an identity or revision the writer would reject. `seed_active` on
-a runtime that holds any record for the controller exits `2` with
-`revision_conflict`; an orchestrator must treat that as terminal (the
-destination already has restriction history, so there is nothing to seed) and
-never as a reason to retry or force.
+cannot accept an identity or revision the writer would reject. An exact replay of
+an accepted `seed_active` exits `0` with `"changed":false`; any other recorded
+state exits `2` with `revision_conflict`. An orchestrator must not force past
+that, but it should first read `inspect`: a record for this controller at a
+HIGHER revision means the destination has legitimately moved on and the seed's
+work is already done, while anything else means the destination holds history
+this seed cannot explain and a person has to look.
 
 | Exit | Meaning                                                                             |
 | ---- | ----------------------------------------------------------------------------------- |

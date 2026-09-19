@@ -30,8 +30,8 @@ export default class TenantRestrictionApply extends Command {
     'This records intent only: it does not authenticate the controller, close existing connections, stop ' +
     'running work, or prove containment. ' +
     'seed_active restates an already-open watermark on a runtime that holds NO record for the controller ' +
-    '(a tenant moved to a fresh runtime, whose restriction state is never portable); any existing record ' +
-    'rejects it as a revision_conflict. ' +
+    '(a tenant moved to a fresh runtime, whose restriction state is never portable); an exact replay of an ' +
+    'accepted seed is a no-op ("changed":false) and any other existing record is a revision_conflict. ' +
     'Exit codes: 0 applied or already in that state (see "changed"); ' +
     '2 conflict — stderr carries {"error":"identity_mismatch|stale_revision|revision_conflict|release_not_prepared"}; ' +
     '3 the runtime is not PostgreSQL and holds no restriction state; 1 any other failure.';

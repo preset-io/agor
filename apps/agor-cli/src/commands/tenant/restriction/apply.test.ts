@@ -36,7 +36,7 @@ describe('buildTenantRestrictionCommand', () => {
     });
   });
 
-  it('builds the re-home seed command the destination runtime accepts on empty history', () => {
+  it('builds the re-home seed command the destination runtime writes on empty history', () => {
     expect(buildTenantRestrictionCommand(flags({ action: 'seed_active' })).action).toBe(
       'seed_active'
     );
