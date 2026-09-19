@@ -109,6 +109,134 @@ function service() {
 describe('ClaudePromptService background task query lifetime', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('treats success/is_error as terminal despite active background work', async () => {
+    const query = fakeQuery([
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'task-1',
+        description: 'fixture',
+        uuid: 'start',
+        session_id: 'sdk-session',
+      },
+      { ...sdkResult('api-error'), is_error: true },
+      sdkResult('must-not-consume'),
+    ]);
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
+    });
+    const activity = vi.fn();
+    const events = [];
+    for await (const event of service().promptSessionStreaming(
+      sessionId,
+      'prompt',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      activity
+    ))
+      events.push(event);
+    expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
+    expect(events.some((event) => event.type === 'complete')).toBe(false);
+    expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    expect(query.return).toHaveBeenCalledOnce();
+    expect(query.releaseInput).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('distinguishes EOF from cancellation (aborted=%s)', async (aborted) => {
+    const controller = new AbortController();
+    const query = fakeQuery(async function* () {
+      if (aborted) controller.abort();
+      // A process can exit cleanly without emitting an SDK result.
+      yield* [];
+    });
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
+    });
+    const events = [];
+    for await (const event of service().promptSessionStreaming(
+      sessionId,
+      'prompt',
+      undefined,
+      undefined,
+      undefined,
+      controller
+    ))
+      events.push(event);
+    expect(events.some((event) => event.type === 'stopped')).toBe(aborted);
+    expect(events.some((event) => event.type === 'result')).toBe(false);
+    expect(query.return).toHaveBeenCalledOnce();
+  });
+
+  it('waits for a delayed result and stops at that authority, before duplicates or late output', async () => {
+    let release = () => {};
+    const terminalReady = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const query = fakeQuery(async function* () {
+      await terminalReady;
+      yield sdkResult('terminal');
+      yield sdkResult('terminal');
+      throw new Error('must not read beyond terminal result');
+    });
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
+    });
+    const events = [];
+    const draining = (async () => {
+      for await (const event of service().promptSessionStreaming(sessionId, 'prompt'))
+        events.push(event);
+    })();
+    await Promise.resolve();
+    expect(query.releaseInput).not.toHaveBeenCalled();
+    release();
+    await draining;
+    expect(events.filter((event) => event.type === 'result')).toHaveLength(1);
+    expect(query.return).toHaveBeenCalledOnce();
+  });
+
+  it('diagnoses streamed text without an assistant envelope without logging the text', async () => {
+    const sentinel = 'SENTINEL_MODEL_DELTA';
+    const query = fakeQuery([
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: sentinel },
+        },
+        parent_tool_use_id: null,
+        uuid: 'delta',
+        session_id: 'sdk-session',
+      },
+      sdkResult('missing-assistant'),
+    ]);
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for await (const _event of service().promptSessionStreaming(sessionId, 'prompt')) {
+        /* drain */
+      }
+      const logged = JSON.stringify(error.mock.calls);
+      expect(logged).toContain('assistants=0');
+      expect(logged).toContain('text_deltas=true');
+      expect(logged).not.toContain(sentinel);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('logs only projected result and stderr metadata for a hostile error result', async () => {
     const sentinel = 'SENTINEL_HOSTILE_RESULT_AND_STDERR_8f31';
     const query = fakeQuery([
@@ -323,7 +451,7 @@ describe('ClaudePromptService background task query lifetime', () => {
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
-        getStderr: () => '',
+        getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
       });
       const activity = vi.fn();
 
@@ -427,7 +555,7 @@ describe('ClaudePromptService background task query lifetime', () => {
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
-        getStderr: () => '',
+        getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
       });
       const activity = vi.fn();
 

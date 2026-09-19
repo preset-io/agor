@@ -640,11 +640,12 @@ export async function executeToolTask(params: {
       completed_at: new Date().toISOString(),
       ...(result.hadError
         ? {
-            error_message: expiredClaudeCredentialMessage(
-              toolName,
-              credentialExpiresAt,
-              result.errorDetails?.join('; ') ?? ''
-            ),
+            error_message:
+              expiredClaudeCredentialMessage(
+                toolName,
+                credentialExpiresAt,
+                result.errorDetails?.join('; ') ?? ''
+              ) ?? result.errorDetails?.join('; '),
           }
         : {}),
     };
