@@ -194,6 +194,7 @@ interface ProcessorState {
   capturedAgentSessionId?: string;
   messageCount: number;
   assistantMessageCount: number;
+  hasTextDeltas: boolean;
   lastAssistantMessageTime: number;
   resolvedModel?: string;
   enableTokenStreaming: boolean;
@@ -229,6 +230,7 @@ export class SDKMessageProcessor {
       capturedAgentSessionId: undefined,
       messageCount: 0,
       assistantMessageCount: 0,
+      hasTextDeltas: false,
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
       minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
@@ -493,6 +495,7 @@ export class SDKMessageProcessor {
         | undefined;
       if (delta?.type === 'text_delta') {
         const textChunk = delta.text as string;
+        this.state.hasTextDeltas ||= textChunk.length > 0;
 
         // Accumulate chunk in buffer
         this.state.textChunkBuffer += textChunk;
@@ -572,7 +575,8 @@ export class SDKMessageProcessor {
     // Never copy it into conversation content: messages are persisted and published
     // in realtime before any downstream UI can distinguish a provider failure from
     // a local command result.
-    if (projectClaudeResultResponse(msg)?.subtype === 'success') {
+    const result = projectClaudeResultResponse(msg);
+    if (result?.subtype === 'success' && result.is_error !== true) {
       const hasAssistantMessages = this.state.assistantMessageCount > 0;
       if (!hasAssistantMessages) {
         events.push({

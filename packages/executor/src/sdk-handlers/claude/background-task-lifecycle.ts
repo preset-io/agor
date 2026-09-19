@@ -129,9 +129,12 @@ export class ClaudeBackgroundTaskLifecycle {
 
     if (message.type !== 'result') return { resultDisposition: 'not-result' };
 
-    // Error results cannot reliably produce later settlement notifications.
+    // Error results (including success/is_error API errors) cannot reliably
+    // produce later settlement notifications.
     // Let the normal error/teardown path contain any remaining subprocess work.
-    if (message.subtype !== 'success') return { resultDisposition: 'terminal' };
+    if (message.subtype !== 'success' || message.is_error === true) {
+      return { resultDisposition: 'terminal' };
+    }
 
     return {
       resultDisposition: this.activeTaskIds.size > 0 ? 'await-background-tasks' : 'terminal',

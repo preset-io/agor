@@ -408,6 +408,14 @@ If you continue to see authentication errors, please contact your Agor administr
           // Generator closed on its own (e.g. subprocess exited). Release the
           // held input so nothing downstream waits on stdin, then settle.
           result.releaseInput();
+          if (abortController?.signal.aborted) {
+            yield { type: 'stopped' } as ProcessedEvent;
+          } else if (sdkResults.length === 0) {
+            const state = processor.getState();
+            console.warn(
+              `[claude-code] stream_closed_without_result messages=${state.messageCount} assistants=${state.assistantMessageCount} pending_tools=${state.toolNamesByUseId.size} text_deltas=${state.hasTextDeltas}`
+            );
+          }
           break;
         }
 
@@ -417,7 +425,7 @@ If you continue to see authentication errors, please contact your Agor administr
         const { resultDisposition } = lifecycleTransition;
         if (
           msg.type === 'result' &&
-          msg.subtype !== 'success' &&
+          (msg.subtype !== 'success' || msg.is_error === true) &&
           backgroundTasks.activeTaskCount > 0
         ) {
           clearBackgroundTaskActivity();
@@ -469,14 +477,21 @@ If you continue to see authentication errors, please contact your Agor administr
             // documents the same policy).
             {
               const safeResult = projectClaudeResultResponse(event.raw_sdk_message);
-              if (!safeResult || safeResult.is_error === true || safeResult.subtype !== 'success') {
+              const state = processor.getState();
+              if (
+                !safeResult ||
+                safeResult.is_error === true ||
+                safeResult.subtype !== 'success' ||
+                state.assistantMessageCount === 0
+              ) {
                 const stderr = getStderrMetadata();
                 console.error(
                   `❌ [claude-code] error result for session ${shortId(sessionId)} ` +
                     `subtype=${safeResult?.subtype ?? 'unknown'} ` +
                     `is_error=${safeResult?.is_error ?? 'unknown'} ` +
                     `num_turns=${safeResult?.num_turns ?? 'unknown'} ` +
-                    `stderr_bytes=${stderr.byteLength}`
+                    `stderr_bytes=${stderr.byteLength} ` +
+                    `messages=${state.messageCount} assistants=${state.assistantMessageCount} pending_tools=${state.toolNamesByUseId.size} text_deltas=${state.hasTextDeltas}`
                 );
               }
             }

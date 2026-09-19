@@ -7,8 +7,14 @@
 
 import type { ContextUsageSnapshot, Task } from './types/task.js';
 
+// Historical export name: this fallback also covers error results after real
+// output/tool work. Do not assert the provider returned nothing or imply replay
+// is safe; the closed result envelope does not establish either fact.
 export const SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE =
-  'The provider ended the request without returning a model response. Retry the prompt.';
+  'Agor could not confirm a successful response. Review any output and tool activity before retrying.';
+
+export const SAFE_MISSING_PROVIDER_RESULT_MESSAGE =
+  'The Claude Code stream closed without a final result. Completion could not be confirmed. Review any output and tool activity before retrying.';
 
 export type SafeNormalizedSdkResponse = NonNullable<Task['normalized_sdk_response']>;
 
