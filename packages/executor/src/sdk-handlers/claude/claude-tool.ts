@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import {
   projectClaudeResultResponse,
   projectContextUsageSnapshot,
+  SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
   SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
 } from '@agor/core';
 import { generateId, shortId } from '@agor/core/db';
@@ -373,6 +374,14 @@ export class ClaudeTool implements ITool {
         continue; // Skip processing this event
       }
 
+      // The processor synthesizes this only when a result lacks an assistant
+      // message. Persisting the safe notice is not evidence of model success.
+      if (event.type === 'complete' && event.isSynthesizedResult) {
+        hadError = true;
+        errorSubtype = 'missing_assistant';
+        errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
+      }
+
       // Capture resolved model from first event
       if (!resolvedModel && 'resolvedModel' in event && event.resolvedModel) {
         resolvedModel = event.resolvedModel;
@@ -660,8 +669,9 @@ export class ClaudeTool implements ITool {
         const sdkResult = projectClaudeResultResponse(rawSdkResponse);
         // Use only the closed result projection for control flow. In particular,
         // do not inspect the provider-owned errors array even to decide whether
-        // to persist a message.
-        if (sdkResult && sdkResult.subtype !== 'success') {
+        // to persist a message. SDKResultSuccess also carries API failures:
+        // subtype alone is not success evidence; is_error is authoritative.
+        if (sdkResult && (sdkResult.subtype !== 'success' || sdkResult.is_error === true)) {
           hadError = true;
           errorSubtype = sdkResult.subtype;
           errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
@@ -850,6 +860,26 @@ export class ClaudeTool implements ITool {
       }
     }
 
+    // Iterator exhaustion is transport evidence, not a successful SDK result.
+    // Return normally so already-persisted output and accounting survive, while
+    // the base executor settles failed through its existing fenced task patch.
+    if (!rawSdkResponse && !wasStopped) {
+      hadError = true;
+      errorSubtype = 'missing_result';
+      errorDetails = [SAFE_MISSING_PROVIDER_RESULT_MESSAGE];
+      await withFeathersSessionGuard(sessionId, this.sessionsRepo, () =>
+        createSystemMessage(
+          sessionId,
+          generateId() as MessageID,
+          buildProviderFailureContent(SAFE_MISSING_PROVIDER_RESULT_MESSAGE),
+          taskId,
+          nextIndex++,
+          resolvedModel,
+          this.messagesService!
+        )
+      );
+    }
+
     if (hadError) {
       if (classifiedProviderFailureKind) {
         console.error(
@@ -1021,6 +1051,14 @@ export class ClaudeTool implements ITool {
         continue; // Skip processing this event
       }
 
+      // The processor synthesizes this only when a result lacks an assistant
+      // message. Persisting the safe notice is not evidence of model success.
+      if (event.type === 'complete' && event.isSynthesizedResult) {
+        hadError = true;
+        errorSubtype = 'missing_assistant';
+        errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
+      }
+
       // Capture resolved model from first event
       if (!resolvedModel && 'resolvedModel' in event && event.resolvedModel) {
         resolvedModel = event.resolvedModel;
@@ -1085,8 +1123,9 @@ export class ClaudeTool implements ITool {
         const sdkResult = projectClaudeResultResponse(rawSdkResponse);
         // Use only the closed result projection for control flow. In particular,
         // do not inspect the provider-owned errors array even to decide whether
-        // to persist a message.
-        if (sdkResult && sdkResult.subtype !== 'success') {
+        // to persist a message. SDKResultSuccess also carries API failures:
+        // subtype alone is not success evidence; is_error is authoritative.
+        if (sdkResult && (sdkResult.subtype !== 'success' || sdkResult.is_error === true)) {
           hadError = true;
           errorSubtype = sdkResult.subtype;
           errorDetails = [SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE];
@@ -1190,6 +1229,26 @@ export class ClaudeTool implements ITool {
           // For now, just log
         }
       }
+    }
+
+    // Iterator exhaustion is transport evidence, not a successful SDK result.
+    // Return normally so already-persisted output and accounting survive, while
+    // the base executor settles failed through its existing fenced task patch.
+    if (!rawSdkResponse && !wasStopped) {
+      hadError = true;
+      errorSubtype = 'missing_result';
+      errorDetails = [SAFE_MISSING_PROVIDER_RESULT_MESSAGE];
+      await withFeathersSessionGuard(sessionId, this.sessionsRepo, () =>
+        createSystemMessage(
+          sessionId,
+          generateId() as MessageID,
+          buildProviderFailureContent(SAFE_MISSING_PROVIDER_RESULT_MESSAGE),
+          taskId,
+          nextIndex++,
+          resolvedModel,
+          this.messagesService!
+        )
+      );
     }
 
     if (hadError) {
