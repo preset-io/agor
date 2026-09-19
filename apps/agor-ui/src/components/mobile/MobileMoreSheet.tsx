@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Branch, Session, User } from '@agor-live/client';
+import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -16,7 +16,6 @@ interface MobileMoreSheetProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onLogout?: () => void;
-  currentUser?: User | null;
 }
 
 /**
@@ -34,7 +33,6 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onLogout,
-  currentUser,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -84,7 +82,6 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
           onOpenUserSettings();
         }}
         onLogout={onLogout}
-        currentUser={currentUser}
       />
     </Drawer>
   );

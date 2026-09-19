@@ -1,21 +1,8 @@
-import { useSyncExternalStore } from 'react';
-
-const QUERY = '(prefers-reduced-motion: reduce)';
-
-function subscribe(onChange: () => void): () => void {
-  if (typeof window === 'undefined') return () => {};
-  const query = window.matchMedia(QUERY);
-  query.addEventListener('change', onChange);
-  return () => query.removeEventListener('change', onChange);
-}
-
-function getSnapshot(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia(QUERY).matches;
-}
+import { useMediaQuery } from './useMediaQuery';
 
 /** Whether the user has requested reduced motion. */
 export function usePrefersReducedMotion(): boolean {
-  return useSyncExternalStore(subscribe, getSnapshot, () => false);
+  return useMediaQuery('(prefers-reduced-motion: reduce)');
 }
 
 /**

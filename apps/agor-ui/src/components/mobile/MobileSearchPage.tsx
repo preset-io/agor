@@ -14,7 +14,6 @@ import {
   selectSessionById,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
-import { pressableProps } from '../../utils/pressableProps';
 import { describeSearchResult } from '../GlobalSearch/describeSearchResult';
 import { searchComments } from '../GlobalSearch/searchComments';
 import {
@@ -25,7 +24,9 @@ import {
 } from '../GlobalSearch/types';
 import { useGlobalSearch } from '../GlobalSearch/useGlobalSearch';
 import { searchResultKey } from '../GlobalSearch/utils';
-import { mobileScrollAreaStyle } from './constants';
+import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
+import { MobileListRow } from './MobileListRow';
+import { useMobileBack } from './useMobileBack';
 
 interface MobileSearchPageProps {
   currentUser?: User | null;
@@ -55,6 +56,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   onOpenBranch,
 }) => {
   const navigate = useNavigate();
+  const goBack = useMobileBack('/m');
   const { token } = theme.useToken();
   const [query, setQuery] = useState('');
   // Defer the heavy cross-entity scan so typing stays responsive.
@@ -141,7 +143,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
     query.trim().length >= MIN_QUERY_LENGTH && !hasAnyResults && !commentResults.length;
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={mobilePageStyle}>
       <div
         style={{
           flexShrink: 0,
@@ -158,7 +160,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           type="text"
           aria-label="Back"
           icon={<ArrowLeftOutlined />}
-          onClick={() => navigate(-1)}
+          onClick={goBack}
           style={{
             marginInlineStart: -token.marginXS,
             minWidth: MOBILE_TOUCH_TARGET,
@@ -210,34 +212,13 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
               dataSource={section.rows}
               rowKey="key"
               renderItem={(row) => (
-                <List.Item
-                  {...pressableProps(row.onClick)}
-                  aria-label={row.title}
-                  style={{
-                    cursor: 'pointer',
-                    paddingInline: token.padding,
-                    minHeight: MOBILE_TOUCH_TARGET,
-                  }}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
-                        {row.title}
-                      </Typography.Text>
-                    }
-                    description={
-                      row.subtitle ? (
-                        <Typography.Text
-                          type="secondary"
-                          ellipsis
-                          style={{ fontSize: token.fontSizeSM }}
-                        >
-                          {row.subtitle}
-                        </Typography.Text>
-                      ) : undefined
-                    }
-                  />
-                </List.Item>
+                <MobileListRow
+                  title={row.title}
+                  subtitle={row.subtitle}
+                  ariaLabel={row.title}
+                  onPress={row.onClick}
+                  inset
+                />
               )}
             />
           ))

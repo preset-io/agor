@@ -27,8 +27,12 @@ vi.mock('../SessionPanel', () => ({
   },
 }));
 
+let settingsModalProps: Record<string, unknown> = {};
 vi.mock('../SessionSettingsModal', () => ({
-  SessionSettingsModal: () => null,
+  SessionSettingsModal: (props: Record<string, unknown>) => {
+    settingsModalProps = props;
+    return null;
+  },
 }));
 
 const noopAsync = vi.fn(async () => {});
@@ -37,7 +41,11 @@ const noop = vi.fn();
 function renderAt(
   path: string,
   sessionById: Map<string, Session>,
-  actions: Pick<AppActionsContextValue, 'onOpenBranch' | 'onOpenAgenticToolSettings'> = {}
+  actions: Pick<AppActionsContextValue, 'onOpenBranch' | 'onOpenAgenticToolSettings'> &
+    Pick<
+      React.ComponentProps<typeof SessionPage>,
+      'onUpdateSessionMcpServers' | 'onUpdateSessionEnvSelections'
+    > = {}
 ) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -98,8 +106,21 @@ describe('SessionPage', () => {
     expect(onOpenAgenticToolSettings).toHaveBeenCalledWith('codex');
   });
 
+  it('hands the settings modal every save handler, so no edit is silently dropped', () => {
+    const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
+    const session = { session_id: sessionId, branch_id: 'branch-1' } as Session;
+    const handlers = { onUpdateSessionMcpServers: vi.fn(), onUpdateSessionEnvSelections: vi.fn() };
+    renderAt(`/m/session/${sessionId}`, new Map([[sessionId, session]]), handlers);
+    expect(settingsModalProps.onUpdate).toBe(noop);
+    expect(settingsModalProps.onUpdateSessionMcpServers).toBe(handlers.onUpdateSessionMcpServers);
+    expect(settingsModalProps.onUpdateSessionEnvSelections).toBe(
+      handlers.onUpdateSessionEnvSelections
+    );
+  });
+
   it('shows a loading state until the session is in the store', () => {
-    renderAt('/m/session/unknown-token', new Map<string, Session>());
+    const { container } = renderAt('/m/session/unknown-token', new Map<string, Session>());
+    expect(container.querySelector('.ant-spin')).not.toBeNull();
     expect(screen.queryByTestId('session-panel')).not.toBeInTheDocument();
   });
 });

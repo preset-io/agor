@@ -10,7 +10,6 @@ import { useState } from 'react';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { pressableProps } from '../../utils/pressableProps';
-import { BrandMark } from '../BrandMark';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -23,7 +22,6 @@ export interface BoardSwitcherOption {
 
 interface MobileHeaderProps {
   title?: string;
-  showLogo?: boolean;
   /** When set, a back arrow appears on the left. */
   onBack?: () => void;
   /** When set, a search icon appears on the right (opens the search screen). */
@@ -47,7 +45,6 @@ interface MobileHeaderProps {
 // title (+ optional back and board switcher) without a duplicated avatar.
 export const MobileHeader: React.FC<MobileHeaderProps> = ({
   title,
-  showLogo = false,
   onBack,
   onSearch,
   onOpenComments,
@@ -82,7 +79,6 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             style={{ ...iconButtonStyle, marginInlineStart: -token.marginXS }}
           />
         )}
-        {showLogo && <BrandMark size={32} />}
         {boardSwitcher ? (
           <Button
             type="text"
@@ -115,8 +111,8 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             style={{
               margin: 0,
               color: token.colorText,
-              fontSize: showLogo ? token.fontSizeXL : token.fontSizeLG,
-              fontWeight: showLogo ? 400 : 500,
+              fontSize: token.fontSizeLG,
+              fontWeight: 500,
             }}
           >
             {title || 'agor'}

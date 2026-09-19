@@ -7,8 +7,8 @@ import type {
   User,
 } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useAgorStore } from '../../store/agorStore';
@@ -17,6 +17,7 @@ import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
+import { useMobileBack } from './useMobileBack';
 
 interface SessionPageProps {
   client: AgorClient | null;
@@ -34,6 +35,7 @@ interface SessionPageProps {
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onOpenBranch?: AppActionsContextValue['onOpenBranch'];
   onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
@@ -58,12 +60,11 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   onUpdateSession,
   onDeleteSession,
   onUpdateSessionMcpServers,
+  onUpdateSessionEnvSelections,
   onOpenBranch,
   onOpenAgenticToolSettings,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const navigate = useNavigate();
-  const location = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const resolvedSessionId = sessionId
@@ -80,13 +81,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
     ) ?? EMPTY_MCP_IDS;
 
-  // Back to the actual parent the user came from. A cold deep-link has the
-  // router's initial entry (`location.key === 'default'`) and no in-app history,
-  // so send it to Sessions instead of `navigate(-1)`, which could exit the app.
-  const goBack = useCallback(() => {
-    if (location.key !== 'default') navigate(-1);
-    else navigate('/m/sessions');
-  }, [navigate, location.key]);
+  const goBack = useMobileBack('/m/sessions');
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -163,6 +158,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
         session={session}
         onUpdate={onUpdateSession}
         onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+        onUpdateSessionEnvSelections={onUpdateSessionEnvSelections}
         client={client}
         currentUser={currentUser}
       />

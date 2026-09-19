@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 /** Subscribes `onChange` to a media query; returns the unsubscribe function. */
-export function subscribeToMediaQuery(query: string, onChange: () => void): () => void {
+function subscribeToMediaQuery(query: string, onChange: () => void): () => void {
   if (typeof window === 'undefined') return () => {};
   const list = window.matchMedia(query);
   list.addEventListener('change', onChange);

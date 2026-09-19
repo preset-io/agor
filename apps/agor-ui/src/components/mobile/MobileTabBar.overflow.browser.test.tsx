@@ -20,16 +20,11 @@ function overflowers(root: HTMLElement, limit: number): string[] {
 
 describe('MobileTabBar fits narrow viewports', () => {
   for (const width of [320, 360, 390, 430]) {
-    it(`all 5 destinations + FAB fit at ${width}px (active=comments, badges shown)`, () => {
+    it(`all destinations + the Ask button fit at ${width}px (active=marketplace, badge shown)`, () => {
       const { container } = render(
         <ConfigProvider theme={{ token: { motion: false } }}>
           <div style={{ width, boxSizing: 'border-box' }} data-testid="vp">
-            <MobileTabBar
-              activeTab="marketplace"
-              onSelect={vi.fn()}
-              askEmoji="🤖"
-              sessionsBadge={12}
-            />
+            <MobileTabBar activeTab="marketplace" onSelect={vi.fn()} sessionsBadge={12} />
           </div>
         </ConfigProvider>
       );

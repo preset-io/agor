@@ -65,7 +65,6 @@ export async function boardMetadataTestApp(
     });
   }
   app.use('users', createUsersService(db, app, config));
-  app.use('branches', new BranchesService(db, app));
   const authentication = new AuthenticationService(app);
   authentication.register(
     'jwt',
@@ -81,6 +80,8 @@ export async function boardMetadataTestApp(
     app.configure(socketio(sockets.serverOptions, sockets.callback));
     configureChannels(app);
   }
+  // Register realtime services after the transport installs its event mixins.
+  app.use('branches', new BranchesService(db, app));
   const boardsService = createBoardsService(db);
   app.use('boards', boardsService);
   app.use('board-objects', new BoardObjectsService(db, app));

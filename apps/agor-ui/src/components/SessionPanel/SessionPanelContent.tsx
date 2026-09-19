@@ -18,6 +18,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
+import { SessionConversationLayout } from './SessionConversationLayout';
 
 export interface SessionPanelContentProps {
   client: AgorClient | null;
@@ -117,6 +118,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
         {/* Header row with pills and scroll navigation */}
         <div
           style={{
+            flexShrink: 0,
             marginBottom: token.sizeUnit,
             display: 'flex',
             // Keep navigation aligned with the branch pill's first row when metadata wraps below it.
@@ -171,52 +173,14 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
         <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
 
-        <ConversationView
-          client={client}
-          sessionId={session.session_id}
-          agentic_tool={session.agentic_tool}
-          sessionModel={session.model_config?.model}
-          userById={userById}
-          currentUserId={currentUserId}
-          onScrollRef={handleScrollRef}
-          onPermissionDecision={onPermissionDecision}
-          branchName={branch?.name}
-          scheduledFromBranch={session.scheduled_from_branch}
-          scheduledRunAt={session.scheduled_run_at}
-          isActive={isOpen}
-          genealogy={session.genealogy}
-          teammateEmoji={
-            branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
-          }
-          forceExpandAll={forceExpandAll}
-          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-        />
-
-        {/* Queued Tasks Drawer - Above Footer.
-            Reads tasks (status='queued') instead of messages now that the queue
-            is task-centric (see never-lose-prompt §C). The full prompt lives on
-            task.full_prompt; description is the truncated 120-char preview. */}
-        {queuedTasks.length > 0 && (
-          <div
-            style={{
-              flexShrink: 0,
-              background: token.colorBgElevated,
-              borderTop: `1px solid ${token.colorBorderSecondary}`,
-              borderTopLeftRadius: token.borderRadiusLG,
-              borderTopRightRadius: token.borderRadiusLG,
-              padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
-              marginLeft: -token.sizeUnit * 6 + token.sizeUnit * 2,
-              marginRight: -token.sizeUnit * 6 + token.sizeUnit * 2,
-              marginTop: token.sizeUnit * 2,
-              boxShadow: `0 -2px 8px ${token.colorBgMask}`,
-            }}
-          >
+        <SessionConversationLayout
+          queueHeader={
             <Typography.Text
               type="secondary"
               style={{
                 fontSize: token.fontSizeSM,
                 display: 'block',
-                marginBottom: token.sizeUnit * 2,
+                marginBottom: token.sizeUnit,
                 fontWeight: 500,
                 textTransform: 'uppercase',
                 letterSpacing: '0.5px',
@@ -224,103 +188,136 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             >
               Queued Tasks ({queuedTasks.length})
             </Typography.Text>
-            {isQueueHeldByFailure && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: token.sizeUnit * 2 }}
-                message="Queue paused by failed session"
-                description="Queued prompts are preserved. Resume the queue to run the next prompt without copy/paste."
-                action={
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={resumeQueueInFlight}
-                    disabled={!client}
-                    onClick={handleResumeHeldQueue}
-                  >
-                    Resume queue
-                  </Button>
-                }
-              />
-            )}
-            <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-              {queuedTasks.map((task, idx) => (
-                <div
-                  key={task.task_id}
-                  style={{
-                    background: token.colorBgContainer,
-                    padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 3}px`,
-                    borderRadius: token.borderRadius,
-                    border: `1px solid ${token.colorBorder}`,
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: token.sizeUnit * 2,
-                  }}
-                >
-                  <Typography.Text ellipsis style={{ flex: 1 }}>
-                    <span style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}>
-                      {idx + 1}.
-                    </span>
-                    {task.full_prompt}
-                  </Typography.Text>
-                  <Space size={4}>
-                    {isQueueHeldByFailure && idx === 0 && (
+          }
+          queue={
+            queuedTasks.length > 0 ? (
+              <>
+                {isQueueHeldByFailure && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: token.sizeUnit * 2 }}
+                    message="Queue paused by failed session"
+                    description="Queued prompts are preserved. Resume the queue to run the next prompt without copy/paste."
+                    action={
                       <Button
                         size="small"
-                        type="link"
+                        type="primary"
                         loading={resumeQueueInFlight}
                         disabled={!client}
                         onClick={handleResumeHeldQueue}
                       >
-                        Run next
+                        Resume queue
                       </Button>
-                    )}
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      onClick={async () => {
-                        await copyToClipboard(task.full_prompt);
-                        showSuccess('Message copied to clipboard');
+                    }
+                  />
+                )}
+                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+                  {queuedTasks.map((task, idx) => (
+                    <div
+                      key={task.task_id}
+                      style={{
+                        background: token.colorBgContainer,
+                        padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 3}px`,
+                        borderRadius: token.borderRadius,
+                        border: `1px solid ${token.colorBorder}`,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: token.sizeUnit * 2,
                       }}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={async () => {
-                        if (!client) return;
+                    >
+                      <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                        <span
+                          style={{ color: token.colorTextSecondary, marginRight: token.sizeUnit }}
+                        >
+                          {idx + 1}.
+                        </span>
+                        {task.full_prompt}
+                      </Typography.Text>
+                      <Space size={4} style={{ flexShrink: 0 }}>
+                        {isQueueHeldByFailure && idx === 0 && (
+                          <Button
+                            size="small"
+                            type="link"
+                            loading={resumeQueueInFlight}
+                            disabled={!client}
+                            onClick={handleResumeHeldQueue}
+                          >
+                            Run next
+                          </Button>
+                        )}
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          aria-label={`Copy queued task ${idx + 1}`}
+                          onClick={async () => {
+                            await copyToClipboard(task.full_prompt);
+                            showSuccess('Message copied to clipboard');
+                          }}
+                        />
+                        <Button
+                          type="text"
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          aria-label={`Remove queued task ${idx + 1}`}
+                          onClick={async () => {
+                            if (!client) return;
 
-                        try {
-                          // Optimistically remove from UI
-                          setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+                            try {
+                              // Optimistically remove from UI
+                              setQueuedTasks((prev) =>
+                                prev.filter((t) => t.task_id !== task.task_id)
+                              );
 
-                          // Delete the queued task — cascade removes the row
-                          // entirely; spawnTaskExecutor never gets a chance.
-                          await client.service('tasks').remove(task.task_id);
-                        } catch (error) {
-                          showError(
-                            `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
-                          );
+                              // Delete the queued task — cascade removes the row
+                              // entirely; spawnTaskExecutor never gets a chance.
+                              await client.service('tasks').remove(task.task_id);
+                            } catch (error) {
+                              showError(
+                                `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
+                              );
 
-                          // Re-fetch queue to restore accurate state
-                          const response = await client
-                            .service(`sessions/${session.session_id}/tasks/queue`)
-                            .find();
-                          const data = (response as { data: Task[] }).data || [];
-                          setQueuedTasks(data);
-                        }
-                      }}
-                    />
-                  </Space>
-                </div>
-              ))}
-            </Space>
-          </div>
-        )}
+                              // Re-fetch queue to restore accurate state
+                              const response = await client
+                                .service(`sessions/${session.session_id}/tasks/queue`)
+                                .find();
+                              const data = (response as { data: Task[] }).data || [];
+                              setQueuedTasks(data);
+                            }
+                          }}
+                        />
+                      </Space>
+                    </div>
+                  ))}
+                </Space>
+              </>
+            ) : undefined
+          }
+        >
+          <ConversationView
+            client={client}
+            sessionId={session.session_id}
+            agentic_tool={session.agentic_tool}
+            sessionModel={session.model_config?.model}
+            userById={userById}
+            currentUserId={currentUserId}
+            onScrollRef={handleScrollRef}
+            onPermissionDecision={onPermissionDecision}
+            branchName={branch?.name}
+            scheduledFromBranch={session.scheduled_from_branch}
+            scheduledRunAt={session.scheduled_run_at}
+            isActive={isOpen}
+            genealogy={session.genealogy}
+            teammateEmoji={
+              branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
+            }
+            forceExpandAll={forceExpandAll}
+            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+          />
+        </SessionConversationLayout>
 
         {/* Advanced Spawn Modal */}
         <ForkSpawnModal

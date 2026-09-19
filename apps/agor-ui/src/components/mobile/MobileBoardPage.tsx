@@ -40,10 +40,11 @@ import {
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { isSafeExternalUrl } from '@/utils/safeExternalUrl';
+import { sortSessions } from '@/utils/sessionSearch';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
-import { mobileScrollAreaStyle } from './constants';
+import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -128,7 +129,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   if (!board) {
     return (
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={mobilePageStyle}>
         <MobileHeader
           title="Board"
           boardSwitcher={boardSwitcher}
@@ -180,16 +181,9 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     ({ branch }) => (sessionsByBranch.get(branch.branch_id) ?? []).length > 0
   );
 
-  const renderBranchCard = (
-    branch: Branch,
-    placement: BoardEntityObject,
-    { showZoneTag }: { showZoneTag: boolean }
-  ) => {
-    const sessions = [...(sessionsByBranch.get(branch.branch_id) ?? [])].sort(
-      (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-    );
+  const renderBranchCard = (branch: Branch) => {
+    const sessions = sortSessions(sessionsByBranch.get(branch.branch_id) ?? [], 'recent');
     const repo = repoById.get(branch.repo_id);
-    const zone = placement.zone_id ? board.objects?.[placement.zone_id] : undefined;
     return (
       <Card
         key={branch.branch_id}
@@ -232,7 +226,6 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           <Text type="secondary" ellipsis>
             {repo?.slug ?? 'Repository unavailable'}
           </Text>
-          {showZoneTag && <ZoneTag zone={zone} />}
           {branch.filesystem_status === 'failed' && branch.error_message && (
             <Flex gap={token.marginXS} align="flex-start">
               <WarningOutlined style={{ color: token.colorError, marginTop: 3 }} />
@@ -254,7 +247,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={mobilePageStyle}>
       <MobileHeader
         title={board.name}
         boardSwitcher={boardSwitcher}
@@ -519,9 +512,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                             </Paragraph>
                           )}
                           {zoneBranches.length > 0 ? (
-                            zoneBranches.map(({ branch, placement }) =>
-                              renderBranchCard(branch, placement, { showZoneTag: false })
-                            )
+                            zoneBranches.map(({ branch }) => renderBranchCard(branch))
                           ) : (
                             <Text type="secondary">No branches in this zone</Text>
                           )}
@@ -546,9 +537,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                           ),
                           children: (
                             <Flex vertical gap={token.marginSM}>
-                              {ungroupedBranches.map(({ branch, placement }) =>
-                                renderBranchCard(branch, placement, { showZoneTag: false })
-                              )}
+                              {ungroupedBranches.map(({ branch }) => renderBranchCard(branch))}
                             </Flex>
                           ),
                         },
@@ -561,9 +550,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                 <Title level={5} style={{ margin: 0 }}>
                   Branches
                 </Title>
-                {branches.map(({ branch, placement }) =>
-                  renderBranchCard(branch, placement, { showZoneTag: false })
-                )}
+                {branches.map(({ branch }) => renderBranchCard(branch))}
               </Flex>
             ))}
         </Flex>

@@ -11009,6 +11009,53 @@
         }
       }
     },
+    "/branches/{id}/retry-provisioning": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "id parameter"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_id"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "not authenticated"
+          },
+          "500": {
+            "description": "general error"
+          }
+        },
+        "description": "Creates a new resource with data.",
+        "summary": "Creates a new resource with data",
+        "tags": ["branches"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_id"
+              }
+            }
+          }
+        }
+      }
+    },
     "/branches/{id}/nuke": {
       "post": {
         "parameters": [

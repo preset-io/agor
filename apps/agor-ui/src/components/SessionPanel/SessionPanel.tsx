@@ -1771,7 +1771,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ref={bodyRef}
         style={{
           flex: 1,
-          overflow: 'hidden',
+          overflowX: 'hidden',
+          overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
@@ -1830,7 +1831,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           ref={conversationRef}
           style={{
             flex: 1,
-            minHeight: 0,
+            // If chrome + composer cannot fit on a short viewport, scroll the
+            // body rather than crushing the transcript and queue to slivers.
+            minHeight: queuedTasks.length > 0 ? 360 : 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',

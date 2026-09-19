@@ -191,6 +191,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
   const [prefs, setPref] = useFooterPreferences();
   const pinnedItems = prefs.pinnedItems;
+  // The phone bar keeps only Attach; the other pinned actions stay in the controls sheet.
+  const barPinnedItems = isMobile ? pinnedItems.filter((item) => item === 'upload') : pinnedItems;
   const togglePin = (id: string) => {
     setPref({
       pinnedItems: pinnedItems.includes(id)
@@ -303,6 +305,32 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     height: isMobile ? MOBILE_TOUCH_TARGET : 32,
   };
 
+  // One effort control, shown in the controls panel and again in the phone chip bar.
+  const effortSelector = toolCaps?.reasoningEffortLevels ? (
+    <EffortSelector
+      value={effortLevel}
+      onChange={onEffortChange}
+      levels={toolCaps.reasoningEffortLevels}
+      fallbackValue={toolCaps.defaultReasoningEffort}
+      allowInherited={!toolCaps.defaultReasoningEffort}
+      size="small"
+      compact
+      plain
+    />
+  ) : null;
+  const moreButton = (
+    <Tooltip title="More options">
+      <Button
+        size={actionSize}
+        style={touchActionStyle}
+        type="text"
+        icon={<EllipsisOutlined />}
+        aria-label="More options"
+        onClick={isMobile ? () => setMoreOpen(true) : undefined}
+      />
+    </Tooltip>
+  );
+
   const moreContent = (
     <fieldset
       ref={moreContentRef}
@@ -398,16 +426,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               opacity: managedByPreset ? 0.65 : undefined,
             }}
           >
-            <EffortSelector
-              value={effortLevel}
-              onChange={onEffortChange}
-              levels={toolCaps.reasoningEffortLevels}
-              fallbackValue={toolCaps.defaultReasoningEffort}
-              allowInherited={!toolCaps.defaultReasoningEffort}
-              size="small"
-              compact
-              plain
-            />
+            {effortSelector}
           </div>
         </div>
       )}
@@ -1441,16 +1460,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   opacity: managedByPreset ? 0.65 : undefined,
                 }}
               >
-                <EffortSelector
-                  value={effortLevel}
-                  onChange={onEffortChange}
-                  levels={toolCaps.reasoningEffortLevels}
-                  fallbackValue={toolCaps.defaultReasoningEffort}
-                  allowInherited={!toolCaps.defaultReasoningEffort}
-                  size="small"
-                  compact
-                  plain
-                />
+                {effortSelector}
               </div>
             )}
 
@@ -1682,7 +1692,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         >
           {/* Left group */}
           <Space size={4}>
-            {pinnedItems.includes('upload') && (
+            {barPinnedItems.includes('upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1705,7 +1715,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {!isMobile && pinnedItems.includes('advanced-upload') && (
+            {barPinnedItems.includes('advanced-upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1727,65 +1737,50 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {!isMobile &&
-              pinnedItems.includes('fork') &&
-              toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Fork session"
-                    icon={<ForkOutlined />}
-                    onClick={onFork}
-                    disabled={forkDisabled}
-                    data-testid="fork-bar-btn"
-                  />
-                </Tooltip>
-              )}
-            {/* Dynamically pinned items */}
-            {!isMobile &&
-              pinnedItems.includes('btw-fork') &&
-              toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title="BTW fork">
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Ask side question via BTW fork"
-                    icon={<QuestionCircleOutlined />}
-                    onClick={onBtwSend}
-                    disabled={btwForkDisabled}
-                    data-testid="btw-fork-bar-btn"
-                  />
-                </Tooltip>
-              )}
-            {!isMobile &&
-              pinnedItems.includes('spawn') &&
-              toolCaps?.supportsChildSpawn !== false && (
-                <Tooltip title="Spawn subsession">
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Spawn subsession"
-                    icon={<BranchesOutlined />}
-                    onClick={onSpawnOpen}
-                    disabled={spawnDisabled}
-                  />
-                </Tooltip>
-              )}
-            {isMobile ? (
-              <Tooltip title="More options">
+            {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
                   type="text"
-                  icon={<EllipsisOutlined />}
-                  aria-label="More options"
-                  onClick={() => setMoreOpen(true)}
+                  aria-label="Fork session"
+                  icon={<ForkOutlined />}
+                  onClick={onFork}
+                  disabled={forkDisabled}
+                  data-testid="fork-bar-btn"
                 />
               </Tooltip>
+            )}
+            {/* Dynamically pinned items */}
+            {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
+              <Tooltip title="BTW fork">
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Ask side question via BTW fork"
+                  icon={<QuestionCircleOutlined />}
+                  onClick={onBtwSend}
+                  disabled={btwForkDisabled}
+                  data-testid="btw-fork-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+              <Tooltip title="Spawn subsession">
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Spawn subsession"
+                  icon={<BranchesOutlined />}
+                  onClick={onSpawnOpen}
+                  disabled={spawnDisabled}
+                />
+              </Tooltip>
+            )}
+            {isMobile ? (
+              moreButton
             ) : (
               <Popover
                 open={moreOpen}
@@ -1795,14 +1790,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 content={moreContent}
                 title={null}
               >
-                <Tooltip title="More options">
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<EllipsisOutlined />}
-                    aria-label="More options"
-                  />
-                </Tooltip>
+                {moreButton}
               </Popover>
             )}
           </Space>
