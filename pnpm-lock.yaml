@@ -305,8 +305,8 @@ importers:
         specifier: ^11.1.0
         version: 11.1.0
       hot-shots:
-        specifier: ^17.1.0
-        version: 17.1.0
+        specifier: ^17.1.1
+        version: 17.1.1
       mdast-util-gfm:
         specifier: ^3.1.0
         version: 3.1.0(supports-color@8.1.1)
@@ -7341,6 +7341,10 @@ packages:
     resolution: {integrity: sha512-F7hnyBtBq7UE1amiWFRF8uEIzb29+FKW2otG9KbgPG+DwALavjwn/Vzc9GWp6EU6T1JW5sik7qnPecainwpIQA==}
     engines: {node: '>=18.0.0'}
 
+  hot-shots@17.1.1:
+    resolution: {integrity: sha512-NqQjc677dry0av5lxAC2JmiPqq85spE0eXR2HjQD/QFVz8zEgu3eeMnKgj8kfb9zFrS+uB/iz9/V57TefG1HuQ==}
+    engines: {node: '>=18.0.0'}
+
   html-encoding-sniffer@4.0.0:
     resolution: {integrity: sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==}
     engines: {node: '>=18'}
@@ -8473,6 +8477,9 @@ packages:
 
   nan@2.23.1:
     resolution: {integrity: sha512-r7bBUGKzlqk8oPBDYxt6Z0aEdF1G1rwlMcLk8LCOMbOzf0mG+JUfUzG4fIMWwHWP0iyaLWEQZJmtB7nOHEm/qw==}
+
+  nan@2.29.0:
+    resolution: {integrity: sha512-GlGk3HIvitbvs+LT3g6XUP1kpirKNvmDFwF/bmo6XNWSb/eYEs/O4bfgIEIXCZ+lIOTS5xNwDvSGMw6FJdAhtA==}
 
   nanoid@3.3.18:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
@@ -18092,6 +18099,10 @@ snapshots:
     optionalDependencies:
       unix-dgram: 2.0.7
 
+  hot-shots@17.1.1:
+    optionalDependencies:
+      unix-dgram: 2.0.7
+
   html-encoding-sniffer@4.0.0:
     dependencies:
       whatwg-encoding: 3.1.1
@@ -19506,6 +19517,9 @@ snapshots:
       thenify-all: 1.6.0
 
   nan@2.23.1:
+    optional: true
+
+  nan@2.29.0:
     optional: true
 
   nanoid@3.3.18: {}
@@ -21738,7 +21752,7 @@ snapshots:
   unix-dgram@2.0.7:
     dependencies:
       bindings: 1.5.0
-      nan: 2.23.1
+      nan: 2.29.0
     optional: true
 
   unpipe@1.0.0: {}
