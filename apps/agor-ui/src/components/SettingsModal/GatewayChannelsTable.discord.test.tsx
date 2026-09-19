@@ -191,9 +191,11 @@ function getTokenInput(): HTMLInputElement {
 async function fillDiscordWizard({
   allowedUserId,
   allowedRoleId,
+  files = false,
 }: {
   allowedUserId?: string;
   allowedRoleId?: string;
+  files?: boolean;
 }) {
   clickButton(/Add Channel/);
   selectDiscord();
@@ -222,6 +224,7 @@ async function fillDiscordWizard({
 
   expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
+  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
   addTag('Allowed public text channel IDs', CHANNEL_ID);
   if (allowedUserId) addTag('Allowed user IDs', allowedUserId);
   if (allowedRoleId) addTag('Allowed role IDs', allowedRoleId);
@@ -271,7 +274,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
   it('submits the complete draft, verifies stored credentials, then enables', async () => {
     const { client, channelCreate, channelPatch, testCreate } = makeClient();
     renderTable(client);
-    await fillDiscordWizard({ allowedUserId: USER_ID, allowedRoleId: ROLE_ID });
+    await fillDiscordWizard({ allowedUserId: USER_ID, allowedRoleId: ROLE_ID, files: true });
     await createDraft(channelCreate);
 
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
@@ -298,7 +301,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
           rate_limit_max_retries: 2,
           rate_limit_max_total_delay_ms: 10000,
         },
-        files: false,
+        files: true,
         agent_tools: [],
       },
     });

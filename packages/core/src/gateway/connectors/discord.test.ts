@@ -6,6 +6,7 @@ import { buildDiscordDeliveryMetadata, buildDiscordDeliveryNonce } from '../disc
 import {
   chunkDiscordMessage,
   DiscordConnector,
+  extractDiscordInboundFiles,
   hasStructuredDiscordBotMention,
   stripDiscordBotMention,
 } from './discord';
@@ -103,6 +104,87 @@ function makeTransport() {
 }
 
 describe('Discord connector beta', () => {
+  const signedAttachmentUrl =
+    'https://cdn.discordapp.com/attachments/333333333333333333/777777777777777777/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature';
+
+  it('normalizes only signed PNG/JPEG attachment records', () => {
+    expect(
+      extractDiscordInboundFiles([
+        {
+          id: '777777777777777777',
+          filename: 'screenshot.png',
+          size: 2048,
+          content_type: 'image/png',
+          url: signedAttachmentUrl,
+        },
+        {
+          id: '888888888888888888',
+          filename: 'photo.jpeg',
+          size: 4096,
+          url: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
+        },
+      ])
+    ).toEqual([
+      {
+        id: '777777777777777777',
+        name: 'screenshot.png',
+        mimetype: 'image/png',
+        size: 2048,
+        url_private_download: signedAttachmentUrl,
+      },
+      {
+        id: '888888888888888888',
+        name: 'photo.jpeg',
+        mimetype: 'image/jpeg',
+        size: 4096,
+        url_private_download: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
+      },
+    ]);
+    expect(
+      extractDiscordInboundFiles([
+        {
+          id: '777777777777777777',
+          filename: 'document.pdf',
+          size: 2048,
+          content_type: 'application/pdf',
+          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
+        },
+      ])
+    ).toBeUndefined();
+    expect(
+      extractDiscordInboundFiles([
+        {
+          id: '777777777777777777',
+          filename: 'screenshot.png',
+          size: 2048,
+          content_type: 'image/png',
+          url: 'https://evil.example/screenshot.png',
+        },
+      ])
+    ).toBeUndefined();
+  });
+
+  it('rejects a mixed supported/unsupported attachment payload instead of dropping the unsupported item', () => {
+    expect(
+      extractDiscordInboundFiles([
+        {
+          id: '777777777777777777',
+          filename: 'screenshot.png',
+          size: 2048,
+          content_type: 'image/png',
+          url: signedAttachmentUrl,
+        },
+        {
+          id: '888888888888888888',
+          filename: 'document.pdf',
+          size: 2048,
+          content_type: 'application/pdf',
+          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
+        },
+      ])
+    ).toBeUndefined();
+  });
+
   it('chunks at Discord’s hard limit and avoids empty trailing chunks', () => {
     const chunks = chunkDiscordMessage(`${'a'.repeat(1999)}\n${'b'.repeat(1999)}`);
     expect(chunks).toHaveLength(2);
@@ -328,6 +410,103 @@ describe('Discord connector beta', () => {
       expect.objectContaining({ checkpoint: undefined })
     );
     expect(gateway.connect).toHaveBeenCalledOnce();
+    await connector.stopListening();
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('accepts text plus a signed PNG when inbound files are explicitly enabled', async () => {
+    const { transport, gateway, dispatch } = makeTransport();
+    const connector = new DiscordConnector({ ...config, files: true }, transport as never);
+    const received: unknown[] = [];
+    await connector.startListening(async (message) => {
+      received.push(message);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 11,
+        d: {
+          id: '888888888888888888',
+          guild_id: config.guild_id,
+          channel_id: config.allowed_channel_ids[0],
+          type: 0,
+          content: '<@666666666666666666> what is in this screenshot?',
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: '666666666666666666' }],
+          attachments: [
+            {
+              id: '777777777777777777',
+              filename: 'screenshot.png',
+              size: 2048,
+              content_type: 'image/png',
+              url: signedAttachmentUrl,
+            },
+          ],
+          embeds: [],
+          components: [],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      text: 'what is in this screenshot?',
+      files: [
+        {
+          id: '777777777777777777',
+          name: 'screenshot.png',
+          mimetype: 'image/png',
+          size: 2048,
+          url_private_download: signedAttachmentUrl,
+        },
+      ],
+    });
+    expect((received[0] as { threadId: string }).threadId).toBe(
+      'discord:message:333333333333333333:888888888888888888'
+    );
+    await connector.stopListening();
+    expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('keeps attachment messages rejected when the capability is disabled', async () => {
+    const { transport, gateway, dispatch } = makeTransport();
+    const connector = new DiscordConnector(config, transport as never);
+    const received: unknown[] = [];
+    await connector.startListening(async (message) => {
+      received.push(message);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 12,
+        d: {
+          id: '888888888888888888',
+          guild_id: config.guild_id,
+          channel_id: config.allowed_channel_ids[0],
+          type: 0,
+          content: '<@666666666666666666> do not admit this file',
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: '666666666666666666' }],
+          attachments: [
+            {
+              id: '777777777777777777',
+              filename: 'screenshot.png',
+              size: 2048,
+              content_type: 'image/png',
+              url: signedAttachmentUrl,
+            },
+          ],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+
+    expect(received).toHaveLength(0);
     await connector.stopListening();
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });

@@ -22,6 +22,8 @@ export { getConnector, hasConnector, registerConnector } from './connector-regis
 export {
   chunkDiscordMessage,
   DiscordConnector,
+  extractDiscordInboundFiles,
+  isAllowedDiscordAttachmentUrl,
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {

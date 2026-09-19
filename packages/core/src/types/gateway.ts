@@ -181,7 +181,8 @@ export interface DiscordGatewayConfig {
   align_discord_users?: boolean;
   user_map?: Record<string, string>;
   catch_up?: DiscordCatchUpConfig;
-  files?: false;
+  /** Opt-in bounded PNG/JPEG ingestion for live Discord messages. */
+  files?: boolean;
   agent_tools?: never[];
   outbound_enabled?: boolean;
   default_outbound_target?: string | null;
@@ -416,8 +417,8 @@ export function validateDiscordConfig(
   }
 
   validateCatchUpConfig(raw.catch_up, errors);
-  if (raw.files !== undefined && raw.files !== false) {
-    errors.push('files must be false');
+  if (raw.files !== undefined && typeof raw.files !== 'boolean') {
+    errors.push('files must be a boolean');
   }
   if (
     raw.agent_tools !== undefined &&

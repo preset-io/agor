@@ -37,6 +37,7 @@ import type {
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
   GatewaySendReceipt,
+  InboundFile,
   InboundMessage,
 } from '../connector';
 import type { DiscordDeliveryNonce } from '../discord-identifiers';
@@ -156,6 +157,95 @@ function withDeliveryErrorMetadata(error: unknown, message: string): Error {
 
 function snowflake(value: unknown): string | undefined {
   return isDiscordSnowflake(value) ? value : undefined;
+}
+
+const DISCORD_ATTACHMENT_CDN_HOST = 'cdn.discordapp.com';
+const DISCORD_ATTACHMENT_PATH = /^\/attachments\/\d{17,20}\/\d{17,20}\/.+$/;
+const DISCORD_SIGNED_ATTACHMENT_QUERY = new Set(['ex', 'is', 'hm']);
+const DISCORD_IMAGE_MIMES = new Set(['image/png', 'image/jpeg']);
+
+/**
+ * Discord attachment URLs are signed CDN URLs, not arbitrary user-provided
+ * download targets. Keep the accepted shape narrow so the daemon can fetch
+ * without forwarding a channel credential or accepting external URL input.
+ */
+export function isAllowedDiscordAttachmentUrl(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname.toLowerCase() !== DISCORD_ATTACHMENT_CDN_HOST ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hash ||
+    !DISCORD_ATTACHMENT_PATH.test(url.pathname)
+  ) {
+    return false;
+  }
+  const queryKeys = [...url.searchParams.keys()];
+  return (
+    queryKeys.length === DISCORD_SIGNED_ATTACHMENT_QUERY.size &&
+    queryKeys.every((key) => DISCORD_SIGNED_ATTACHMENT_QUERY.has(key)) &&
+    [...DISCORD_SIGNED_ATTACHMENT_QUERY].every((key) => {
+      const value = url.searchParams.get(key);
+      return typeof value === 'string' && value.length > 0;
+    })
+  );
+}
+
+function discordAttachmentMime(contentType: unknown, filename: string): string | undefined {
+  if (contentType !== undefined && contentType !== null && typeof contentType !== 'string') {
+    return undefined;
+  }
+  const normalized =
+    typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
+  if (normalized) return DISCORD_IMAGE_MIMES.has(normalized) ? normalized : undefined;
+  const lowerName = filename.toLowerCase();
+  if (lowerName.endsWith('.png')) return 'image/png';
+  if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg';
+  return undefined;
+}
+
+/** Normalize the strictly supported live Discord attachment subset. */
+export function extractDiscordInboundFiles(rawAttachments: unknown): InboundFile[] | undefined {
+  if (!Array.isArray(rawAttachments)) return undefined;
+  const files: InboundFile[] = [];
+  for (const rawAttachment of rawAttachments) {
+    const attachment = asRecord(rawAttachment);
+    const id = snowflake(attachment?.id);
+    const filename = attachment?.filename;
+    const size = attachment?.size;
+    const url = attachment?.url;
+    if (
+      !id ||
+      typeof filename !== 'string' ||
+      filename.length === 0 ||
+      filename.length > 255 ||
+      !Number.isSafeInteger(size) ||
+      (size as number) < 0 ||
+      typeof url !== 'string' ||
+      !isAllowedDiscordAttachmentUrl(url)
+    ) {
+      return undefined;
+    }
+    const mimetype = discordAttachmentMime(attachment?.content_type, filename);
+    if (!mimetype) return undefined;
+    files.push({ id, name: filename, mimetype, size: size as number, url_private_download: url });
+  }
+  return files;
+}
+
+function hasUnsupportedDiscordRichPayload(message: Record<string, unknown>): boolean {
+  for (const field of ['embeds', 'components', 'sticker_items'] as const) {
+    const value = message[field];
+    if (value !== undefined && (!Array.isArray(value) || value.length > 0)) return true;
+  }
+  return message.poll !== undefined;
 }
 
 function escapeRegExp(value: string): string {
@@ -915,6 +1005,7 @@ export class DiscordConnector implements GatewayConnector {
     threadId?: string;
     metadata?: Record<string, unknown>;
     text?: string;
+    files?: InboundFile[];
     prepareDelivery?: InboundMessage['prepareDelivery'];
   }> {
     const author = asRecord(message.author);
@@ -959,14 +1050,16 @@ export class DiscordConnector implements GatewayConnector {
     const rawContent = typeof message.content === 'string' ? message.content : '';
     const mentioned = hasStructuredDiscordBotMention(message, botUserId);
     if (!mentioned) return { accepted: false };
-    if (
-      (Array.isArray(message.attachments) && message.attachments.length > 0) ||
-      (Array.isArray(message.embeds) && message.embeds.length > 0) ||
-      (Array.isArray(message.components) && message.components.length > 0) ||
-      (Array.isArray(message.sticker_items) && message.sticker_items.length > 0) ||
-      message.poll !== undefined
-    ) {
+    const rawAttachments = message.attachments;
+    if (rawAttachments !== undefined && !Array.isArray(rawAttachments)) {
       return { accepted: false };
+    }
+    if (hasUnsupportedDiscordRichPayload(message)) return { accepted: false };
+    let files: InboundFile[] | undefined;
+    if (Array.isArray(rawAttachments) && rawAttachments.length > 0) {
+      if (this.config.files !== true) return { accepted: false };
+      files = extractDiscordInboundFiles(rawAttachments);
+      if (!files) return { accepted: false };
     }
     const text = stripStructuredDiscordBotMention(rawContent, botUserId);
     if (!text) return { accepted: false };
@@ -1001,6 +1094,7 @@ export class DiscordConnector implements GatewayConnector {
       accepted: true,
       threadId,
       text,
+      ...(files ? { files } : {}),
       metadata: buildDiscordInboundMetadata({
         guildId,
         channelId,
@@ -1041,6 +1135,7 @@ export class DiscordConnector implements GatewayConnector {
       text: result.text,
       userId: String(asRecord(message.author)?.id ?? ''),
       timestamp: toIsoTimestamp(message.timestamp),
+      ...(result.files && result.files.length > 0 ? { files: result.files } : {}),
       metadata: result.metadata,
       prepareDelivery: result.prepareDelivery,
     };

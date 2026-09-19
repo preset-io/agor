@@ -15,9 +15,10 @@ import type {
 /**
  * File attached to an inbound message (provider-neutral shape).
  *
- * `url_private_download` is a platform URL that requires the channel's
- * credentials to fetch; connectors pass it through verbatim and the gateway
- * decides whether/how to download it.
+ * `url_private_download` is a legacy provider-neutral field name retained for
+ * Slack compatibility. It is an opaque platform URL: Slack URLs require the
+ * channel credential, while Discord URLs are signed attachment CDN URLs. The
+ * gateway decides whether/how to download it.
  */
 export interface InboundFile {
   id: string;

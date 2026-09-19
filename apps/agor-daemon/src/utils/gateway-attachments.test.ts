@@ -2,16 +2,18 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
-import type { SessionID, TenantID, UploadRef } from '@agor/core/types';
+import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
+import type { SessionID, TenantID, UploadRef, UploadStagingStore } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
+  ingestDiscordInboundImages,
   ingestInboundAttachments,
   isAllowedSlackFileUrl,
   isIngestableFile,
 } from './gateway-attachments.js';
-import { MAX_UPLOAD_FILE_SIZE } from './upload.js';
+import { configureUploadLimits, MAX_UPLOAD_FILE_SIZE } from './upload.js';
 
 function makeFile(overrides: Partial<InboundFile> = {}): InboundFile {
   return {
@@ -29,6 +31,80 @@ function makeImageResponse(body: Uint8Array, headers: Record<string, string> = {
     status: 200,
     headers: { 'content-type': 'image/png', ...headers },
   });
+}
+
+const DISCORD_SIGNED_URL =
+  'https://cdn.discordapp.com/attachments/333333333333333333/777777777777777777/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature';
+
+const VALID_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+);
+const VALID_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/AP/EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAQUCcf/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8BP//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8BP//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEABj8Cf//Z',
+  'base64'
+);
+
+function makeDiscordFile(overrides: Partial<InboundFile> = {}): InboundFile {
+  return {
+    id: '777777777777777777',
+    name: 'screenshot.png',
+    mimetype: 'image/png',
+    size: 1024,
+    url_private_download: DISCORD_SIGNED_URL,
+    ...overrides,
+  };
+}
+
+async function listLocalStoreArtifacts(root: string): Promise<string[]> {
+  const artifacts: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(child);
+      } else {
+        artifacts.push(path.relative(root, child).split(path.sep).join('/'));
+      }
+    }
+  }
+  await visit(root);
+  return artifacts.sort();
+}
+
+function expectedLocalStoreArtifacts(refs: readonly string[]): string[] {
+  return refs
+    .flatMap((ref) => {
+      const prefix = path.join('objects', ref.slice(4, 6), ref);
+      return [`${prefix}.data`, `${prefix}.json`];
+    })
+    .map((artifact) => artifact.split(path.sep).join('/'))
+    .sort();
+}
+
+function makeDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function storeWithStage(
+  base: LocalUploadStagingStore,
+  stage: UploadStagingStore['stage']
+): UploadStagingStore {
+  return {
+    stage,
+    inspect: base.inspect.bind(base),
+    read: base.read.bind(base),
+    consume: base.consume.bind(base),
+    delete: base.delete.bind(base),
+    cleanupExpired: base.cleanupExpired.bind(base),
+  };
 }
 
 describe('isAllowedSlackFileUrl', () => {
@@ -501,5 +577,530 @@ describe('ingestInboundAttachments', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(10);
     expect(result.uploads).toHaveLength(10);
     expect(result.failed).toBe(2);
+  });
+});
+
+describe('ingestDiscordInboundImages', () => {
+  let uploadDir: string;
+  let store: LocalUploadStagingStore;
+  const tenantId = 'tenant-discord' as TenantID;
+  const sessionId = '00000000-0000-0000-0000-000000000011' as SessionID;
+  const branchId = '00000000-0000-0000-0000-000000000013' as never;
+  const createdBy = '00000000-0000-0000-0000-000000000014' as never;
+
+  beforeEach(async () => {
+    uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-discord-attachments-'));
+    store = new LocalUploadStagingStore(() => uploadDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(uploadDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('allows only signed Discord CDN attachment URLs', () => {
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL)).toBe(true);
+    expect(
+      isAllowedDiscordAttachmentUrl(
+        DISCORD_SIGNED_URL.replace('cdn.discordapp.com', 'evil.example')
+      )
+    ).toBe(false);
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL.replace('?ex=', '?missing='))).toBe(
+      false
+    );
+    expect(isAllowedDiscordAttachmentUrl(DISCORD_SIGNED_URL.replace('https://', 'http://'))).toBe(
+      false
+    );
+  });
+
+  it('downloads a PNG without credentials and stages it under the exact owner', async () => {
+    const bytes = VALID_PNG;
+    const fetchImpl = vi.fn(async () => makeImageResponse(bytes));
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile()],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      DISCORD_SIGNED_URL,
+      expect.objectContaining({ headers: {}, redirect: 'manual' })
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
+    expect(result.failed).toBe(0);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '777777777777777777_screenshot.png',
+      mimeType: 'image/png',
+      provenance: 'gateway-discord',
+    });
+    const stored = await store.inspect({
+      tenantId,
+      sessionId,
+      branchId,
+      ref: result.uploads[0].ref,
+    });
+    expect(stored).toMatchObject({ provenance: 'gateway-discord', size: bytes.byteLength });
+    await expect(
+      store.inspect({
+        tenantId: 'other-tenant' as TenantID,
+        sessionId,
+        branchId,
+        ref: result.uploads[0].ref,
+      })
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it.each([
+    ['PNG', VALID_PNG, 'image/png', 'screenshot.png'],
+    ['JPEG', VALID_JPEG, 'image/jpeg', 'screenshot.jpg'],
+  ] as const)('stages a valid %s fixture', async (_label, bytes, mimeType, name) => {
+    const fetchImpl = vi.fn(async () => makeImageResponse(bytes, { 'content-type': mimeType }));
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile({ mimetype: mimeType, name })],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({ mimeType, size: bytes.byteLength });
+  });
+
+  it('rejects empty image downloads, cleans them, and continues with a valid image', async () => {
+    const emptyBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(emptyBody, { status: 200, headers: { 'content-type': 'image/jpeg' } })
+      )
+      .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ name: 'empty.jpg', mimetype: 'image/jpeg' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '888888888888888888_second.png',
+      mimeType: 'image/png',
+      size: VALID_PNG.byteLength,
+    });
+    const artifacts = await listLocalStoreArtifacts(uploadDir);
+    expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+    expect(artifacts).toEqual(
+      expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
+    );
+    const dataArtifacts = artifacts.filter((artifact) => artifact.endsWith('.data'));
+    expect(dataArtifacts).toHaveLength(1);
+    expect(await fs.stat(path.join(uploadDir, dataArtifacts[0]!))).toMatchObject({
+      size: VALID_PNG.byteLength,
+    });
+  });
+
+  it('joins deferred failed staging cleanup before continuing to the next attachment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const events: string[] = [];
+    const stageStarted = makeDeferred<void>();
+    const cleanupStarted = makeDeferred<void>();
+    const cleanupFinished = makeDeferred<void>();
+    let firstBodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let stageCalls = 0;
+    const firstBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        firstBodyController = controller;
+        controller.enqueue(VALID_PNG.subarray(0, 4));
+      },
+    });
+    const controlledStore = storeWithStage(store, async (input) => {
+      stageCalls++;
+      if (stageCalls > 1) {
+        events.push('second-stage-started');
+        return store.stage(input);
+      }
+
+      events.push('stage-started');
+      stageStarted.resolve();
+      let cleanupObserved = false;
+      const observeCleanup = () => {
+        if (cleanupObserved) return;
+        cleanupObserved = true;
+        events.push('cleanup-started');
+        cleanupStarted.resolve();
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          channel.port2.close();
+          events.push('cleanup-finished');
+          cleanupFinished.resolve();
+        };
+        channel.port2.postMessage(undefined);
+      };
+      input.body.once('error', observeCleanup);
+      input.body.once('close', observeCleanup);
+      await cleanupFinished.promise;
+      events.push('stage-settled');
+      throw new Error('controlled staging failure');
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(firstBody, { status: 200, headers: { 'content-type': 'image/png' } })
+      )
+      .mockImplementationOnce(async () => {
+        events.push('second-fetch-started');
+        await cleanupFinished.promise;
+        return makeImageResponse(VALID_PNG);
+      });
+
+    const resultPromise = ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ name: 'first.png' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store: controlledStore,
+    });
+
+    await stageStarted.promise;
+    expect(firstBodyController).toBeDefined();
+    firstBodyController!.error(new Error('controlled CDN reset'));
+    await cleanupStarted.promise;
+
+    const result = await resultPromise;
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '888888888888888888_second.png',
+      size: VALID_PNG.byteLength,
+    });
+    expect(events.indexOf('stage-settled')).toBeLessThan(events.indexOf('second-fetch-started'));
+    expect(events.indexOf('cleanup-finished')).toBeLessThan(events.indexOf('second-fetch-started'));
+  });
+
+  it('tears down an open source when staging fails first and continues', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let stageCalls = 0;
+    let sourceCancelled = false;
+    const openBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+      },
+      cancel() {
+        sourceCancelled = true;
+      },
+    });
+    const controlledStore = storeWithStage(store, async (input) => {
+      stageCalls++;
+      if (stageCalls === 1) throw new Error('controlled stage-first failure');
+      return store.stage(input);
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(openBody, { status: 200, headers: { 'content-type': 'image/png' } })
+      )
+      .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ name: 'first.png' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store: controlledStore,
+    });
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({
+      name: '888888888888888888_second.png',
+      size: VALID_PNG.byteLength,
+    });
+    expect(stageCalls).toBe(2);
+    expect(sourceCancelled).toBe(true);
+  });
+
+  it('fails closed for unsafe URLs, expired responses, and non-image bodies', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } })
+      );
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ url_private_download: 'https://attacker.example/image.png' }),
+        makeDiscordFile({ id: '888888888888888888', url_private_download: DISCORD_SIGNED_URL }),
+        makeDiscordFile({ id: '999999999999999999', url_private_download: DISCORD_SIGNED_URL }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 3 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(DISCORD_SIGNED_URL);
+  });
+
+  it('enforces the declared per-file and existing per-message count limits', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(async () => makeImageResponse(new Uint8Array([1])));
+    const files = [
+      makeDiscordFile({ size: MAX_UPLOAD_FILE_SIZE + 1 }),
+      ...Array.from({ length: 11 }, (_, index) =>
+        makeDiscordFile({
+          id: `${String(700000000000000000 + index).padStart(18, '0')}`,
+          name: `image-${index}.png`,
+        })
+      ),
+    ];
+
+    const result = await ingestDiscordInboundImages({
+      files,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(9);
+    expect(result.uploads).toHaveLength(9);
+    expect(result.failed).toBe(3);
+  });
+
+  it('does not send credentials while rejecting a redirect to an unsafe host', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://attacker.example/exfil.png' },
+        })
+    );
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile()],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result).toEqual({ uploads: [], failed: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(DISCORD_SIGNED_URL);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: {},
+      redirect: 'manual',
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('propagates a mid-body failure, cleans partial bytes, and continues', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const failingBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(VALID_PNG.subarray(0, 4));
+        setTimeout(() => controller.error(new Error('simulated CDN connection reset')), 0);
+      },
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(failingBody, { status: 200, headers: { 'content-type': 'image/png' } })
+      )
+      .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+
+    const result = await ingestDiscordInboundImages({
+      files: [
+        makeDiscordFile({ id: '777777777777777777', name: 'first.png' }),
+        makeDiscordFile({ id: '888888888888888888', name: 'second.png' }),
+      ],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result.failed).toBe(1);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0].name).toBe('888888888888888888_second.png');
+    const artifacts = await listLocalStoreArtifacts(uploadDir);
+    expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+    expect(artifacts).toEqual(
+      expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
+    );
+  });
+
+  it('times out stalled headers and continues with the next attachment', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockReturnValueOnce(new Promise<Response>(() => undefined))
+        .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+      const resultPromise = ingestDiscordInboundImages({
+        files: [
+          makeDiscordFile({ id: '777777777777777777', name: 'stalled.png' }),
+          makeDiscordFile({ id: '888888888888888888', name: 'next.png' }),
+        ],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        tenantId,
+        sessionId,
+        branchId,
+        createdBy,
+        store,
+        downloadTimeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await resultPromise;
+      expect(result.failed).toBe(1);
+      expect(result.uploads).toHaveLength(1);
+      expect(result.uploads[0].name).toBe('888888888888888888_next.png');
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
+      const firstRequest = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(firstRequest?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a trickling body, cleans partial bytes, and continues', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.useFakeTimers();
+    try {
+      let cancelled = false;
+      const tricklingBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(tricklingBody, {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          })
+        )
+        .mockResolvedValueOnce(makeImageResponse(VALID_PNG));
+      const resultPromise = ingestDiscordInboundImages({
+        files: [
+          makeDiscordFile({ id: '777777777777777777', name: 'trickling.png' }),
+          makeDiscordFile({ id: '888888888888888888', name: 'next.png' }),
+        ],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        tenantId,
+        sessionId,
+        branchId,
+        createdBy,
+        store,
+        downloadTimeoutMs: 25,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await resultPromise;
+      expect(result.failed).toBe(1);
+      expect(result.uploads).toHaveLength(1);
+      expect(result.uploads[0].name).toBe('888888888888888888_next.png');
+      expect(cancelled).toBe(true);
+      const artifacts = await listLocalStoreArtifacts(uploadDir);
+      expect(artifacts.filter((artifact) => artifact.endsWith('.partial'))).toEqual([]);
+      expect(artifacts).toEqual(
+        expectedLocalStoreArtifacts(result.uploads.map((upload) => upload.ref))
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds actual aggregate bytes even when Discord underreports the attachment size', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    configureUploadLimits(4);
+    let chunksPulled = 0;
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunksPulled++;
+        controller.enqueue(new Uint8Array([1]));
+      },
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(endlessBody, {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+    );
+
+    try {
+      const result = await ingestDiscordInboundImages({
+        files: [makeDiscordFile({ size: 1 })],
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        tenantId,
+        sessionId,
+        branchId,
+        createdBy,
+        store,
+      });
+
+      expect(result).toEqual({ uploads: [], failed: 1 });
+      // A stream may already have one high-water-mark of data queued, but it
+      // must stop near the bounded aggregate ceiling rather than buffering
+      // the untrusted response indefinitely.
+      expect(chunksPulled).toBeLessThan(100_000);
+    } finally {
+      configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
+    }
   });
 });

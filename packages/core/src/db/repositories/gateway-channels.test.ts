@@ -625,16 +625,20 @@ describe('GatewayChannelRepository', () => {
           ...discordConfig,
           allowed_user_ids: [],
           allowed_role_ids: [],
-          files: true,
+          files: 'true',
           agent_tools: ['history'],
         }).errors
       ).toEqual(
         expect.arrayContaining([
           'at least one allowed_user_ids or allowed_role_ids entry is required',
-          'files must be false',
+          'files must be a boolean',
           'agent_tools must be an empty array',
         ])
       );
+      expect(validateDiscordConfig({ ...discordConfig, files: true })).toEqual({
+        ok: true,
+        errors: [],
+      });
       expect(validateDiscordConfig({ ...discordConfig, user_map: {} }).errors).toContain(
         'user_map is only allowed when align_discord_users is true'
       );
