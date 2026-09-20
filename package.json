@@ -55,13 +55,13 @@
     "test:ha:tenant-links": "node scripts/test-ha-tenant-links.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.13",
+    "@biomejs/biome": "2.5.14",
     "@google-analytics/admin": "^9.2.0",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
     "lint-staged": "^17.5.1",
     "postgres": "^3.4.9",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.7",
     "rollup": "4.63.3",
     "rollup-plugin-dts": "^6.5.1",
     "socket.io-client": "^4.8.3",
