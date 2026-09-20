@@ -72,9 +72,12 @@ export interface TenantServiceClassification {
 }
 
 /**
- * Services classified by the agent-initiated MCP OAuth feature — the connect
- * and recovery lanes, their browser preflights, the widget routes, the Catalog
- * connect lane, and the operator switches those lanes read.
+ * Services that have declared where their tenant database scope is armed.
+ *
+ * Most of these were classified by the agent-initiated MCP OAuth feature — the
+ * connect and recovery lanes, their browser preflights, the widget routes, the
+ * Catalog connect lane, and the operator switches those lanes read. Services
+ * registered since then answer here too.
  *
  * Paths already named by {@link TENANT_OWNED_SERVICE_PATHS} or
  * {@link TENANT_IDENTITY_ONLY_SERVICE_PATHS} are classified from those
@@ -164,6 +167,18 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   'mcp-servers/oauth-browser-reservations': {
     scopeClass: 'system',
     why: 'Touches no database: the reservation lives in a process-local map, and its authority is read from the live Socket.IO connection projection.',
+  },
+
+  // --------------------------------------------------------------------------
+  // Branch provisioning retry (#2118). A long authenticated route, so nothing
+  // upstream arms a scope, and it dispatches the provisioning executor before
+  // it returns. Its sibling lifecycle routes ('branches/:id/start' and friends)
+  // predate this mechanism and sit in the baseline; this one is new, so it
+  // answers.
+  // --------------------------------------------------------------------------
+  'branches/:id/retry-provisioning': {
+    scopeClass: 'identity-only',
+    why: 'Long route that crosses the executor spawn boundary: the authorization read, the repo lookup, the failed -> creating CAS and the dispatch each open their own short unit via reposService.withTenantDatabase, so no transaction is held across the spawn.',
   },
 };
 
