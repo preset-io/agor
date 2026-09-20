@@ -7,18 +7,7 @@ import {
   PlusOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import {
-  App,
-  Button,
-  Form,
-  Input,
-  Popconfirm,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { App, Button, Form, Input, Popconfirm, Select, Table, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -325,26 +314,31 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   return (
     <div>
       <ResponsiveSettingsHeader
+        title="Boards"
         description="Create and manage boards for organizing sessions."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Select
-              value={archiveFilter}
-              onChange={(value) => setArchiveFilter(value)}
-              style={{ width: 120 }}
-              options={[
-                { value: 'active', label: 'Active' },
-                { value: 'all', label: 'All' },
-                { value: 'archived', label: 'Archived' },
-              ]}
-            />
-            <Input
-              allowClear
-              placeholder="Search name, slug, description, or ID"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 300, flex: compact ? '1 1 100%' : undefined }}
-            />
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, slug, description, or ID"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        filters={
+          <Select
+            value={archiveFilter}
+            onChange={(value) => setArchiveFilter(value)}
+            style={{ width: 120 }}
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'all', label: 'All' },
+              { value: 'archived', label: 'Archived' },
+            ]}
+          />
+        }
+        count={`${boards.length} ${boards.length === 1 ? 'board' : 'boards'}`}
+        primaryActions={
+          <>
             <Button icon={<UploadOutlined />} onClick={handleImportClick}>
               Import Board
             </Button>
@@ -360,8 +354,8 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             >
               New Board
             </Button>
-          </Space>
-        )}
+          </>
+        }
       />
 
       <Table

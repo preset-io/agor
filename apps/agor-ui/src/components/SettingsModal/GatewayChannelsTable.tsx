@@ -4638,29 +4638,30 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   return (
     <div>
       <ResponsiveSettingsHeader
+        title="Gateway Channels"
         description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search name, type, target branch, key, or config"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
-            />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => {
-                resetConnectionTest();
-                createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
-                setCreateModalOpen(true);
-              }}
-            >
-              Add Channel
-            </Button>
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, type, target branch, key, or config"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${channels.length} ${channels.length === 1 ? 'channel' : 'channels'}`}
+        primaryActions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              resetConnectionTest();
+              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+              setCreateModalOpen(true);
+            }}
+          >
+            Add Channel
+          </Button>
+        }
       />
 
       <CompactAlert

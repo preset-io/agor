@@ -206,23 +206,20 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     <div>
       <ResponsiveSettingsHeader
         description="Manage personal API keys."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search name, prefix, or dates"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{
-                width: compact ? '100%' : 300,
-                flex: compact ? '1 1 100%' : undefined,
-              }}
-            />
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
-              Create New Key
-            </Button>
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, prefix, or dates"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${filteredKeys.length} ${filteredKeys.length === 1 ? 'key' : 'keys'}`}
+        primaryActions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+            Create New Key
+          </Button>
+        }
       />
 
       <Table

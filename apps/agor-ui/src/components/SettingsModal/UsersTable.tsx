@@ -338,31 +338,28 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const usersTable = (
     <div>
       <ResponsiveSettingsHeader
+        title="Users"
         description={
           externallyManaged
             ? 'User accounts and roles are managed by your identity provider.'
             : 'Manage user accounts and permissions.'
         }
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search name, email, username, role, or groups"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 320, flex: compact ? '1 1 100%' : undefined }}
-            />
-            {canCreateUsers && (
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => setCreateModalOpen(true)}
-              >
-                New User
-              </Button>
-            )}
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, email, username, role, or groups"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${users.length} ${users.length === 1 ? 'user' : 'users'}`}
+        primaryActions={
+          canCreateUsers ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+              New User
+            </Button>
+          ) : undefined
+        }
       />
 
       <Table
