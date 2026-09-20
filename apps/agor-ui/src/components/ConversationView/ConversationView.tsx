@@ -178,25 +178,34 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // The hook observes content growth, not changes to the scroll viewport.
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
-    const viewportObserverRef = useRef<ResizeObserver | null>(null);
+    const viewportCleanupRef = useRef<(() => void) | null>(null);
     const setScrollViewport = useCallback(
       (element: HTMLDivElement | null) => {
-        viewportObserverRef.current?.disconnect();
+        viewportCleanupRef.current?.();
+        viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
         let height = element.clientHeight;
+        let resizeGeneration = 0;
+        let guardedDifference = 0;
         const observer = new ResizeObserver(() => {
           const nextHeight = element.clientHeight;
           if (nextHeight === height) return;
           const difference = nextHeight - height;
           height = nextHeight;
+          const generation = ++resizeGeneration;
           // Share the hook's resize guard: growing the viewport can make the
           // browser clamp scrollTop upward before its deferred scroll handler.
           // That is layout, not a reader escaping the bottom lock.
           state.resizeDifference = difference;
+          guardedDifference = difference;
           requestAnimationFrame(() => {
             setTimeout(() => {
-              if (state.resizeDifference === difference) state.resizeDifference = 0;
+              // Consecutive frames can resize by the same number of pixels.
+              // An older timer must not clear the newer frame's scroll guard.
+              if (resizeGeneration === generation && state.resizeDifference === difference) {
+                state.resizeDifference = 0;
+              }
             }, 1);
           });
           if (state.isAtBottom && !state.escapedFromLock) {
@@ -204,7 +213,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
-        viewportObserverRef.current = observer;
+        viewportCleanupRef.current = () => {
+          ++resizeGeneration;
+          observer.disconnect();
+          if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
+        };
       },
       [scrollRef, scrollToBottom, state]
     );

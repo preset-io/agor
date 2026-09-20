@@ -1,3 +1,4 @@
+import type { SessionID } from '@agor-live/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +33,7 @@ vi.mock('@agor-live/client', () => ({
 // `mockState` is a mutable object mirroring the library's live `state`: the
 // real hook mutates `state.escapedFromLock`/`state.isAtBottom` synchronously,
 // so tests flip these fields to drive the expand logic deterministically.
-let mockState: { escapedFromLock: boolean; isAtBottom: boolean };
+let mockState: { escapedFromLock: boolean; isAtBottom: boolean; resizeDifference?: number };
 const mockScrollToBottom = vi.fn();
 const mockStopScroll = vi.fn();
 type CallbackRef = ((el: HTMLElement | null) => void) & { current: HTMLElement | null };
@@ -137,6 +138,58 @@ describe('ConversationView auto-scroll integration', () => {
 
   afterEach(() => {
     mockUseSharedReactiveSession.mockReset();
+  });
+
+  it('keeps the latest viewport resize guarded when consecutive deltas match', () => {
+    vi.useFakeTimers();
+    let resize: (() => void) | undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const state = makeState({ loading: false, tasks: [makeTask('task-1', 'a')] });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+    const { unmount } = render(
+      <ConversationView client={null} sessionId={'session-1' as SessionID} sessionModel="loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    let height = 4;
+    Object.defineProperty(scroller, 'clientHeight', { get: () => height });
+    try {
+      act(() => resize?.());
+      // The first frame schedules its delayed reset, but another ResizeObserver
+      // delivery arrives before that timer. Equal deltas are not equal resizes.
+      act(() => vi.advanceTimersToNextFrame());
+      height = 8;
+      act(() => resize?.());
+      act(() => vi.advanceTimersByTime(1));
+      expect(mockState.resizeDifference).toBe(4);
+      act(() => vi.advanceTimersToNextFrame());
+      act(() => vi.advanceTimersByTime(1));
+      expect(mockState.resizeDifference).toBe(0);
+
+      mockState.escapedFromLock = true;
+      mockScrollToBottom.mockClear();
+      height = 12;
+      act(() => resize?.());
+      expect(mockScrollToBottom).not.toHaveBeenCalled();
+      unmount();
+      expect(mockState.resizeDifference).toBe(0);
+      // A replacement viewport may publish the same delta before old timers run.
+      mockState.resizeDifference = 4;
+      act(() => vi.runAllTimers());
+      expect(mockState.resizeDifference).toBe(4);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('exposes a working scrollToBottom and scrollToTop via onScrollRef', () => {

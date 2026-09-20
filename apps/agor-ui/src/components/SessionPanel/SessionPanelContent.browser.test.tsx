@@ -226,6 +226,19 @@ const expectBottom = () =>
     ).toBeLessThanOrEqual(3);
   });
 
+// A restored percentage can produce the expected height before ResizeObserver
+// has committed the new pixel-derived constraints. Do not send the next resize
+// key until the separator exposes bounds for the current viewport.
+const expectCurrentResizeBounds = () =>
+  waitFor(() => {
+    const available = conversation().clientHeight + queueHeight();
+    expect(divider()).toHaveAttribute('aria-valuemax', String(Math.round(100 - 8000 / available)));
+    expect(divider()).toHaveAttribute(
+      'aria-valuemin',
+      String(Math.round(Math.max(50, Math.min(240 / available, 0.6) * 100)))
+    );
+  });
+
 it.each(['keyboard', 'pointer'])(
   'restores %s resize intent after 25 → 1 → 25, empty/refill, and viewport clamps',
   async (input) => {
@@ -257,6 +270,7 @@ it.each(['keyboard', 'pointer'])(
     await waitFor(() => expect(Math.abs(queueHeight() - desired)).toBeLessThanOrEqual(1));
     await expectBottom();
     // A subsequent intentional resize replaces the remembered expansion.
+    await expectCurrentResizeBounds();
     act(() => divider().focus());
     await act(() => userEvent.keyboard('{End}'));
     await waitFor(() => expect(queueHeight()).toBe(80));
