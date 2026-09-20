@@ -32,7 +32,22 @@ import type {
 } from './client';
 import { isPostgresDatabase, runDatabaseTransaction } from './database-wrapper';
 
-const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
+/**
+ * Proxy → raw handle, shared across bundled copies of this module for the same
+ * reason the scope stores are (see `processScopeStore` in `tenant-context.ts`).
+ * A private map here would silently stop unwrapping any proxy built by another
+ * entry point, sending `isPostgresDatabaseHandle` through the guarded trap it
+ * exists to avoid.
+ */
+const tenantScopedProxyTargets = ((): WeakMap<object, RawDatabase | Database> => {
+  const registry = globalThis as typeof globalThis & Record<symbol, unknown>;
+  const symbol = Symbol.for('agor.db.tenant-scoped-proxy-targets');
+  const existing = registry[symbol];
+  if (existing) return existing as WeakMap<object, RawDatabase | Database>;
+  const created = new WeakMap<object, RawDatabase | Database>();
+  registry[symbol] = created;
+  return created;
+})();
 
 export interface TenantScopedDatabaseProxyOptions {
   /**

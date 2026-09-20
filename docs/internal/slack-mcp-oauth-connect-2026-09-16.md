@@ -1798,31 +1798,89 @@ Step 2 is where D5 was found.
   against `com.amazonaws/knowledge-mcp`, say. The `query.ts` comment was
   corrected then; `matches` now carries the field list and the reason.
 
-- **Instance six: the standalone token refresh reads unscoped. NOT fixed.**
-  Found by the mechanism in §7.1.12, doing exactly what it was built for. Arming
-  the tenant scope guard by default on `register-services.oauth-sqlite.
-integration.test.ts` turns 11 of its assertions red, and the probe says why:
-  `[PROBE] RepositoryError Failed to get OAuth token: Missing tenant database
+- **Instance six: the standalone token refresh read unscoped. Fixed as
+  follow-up F4, and it was worse in production than this note first said.**
+  Found by the mechanism in §7.1.12, doing exactly what it was built for.
+  Arming the tenant scope guard by default on `register-services.oauth-sqlite.
+integration.test.ts` turned 9 of its tests red (this note previously counted
+  them as 11 assertions; the unit re-measured here is tests) and the probe said
+  why: `RepositoryError Failed to get OAuth token: Missing tenant database
 scope`.
 
   `refreshAndPersistToken` (`packages/core/src/tools/mcp/oauth-refresh.ts`)
-  branches on dialect. `refreshPostgres` opens a scope; the standalone SQLite
-  path does not — `loadObservedStandaloneGrant` and `refreshStandalone` build
-  `new UserMCPOAuthTokenRepository(deps.db as Database)` from the raw handle,
-  and their caller `acquireMCPOAuthGrant` has already closed its own short
-  units by the time it calls them. The daemon's handle IS guarded in every mode
-  (`setup/database.ts` takes the `requireScope` default), so on a real SQLite
-  deployment the first read throws, and `mcp-servers/oauth-auth-headers`'
-  catch-all turns it into `{ error: 'needs_reauth' }` — the same laundering, one
-  lane over.
+  branches on dialect. `refreshPostgres` opens a scope around every repository
+  operation; the standalone SQLite path did not — `loadObservedStandaloneGrant`
+  and `refreshStandalone` built `new UserMCPOAuthTokenRepository(deps.db as
+Database)` from the raw handle, and their caller `acquireMCPOAuthGrant` has
+  already closed its own short units by the time it calls them.
 
-  Left alone deliberately. `mcp-servers/oauth-*` is not this feature's lane, it
-  was already classified `identity-only` before this work, and the fix is a
-  behaviour change inside the token refresh core that needs its own coverage and
-  its own real-stack drive. It is recorded here rather than folded in because
-  that is the bound the follow-up set, and because the finding is itself the
-  argument for the mechanism: five instances took five separate incidents to
-  find; the sixth fell out of turning one fixture default on.
+  **What the drive showed.** The note's consequence was inferred, not observed,
+  so before fixing anything it was driven on a real daemon (`tsx src/main.ts`,
+  isolated `HOME`, migrated SQLite, real repositories) against one seed: a
+  shared OAuth grant whose access token lapsed an hour ago and whose refresh
+  token is good, pointed at a local fake token endpoint. The same seed was
+  driven on a build without the fix and a build with it.
+
+  | Surface (real daemon, real grant)                                | Before                      | After                                        |
+  | ---------------------------------------------------------------- | --------------------------- | -------------------------------------------- |
+  | `POST /mcp-servers/oauth-auth-headers` (the JIT path)            | `{ error: 'needs_reauth' }` | `{ authorization: 'Bearer …' }`              |
+  | `POST /mcp-servers/oauth-refresh` (the MCP pill's "refresh now") | `token_refresh_failed`      | `{ success: true, expires_at }`              |
+  | Requests reaching the provider                                   | **none**                    | exactly one per refresh, with the good token |
+  | The saved grant afterwards                                       | untouched, still lapsed     | rotated pair, `refresh_generation` 0 → 1     |
+
+  So the inference held, and the "before" column is the whole finding stated as
+  one transcript: a grant Agor could have refreshed, that it never asked the
+  provider about, reported to the user as a sign-in that had gone away. It also
+  understated the blast radius twice. The manual refresh button is a second
+  affected surface, `mcp-servers/discover` is a third, and — the part the
+  fixture could not see —
+
+  **the failure in production is earlier and dialect-independent.** `@agor/core`
+  is built with `splitting: false`, so every tsup entry inlines its own copy of
+  each shared module. The daemon loads `@agor/core/db` (which builds the guarded
+  handle) and `@agor/core/tools/mcp/oauth-refresh` (which does the refresh), and
+  each owned a private `AsyncLocalStorage` and a private proxy-target `WeakMap`.
+  Consequences: `isPostgresDatabaseHandle` could not unwrap the handle it was
+  given, so the dialect check on the first line of `refreshAndPersistToken`
+  itself tripped the guard; and a scope armed inside core would not have been
+  seen by the proxy anyway. Under vitest, which resolves `@agor/core` to source,
+  there is one copy and neither is visible — which is exactly why the fixture's
+  evidence stopped at `getToken`. Nothing about this is specific to SQLite: on
+  the same built artifact the PostgreSQL branch would have failed at the same
+  line.
+
+  **The fix**, in two parts, neither of which changes when a refresh happens,
+  what it persists, or any authorization decision:
+
+  1. `standaloneWork` — the standalone path's counterpart to the PostgreSQL
+     path's `tenantWork`. Every repository read and write on that path now
+     enters a short tenant database scope, and the provider round-trip stays
+     between units rather than inside one. It differs from `tenantWork` in one
+     deliberate way: it does not _require_ trusted tenant identity, because the
+     standalone path never has. Daemon callers all supply `tenantId`; making it
+     mandatory would be an authorization change.
+  2. The tenant scope stores and the proxy-target map are now keyed on
+     `Symbol.for`, so they are the process's rather than each bundled copy's.
+     `createTenantBoundDataAccess` was the preferred mechanism and does not fit
+     here — it lives in the daemon and `oauth-refresh.ts` is core — but this is
+     what makes core's own scoping mean anything in a built artifact.
+
+  **Callers checked**, all three of which were affected and are now green:
+  `mcp-servers/oauth-auth-headers` and `mcp-servers/discover` (both via
+  `acquireMCPOAuthGrant`) and the `mcp-servers/oauth-refresh` route. All three
+  are `identity-only`, which is the point: identity is armed for the request and
+  a database scope deliberately is not, so the scope has to come from the code
+  doing the work.
+
+  **Coverage.** `oauth-refresh.tenant-scope.test.ts` drives the standalone path
+  against a real migrated SQLite database behind `requireScope: true` with only
+  the network replaced — 3 of its 4 cases fail without part 1. Three cases in
+  `tenant-scope.test.ts` reproduce the module duplication in one process with
+  `vi.resetModules()` and fail without part 2. And `requireTenantScope` on the
+  SQLite harness is now **on by default**, which is what a daemon runs with;
+  the two tests that flipping it broke needed the harness to install the
+  tenant-owned services' scope around-hook, which `registerHooks` installs in
+  the daemon and this service-only harness never ran.
 
 - **`gateway_token`'s `buildResultMeta` `WeakMap`. Fixed as follow-up F3.** The
   submit-resolved variant could not return its own `result_meta`, so

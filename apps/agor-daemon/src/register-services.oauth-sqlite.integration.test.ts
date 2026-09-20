@@ -15,6 +15,7 @@ import {
   mcpServers,
   RepoRepository,
   runMigrations,
+  runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
@@ -64,7 +65,11 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
-import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
+import {
+  type RegisterHooksContext,
+  registerHooks,
+  TENANT_OWNED_SERVICE_PATHS,
+} from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { issueMCPOAuthConnectLink } from './services/mcp-oauth-connect-delivery.js';
@@ -477,30 +482,33 @@ async function createHarness(
     /**
      * Arm the daemon's tenant database scope guard for this harness.
      *
-     * Off by default because most of this file's fixtures predate the guard
-     * and reach the database through paths that do not yet open a scope. A
-     * suite that opts in gets the production guard: any repository read its
-     * service performs outside a tenant scope throws instead of silently
-     * succeeding, which is what a `:memory:` SQLite database would otherwise
-     * let through.
+     * **On by default**, which is what the production daemon does
+     * (`setup/database.ts` takes the `requireScope` default in every mode). A
+     * harness that opts out gets a `:memory:` SQLite handle with no guard, so
+     * a repository read performed outside a tenant scope silently succeeds —
+     * and that is precisely the arrangement in which six scope defects have
+     * now shipped, none of them visible to a test.
      *
-     * The two MCP Slack lanes no longer opt in one test at a time — they go
-     * through `createSlackLaneHarness`, which sets this unconditionally. Five
-     * scope defects have shipped on those lanes and none of them was visible
-     * without the guard, so leaving it to each new test to remember is the
-     * gap rather than a default.
+     * It was off by default until the sixth instance, which the default itself
+     * found: turning it on turned 11 assertions red on the standalone token
+     * refresh, which was reading through the raw handle. That is fixed; the
+     * default stays on so the seventh has nowhere to hide.
+     *
+     * `false` is available for a fixture that still reaches the database
+     * through a path that does not open a scope, but it is a statement about
+     * that fixture, not about production.
      */
     requireTenantScope?: boolean;
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
-  const db = (options.requireTenantScope
-    ? createTenantScopedDatabaseProxy(rawDb, {
+  const db = (options.requireTenantScope === false
+    ? rawDb
+    : createTenantScopedDatabaseProxy(rawDb, {
         requireScope: true,
         label: 'sqlite oauth harness',
-      })
-    : rawDb) as unknown as TenantScopeAwareDatabase;
+      })) as unknown as TenantScopeAwareDatabase;
   const user = await new UsersRepository(rawDb).create({
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
@@ -600,6 +608,29 @@ async function createHarness(
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
+  // Tenant-owned services arm their database scope from an around-hook that
+  // `registerHooks` installs, and this service-only harness does not run that
+  // chain. Install the same scope for the tenant-owned services it stands up,
+  // so a nested `app.service('mcp-servers').create(...)` sees in the harness
+  // exactly what it sees in the daemon. Without this the guard would report a
+  // missing hook as if it were a missing scope in the code under test.
+  for (const path of TENANT_OWNED_SERVICE_PATHS) {
+    let service: { hooks(options: unknown): void } | undefined;
+    try {
+      service = app.service(path) as unknown as { hooks(options: unknown): void };
+    } catch {
+      continue;
+    }
+    service?.hooks({
+      around: {
+        all: [
+          async (_context: unknown, next: () => Promise<void>) =>
+            runWithTenantDatabaseScope(db, 'default', next),
+        ],
+      },
+    });
+  }
+
   // The production registerHooks chain turns the catalog service's private
   // params capability into the persisted provenance stamp. This service-only
   // harness installs that narrow seam explicitly so the repository's trusted

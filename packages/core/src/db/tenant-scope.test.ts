@@ -459,3 +459,67 @@ describe('tenant-scoped database proxy', () => {
     ).rejects.toThrow(/Cannot change system database capability/);
   });
 });
+
+/**
+ * `@agor/core` is built with `splitting: false`, so every tsup entry point
+ * inlines its own copy of this module. The daemon loads at least two —
+ * `@agor/core/db` builds the guarded handle, `@agor/core/tools/mcp/oauth-refresh`
+ * arms scopes around its repository work — and until these stores were keyed on
+ * the process, each copy owned a private `AsyncLocalStorage` and a private
+ * proxy-target map. A scope declared through one copy was then invisible to a
+ * proxy built by the other, so correctly scoped work was refused, and
+ * `isPostgresDatabaseHandle` could not unwrap the very handle it was given.
+ *
+ * `vi.resetModules()` plus a fresh import is the same duplication in one
+ * process, which is what makes this checkable here rather than only in a built
+ * artifact.
+ */
+describe('scope stores survive a duplicated copy of this module', () => {
+  it('shares the tenant database scope between two evaluations', async () => {
+    const first = await import('./tenant-scope');
+    vi.resetModules();
+    const second = await import('./tenant-scope');
+    expect(second).not.toBe(first);
+
+    const db = { run: vi.fn() } as unknown as Database;
+    let seenBySecondCopy: string | undefined;
+    await first.runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      seenBySecondCopy = second.getCurrentTenantId() as string | undefined;
+    });
+
+    expect(seenBySecondCopy).toBe('tenant-a');
+  });
+
+  it('lets one copy unwrap a guarded handle built by another', async () => {
+    const first = await import('./tenant-scope');
+    vi.resetModules();
+    const second = await import('./tenant-scope');
+
+    const postgres = first.createTenantScopedDatabaseProxy(
+      { transaction: vi.fn() } as unknown as Database,
+      { requireScope: true, label: 'duplicated module test' }
+    );
+
+    // The unwrap, not the trap: asking outside a scope must not throw.
+    expect(second.isPostgresDatabaseHandle(postgres)).toBe(true);
+  });
+
+  it('honours a guard armed by the other copy', async () => {
+    const first = await import('./tenant-scope');
+    vi.resetModules();
+    const second = await import('./tenant-scope');
+
+    const base = { run: vi.fn(), marker: () => 'base' };
+    const guarded = first.createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: true,
+      label: 'duplicated module test',
+    });
+
+    expect(() => (guarded as unknown as { marker(): string }).marker()).toThrow(
+      first.MissingTenantDatabaseScopeError
+    );
+    await second.runWithTenantDatabaseScope(guarded, 'tenant-a', async () => {
+      expect((guarded as unknown as { marker(): string }).marker()).toBe('base');
+    });
+  });
+});
