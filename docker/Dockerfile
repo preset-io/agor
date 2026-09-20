@@ -156,7 +156,9 @@ COPY packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencod
 COPY packages/agentic-tools/package.json ./packages/agentic-tools/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
-COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
+# pnpm validates every patchedDependencies file before a frozen install.
+# Copy the complete set so new patches also reach managed development builds.
+COPY patches/ ./patches/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
