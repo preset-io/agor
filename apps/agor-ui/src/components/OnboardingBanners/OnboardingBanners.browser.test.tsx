@@ -128,11 +128,30 @@ describe('OnboardingBanners real-browser UX', () => {
         })}
       />
     );
-    expect(await screen.findByRole('button', { name: 'Connect tools' })).toBeVisible();
-    expectCompactReminder();
+    expect(await screen.findByRole('button', { name: 'Browse the catalog' })).toBeVisible();
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
     act(() => screen.getByRole('button', { name: 'Maybe later' }).focus());
     await act(async () => userEvent.keyboard(' '));
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
+  });
+
+  it('replaces a rejected credential verdict only after the new probe settles', async () => {
+    const props = baseProps();
+    const view = render(<OnboardingBanners {...props} />);
+    expect(await screen.findByText(/rejected the configured credential/)).toBeVisible();
+    let settle!: (value: Awaited<ReturnType<OnboardingBannersProps['onCheckAuth']>>) => void;
+    const onCheckAuth: OnboardingBannersProps['onCheckAuth'] = () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      });
+    view.rerender(<OnboardingBanners {...props} credentialVersion={1} onCheckAuth={onCheckAuth} />);
     expect(screen.queryByRole('status')).toBeNull();
+    await act(async () =>
+      settle({ status: 'authenticated', authenticated: true, method: 'api-key' })
+    );
+    expect(screen.queryByRole('status')).toBeNull();
+    view.rerender(<OnboardingBanners {...props} credentialVersion={2} />);
+    expect(await screen.findByText(/rejected the configured credential/)).toBeVisible();
   });
 
   it('stacks the message above the actions on a narrow viewport (no per-word tower)', async () => {

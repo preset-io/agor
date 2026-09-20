@@ -170,8 +170,7 @@ describe('OnboardingBanners probe effect', () => {
       />
     );
     // A credential for another tool does not add probes to the selected-tool reminder.
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalled());
-    const callsAfterFirstRender = onCheckAuth.mock.calls.length;
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
 
     // This intentionally omits a new server `updated_at`: production user
     // patches carry that durable revision and do re-probe. The assertion here
@@ -188,7 +187,7 @@ describe('OnboardingBanners probe effect', () => {
       />
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(onCheckAuth).toHaveBeenCalledTimes(callsAfterFirstRender);
+    expect(onCheckAuth).toHaveBeenCalledTimes(1);
   });
 
   it('treats provider-scoped CLAUDE_CODE_OAUTH_TOKEN as Claude auth (probes claude-code, no banner)', async () => {
@@ -237,7 +236,7 @@ describe('OnboardingBanners probe effect', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
-    expect(screen.queryByText(/Connect tools to let your AI/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).not.toBeInTheDocument();
   });
 
   it('routes the integrations CTA to the catalog, not workspace MCP settings', async () => {
@@ -264,7 +263,6 @@ describe('OnboardingBanners probe effect', () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
-        deployment_available: true,
         enabled: true,
         resolution_policy: 'tenant_preferred',
         deployment_available: true,
@@ -293,7 +291,6 @@ describe('OnboardingBanners probe effect', () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
-        deployment_available: true,
         enabled: true,
         resolution_policy: 'tenant_preferred',
         deployment_available: true,
@@ -324,7 +321,6 @@ describe('OnboardingBanners probe effect', () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
-        deployment_available: true,
         enabled: true,
         resolution_policy: 'user_preferred',
         deployment_available: true,
@@ -355,7 +351,6 @@ describe('OnboardingBanners probe effect', () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
-        deployment_available: true,
         enabled: false,
         resolution_policy: 'user_preferred',
         deployment_available: true,
@@ -364,7 +359,6 @@ describe('OnboardingBanners probe effect', () => {
       },
       {
         tool: 'codex',
-        deployment_available: true,
         enabled: true,
         resolution_policy: 'user_required',
         deployment_available: true,

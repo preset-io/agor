@@ -13,8 +13,10 @@ import type {
   User,
 } from '@agor-live/client';
 import { CloseOutlined } from '@ant-design/icons';
-import { Alert, Button, Flex, Tooltip, theme } from 'antd';
+import { Alert, Button, Flex, Space, Tooltip, theme } from 'antd';
 import { type ReactNode, useEffect, useState } from 'react';
+import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -38,6 +40,8 @@ export interface OnboardingBannersProps {
   canManageMcp: boolean;
   onOpenUserSettings: (tab: string) => void;
   onOpenWorkspaceSettings: (tab: string) => void;
+  /** Open the existing catalog, not workspace credential settings. */
+  onOpenCatalog?: () => void;
   /** Passive server-side check; native login may deliberately remain unknown. */
   onCheckAuth: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
   /** Re-probe after local saves, even when credential presence is unchanged. */
@@ -95,6 +99,9 @@ export function OnboardingBanners(props: OnboardingBannersProps) {
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
   const hydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
   const { user } = props;
+  // Integrations dismissal remains separate from the per-agent opt-out.
+  // Its persistence/snooze policy is owned by the integrations-banner work.
+  const [integrationsDismissal, setIntegrationsDismissal] = useState<string | null>(null);
   if (!user) return null;
 
   const probeAgent = resolveGovernedProbeAgent(user, settings);
@@ -110,6 +117,8 @@ export function OnboardingBanners(props: OnboardingBannersProps) {
       probeAgent={probeAgent}
       probeSettings={settings.get(probeAgent)}
       policyHydrated={hydrated}
+      integrationsBannerDismissed={integrationsDismissal === owner}
+      onDismissIntegrations={() => setIntegrationsDismissal(owner)}
     />
   );
 }
@@ -127,6 +136,9 @@ function OwnedOnboardingBanners({
   onOpenUserSettings,
   onOpenWorkspaceSettings,
   onCheckAuth,
+  onOpenCatalog,
+  integrationsBannerDismissed,
+  onDismissIntegrations,
   credentialVersion,
   connectionReady,
 }: OnboardingBannersProps & {
@@ -135,16 +147,16 @@ function OwnedOnboardingBanners({
   probeAgent: AgenticToolName;
   probeSettings?: TenantAgenticToolSettings;
   policyHydrated: boolean;
+  integrationsBannerDismissed: boolean;
+  onDismissIntegrations: () => void;
 }) {
+  const catalog = useMCPCatalogModal();
+  const isMobile = useIsMobileViewport();
   // The keyed parent keeps useLocalStorage keys stable for this mount. No
   // fingerprint, snooze expiry, recovery invalidation or per-tool revision:
   // "Don't remind me" stays respected, even after a different credential save.
   const [warningOptOut, setWarningOptOut] = useLocalStorage<boolean>(
     `agor:onboarding:v3:${owner}:${probeAgent}:dismissed`,
-    false
-  );
-  const [integrationsOptOut, setIntegrationsOptOut] = useLocalStorage<boolean>(
-    `agor:onboarding:v3:${owner}:integrations-dismissed`,
     false
   );
   // localStorage isn't typed/trusted at runtime. Only an explicit true opts out.
@@ -210,26 +222,41 @@ function OwnedOnboardingBanners({
     mcpServerCount,
     gatewayChannelCount,
     integrationsHydrated,
-    integrationsBannerDismissed: integrationsOptOut === true,
+    integrationsBannerDismissed,
     credentialWarningDismissed: warningDismissed,
   });
   if (decision === BannerDecision.None) return null;
   if (decision === BannerDecision.Integrations) {
-    return (
-      <ReminderBanner
+    const integrationsMessage =
+      'Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.';
+    const integrationsActions = (
+      <Space size="small" wrap={isMobile}>
+        <Button type="text" size="small" onClick={() => onDismissIntegrations()}>
+          Maybe later
+        </Button>
+        <Button
+          type="primary"
+          size="small"
+          onClick={onOpenCatalog ?? (() => catalog?.openCatalog())}
+        >
+          Browse the catalog
+        </Button>
+      </Space>
+    );
+    return isMobile ? (
+      <Alert
+        banner
+        showIcon
         type="info"
-        message="Connect tools to let your AI post updates and track issues."
-        action={
-          <Flex wrap gap="small">
-            <Button type="text" size="small" onClick={() => setIntegrationsOptOut(true)}>
-              Maybe later
-            </Button>
-            <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
-              Connect tools
-            </Button>
-          </Flex>
+        title={
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            <span>{integrationsMessage}</span>
+            {integrationsActions}
+          </Space>
         }
       />
+    ) : (
+      <Alert banner showIcon type="info" title={integrationsMessage} action={integrationsActions} />
     );
   }
 

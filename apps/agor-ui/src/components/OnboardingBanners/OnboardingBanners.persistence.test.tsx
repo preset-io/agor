@@ -77,10 +77,12 @@ describe('OnboardingBanners browser-local opt-outs', () => {
     await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
     first.unmount();
 
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 86_400_000);
     // A fresh mount (page reload) with the same still-broken credential keeps the
     // warning hidden — the dismissal is durable, not a 24-hour snooze.
     const second = render(<OnboardingBanners {...props} />);
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalled());
+    await act(async () => {});
+    expect(onCheckAuth).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/Claude Code isn't connected/)).not.toBeInTheDocument();
     second.unmount();
   });
@@ -216,24 +218,74 @@ describe('OnboardingBanners browser-local opt-outs', () => {
     expect(screen.queryByText(/is working/)).not.toBeInTheDocument();
   });
 
-  it('persists the integrations "Maybe later" dismissal across a reload', async () => {
+  it('does not turn a legacy temporary snooze into a permanent opt-out', async () => {
+    window.localStorage.setItem(
+      'agor:credential-warning:v1:user-1:claude-code',
+      JSON.stringify({ version: 1, snoozedUntil: Date.now() + 86_400_000 })
+    );
+    render(<OnboardingBanners {...baseProps({})} />);
+    expect(
+      await screen.findByRole('button', { name: "Don't remind me about Claude Code" })
+    ).toBeVisible();
+  });
+
+  it.each(['user', 'tool', 'logout'] as const)(
+    'retires pending results on %s changes',
+    async (change) => {
+      let settleOld!: (value: AuthCheckResult) => void;
+      const onCheckAuth = vi
+        .fn<OnboardingBannersProps['onCheckAuth']>()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              settleOld = resolve;
+            })
+        )
+        .mockResolvedValue(result('authenticated'));
+      const props = baseProps({ onCheckAuth });
+      const view = render(<OnboardingBanners {...props} />);
+      const nextUser =
+        change === 'logout'
+          ? null
+          : onboardedUser(change === 'user' ? 'other-workspace-user' : 'user-1', {
+              primary_agentic_tool: change === 'tool' ? 'codex' : 'claude-code',
+            });
+      view.rerender(<OnboardingBanners {...props} user={nextUser} />);
+      await act(async () => settleOld(result('unauthenticated')));
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(onCheckAuth).toHaveBeenCalledTimes(change === 'logout' ? 1 : 2);
+    }
+  );
+
+  it('never treats configured credentials as usable authentication during pending, error or unknown results', async () => {
+    let reject!: (error: Error) => void;
+    const onCheckAuth = vi
+      .fn<OnboardingBannersProps['onCheckAuth']>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, rejectPromise) => {
+            reject = rejectPromise;
+          })
+      )
+      .mockResolvedValueOnce(result('unknown'))
+      .mockResolvedValueOnce(result('authenticated'));
     const props = baseProps({
+      user: onboardedUser('user-1', {
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      }),
       mcpServerCount: 0,
       canManageMcp: true,
-      onCheckAuth: async () => result('authenticated'),
+      onCheckAuth,
     });
-    const first = render(<OnboardingBanners {...props} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
-    await waitFor(() => expect(screen.queryByText(/Connect tools to let your AI/)).toBeNull());
-    expect(
-      Object.keys(window.localStorage).some((key) => key.endsWith(':integrations-dismissed'))
-    ).toBe(true);
-    first.unmount();
-
-    const second = render(<OnboardingBanners {...props} />);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByText(/Connect tools to let your AI/)).not.toBeInTheDocument();
-    second.unmount();
+    const view = render(<OnboardingBanners {...props} />);
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
+    await act(async () => reject(new Error('offline')));
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
+    view.rerender(<OnboardingBanners {...props} credentialVersion={1} />);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
+    view.rerender(<OnboardingBanners {...props} credentialVersion={2} />);
+    expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeVisible();
   });
 
   it('gives a member a durable dismiss for a workspace-managed broken tool', async () => {
@@ -263,7 +315,8 @@ describe('OnboardingBanners browser-local opt-outs', () => {
     first.unmount();
 
     const second = render(<OnboardingBanners {...props} />);
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalled());
+    await act(async () => {});
+    expect(onCheckAuth).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/rejected the workspace-managed credential/)).not.toBeInTheDocument();
     second.unmount();
   });
@@ -326,7 +379,7 @@ describe('OnboardingBanners browser-local opt-outs', () => {
     expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeVisible();
     view.rerender(<OnboardingBanners {...props} />);
     await act(async () => {});
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
   });
 
   it('drops an old authority response even when the user and callback are unchanged', async () => {
