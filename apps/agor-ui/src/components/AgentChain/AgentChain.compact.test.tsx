@@ -37,7 +37,7 @@ describe('AgentChain compact view', () => {
     // 1 thought + 2 tools over 1m 14s, touching one file.
     const summary = screen.getByText('Worked for 1m 14s · 3 steps · 1 file');
     expect(summary).toBeVisible();
-    expect(screen.getByText('· 1 retried')).toBeVisible();
+    expect(screen.getByText('· 1 errored')).toBeVisible();
     expect(screen.queryByText('Checking the catalog tab')).not.toBeInTheDocument();
 
     fireEvent.click(summary);

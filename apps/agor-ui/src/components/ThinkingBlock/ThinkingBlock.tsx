@@ -13,6 +13,7 @@ import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 import { CollapsibleText } from '../CollapsibleText';
+import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
 import { ToolBlock } from '../ToolBlock';
 
 const { Text } = Typography;
@@ -63,8 +64,9 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   // Compact reuses the tool row so reasoning and actions share one grammar.
   if (compact) {
     return (
-      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
+      <div style={{ margin: `${token.sizeUnit * COMPACT_BLOCK_GAP_UNITS}px 0` }}>
         <ToolBlock
+          compact
           icon={<BulbOutlined />}
           name={isStreaming ? 'Thinking…' : 'Thought'}
           expandedByDefault={defaultExpanded}

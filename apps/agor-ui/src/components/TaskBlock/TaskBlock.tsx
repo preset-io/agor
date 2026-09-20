@@ -41,6 +41,11 @@ import { formatCompactDuration } from '../../utils/time';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
+import {
+  COMPACT_BLOCK_GAP_UNITS,
+  COMPACT_GUTTER_GAP,
+  COMPACT_GUTTER_SIZE,
+} from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
@@ -1043,24 +1048,33 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
         {runtimeLive && (
-          <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
+          <div
+            data-conversation-block
+            style={{
+              margin: `${token.sizeUnit * (compact ? COMPACT_BLOCK_GAP_UNITS : 1)}px 0`,
+            }}
+          >
             <Bubble
               placement="start"
               avatar={
                 teammateEmoji ? (
-                  <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                  <AgorAvatar size={compact ? COMPACT_GUTTER_SIZE : undefined}>
+                    {teammateEmoji}
+                  </AgorAvatar>
                 ) : agentic_tool ? (
-                  <ToolIcon tool={agentic_tool} size={32} />
+                  <ToolIcon tool={agentic_tool} size={compact ? COMPACT_GUTTER_SIZE : 32} />
                 ) : (
                   <AgorAvatar
                     icon={<RobotOutlined />}
+                    size={compact ? COMPACT_GUTTER_SIZE : undefined}
                     style={{ backgroundColor: token.colorSuccess }}
                   />
                 )
               }
               loading={true}
               content=""
-              variant="outlined"
+              variant={compact ? 'borderless' : 'outlined'}
+              styles={{ root: { gap: compact ? COMPACT_GUTTER_GAP : undefined } }}
             />
           </div>
         )}
@@ -1115,7 +1129,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     if (compact) {
       return (
         <div data-task-block={task.task_id}>
-          <Divider plain style={{ margin: `${token.sizeUnit * 5}px 0 ${token.sizeUnit}px` }}>
+          <Divider plain style={{ margin: `${token.sizeUnit * 5}px 0 0` }}>
             <Tooltip title={compactMetaDetail || undefined}>
               <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {/* A flat transcript has no task header, so an unfinished task

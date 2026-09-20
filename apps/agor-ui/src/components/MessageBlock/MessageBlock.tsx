@@ -33,6 +33,11 @@ import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
+import {
+  COMPACT_BLOCK_GAP_UNITS,
+  COMPACT_GUTTER_GAP,
+  COMPACT_GUTTER_SIZE,
+} from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
@@ -216,31 +221,41 @@ function getAgentAvatar({
   agentic_tool,
   isCallback,
   token,
+  size,
 }: {
   teammateEmoji?: string;
   agentic_tool?: string;
   isCallback?: boolean;
   token: ReturnType<typeof theme.useToken>['token'];
+  /**
+   * Fixed box every avatar must fill, so compact rows share one gutter column.
+   * Unset keeps each variant's historical size.
+   */
+  size?: number;
 }): React.ReactNode {
   if (isCallback) {
     return (
       <img
         src={brandBadgeHref()}
         alt={`${BRAND.name} callback`}
-        width={32}
-        height={32}
-        style={{ width: 32, height: 32, borderRadius: '50%' }}
+        width={size ?? 32}
+        height={size ?? 32}
+        style={{ width: size ?? 32, height: size ?? 32, borderRadius: '50%' }}
       />
     );
   }
   if (teammateEmoji) {
-    return <AgorAvatar>{teammateEmoji}</AgorAvatar>;
+    return <AgorAvatar size={size}>{teammateEmoji}</AgorAvatar>;
   }
   if (agentic_tool) {
-    return <ToolIcon tool={agentic_tool} size={32} />;
+    return <ToolIcon tool={agentic_tool} size={size ?? 32} />;
   }
   return (
-    <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
+    <AgorAvatar
+      icon={<RobotOutlined />}
+      size={size}
+      style={{ backgroundColor: token.colorBgContainer }}
+    />
   );
 }
 
@@ -706,13 +721,21 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasTextBefore &&
         (() => {
           const avatar = isUser ? (
-            <UserIdentityAvatar user={currentUser} size={compact ? 32 : 40} />
+            <UserIdentityAvatar user={currentUser} size={compact ? COMPACT_GUTTER_SIZE : 40} />
           ) : (
-            getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
+            getAgentAvatar({
+              teammateEmoji,
+              agentic_tool,
+              isCallback,
+              token,
+              size: compact ? COMPACT_GUTTER_SIZE : undefined,
+            })
           );
 
           return (
-            <div style={{ margin: `${token.sizeUnit * (compact ? 3 : 1)}px 0` }}>
+            <div
+              style={{ margin: `${token.sizeUnit * (compact ? COMPACT_BLOCK_GAP_UNITS : 1)}px 0` }}
+            >
               <Bubble
                 placement={isUser ? 'end' : 'start'}
                 avatar={
@@ -774,7 +797,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // conversation viewport and push its left edge off-screen.
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
-                  root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  root: { maxWidth: '100%', gap: compact ? COMPACT_GUTTER_GAP : undefined },
                   body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
                     padding: compact && isUser ? '4px 10px' : undefined,
@@ -800,7 +823,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {hasTools && (
         <div
           style={{
-            margin: `${token.sizeUnit * 1.5}px 0`,
+            margin: `${token.sizeUnit * (compact ? COMPACT_BLOCK_GAP_UNITS : 1.5)}px 0`,
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
@@ -847,6 +870,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   descriptionNode={bashNode}
                   status={status}
                   expandedByDefault={!compact && shouldExpandToolByDefault(toolUse.name)}
+                  compact={compact}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
@@ -859,10 +883,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {/* Response text after tools */}
       {hasTextAfter &&
         (() => {
-          const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token });
+          const avatar = getAgentAvatar({
+            teammateEmoji,
+            agentic_tool,
+            isCallback,
+            token,
+            size: compact ? COMPACT_GUTTER_SIZE : undefined,
+          });
 
           return (
-            <div style={{ margin: `${token.sizeUnit * (compact ? 3 : 1)}px 0` }}>
+            <div
+              style={{ margin: `${token.sizeUnit * (compact ? COMPACT_BLOCK_GAP_UNITS : 1)}px 0` }}
+            >
               <Bubble
                 placement="start"
                 avatar={
@@ -911,7 +943,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 }
                 variant={isCallback ? 'filled' : compact ? 'borderless' : 'outlined'}
                 styles={{
-                  root: { maxWidth: '100%' },
+                  root: { maxWidth: '100%', gap: compact ? COMPACT_GUTTER_GAP : undefined },
                   body: { minWidth: 0 },
                   ...(isCallback
                     ? {

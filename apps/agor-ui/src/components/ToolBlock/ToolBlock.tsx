@@ -11,6 +11,11 @@ import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import {
+  COMPACT_CONTENT_OFFSET,
+  COMPACT_GUTTER_GAP,
+  COMPACT_GUTTER_SIZE,
+} from '../ConversationView/compactLayout';
 
 export interface ToolBlockProps {
   /** Tool/block icon (Ant Design icon element) */
@@ -28,6 +33,13 @@ export interface ToolBlockProps {
   expandedByDefault?: boolean;
   /** Body content shown when expanded */
   children?: React.ReactNode;
+  /** Compact transcript grid: icon centered in the shared gutter, chevron last. */
+  compact?: boolean;
+  /**
+   * Compact only. Set when the body is itself a list of compact rows, so they
+   * keep the shared gutter instead of insetting under this row's label.
+   */
+  nestedRows?: boolean;
 }
 
 export const ToolBlock: React.FC<ToolBlockProps> = ({
@@ -38,6 +50,8 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   status,
   expandedByDefault = false,
   children,
+  compact = false,
+  nestedRows = false,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
   const { token } = theme.useToken();
@@ -52,13 +66,21 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
           ? token.colorWarning
           : token.colorTextSecondary;
 
+  // Compact moves the chevron to the end of the row so the label can start at
+  // the shared content edge.
+  const chevron = hasBody ? (
+    <span style={{ flexShrink: 0, fontSize: 9, color: token.colorTextQuaternary }}>
+      {expanded ? <DownOutlined /> : <RightOutlined />}
+    </span>
+  ) : null;
+
   const header = (
     <div
       onClick={hasBody ? () => setExpanded(!expanded) : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: compact ? COMPACT_GUTTER_GAP : 6,
         cursor: hasBody ? 'pointer' : 'default',
         userSelect: 'none',
         minHeight: 24,
@@ -66,21 +88,34 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
         overflow: 'hidden',
       }}
     >
-      {/* Status icon */}
-      <span style={{ flexShrink: 0, fontSize: 14, color: statusColor, lineHeight: 1 }}>{icon}</span>
+      {/* Status icon — centered in the gutter column when compact */}
+      <span
+        style={{
+          flexShrink: 0,
+          fontSize: 14,
+          color: statusColor,
+          lineHeight: 1,
+          ...(compact
+            ? {
+                width: COMPACT_GUTTER_SIZE,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }
+            : null),
+        }}
+      >
+        {icon}
+      </span>
 
       {/* Expand/collapse chevron (only when there's expandable content) */}
-      {hasBody && (
-        <span style={{ flexShrink: 0, fontSize: 9, color: token.colorTextQuaternary }}>
-          {expanded ? <DownOutlined /> : <RightOutlined />}
-        </span>
-      )}
+      {!compact && chevron}
 
       {/* Name + description */}
       <span
         style={{
           display: 'inline-flex',
-          alignItems: 'baseline',
+          alignItems: compact ? 'center' : 'baseline',
           gap: 4,
           minWidth: 0,
           flex: 1,
@@ -102,6 +137,8 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
             </Typography.Text>
           ))}
       </span>
+
+      {compact && chevron}
     </div>
   );
 
@@ -117,7 +154,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
         <div
           style={{
             marginTop: 2,
-            paddingLeft: token.sizeUnit * 4,
+            paddingLeft: compact ? (nestedRows ? 0 : COMPACT_CONTENT_OFFSET) : token.sizeUnit * 4,
             minWidth: 0,
             maxWidth: '100%',
           }}

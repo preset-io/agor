@@ -47,6 +47,7 @@ import { formatCompactDuration } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
+import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
 import { Tag } from '../Tag';
 import {
   buildBashDescriptionNode,
@@ -464,6 +465,7 @@ export const AgentChain = React.memo<AgentChainProps>(
             {/* Keep omission visible even while the result text is collapsed. */}
             <TranscriptTruncationNotice truncations={[item.transcript_truncation]} />
             <ToolBlock
+              compact={compact}
               icon={<BulbOutlined style={{ fontSize: 14 }} />}
               name="Thinking"
               description={oneLine || undefined}
@@ -530,12 +532,13 @@ export const AgentChain = React.memo<AgentChainProps>(
       return (
         <ToolBlock
           key={toolUse.id}
+          compact={compact}
           icon={icon}
           name={displayName}
           description={description ?? undefined}
           descriptionNode={descriptionNode}
           status={status}
-          expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+          expandedByDefault={!compact && shouldExpandToolByDefault(toolUse.name)}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>
@@ -634,11 +637,13 @@ export const AgentChain = React.memo<AgentChainProps>(
     // tool call. A live chain still lands open so progress stays watchable.
     if (compact) {
       return (
-        <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
+        <div style={{ margin: `${token.sizeUnit * COMPACT_BLOCK_GAP_UNITS}px 0` }}>
           <ToolBlock
+            compact
+            nestedRows
             icon={<ThunderboltOutlined />}
             name={compactSummary}
-            description={stats.errorCount > 0 ? `· ${stats.errorCount} retried` : undefined}
+            description={stats.errorCount > 0 ? `· ${stats.errorCount} errored` : undefined}
             status={hasErrors ? 'error' : 'success'}
             expandedByDefault={isTaskRunning && isLatest !== false}
           >
