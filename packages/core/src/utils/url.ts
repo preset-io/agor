@@ -141,6 +141,9 @@ export function knowledgePath(namespaceSlug?: string | null, documentPath?: stri
  *  `baseUrl` here comes from `getBaseUrl()` in config-manager, which
  *  prefers `ui.base_url` before the daemon fallback. */
 function fullUrl(path: string, baseUrl: string): string {
+  // Hosted tenants may not have received routing metadata yet. Do not turn an
+  // unavailable absolute URL into a misleading relative link in MCP/gateways.
+  if (!baseUrl) return '';
   // Strip trailing slash first, then any trailing /ui suffix.
   let base = baseUrl.replace(/\/$/, '');
   if (base.endsWith(UI_MOUNT_PATH)) {

@@ -294,7 +294,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     try {
       this.rejectGenericPrimaryTeammateWrite(data, 'set');
       const boardId = data.board_id ?? generateId();
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       let finalSlug: string | undefined;
 
       if (data.slug === null) {
@@ -367,7 +367,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async findById(id: string): Promise<Board | null> {
     try {
       const fullId = await this.resolveId(id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const row = await select(this.db).from(boards).where(eq(boards.board_id, fullId)).one();
 
       return row ? this.rowToBoard(row, baseUrl) : null;
@@ -386,7 +386,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async findBySlug(slug: string): Promise<Board | null> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const row = await select(this.db).from(boards).where(eq(boards.slug, slug)).one();
 
       return row ? this.rowToBoard(row, baseUrl) : null;
@@ -462,7 +462,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         conditions.push(this.visibleBoardCondition(filter.visibleToUserId));
       }
 
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const query = select(this.db, this.listSelection(filter?.lean)).from(boards);
       const rows =
         conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
@@ -536,7 +536,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
     if (opts.offset) dataQuery = dataQuery.offset(opts.offset);
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     const rows = await dataQuery.all();
     return {
       data: (rows as BoardRow[]).map((row) => this.rowToBoard(row, baseUrl, { lean: opts.lean })),

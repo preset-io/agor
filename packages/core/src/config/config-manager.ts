@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
+import type { Database } from '../db/client';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
@@ -1938,7 +1939,13 @@ export async function getDaemonBaseUrl(): Promise<string> {
  * Used to generate clickable URLs to sessions, boards, and other resources
  * that are sent to external platforms like Slack, email, etc.
  *
- * Resolution order:
+ * Hosted (`required_from_auth`): use durable routing from the current trusted
+ * tenant's verified launch. Missing metadata returns an empty string, so entity
+ * projections omit the link until someone opens the workspace through Cloud.
+ * No deployment origin fallback is safe in that mode. `db` permits background
+ * callers to open a short tenant read without a browser request.
+ *
+ * Static/local resolution order:
  * 1. AGOR_BASE_URL environment variable (highest priority)
  * 2. ui.base_url from config.yaml
  * 3. daemon.base_url from config.yaml
@@ -1946,11 +1953,17 @@ export async function getDaemonBaseUrl(): Promise<string> {
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
-export async function getBaseUrl(): Promise<string> {
+export async function getBaseUrl(db?: Database): Promise<string> {
+  const config = await loadConfig();
+  if (config.multi_tenancy?.mode === 'required_from_auth') {
+    // Keep DB-backed tenant routing out of local/CLI configuration loading.
+    const { getTenantPublicBaseUrl } = await import('../db/repositories/tenant-public-routing');
+    return getTenantPublicBaseUrl(db);
+  }
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-  return resolveBaseUrl(await loadConfig(), 'ui');
+  return resolveBaseUrl(config, 'ui');
 }
 
 /**

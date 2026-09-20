@@ -306,7 +306,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         },
         { sqliteImmediate: true }
       );
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -349,7 +349,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       });
       const row = await select(this.db).from(branches).where(eq(branches.branch_id, fullId)).one();
       if (!row) return null;
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
@@ -452,7 +452,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         ? await baseQuery.where(and(...conditions)).all()
         : await baseQuery.all();
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
   }
 
@@ -518,7 +518,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
     if (opts.offset) dataQuery = dataQuery.offset(opts.offset);
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     const rows = await dataQuery.all();
     return { data: (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl)), total };
   }
@@ -618,7 +618,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .offset(filter?.offset ?? 0)
       .all();
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl));
   }
 
@@ -662,7 +662,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', id);
     }
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     // Use transaction to make read-merge-write atomic
     return await this.db.transaction(async (tx) => {
@@ -844,7 +844,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return await runDatabaseTransaction(
       this.db,
       async (tx) => {
@@ -919,7 +919,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (!existing) {
       throw new EntityNotFoundError('Branch', id);
     }
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return await runDatabaseTransaction(
       this.db,
       async (tx) => {
@@ -977,7 +977,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     }
     const existing = await this.findById(id);
     if (!existing) throw new EntityNotFoundError('Branch', id);
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return await runDatabaseTransaction(
       this.db,
       async (tx) => {
@@ -1030,7 +1030,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .orderBy(asc(branches.branch_id))
       .limit(limit)
       .all();
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
   }
 
@@ -1060,7 +1060,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       return current;
     }
 
-    return this.rowToBranch(row, await getBaseUrl());
+    return this.rowToBranch(row, await getBaseUrl(this.db));
   }
 
   /**
@@ -1110,7 +1110,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .one();
 
     if (!row) return null;
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return this.rowToBranch(row, baseUrl);
   }
 
@@ -1126,7 +1126,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .one();
 
     if (!row) return null;
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return this.rowToBranch(row, baseUrl);
   }
 
@@ -1330,7 +1330,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       )
       .all();
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
   }
 
@@ -1458,7 +1458,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .where(and(...conditions))
       .all();
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     const seen = new Set<string>();
     const result: Branch[] = [];
     for (const row of rows as BranchRow[]) {
@@ -1502,7 +1502,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         .where(and(eq(branches.branch_id, fullId), accessCondition))
         .one();
       if (!row) return null;
-      return this.rowToBranch(row as BranchRow, await getBaseUrl());
+      return this.rowToBranch(row as BranchRow, await getBaseUrl(this.db));
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       throw error;

@@ -10,7 +10,9 @@ import {
   hash,
   initializeDatabase,
   insert,
+  runWithTenantDatabaseScope,
   select,
+  TenantPublicRoutingRepository,
   update,
   userExternalIdentities,
   users,
@@ -149,6 +151,70 @@ describe('one-time launch auth service', () => {
       onAuthorizationInvalidated,
     });
   }
+
+  it('projects a verified public URL tenant-wide and preserves it for legacy launches', async () => {
+    const issuedAt = Math.floor(Date.now() / 1000) - 10;
+    mockExchange(signClaims({ public_base_url: 'https://tenant.example.test/', iat: issuedAt }));
+    await service().create({ launchCode: 'first' });
+    const read = () =>
+      runWithTenantDatabaseScope(db, 'default', (scoped) =>
+        new TenantPublicRoutingRepository(scoped).find()
+      );
+    await expect(read()).resolves.toEqual({
+      public_base_url: 'https://tenant.example.test',
+      assertion_issued_at: issuedAt,
+    });
+    mockExchange(signClaims({ sub: 'another-user', email: 'another@example.test' }));
+    await service().create({ launchCode: 'legacy' });
+    await expect(read()).resolves.toMatchObject({ public_base_url: 'https://tenant.example.test' });
+    mockExchange(signClaims({ public_base_url: 'https://old.example.test', iat: issuedAt - 10 }));
+    await service().create({ launchCode: 'older' });
+    await expect(read()).resolves.toMatchObject({ public_base_url: 'https://tenant.example.test' });
+    mockExchange(signClaims({ public_base_url: 'https://new.example.test', iat: issuedAt + 1 }));
+    await service().create({ launchCode: 'newer' });
+    await expect(read()).resolves.toMatchObject({ public_base_url: 'https://new.example.test' });
+  });
+
+  it.each(['https://user:secret@host.test', 'https://host.test?secret=value', '//host.test'])(
+    'rejects invalid signed routing before creating any tenant data: %s',
+    async (public_base_url) => {
+      mockExchange(signClaims({ public_base_url }));
+      await expect(service().create({ launchCode: 'code' })).rejects.toThrow(
+        'Invalid one-time launch assertion public URL'
+      );
+      expect(await select(db).from(users).all()).toHaveLength(0);
+      await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+        expect(new TenantPublicRoutingRepository(scoped).find()).resolves.toBeNull()
+      );
+    }
+  );
+
+  it('does not project routing from an unverified JWT or caller headers', async () => {
+    mockExchange(
+      jwt.sign({ sub: 'forged', public_base_url: 'https://attacker.test' }, 'wrong-secret', {
+        issuer: 'https://issuer.example.test',
+        audience: 'runtime:test',
+        expiresIn: '5m',
+      })
+    );
+    await expect(service().create({ launchCode: 'forged' })).rejects.toBeInstanceOf(
+      NotAuthenticated
+    );
+    mockExchange(signClaims());
+    await service().create(
+      { launchCode: 'legacy' },
+      {
+        headers: {
+          host: 'attacker.test',
+          'x-forwarded-host': 'attacker.test',
+          public_base_url: 'https://attacker.test',
+        },
+      }
+    );
+    await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+      expect(new TenantPublicRoutingRepository(scoped).find()).resolves.toBeNull()
+    );
+  });
 
   it('rejects when disabled', async () => {
     await expect(

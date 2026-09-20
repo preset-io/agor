@@ -1339,7 +1339,9 @@ export class GatewayService {
       secret,
       new Date(notice.issued_at)
     );
-    const page = getMcpSlackRecoveryUrl(await getBaseUrl());
+    const baseUrl = await getBaseUrl(this.db);
+    if (!baseUrl) throw new Error('Tenant public URL is not initialized');
+    const page = getMcpSlackRecoveryUrl(baseUrl);
     return `${page}#token=${encodeURIComponent(token)}`;
   }
 
@@ -3018,7 +3020,8 @@ export class GatewayService {
     user?: User
   ): Promise<string | null> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
+      if (!baseUrl) return null;
       const sessionUrl = getSessionUrl(sessionId, baseUrl);
       if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
       return sessionUrl;
