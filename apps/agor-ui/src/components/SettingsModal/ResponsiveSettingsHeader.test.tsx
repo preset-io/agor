@@ -21,8 +21,6 @@ describe('ResponsiveSettingsHeader', () => {
 
     const description = screen.getByText('Create and manage boards for organizing sessions.');
     const search = screen.getByRole('textbox', { name: 'Search' });
-    // If description shared the toolbar row (the old layout), its nearest block
-    // container would also hold the search input. It must not.
     expect(description.closest('div')).not.toContainElement(search);
   });
 
@@ -35,19 +33,47 @@ describe('ResponsiveSettingsHeader', () => {
     expect(screen.getByRole('button', { name: 'New Board' })).toBeInTheDocument();
   });
 
-  it('bounds the search width on desktop (header owns the width)', () => {
+  it('places the primary action on the title row (before the description) when a title is given', () => {
     vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
     render(<ResponsiveSettingsHeader {...slots} />);
 
+    const action = screen.getByRole('button', { name: 'New Board' });
+    const description = screen.getByText('Create and manage boards for organizing sessions.');
+    // The header-row action precedes the description in DOM order.
+    expect(
+      action.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('falls back to the toolbar for the primary action when no title is passed', () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
+    render(
+      <ResponsiveSettingsHeader
+        description="Manage personal API keys."
+        search={<Input aria-label="Search" />}
+        count="2 keys"
+        primaryActions={<Button>Create New Key</Button>}
+      />
+    );
+
+    const action = screen.getByRole('button', { name: 'Create New Key' });
+    const description = screen.getByText('Manage personal API keys.');
+    expect(action).toBeInTheDocument();
+    // No title → the action follows the description (it's in the toolbar row).
+    expect(
+      description.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('bounds the search width on desktop and goes full-width on narrow screens', () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
+    const { rerender } = render(<ResponsiveSettingsHeader {...slots} />);
     expect(screen.getByRole('textbox', { name: 'Search' }).closest('div')).toHaveStyle({
       width: '320px',
     });
-  });
 
-  it('stacks and gives the search full width on narrow screens', () => {
     vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: false });
-    render(<ResponsiveSettingsHeader {...slots} />);
-
+    rerender(<ResponsiveSettingsHeader {...slots} />);
     expect(screen.getByRole('textbox', { name: 'Search' }).closest('div')).toHaveStyle({
       width: '100%',
     });
