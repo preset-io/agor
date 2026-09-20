@@ -16,6 +16,7 @@ import { Alert, Button, Flex, Space, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -33,6 +34,8 @@ import {
   readCredentialWarningSnooze,
   writeCredentialWarningSnooze,
 } from './credentialWarningDismissal';
+
+const INTEGRATIONS_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
@@ -136,7 +139,23 @@ export function OnboardingBanners({
     owner: '',
     state: ProbeState.Unknown,
   });
-  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
+  const [integrationsSnoozedUntil, setIntegrationsSnoozedUntil] = useUserLocalStorage<
+    number | null
+  >(user?.user_id, 'onboarding:integrations-snoozed-until:v1', null);
+  const integrationsBannerDismissed =
+    typeof integrationsSnoozedUntil === 'number' &&
+    Number.isFinite(integrationsSnoozedUntil) &&
+    integrationsSnoozedUntil > Date.now() &&
+    integrationsSnoozedUntil <= Date.now() + INTEGRATIONS_SNOOZE_MS;
+
+  useEffect(() => {
+    if (!integrationsBannerDismissed || integrationsSnoozedUntil === null) return;
+    const timer = window.setTimeout(
+      () => setIntegrationsSnoozedUntil(null),
+      Math.min(integrationsSnoozedUntil - Date.now(), 2_147_483_647)
+    );
+    return () => window.clearTimeout(timer);
+  }, [integrationsBannerDismissed, integrationsSnoozedUntil, setIntegrationsSnoozedUntil]);
   const [credentialWarningSnoozedUntil, setCredentialWarningSnoozedUntil] = useState<number | null>(
     null
   );
@@ -394,7 +413,12 @@ export function OnboardingBanners({
         'Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.';
       const integrationsActions = (
         <Space size="small" wrap={isMobile}>
-          <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
+          <Button
+            type="text"
+            size="small"
+            title="Hide this reminder for 24 hours"
+            onClick={() => setIntegrationsSnoozedUntil(Date.now() + INTEGRATIONS_SNOOZE_MS)}
+          >
             Maybe later
           </Button>
           <Button

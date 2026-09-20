@@ -39,3 +39,20 @@ describe('useUserLocalStorage', () => {
     expect(localStorage.length).toBe(0);
   });
 });
+
+it('syncs only the current user/key across tabs and handles storage clearing', () => {
+  const { result, rerender } = renderHook(({ userId }) => useUserLocalStorage(userId, 'test', 0), {
+    initialProps: { userId: 'a' },
+  });
+  localStorage.setItem('agor:user:a:test', '1');
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'agor:user:a:test' })));
+  expect(result.current[0]).toBe(1);
+  rerender({ userId: 'b' });
+  localStorage.setItem('agor:user:a:test', '2');
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'agor:user:a:test' })));
+  expect(result.current[0]).toBe(0);
+  act(() => result.current[1](3));
+  localStorage.clear();
+  act(() => window.dispatchEvent(new StorageEvent('storage', { key: null })));
+  expect(result.current[0]).toBe(0);
+});

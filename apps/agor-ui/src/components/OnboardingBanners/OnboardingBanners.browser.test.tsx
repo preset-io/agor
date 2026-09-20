@@ -2,6 +2,7 @@ import type { User } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { agorStore } from '../../store/agorStore';
 import { OnboardingBanners } from './OnboardingBanners';
 
@@ -92,4 +93,34 @@ describe('OnboardingBanners real-browser UX', () => {
       message.getBoundingClientRect().bottom - 2
     );
   });
+});
+
+it('keeps Maybe later dismissed when the mobile banner remounts', async () => {
+  const banner = (
+    <OnboardingBanners
+      user={USER}
+      mcpServerCount={0}
+      gatewayChannelCount={0}
+      integrationsHydrated
+      canManageMcp
+      connectionReady
+      credentialVersion={0}
+      onOpenUserSettings={vi.fn()}
+      onOpenWorkspaceSettings={vi.fn()}
+      onCheckAuth={async () => ({
+        status: 'authenticated',
+        authenticated: true,
+        method: 'api-key',
+      })}
+    />
+  );
+  const first = render(banner);
+  const button = await screen.findByRole('button', { name: 'Maybe later' });
+  expect(button).toHaveAttribute('title', 'Hide this reminder for 24 hours');
+  button.focus();
+  await userEvent.keyboard('{Enter}');
+  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+  first.unmount();
+  render(banner);
+  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
 });
