@@ -1558,7 +1558,9 @@ export async function createBranch(
   /** Immutable commit selected by resolveGitRef; pins creation against ref movement. */
   sourceSha?: string,
   /** Separately bounded credentials for the selected source transport. */
-  sourceEnv: UserGitEnvironment | undefined = env
+  sourceEnv: UserGitEnvironment | undefined = env,
+  /** Resolver identity: names (including hexadecimal branch names) are not kinds. */
+  resolvedSource?: Pick<ResolvedGitRef, 'kind' | 'remoteName'>
 ): Promise<void> {
   console.log('🔍 createBranch called with:', {
     repoPath,
@@ -1703,9 +1705,10 @@ export async function createBranch(
   const attachNewLocalBranch =
     !createBranch &&
     sourceSha &&
-    refType !== 'tag' &&
-    !/^[0-9a-f]{7,64}$/i.test(ref) &&
+    resolvedSource?.kind === 'remote_branch' &&
     !(await resolveCommitSha(git, `refs/heads/${ref}`));
+  const trackingRemote = attachNewLocalBranch ? resolvedSource?.remoteName : undefined;
+  const trackingName = sourceBranch ?? ref;
   const worktreeAddArgs = buildWorktreeAddArgs({
     branchPath,
     ref,
@@ -1719,6 +1722,15 @@ export async function createBranch(
   }
 
   try {
+    if (trackingRemote) {
+      // A remote name alone is not identity. Refuse to wire tracking to a mutable
+      // destination that no longer matches the source selected by the resolver.
+      const configuredUrl = await getRemoteUrl(repoPath, trackingRemote);
+      const selectedUrl = safeSourceRemoteUrl ?? safeDestinationRemoteUrl;
+      if (!configuredUrl || (selectedUrl && configuredUrl !== selectedUrl)) {
+        throw new Error(`Selected remote '${trackingRemote}' changed; retry source resolution.`);
+      }
+    }
     try {
       await git.raw(worktreeAddArgs);
       if (sourceSha) {
@@ -1733,6 +1745,14 @@ export async function createBranch(
             `Resolved ref '${sourceBranch ?? ref}' moved during worktree creation: expected ${sourceSha}, checked out ${actualSha}. Retry to resolve the new tip explicitly.`
           );
         }
+      }
+      if (trackingRemote && sourceSha) {
+        // Creating at the immutable SHA deliberately avoids Git's DWIM checkout,
+        // so restore the selected tracking relationship explicitly. The clean
+        // source fetch may only have populated our temporary namespace.
+        await git.raw(['update-ref', `refs/remotes/${trackingRemote}/${trackingName}`, sourceSha]);
+        await git.addConfig(`branch.${ref}.remote`, trackingRemote);
+        await git.addConfig(`branch.${ref}.merge`, `refs/heads/${trackingName}`);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2352,7 +2372,9 @@ export async function restoreBranchFilesystem(
         undefined,
         undefined,
         safeDestinationRemoteUrl,
-        destinationSha
+        destinationSha,
+        env,
+        { kind: 'remote_branch', remoteName: 'origin' }
       );
       return { success: true, strategy: 'checkout' };
     }

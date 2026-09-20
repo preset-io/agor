@@ -965,8 +965,20 @@ export async function handleGitBranchAdd(
     const sourceRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : baseRemoteUrl;
     const resolutionPath =
       storageMode === 'clone' && (!repoPath || !existsSync(repoPath)) ? undefined : repoPath;
-    const resolveStartingRef = () =>
-      resolveGitRef(resolutionPath, requestedStartingRef, {
+    const resolveStartingRef = () => {
+      // Persisted source identity is a locator, not credential authority. Resolve
+      // it without the mutable cache, and bound credentials independently just as
+      // we do for the eventual clone transport. Older rows retain the legacy path.
+      if (restoreMode && branchRecord.base_source) {
+        const source = branchRecord.base_source;
+        return resolveGitRef(undefined, source.name, {
+          refType: refType || 'branch',
+          remote: { url: source.remote_url },
+          remoteOnly: true,
+          env: gitEnvironmentForRemote(source.remote_url, [remoteUrl, sourceRemoteUrl], env),
+        });
+      }
+      return resolveGitRef(resolutionPath, requestedStartingRef, {
         refType: refType || 'branch',
         ...(sourceRemoteUrl
           ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
@@ -975,6 +987,7 @@ export async function handleGitBranchAdd(
             : {}),
         env,
       });
+    };
     let resolvedStartingRef =
       restoreMode || alreadyMaterialized ? undefined : await resolveStartingRef();
 
@@ -982,6 +995,14 @@ export async function handleGitBranchAdd(
       await client.service('branches').patch(branchId, {
         base_ref: resolvedStartingRef.ref,
         base_sha: resolvedStartingRef.sha,
+        ...(resolvedStartingRef.remoteUrl
+          ? {
+              base_source: {
+                name: resolvedStartingRef.name,
+                remote_url: stripGitUrlCredentials(resolvedStartingRef.remoteUrl),
+              },
+            }
+          : {}),
       });
       console.log(
         `[git.branch.add] Resolved '${requestedStartingRef}' to ${resolvedStartingRef.ref} @ ${resolvedStartingRef.sha}`
@@ -1117,7 +1138,8 @@ export async function handleGitBranchAdd(
           resolvedStartingRef?.remoteUrl ?? baseRemoteUrl ?? '',
           [remoteUrl, sourceRemoteUrl],
           env
-        ) ?? {}
+        ) ?? {},
+        resolvedStartingRef
       );
     }
 

@@ -427,6 +427,10 @@ describe('managed executor git/fs commands', () => {
     expect(patchedBranches).toContainEqual({
       base_ref: 'trusted-base',
       base_sha: '0123456789abcdef0123456789abcdef01234567',
+      base_source: {
+        name: 'trusted-base',
+        remote_url: 'https://github.com/preset-io/agor-teammate.git',
+      },
     });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
@@ -486,17 +490,23 @@ describe('managed executor git/fs commands', () => {
       'https://example.com/trusted/repo.git',
       'https://example.com/trusted/repo.git',
       'abcdef0123456789abcdef0123456789abcdef01',
-      {}
+      {},
+      expect.objectContaining({ kind: 'remote_branch', remoteName: 'origin' })
     );
     expect(patchedBranches).toContainEqual({
       base_ref: 'origin/main',
       base_sha: 'abcdef0123456789abcdef0123456789abcdef01',
+      base_source: { name: 'main', remote_url: 'https://example.com/trusted/repo.git' },
     });
   });
 
-  it.each(['personal/topic', 'refs/remotes/personal/topic'])(
-    'withholds managed credentials from configured clone source %s',
-    async (baseRef) => {
+  it.each([
+    ['personal/topic', false],
+    ['refs/remotes/personal/topic', false],
+    ['personal/topic', true],
+  ] as const)(
+    'withholds managed credentials from configured/persisted clone source %s (restore=%s)',
+    async (baseRef, restoreMode) => {
       const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
       const authorization: Array<string | undefined> = [];
       const server = createServer((req, res) => {
@@ -523,6 +533,7 @@ describe('managed executor git/fs commands', () => {
             name: 'feature',
             ref: 'feature',
             base_ref: baseRef,
+            ...(restoreMode ? { base_source: { name: 'topic', remote_url: remoteUrl } } : {}),
             new_branch: true,
             ref_type: 'branch',
             storage_mode: 'clone',
@@ -545,7 +556,7 @@ describe('managed executor git/fs commands', () => {
           {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
-            params: { branchId, repoId, useReference: false },
+            params: { branchId, repoId, useReference: false, restoreMode },
           },
           {}
         );
@@ -555,6 +566,33 @@ describe('managed executor git/fs commands', () => {
         );
         expect(authorization.length).toBeGreaterThan(0); // Real clone transport reached the server.
         expect(authorization.every((header) => header === undefined)).toBe(true);
+        if (restoreMode) {
+          expect(mocks.resolveGitRef).toHaveBeenLastCalledWith(undefined, 'topic', {
+            refType: 'branch',
+            remote: { url: remoteUrl },
+            remoteOnly: true,
+            env: undefined,
+          });
+          // Also exercise the real resolver transport, not only the clone. A
+          // persisted URL for another tenant/repository cannot inherit this
+          // caller's managed token (or credential-bearing proxy) at either hop.
+          authorization.length = 0;
+          mocks.resolveGitRef.mockImplementation(actual.resolveGitRef);
+          expect(
+            (
+              await handleGitBranchAdd(
+                {
+                  command: 'git.branch.add',
+                  sessionToken: 'tenant-token',
+                  params: { branchId, repoId, useReference: false, restoreMode },
+                },
+                {}
+              )
+            ).success
+          ).toBe(false);
+          expect(authorization.length).toBeGreaterThan(0);
+          expect(authorization.every((header) => header === undefined)).toBe(true);
+        }
       } finally {
         await new Promise<void>((resolve, reject) =>
           server.close((error) => (error ? reject(error) : resolve()))
@@ -565,7 +603,7 @@ describe('managed executor git/fs commands', () => {
   );
 
   it.each(['origin', 'personal'])(
-    'creates and restores an unpushed clone from persisted %s provenance (origin cache unmounted)',
+    'creates and restores an unpushed clone from persisted %s provenance with an unavailable cache',
     async (remoteName) => {
       const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
       const root = await mkdtemp(join(tmpdir(), 'agor-clone-provenance-'));
@@ -595,15 +633,12 @@ describe('managed executor git/fs commands', () => {
           ref_type: 'branch',
           storage_mode: 'clone',
         };
-        createClient({
-          repo: {
-            repo_id: repoId,
-            local_path: remoteName === 'origin' ? join(root, 'unmounted') : remoteUrl,
-            remote_url: destinationUrl,
-          },
-          branch,
-          patchedBranches,
-        });
+        const repo = {
+          repo_id: repoId,
+          local_path: remoteName === 'origin' ? join(root, 'unmounted') : remoteUrl,
+          remote_url: destinationUrl,
+        };
+        createClient({ repo, branch, patchedBranches });
         mocks.resolveGitRef.mockImplementation(actual.resolveGitRef);
         mocks.createBranchAsClone.mockImplementation(actual.createBranchAsClone);
         mocks.isRemoteRefVisibleForClone.mockImplementation(actual.isRemoteRefVisibleForClone);
@@ -614,8 +649,12 @@ describe('managed executor git/fs commands', () => {
         };
         expect((await handleGitBranchAdd(payload, {})).success).toBe(true);
         const provenance = patchedBranches.find((patch) => 'base_ref' in patch);
-        expect(provenance).toMatchObject({ base_ref: `${remoteName}/main` });
+        expect(provenance).toMatchObject({
+          base_ref: `${remoteName}/main`,
+          base_source: { name: 'main', remote_url: remoteUrl },
+        });
         Object.assign(branch, provenance);
+        repo.local_path = join(root, 'unmounted');
         await rm(branch.path, { recursive: true });
         expect(
           (
@@ -628,6 +667,9 @@ describe('managed executor git/fs commands', () => {
         expect(
           (await actual.createGit(branch.path).git.revparse(['--abbrev-ref', 'HEAD'])).trim()
         ).toBe('feature');
+        expect((await actual.createGit(branch.path).git.revparse(['HEAD'])).trim()).toBe(
+          provenance?.base_sha
+        );
         expect(mocks.createBranchAsClone).toHaveBeenLastCalledWith(
           expect.objectContaining({ ref: 'main', remoteUrl, newBranchName: 'feature' })
         );
@@ -1289,6 +1331,10 @@ describe('local teammate materialization', () => {
             {
               base_ref: 'template/builder',
               base_sha: '0123456789abcdef0123456789abcdef01234567',
+              base_source: {
+                name: 'template/builder',
+                remote_url: 'https://github.com/preset-io/agor-teammate.git',
+              },
             },
           ]);
         });

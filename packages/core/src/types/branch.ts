@@ -201,6 +201,13 @@ export interface Branch {
   base_ref?: string;
 
   /**
+   * Normalized remote source for clone restore when the repository cache is
+   * unavailable. Provenance only: this URL NEVER grants managed credentials;
+   * transport authority must still come from trusted repository/template metadata.
+   */
+  base_source?: { name: string; remote_url: string };
+
+  /**
    * Remote that owns {@link base_ref} when the branch was seeded from a
    * different repository than {@link repo_id}.
    *

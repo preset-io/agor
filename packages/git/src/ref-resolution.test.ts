@@ -291,11 +291,29 @@ describe('resolveGitRef', () => {
     expect((await git.raw(['for-each-ref', 'refs/agor/base'])).trim()).toBe('');
   });
 
-  it('attaches an existing remote-only branch to its local branch identity', async () => {
-    await simpleGit(repoPath).push('origin', 'different:refs/heads/topic');
-    const selected = await resolveGitRef(repoPath, 'topic', {
-      remote: { name: 'origin', url: join(root, 'origin.git') },
-    });
+  it.each([
+    ['origin', 'topic'],
+    ['origin', 'deadbee'],
+    ['personal', 'topic'],
+    ['company/fork', 'topic'],
+  ])('attaches uncached %s/%s with its selected upstream and pinned SHA', async (remote, name) => {
+    const git = simpleGit(repoPath);
+    const remoteUrl = join(root, `${remote.replace('/', '-')}.git`);
+    // Push creates a tracking ref locally; remove it to exercise network-only resolution.
+    await git.push(remote, `different:refs/heads/${name}`);
+    await git.raw(['update-ref', '-d', `refs/remotes/${remote}/${name}`]);
+    // A same-named destination branch must not hijack the selected upstream.
+    if (remote !== 'origin') await git.push('origin', `main:refs/heads/${name}`);
+    const selected = await resolveGitRef(
+      repoPath,
+      remote === 'origin' ? name : `${remote}/${name}`,
+      {
+        remote: { name: 'origin', url: join(root, 'origin.git') },
+      }
+    );
+    expect(selected.kind).toBe('remote_branch');
+    expect(selected.remoteUrl).toBe(remoteUrl);
+    await expect(git.revparse(['--verify', `refs/remotes/${remote}/${name}`])).rejects.toThrow();
     const target = join(root, 'existing');
     await createBranch(
       repoPath,
@@ -309,10 +327,67 @@ describe('resolveGitRef', () => {
       selected.remoteUrl,
       join(root, 'origin.git'),
       selected.sha,
-      {}
+      {},
+      selected
     );
-    expect((await simpleGit(target).revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('topic');
+    const checkout = simpleGit(target);
+    expect((await checkout.revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe(name);
+    expect((await checkout.revparse(['HEAD'])).trim()).toBe(secondSha);
+    expect((await checkout.revparse(['--abbrev-ref', '@{upstream}'])).trim()).toBe(
+      `${remote}/${name}`
+    );
+    expect((await checkout.getConfig(`branch.${name}.remote`)).value).toBe(remote);
+    expect((await checkout.getConfig(`branch.${name}.merge`)).value).toBe(`refs/heads/${name}`);
+    expect((await git.raw(['for-each-ref', 'refs/agor/base'])).trim()).toBe('');
+  });
+
+  it('keeps a resolved commit detached rather than creating a local branch', async () => {
+    const selected = await resolveGitRef(repoPath, secondSha);
+    const target = join(root, 'commit');
+    await createBranch(
+      repoPath,
+      target,
+      selected.ref,
+      false,
+      false,
+      undefined,
+      {},
+      'branch',
+      undefined,
+      undefined,
+      selected.sha,
+      {},
+      selected
+    );
     expect((await simpleGit(target).revparse(['HEAD'])).trim()).toBe(secondSha);
+    expect((await simpleGit(target).revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('HEAD');
+  });
+
+  it('refuses upstream wiring if the selected remote URL changes', async () => {
+    const git = simpleGit(repoPath);
+    await git.push('personal', 'different:refs/heads/topic');
+    const selected = await resolveGitRef(repoPath, 'personal/topic');
+    await git.remote(['set-url', 'personal', join(root, 'origin.git')]);
+    await expect(
+      createBranch(
+        repoPath,
+        join(root, 'changed'),
+        selected.name,
+        false,
+        true,
+        selected.name,
+        {},
+        'branch',
+        selected.remoteUrl,
+        join(root, 'origin.git'),
+        selected.sha,
+        {},
+        selected
+      )
+    ).rejects.toThrow(/Selected remote 'personal' changed/);
+    expect((await git.raw(['for-each-ref', 'refs/agor/base'])).trim()).toBe('');
+    expect((await git.getConfig('branch.topic.remote')).value).toBeNull();
+    await expect(git.revparse(['--verify', 'refs/heads/topic'])).rejects.toThrow();
   });
 
   it('fast-forwards a stale cached branch when restoring from the destination', async () => {

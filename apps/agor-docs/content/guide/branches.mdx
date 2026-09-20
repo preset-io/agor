@@ -121,6 +121,13 @@ explicit `_resolution` object with the requested ref, resolved ref, and full com
 waits only for this short resolution phase even when `waitForReady` is false; filesystem
 materialization remains asynchronous unless readiness waiting is requested.
 
+Existing remote-branch checkouts stay attached to the local branch at the resolved SHA and track
+the selected remote, including non-origin remotes. Clone creation also records the normalized remote
+source so restore can fall back to it if the destination branch has not been pushed and the cache
+is unavailable. This source record does not authorize managed credentials: those remain bounded to
+trusted repository/template metadata. Older branches without this source record may still need the
+original cache to reconstruct a non-origin source.
+
 ---
 
 ## Storage modes

@@ -250,6 +250,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       data: {
         path: branch.path!,
         base_ref: branch.base_ref,
+        base_source: branch.base_source,
         base_remote_url: branch.base_remote_url,
         base_sha: branch.base_sha,
         last_commit_sha: branch.last_commit_sha,
