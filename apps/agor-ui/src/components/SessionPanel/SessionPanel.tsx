@@ -12,6 +12,7 @@ import type {
   SessionStopResult,
   SpawnConfig,
   Task,
+  TranscriptViewMode,
   User,
 } from '@agor-live/client';
 import {
@@ -20,15 +21,18 @@ import {
   mapToCodexPermissionConfig,
   SessionStatus,
   TaskStatus,
+  TRANSCRIPT_VIEW_MODES,
 } from '@agor-live/client';
 import {
   AimOutlined,
+  CheckOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
   EditOutlined,
   EllipsisOutlined,
   InboxOutlined,
+  ProfileOutlined,
   RobotOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -58,6 +62,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
+import { useTranscriptViewMode } from '../../hooks/useTranscriptViewMode';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectMcpServerById,
@@ -108,6 +113,11 @@ import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
+
+const TRANSCRIPT_VIEW_LABELS: Record<TranscriptViewMode, string> = {
+  compact: 'Compact',
+  detailed: 'Detailed',
+};
 
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
@@ -392,6 +402,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } = useAppActions();
 
   const { archiveSession } = useSessionActions(client);
+  const transcriptView = useTranscriptViewMode(client, currentUserId);
 
   // Click-to-edit session title, inline in the header — see render below.
   // Draft is seeded from the *explicit* title only (not the description
@@ -1082,6 +1093,27 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             icon: <SettingOutlined />,
             label: 'Session settings',
             onClick: () => onOpenSettings(session.session_id),
+          },
+        ]
+      : []),
+    ...(transcriptView.canChange
+      ? [
+          {
+            key: 'transcript-view',
+            icon: <ProfileOutlined />,
+            label: 'Transcript view',
+            extra: (
+              <Typography.Text type="secondary">
+                {TRANSCRIPT_VIEW_LABELS[transcriptView.mode]}
+              </Typography.Text>
+            ),
+            children: TRANSCRIPT_VIEW_MODES.map((mode) => ({
+              key: `transcript-view-${mode}`,
+              label: TRANSCRIPT_VIEW_LABELS[mode],
+              extra:
+                transcriptView.mode === mode ? <CheckOutlined aria-label="Selected" /> : undefined,
+              onClick: () => transcriptView.setMode(mode),
+            })),
           },
         ]
       : []),

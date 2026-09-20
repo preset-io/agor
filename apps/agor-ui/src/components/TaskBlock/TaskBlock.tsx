@@ -34,9 +34,10 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Collapse, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { formatCompactDuration } from '../../utils/time';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
@@ -51,6 +52,7 @@ import {
   TimerPill,
   TokenCountPill,
 } from '../Pill';
+import { getModelDisplayName } from '../Pill/modelDisplay';
 import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
@@ -106,7 +108,7 @@ interface TaskBlockProps {
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
-  /** Phone-sized transcript presentation without desktop-only indents or gradients. */
+  /** Compact transcript view: one muted metadata line instead of the pill row. */
   compact?: boolean;
 }
 
@@ -753,6 +755,27 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         })
       : undefined;
 
+    // Compact replaces the pill row with one muted line; the rest moves to its
+    // tooltip so nothing becomes unreachable.
+    const taskDuration = formatCompactDuration(task.duration_ms);
+    const taskModel = task.model || sessionModel;
+    const compactMetaLine =
+      [taskModel && getModelDisplayName(taskModel), taskDuration].filter(Boolean).join(' · ') ||
+      'Task';
+    const taskCreator = task.created_by !== currentUserId ? userById.get(task.created_by) : null;
+    const compactMetaDetail = [
+      taskDuration && `Duration ${taskDuration}`,
+      taskCreator && `By ${taskCreator.name || taskCreator.email}`,
+      normalized && `${normalized.tokenUsage.totalTokens.toLocaleString()} tokens`,
+      hasContextWindowUsage &&
+        contextWindowLimit > 0 &&
+        `Context ${Math.round((contextWindowUsed / contextWindowLimit) * 100)}%`,
+      task.git_state.ref_at_start && `Git ${task.git_state.ref_at_start}`,
+      task.report && 'Report available',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
@@ -797,86 +820,96 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           </CopyableContent>
 
           {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit}>
-            <TimerPill
-              status={task.status}
-              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
-              endedAt={
-                task.completed_at ||
-                (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-                  ? task.message_range?.end_timestamp
-                  : undefined)
-              }
-              durationMs={task.duration_ms}
-              lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-              latestExecutorPulse={task.latest_executor_pulse}
-            />
-            {scheduledFromBranch && scheduledRunAt && (
-              <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
-            )}
-            {task.created_by && (
-              <CreatedByTag
-                createdBy={task.created_by}
-                currentUserId={currentUserId}
-                userById={userById}
-                prefix="By"
+          {compact ? (
+            <Tooltip title={compactMetaDetail || undefined}>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {compactMetaLine}
+              </Typography.Text>
+            </Tooltip>
+          ) : (
+            <Flex wrap gap={token.sizeUnit}>
+              <TimerPill
+                status={task.status}
+                startedAt={
+                  task.started_at || task.message_range?.start_timestamp || task.created_at
+                }
+                endedAt={
+                  task.completed_at ||
+                  (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                    ? task.message_range?.end_timestamp
+                    : undefined)
+                }
+                durationMs={task.duration_ms}
+                lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+                latestExecutorPulse={task.latest_executor_pulse}
               />
-            )}
-            {normalized && (
-              <TokenCountPill
-                count={normalized.tokenUsage.totalTokens}
-                inputTokens={normalized.tokenUsage.inputTokens}
-                outputTokens={normalized.tokenUsage.outputTokens}
-                cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
-                cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
-              />
-            )}
-            {hasContextWindowUsage && (
-              <ContextWindowPill
-                used={contextWindowUsed}
-                limit={contextWindowLimit || 0}
-                taskMetadata={{
-                  model: task.model,
-                  duration_ms: task.duration_ms,
-                  agentic_tool,
-                  raw_sdk_response: task.raw_sdk_response,
-                  normalized_sdk_response: normalized ?? undefined,
-                }}
-              />
-            )}
-            {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
-            {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
-              <Flex gap={token.sizeUnit / 2} align="center">
-                <GitStatePill
-                  branch={task.git_state.ref_at_start}
-                  sha={task.git_state.sha_at_start}
-                  branchName={branchName}
-                  style={{ fontSize: 11 }}
+              {scheduledFromBranch && scheduledRunAt && (
+                <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
+              )}
+              {task.created_by && (
+                <CreatedByTag
+                  createdBy={task.created_by}
+                  currentUserId={currentUserId}
+                  userById={userById}
+                  prefix="By"
                 />
-                {task.git_state.sha_at_end &&
-                  task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
-                    <>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        →
-                      </Typography.Text>
-                      <GitStatePill
-                        branch={task.git_state.ref_at_end}
-                        sha={task.git_state.sha_at_end}
-                        branchName={branchName}
-                        showDirtyIndicator={true}
-                        style={{ fontSize: 11 }}
-                      />
-                    </>
-                  )}
-              </Flex>
-            )}
-            {task.report && (
-              <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
-                Report
-              </Tag>
-            )}
-          </Flex>
+              )}
+              {normalized && (
+                <TokenCountPill
+                  count={normalized.tokenUsage.totalTokens}
+                  inputTokens={normalized.tokenUsage.inputTokens}
+                  outputTokens={normalized.tokenUsage.outputTokens}
+                  cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
+                  cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
+                />
+              )}
+              {hasContextWindowUsage && (
+                <ContextWindowPill
+                  used={contextWindowUsed}
+                  limit={contextWindowLimit || 0}
+                  taskMetadata={{
+                    model: task.model,
+                    duration_ms: task.duration_ms,
+                    agentic_tool,
+                    raw_sdk_response: task.raw_sdk_response,
+                    normalized_sdk_response: normalized ?? undefined,
+                  }}
+                />
+              )}
+              {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
+              {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
+                <Flex gap={token.sizeUnit / 2} align="center">
+                  <GitStatePill
+                    branch={task.git_state.ref_at_start}
+                    sha={task.git_state.sha_at_start}
+                    branchName={branchName}
+                    style={{ fontSize: 11 }}
+                  />
+                  {task.git_state.sha_at_end &&
+                    task.git_state.sha_at_end !== 'unknown' &&
+                    task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                      <>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          →
+                        </Typography.Text>
+                        <GitStatePill
+                          branch={task.git_state.ref_at_end}
+                          sha={task.git_state.sha_at_end}
+                          branchName={branchName}
+                          showDirtyIndicator={true}
+                          style={{ fontSize: 11 }}
+                        />
+                      </>
+                    )}
+                </Flex>
+              )}
+              {task.report && (
+                <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
+                  Report
+                </Tag>
+              )}
+            </Flex>
+          )}
         </Flex>
       </Flex>
     );
@@ -901,9 +934,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 header: {
                   padding: compact ? '10px 8px' : token.sizeUnit * 2,
                   alignItems: 'flex-start',
-                  background: compact
-                    ? token.colorBgContainer
-                    : taskHeaderGradient || 'transparent',
+                  background: taskHeaderGradient || 'transparent',
                   borderRadius: isExpanded ? '8px 8px 0 0' : 8,
                 },
                 body: {

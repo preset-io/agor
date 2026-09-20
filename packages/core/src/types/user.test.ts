@@ -5,7 +5,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { TranscriptViewMode, UserPreferences } from './user';
 import {
+  COMPACT_TRANSCRIPT_LAUNCH_AT,
   canAssignUserRole,
   compareRoleAuthority,
   extractAgenticToolsPublicValuesAsync,
@@ -13,6 +15,7 @@ import {
   hasRoleAuthorityOver,
   normalizeRole,
   ROLES,
+  resolveTranscriptViewMode,
 } from './user';
 
 describe('normalizeRole', () => {
@@ -96,5 +99,45 @@ describe('owner-authorized public credential values', () => {
     expect(calls).toEqual(['bad-url', 'good-url']);
     expect(peak).toBe(1);
     expect(result).toEqual({ 'claude-code': { ANTHROPIC_BASE_URL: 'https://example.invalid' } });
+  });
+});
+
+describe('resolveTranscriptViewMode', () => {
+  const asUser = (created_at: Date, preferences?: UserPreferences) => ({
+    created_at,
+    preferences,
+  });
+  const before = new Date(COMPACT_TRANSCRIPT_LAUNCH_AT - 1);
+  const after = new Date(COMPACT_TRANSCRIPT_LAUNCH_AT + 1);
+
+  it('defaults accounts created before launch to detailed', () => {
+    expect(resolveTranscriptViewMode(asUser(before))).toBe('detailed');
+  });
+
+  it('defaults accounts created at or after launch to compact', () => {
+    expect(resolveTranscriptViewMode(asUser(new Date(COMPACT_TRANSCRIPT_LAUNCH_AT)))).toBe(
+      'compact'
+    );
+    expect(resolveTranscriptViewMode(asUser(after))).toBe('compact');
+  });
+
+  it('lets an explicit choice override the account-age default', () => {
+    expect(resolveTranscriptViewMode(asUser(before, { transcriptViewMode: 'compact' }))).toBe(
+      'compact'
+    );
+    expect(resolveTranscriptViewMode(asUser(after, { transcriptViewMode: 'detailed' }))).toBe(
+      'detailed'
+    );
+  });
+
+  it('falls back to detailed for a missing user or unusable created_at', () => {
+    expect(resolveTranscriptViewMode(null)).toBe('detailed');
+    expect(resolveTranscriptViewMode(asUser(new Date('not-a-date')))).toBe('detailed');
+  });
+
+  it('ignores a stored value outside the known family', () => {
+    expect(
+      resolveTranscriptViewMode(asUser(after, { transcriptViewMode: 'cozy' as TranscriptViewMode }))
+    ).toBe('compact');
   });
 });

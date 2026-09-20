@@ -89,3 +89,27 @@ export function formatTimestampWithRelative(
 
   return `${relative}\n${absolute}`;
 }
+
+/**
+ * Format an elapsed duration for compact one-line summaries ("6s", "2m 14s",
+ * "1h 3m"). Returns undefined when the input is missing or unusable so callers
+ * can drop the segment rather than render a placeholder.
+ */
+export function formatCompactDuration(milliseconds: number | null | undefined): string | undefined {
+  if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds) || milliseconds < 0) {
+    return undefined;
+  }
+
+  const totalSeconds = Math.round(milliseconds / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    const seconds = totalSeconds % 60;
+    return seconds > 0 ? `${totalMinutes}m ${seconds}s` : `${totalMinutes}m`;
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}

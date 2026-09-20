@@ -472,12 +472,52 @@ export interface OnboardingState {
 }
 
 /**
+ * Transcript rendering density for the session view.
+ *
+ * `detailed` is the historical rendering. `compact` keeps prompts and answers
+ * in view while collapsing thinking, tool calls, subagent chains, and task
+ * metadata behind one-line, expandable summaries.
+ */
+export const TRANSCRIPT_VIEW_MODES = ['compact', 'detailed'] as const;
+
+export type TranscriptViewMode = (typeof TRANSCRIPT_VIEW_MODES)[number];
+
+/**
+ * Compact view launch. Accounts created before this keep `detailed` until they
+ * choose otherwise, so the rollout never changes a transcript under someone.
+ */
+export const COMPACT_TRANSCRIPT_LAUNCH_AT = Date.parse('2026-09-20T00:00:00.000Z');
+
+function isTranscriptViewMode(value: unknown): value is TranscriptViewMode {
+  return TRANSCRIPT_VIEW_MODES.includes(value as TranscriptViewMode);
+}
+
+/**
+ * Resolve the transcript view for a user. An explicit choice always wins;
+ * otherwise the account's age against the launch decides. Falls back to
+ * `detailed` whenever the user (or a usable `created_at`) is unavailable.
+ */
+export function resolveTranscriptViewMode(
+  user: Pick<User, 'created_at' | 'preferences'> | null | undefined
+): TranscriptViewMode {
+  const chosen = user?.preferences?.transcriptViewMode;
+  if (isTranscriptViewMode(chosen)) return chosen;
+
+  const createdAt = user ? new Date(user.created_at).getTime() : Number.NaN;
+  return Number.isNaN(createdAt) || createdAt < COMPACT_TRANSCRIPT_LAUNCH_AT
+    ? 'detailed'
+    : 'compact';
+}
+
+/**
  * User preferences structure
  */
 export interface UserPreferences {
   audio?: AudioPreferences;
   eventStream?: EventStreamPreferences;
   onboarding?: OnboardingState;
+  /** Explicit transcript view choice; unset resolves from the account's age. */
+  transcriptViewMode?: TranscriptViewMode;
   /** The user's personal/main board ID (created during onboarding or later) */
   mainBoardId?: string;
   /** Whether to render Slack-synced avatar_url when available. Undefined defaults to true. */

@@ -90,6 +90,24 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
 
+### Transcript view: Compact and Detailed
+
+The session view renders a transcript in one of two views, chosen from the
+session **⋯** menu under **Transcript view**:
+
+- **Detailed** shows every task's metadata pills, bordered thinking blocks, and
+  the full subagent summary with its tool tags.
+- **Compact** keeps your prompts and the agent's written answers in view and
+  folds the rest into quiet one-line rows: thinking, each tool call, and a whole
+  subagent chain (`Worked for 1m 2s · 21 steps · 3 files`). Task metadata
+  becomes a single muted `model · duration` line whose tooltip carries the rest.
+
+Nothing is hidden permanently — every collapsed row expands in place.
+
+The choice is stored on your user account, so it applies to every session you
+open, on desktop and on a phone alike. Accounts created before Compact shipped
+stay on Detailed until they pick otherwise; newer accounts start on Compact.
+
 ### Large tool transcripts
 
 Agor bounds each complete executor message write to 800,000 serialized UTF-8

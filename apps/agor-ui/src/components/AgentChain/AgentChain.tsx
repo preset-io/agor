@@ -43,6 +43,7 @@ import {
 import { Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
+import { formatCompactDuration } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
@@ -88,7 +89,7 @@ interface AgentChainProps {
   isTaskRunning?: boolean;
   /** Whether this is the latest (most recent) agent chain block — used for pending/stale status detection */
   isLatest?: boolean;
-  /** Remove desktop transcript indentation at phone widths. */
+  /** Compact transcript view: collapse the whole chain to one summary line. */
   compact?: boolean;
 }
 
@@ -327,6 +328,28 @@ export const AgentChain = React.memo<AgentChainProps>(
         filesAffected: Array.from(filesAffected).sort(),
       };
     }, [chainItems]);
+
+    // One-line chain summary for compact view: "Worked for 1m 2s · 21 steps · 3 files".
+    const compactSummary = useMemo(() => {
+      const times = messages
+        .map((message) => (message.timestamp ? Date.parse(String(message.timestamp)) : Number.NaN))
+        .filter((time) => !Number.isNaN(time));
+      const duration =
+        times.length > 1
+          ? formatCompactDuration(Math.max(...times) - Math.min(...times))
+          : undefined;
+      const steps = stats.thoughtCount + stats.toolCount;
+
+      return [
+        duration ? `Worked for ${duration}` : 'Worked',
+        `${steps} ${steps === 1 ? 'step' : 'steps'}`,
+        stats.filesAffected.length > 0
+          ? `${stats.filesAffected.length} ${stats.filesAffected.length === 1 ? 'file' : 'files'}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    }, [messages, stats]);
 
     // Generate smart description for tool
     const getToolDescription = (toolUse: ToolUseBlock): string | null => {
@@ -607,6 +630,26 @@ export const AgentChain = React.memo<AgentChainProps>(
       return null;
     }
 
+    // Compact collapses the whole chain into the same row grammar as a single
+    // tool call. A live chain still lands open so progress stays watchable.
+    if (compact) {
+      return (
+        <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
+          <ToolBlock
+            icon={<ThunderboltOutlined />}
+            name={compactSummary}
+            description={stats.errorCount > 0 ? `· ${stats.errorCount} retried` : undefined}
+            status={hasErrors ? 'error' : 'success'}
+            expandedByDefault={isTaskRunning && isLatest !== false}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {chainItems.map(renderChainItem)}
+            </div>
+          </ToolBlock>
+        </div>
+      );
+    }
+
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
         {/* Collapsed summary - clickable */}
@@ -660,7 +703,7 @@ export const AgentChain = React.memo<AgentChainProps>(
         {expanded && (
           <div
             style={{
-              paddingLeft: compact ? 0 : token.sizeUnit * 8,
+              paddingLeft: token.sizeUnit * 8,
               marginTop: token.sizeUnit,
               display: 'flex',
               flexDirection: 'column',

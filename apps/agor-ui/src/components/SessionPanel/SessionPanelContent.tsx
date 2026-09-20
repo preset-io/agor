@@ -10,6 +10,7 @@ import { Alert, Button, Divider, Space, Tooltip, Typography, theme } from 'antd'
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useTranscriptViewMode } from '../../hooks/useTranscriptViewMode';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -62,6 +63,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
   }) => {
     const { token } = theme.useToken();
     const isMobileShell = useIsMobileViewport();
+    const { mode: transcriptViewMode } = useTranscriptViewMode(client, currentUserId);
     const { showSuccess, showError } = useThemedMessage();
     const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
     const isQueueHeldByFailure = queuedTasks.length > 0 && session.status === 'failed';
@@ -316,6 +318,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             }
             forceExpandAll={forceExpandAll}
             onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+            compact={transcriptViewMode === 'compact'}
           />
         </SessionConversationLayout>
 

@@ -13,6 +13,7 @@ import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 import { CollapsibleText } from '../CollapsibleText';
+import { ToolBlock } from '../ToolBlock';
 
 const { Text } = Typography;
 
@@ -23,6 +24,8 @@ interface ThinkingBlockProps {
   isStreaming?: boolean;
   /** Whether to default to expanded state */
   defaultExpanded?: boolean;
+  /** Compact transcript view: one quiet expandable line instead of the block. */
+  compact?: boolean;
 }
 
 /**
@@ -36,12 +39,38 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   content,
   isStreaming = false,
   defaultExpanded = false,
+  compact = false,
 }) => {
   const { token } = theme.useToken();
 
   // Don't render if no content
   if (!content && !isStreaming) {
     return null;
+  }
+
+  const body = content ? (
+    <CollapsibleText
+      maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
+      preserveWhitespace
+      style={{ fontSize: token.fontSizeSM, margin: 0, color: token.colorTextSecondary }}
+    >
+      {content}
+    </CollapsibleText>
+  ) : (
+    <Text type="secondary">Thinking...</Text>
+  );
+
+  // Compact reuses the tool row so reasoning and actions share one grammar.
+  if (compact) {
+    return (
+      <ToolBlock
+        icon={<BulbOutlined />}
+        name={isStreaming ? 'Thinking…' : 'Thought'}
+        expandedByDefault={defaultExpanded}
+      >
+        {body}
+      </ToolBlock>
+    );
   }
 
   const thinkingHeader = (
@@ -81,21 +110,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
               fontSize: token.fontSizeSM,
             },
           },
-          children: content ? (
-            <CollapsibleText
-              maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
-              preserveWhitespace
-              style={{
-                fontSize: token.fontSizeSM,
-                margin: 0,
-                color: token.colorTextSecondary,
-              }}
-            >
-              {content}
-            </CollapsibleText>
-          ) : (
-            <Text type="secondary">Thinking...</Text>
-          ),
+          children: body,
         },
       ]}
     />

@@ -106,6 +106,7 @@ interface MessageBlockProps {
     scope: PermissionScope
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  /** Compact transcript view: plain answers, quiet collapsed tools. */
   compact?: boolean;
 }
 
@@ -697,6 +698,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
           defaultExpanded={false}
+          compact={compact}
         />
       )}
 
@@ -764,7 +766,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     </div>
                   </CopyableContent>
                 }
-                variant={isUser || isCallback ? 'filled' : 'outlined'}
+                variant={isUser || isCallback ? 'filled' : compact ? 'borderless' : 'outlined'}
                 styles={{
                   // Bubble.body defaults to min-width:auto. A wide intrinsic
                   // child (notably Streamdown's max-content code <pre>) can
@@ -782,7 +784,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     backgroundColor: isCallback
                       ? token.colorWarningBg
                       : isUser
-                        ? token.colorPrimaryBg
+                        ? compact
+                          ? token.colorFillSecondary
+                          : token.colorPrimaryBg
                         : undefined,
                     color: isUser ? token.colorText : undefined,
                   },
@@ -842,7 +846,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+                  expandedByDefault={!compact && shouldExpandToolByDefault(toolUse.name)}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
@@ -905,7 +909,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     </div>
                   </CopyableContent>
                 }
-                variant={isCallback ? 'filled' : 'outlined'}
+                variant={isCallback ? 'filled' : compact ? 'borderless' : 'outlined'}
                 styles={{
                   root: { maxWidth: '100%' },
                   body: { minWidth: 0 },

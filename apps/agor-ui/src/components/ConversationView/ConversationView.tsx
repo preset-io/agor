@@ -135,7 +135,7 @@ export interface ConversationViewProps {
 
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
-  /** Use the denser, full-width task treatment for phone-sized session routes. */
+  /** Render the Compact transcript view instead of the Detailed one. */
   compact?: boolean;
 }
 
