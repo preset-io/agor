@@ -59,6 +59,25 @@ async function recreateHistoricalClaudeAuthority(
   }
 }
 
+/** Rewind 0111 as well as its ledger: the historical head still had these guards. */
+async function restoreHistoricalOwnerImmutability(
+  transaction: PostgresTestTransaction
+): Promise<void> {
+  const source = await readFile(
+    join(migrationsFolder, '0095_board_branch_capability_policies.sql'),
+    'utf8'
+  );
+  const statements = source
+    .split('--> statement-breakpoint')
+    .filter((statement) =>
+      /^\s*CREATE (?:FUNCTION agor_reject_primary_owner_change\(|TRIGGER (?:boards|branches)_primary_owner_immutable\b)/.test(
+        statement
+      )
+    );
+  expect(statements).toHaveLength(3);
+  for (const statement of statements) await transaction.unsafe(statement);
+}
+
 async function executeReconciliationTransaction(
   transaction: PostgresTestTransaction
 ): Promise<void> {
@@ -370,6 +389,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
+      await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
 
       // Reproduce the previous reviewed head's timestamp-only final watermark.
       // Its authority schema is identical; the rebased bootstrap must not try

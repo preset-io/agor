@@ -8,9 +8,13 @@ import type {
 } from '@agor-live/client';
 import { Alert, Skeleton } from 'antd';
 import { BranchCapabilityPolicyModalEditor } from '../../permissions/CapabilityPolicyEditor';
+import { OwnershipTransfer } from '../../permissions/CapabilityPolicyEditor/OwnershipTransfer';
 
 interface PermissionsTabProps {
   loading: boolean;
+  branchId?: string;
+  onTransferred?: () => void;
+  saving?: boolean;
   canManageAccess: boolean;
   allGroups: Group[];
   currentUser?: User | null;
@@ -25,6 +29,9 @@ interface PermissionsTabProps {
 
 export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   loading,
+  branchId,
+  onTransferred,
+  saving,
   canManageAccess,
   allGroups,
   currentUser,
@@ -45,6 +52,21 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <BranchCapabilityPolicyModalEditor
+        ownershipAction={
+          branchId &&
+          onTransferred && (
+            <OwnershipTransfer
+              kind="branch"
+              resourceId={branchId}
+              ownerUserId={capabilityPolicy.primary_owner_user_id}
+              client={client}
+              users={permissionUsers}
+              currentUser={currentUser}
+              disabled={saving}
+              onTransferred={onTransferred}
+            />
+          )
+        }
         value={capabilityPolicy}
         onChange={onCapabilityPolicyChange}
         client={client}

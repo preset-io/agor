@@ -25,7 +25,61 @@ const readJournals = () =>
     ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
   );
 
+describe('management ownership migration', () => {
+  it('removes only SQLite immutability triggers without rewriting owners or authorship', async () => {
+    const client = createClient({ url: ':memory:' });
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE users (user_id TEXT PRIMARY KEY);
+        CREATE TABLE boards (board_id TEXT PRIMARY KEY, primary_owner_user_id TEXT, created_by TEXT);
+        CREATE TABLE branches (branch_id TEXT PRIMARY KEY, primary_owner_user_id TEXT, created_by TEXT);
+        CREATE TRIGGER boards_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON boards
+          WHEN NEW.primary_owner_user_id IS NOT OLD.primary_owner_user_id
+          BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+        CREATE TRIGGER branches_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON branches
+          WHEN NEW.primary_owner_user_id IS NOT OLD.primary_owner_user_id
+          BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+        CREATE TRIGGER users_protected_owner_restrict BEFORE DELETE ON users
+          WHEN EXISTS (SELECT 1 FROM boards WHERE primary_owner_user_id=OLD.user_id)
+            OR EXISTS (SELECT 1 FROM branches WHERE primary_owner_user_id=OLD.user_id)
+          BEGIN SELECT RAISE(ABORT, 'owns resources'); END;
+        INSERT INTO users VALUES ('creator'), ('successor');
+        INSERT INTO boards VALUES ('board', 'creator', 'creator');
+        INSERT INTO branches VALUES ('branch', 'creator', 'creator');
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0111_management_ownership_transfer.sql', import.meta.url),
+        'utf8'
+      );
+      await client.executeMultiple(migration);
+      for (const table of ['boards', 'branches']) {
+        expect(
+          (await client.execute(`SELECT primary_owner_user_id, created_by FROM ${table}`)).rows[0]
+        ).toEqual({ primary_owner_user_id: 'creator', created_by: 'creator' });
+        await client.execute(`UPDATE ${table} SET primary_owner_user_id='successor'`);
+        expect(
+          (await client.execute(`SELECT primary_owner_user_id, created_by FROM ${table}`)).rows[0]
+        ).toEqual({ primary_owner_user_id: 'successor', created_by: 'creator' });
+      }
+      await expect(client.execute("DELETE FROM users WHERE user_id='successor'")).rejects.toThrow(
+        'owns resources'
+      );
+    } finally {
+      client.close();
+    }
+  });
+});
+
 describe('Postgres migrations', () => {
+  it('keeps ownership transfer pending after the provider-grant migration in both journals', async () => {
+    for (const journal of await readJournals()) {
+      const previous = journal.entries.find(
+        ({ tag }) => tag === '0110_user_provider_oauth_grants'
+      )!;
+      const status = classifyMigrationWatermark(journal.entries, previous.when);
+      expect(status.pending).toContain('0111_management_ownership_transfer');
+    }
+  });
   it('keeps provider grants pending and offline after the shipped branch-cleanup watermark', async () => {
     const journals = await readJournals();
     for (const [index, dialect] of (['postgresql', 'sqlite'] as const).entries()) {

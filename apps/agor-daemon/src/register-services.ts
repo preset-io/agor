@@ -299,6 +299,7 @@ import {
 } from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
+import { setupOwnershipTransferServices } from './services/ownership-transfer.js';
 import { createReposService } from './services/repos.js';
 import {
   createSchedulesService,
@@ -727,6 +728,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
   setupCapabilityPolicyServices(app, db, { allowSuperadmin });
+  setupOwnershipTransferServices(app, db);
 
   // `createBranch` is deliberately NOT a transport method: it takes `(id, data)`,
   // which is not the Feathers custom-method contract, and it is already exposed as

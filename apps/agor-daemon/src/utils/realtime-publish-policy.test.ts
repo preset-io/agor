@@ -7,6 +7,7 @@ import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  OWNERSHIP_TRANSFER_SERVICES,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -44,13 +45,15 @@ describe('realtimePublishPolicyFor', () => {
     expect(realtimePublishPolicyFor('boards')?.minimumRole).toBeUndefined();
   });
 
-  it.each(['mcp-catalog/connect', 'mcp-catalog/start-session', 'mcp-slack-recovery'])(
-    'keeps %s replies private to the caller',
-    (path) => {
-      expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
-      expect(isRealtimePublishAllowed(path)).toBe(false);
-    }
-  );
+  it.each([
+    'mcp-catalog/connect',
+    'mcp-catalog/start-session',
+    'mcp-slack-recovery',
+    ...Object.values(OWNERSHIP_TRANSFER_SERVICES),
+  ])('keeps %s replies private to the caller', (path) => {
+    expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
+    expect(isRealtimePublishAllowed(path)).toBe(false);
+  });
 
   it('requires every entry to explain itself', () => {
     for (const [path, policy] of Object.entries(REALTIME_PUBLISH_POLICY)) {
@@ -168,6 +171,13 @@ describe('source scan: every registered path is declared', () => {
       // line for `app.use('/x', …)` and a line or two down for the multi-line
       // `registerAuthenticatedRoute(\n  app,\n  '/x',` form.
       const window = [line.slice(start), ...lines.slice(index + 1, index + 5)].join('\n');
+      // Ownership registers the two shared route constants in one kind loop.
+      if (/\.use\(\s*OWNERSHIP_TRANSFER_SERVICES\[kind\]/.test(window)) {
+        for (const path of Object.values(OWNERSHIP_TRANSFER_SERVICES)) {
+          found.push({ path, line: index + 1 });
+        }
+        return;
+      }
       const literal = window.match(/['"]([^'"\n]*)['"]/);
       if (!literal) return;
       found.push({ path: literal[1].replace(/^\/+/, '').replace(/\/+$/, ''), line: index + 1 });

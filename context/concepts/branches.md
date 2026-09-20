@@ -18,7 +18,7 @@ Conventional unit: **1 branch = 1 feature / 1 PR / 1 dev environment**.
 
 The `branches` table is normalized (was nested in `repos` JSON historically):
 
-- Materialized columns for query/index include `name`, `ref`, `path`, `branch`, `issue_url`, `pull_request_url`, `board_id`, `unique_id` (port assignment), immutable `primary_owner_user_id`, and `permission_binding` (`inherit | override`).
+- Materialized columns for query/index include `name`, `ref`, `path`, `branch`, `issue_url`, `pull_request_url`, `board_id`, `unique_id` (port assignment), explicitly transferable `primary_owner_user_id`, and `permission_binding` (`inherit | override`).
 - Other state (notes, env config overrides, etc.) lives in JSON.
 - `branch_permission_configs` and `branch_permission_entries` are always authoritative. The complete config also stores the shared-session prompt switch. A branch either inherits its board's entire template or uses one complete override. Historical owner/grant fields are inert compatibility shells.
 

@@ -10,8 +10,8 @@ import { Alert, Button, Divider, Flex, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
-import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
 import { PolicyModeSelector, type PolicyModeSelectorValue } from './PolicyModeSelector';
+import { PrimaryOwner } from './PrimaryOwner';
 import {
   capabilityPolicyHasAudience,
   makePrivatePolicy,
@@ -25,6 +25,7 @@ interface BranchCapabilityPolicyFormProps {
   subjects: EffectiveAccessSubject[];
   sessionSharingWorkspaceEnabled?: boolean;
   canManageAccess?: boolean;
+  ownershipAction?: React.ReactNode;
 }
 
 function findUserDescriptor(
@@ -57,6 +58,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   subjects,
   sessionSharingWorkspaceEnabled = true,
   canManageAccess = true,
+  ownershipAction,
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
@@ -119,7 +121,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
           Branch permissions
         </Typography.Title>
       </div>
-      <ImmutablePrimaryOwner owner={owner} resourceLabel="branch" />
+      <PrimaryOwner action={ownershipAction} owner={owner} resourceLabel="branch" />
       <Divider style={{ marginBlock: 0 }} />
 
       <PolicyModeSelector

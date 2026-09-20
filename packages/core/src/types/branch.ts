@@ -415,7 +415,7 @@ export interface Branch {
 
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
-  /** Immutable primary owner. This is intentionally independent of attribution. */
+  /** Primary owner, changed only by explicit ownership transfer; independent of attribution. */
   primary_owner_user_id?: UUID;
 
   /** Whether the complete branch permission package is inherited or overridden. */

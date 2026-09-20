@@ -16,6 +16,40 @@ const renderWithTheme = (node: React.ReactNode) =>
   render(<ConfigProvider theme={{ token: { motion: false } }}>{node}</ConfigProvider>);
 
 describe('shared capability policy forms', () => {
+  it('places the board ownership action beside the owner', () => {
+    renderWithTheme(
+      <BoardCapabilityPolicyForm
+        value={cloneBoardPrototypeFixture('shared-board')}
+        onChange={() => undefined}
+        principals={PROTOTYPE_PRINCIPALS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
+        sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
+        ownershipAction={<button type="button">Transfer ownership</button>}
+      />
+    );
+    expect(screen.getByLabelText('Primary owner for this board')).toContainElement(
+      screen.getByRole('button', { name: 'Transfer ownership' })
+    );
+    expect(screen.queryByText(/read only/)).not.toBeInTheDocument();
+  });
+
+  it('places the branch ownership action beside the owner, outside access drafts', () => {
+    renderWithTheme(
+      <BranchCapabilityPolicyForm
+        value={cloneBranchPrototypeFixture('inherited-branch')}
+        onChange={() => undefined}
+        principals={PROTOTYPE_PRINCIPALS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
+        ownershipAction={<button type="button">Transfer ownership</button>}
+      />
+    );
+    expect(screen.getByLabelText('Primary owner for this branch')).toContainElement(
+      screen.getByRole('button', { name: 'Transfer ownership' })
+    );
+    expect(screen.getByText('Primary owner')).toBeInTheDocument();
+    expect(screen.queryByText(/read only/)).not.toBeInTheDocument();
+  });
+
   it('shows the primary owner and explicit Others fallback semantics', () => {
     const value = cloneBoardPrototypeFixture('shared-board');
     renderWithTheme(

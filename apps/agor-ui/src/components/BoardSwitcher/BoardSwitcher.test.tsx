@@ -129,6 +129,35 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     expect(modalProps.current?.board).toBe(board);
   });
 
+  it.each(['fallback-board', null])(
+    'keeps the open editor target when access loss navigates to %s',
+    async (fallbackId) => {
+      const client = clientFor();
+      const fallback = { ...board, board_id: 'fallback-board', name: 'Another board' } as Board;
+      const props = {
+        onBoardChange: vi.fn(),
+        branchById: new Map(),
+        client,
+        currentUser: owner,
+      };
+      const { rerender } = render(
+        <BoardSwitcher {...props} boards={[board, fallback]} currentBoardId={board.board_id} />
+      );
+      fireEvent.click(await screen.findByRole('button', { name: /Edit current board:/ }));
+
+      // A private-board transfer removes the old owner's board and may select
+      // a fallback before the command's response/Done interaction completes.
+      rerender(<BoardSwitcher {...props} boards={[fallback]} currentBoardId={fallbackId} />);
+      expect(screen.getByRole('dialog')).toBeVisible();
+      expect(modalProps.current?.board).toBe(board);
+
+      const onClose = modalProps.current?.onClose as () => void;
+      act(onClose);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(modalProps.current?.board).toBeNull();
+    }
+  );
+
   it('overlays the edit action without reserving trigger width', async () => {
     renderSwitcher();
     const edit = await screen.findByRole('button', { name: /Edit current board:/ });

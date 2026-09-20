@@ -25,7 +25,13 @@ import {
   getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import { type Branch, type HookContext, type Task, TaskStatus } from '@agor/core/types';
+import {
+  type Branch,
+  type HookContext,
+  OWNERSHIP_TRANSFER_SERVICES,
+  type Task,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -104,6 +110,8 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     ['users', 'patch', { must_change_password: true }],
     ['users', 'update', { must_change_password: false }],
     ['users', 'remove', {}],
+    [OWNERSHIP_TRANSFER_SERVICES.branch, 'patch', {}],
+    [OWNERSHIP_TRANSFER_SERVICES.board, 'patch', {}],
     ['branches/:id/permissions', 'patch', {}],
     ['boards/:id/permissions', 'patch', {}],
     ['group-memberships', 'remove', {}],

@@ -238,20 +238,30 @@ dbTest(
         ).rejects.toThrow('filesystem_status is managed');
       }
       await runWithTenantDatabaseScope(db, 'default', async () => {
+        const branches = new BranchRepository(db);
+        // A valid command token cannot overwrite an already-terminal branch.
+        await expect(
+          fixture.service.patch(branch.branch_id, { filesystem_status: 'failed' }, params(payload))
+        ).resolves.toMatchObject({ filesystem_status: 'ready' });
+        await branches.update(branch.branch_id, { filesystem_status: 'failed' });
         for (const filesystem_status of ['failed', 'ready'] as const) {
-          // Terminal acknowledgements only apply to an active provisioning attempt.
-          // Seed each attempt independently; a settled branch must not be rewritten.
-          await new BranchRepository(db).update(branch.branch_id, {
-            filesystem_status: 'creating',
-          });
+          // Each terminal acknowledgement must belong to its own active attempt.
+          const attemptId = generateId();
+          expect(
+            (await branches.claimFailedForProvisioningRetry(branch.branch_id, attemptId)).claimed
+          ).toBe(true);
           await expect(
-            fixture.service.patch(branch.branch_id, { filesystem_status }, params(payload))
+            fixture.service.patch(
+              branch.branch_id,
+              { filesystem_status, provisioning_attempt_id: attemptId },
+              params(payload)
+            )
           ).resolves.toMatchObject({ filesystem_status });
           const staleOutcome = filesystem_status === 'ready' ? 'failed' : 'ready';
           await expect(
             fixture.service.patch(
               branch.branch_id,
-              { filesystem_status: staleOutcome },
+              { filesystem_status: staleOutcome, provisioning_attempt_id: attemptId },
               params(payload)
             )
           ).resolves.toMatchObject({ filesystem_status });
