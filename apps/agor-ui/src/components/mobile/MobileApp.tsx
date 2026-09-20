@@ -34,6 +34,7 @@ import {
 } from '../../store/selectors';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
@@ -49,6 +50,7 @@ import { MobileSearchPage } from './MobileSearchPage';
 import { MobileSessionsPage } from './MobileSessionsPage';
 import { type MobileTab, MobileTabBar } from './MobileTabBar';
 import { SessionPage } from './SessionPage';
+import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
 
 interface MobileAppProps {
@@ -179,17 +181,33 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   // Track the board in view so the Board / Comments tabs have a target even from
   // the Sessions tab. Falls back to the user's main board, then any board.
-  const routeBoardId = location.pathname.match(/^\/m\/(?:board|comments)\/([^/]+)/)?.[1];
+  const boardToken = location.pathname.match(/^\/m\/(?:board|comments)\/([^/]+)/)?.[1];
+  const sessionToken = location.pathname.match(/^\/m\/session\/([^/]+)/)?.[1];
+  const routedSessionId = sessionToken
+    ? sessionById.has(sessionToken)
+      ? sessionToken
+      : resolveSessionFromShortIdPure(sessionToken, sessionById)
+    : null;
+  const routeBoardId = boardToken
+    ? boardById.has(boardToken)
+      ? boardToken
+      : resolveBoardFromUrlPure(boardToken, boardById)
+    : sessionBoardId(
+        routedSessionId ? sessionById.get(routedSessionId) : undefined,
+        branchById,
+        boardById
+      );
   const [currentBoardId, setCurrentBoardId] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (routeBoardId) setCurrentBoardId(routeBoardId);
   }, [routeBoardId]);
   const effectiveBoardId = useMemo(() => {
+    if (routeBoardId && boardById.has(routeBoardId)) return routeBoardId;
     if (currentBoardId && boardById.has(currentBoardId)) return currentBoardId;
     const mainBoardId = user?.preferences?.mainBoardId;
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
-  }, [currentBoardId, boardById, user?.preferences?.mainBoardId]);
+  }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
@@ -451,6 +469,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             element={
               <SessionPage
                 client={client}
+                boardById={boardById}
                 sessionById={sessionById}
                 branchById={branchById}
                 currentUser={user}
