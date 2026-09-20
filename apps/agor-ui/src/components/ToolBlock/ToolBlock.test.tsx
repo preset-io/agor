@@ -7,6 +7,7 @@ import {
   COMPACT_CONTENT_OFFSET,
   COMPACT_GUTTER_GAP,
   COMPACT_GUTTER_SIZE,
+  COMPACT_NESTED_INDENT,
 } from '../ConversationView/compactLayout';
 import { ToolBlock, type ToolBlockProps } from './ToolBlock';
 
@@ -60,10 +61,23 @@ describe('ToolBlock compact grid', () => {
     expect(bodyOf()).toHaveStyle({ paddingLeft: `${COMPACT_CONTENT_OFFSET}px` });
   });
 
-  it('keeps a nested list of rows in the gutter instead of insetting it', () => {
-    renderRow({ compact: true, nestedRows: true, expandedByDefault: true });
+  it('nests a list of rows under its parent behind a themed guide line', () => {
+    render(
+      <ConfigProvider theme={{ token: { colorSplit: 'rgb(0, 0, 255)' } }}>
+        <ToolBlock compact nestedRows expandedByDefault icon={<CloseCircleOutlined />} name="Task">
+          <span data-testid="row-body">step</span>
+        </ToolBlock>
+      </ConfigProvider>
+    );
 
-    expect(bodyOf()).toHaveStyle({ paddingLeft: '0px' });
+    const body = bodyOf();
+    // The guide line sits in the middle of the inset, so children read as
+    // children while keeping their own gutter inside it.
+    expect(body).toHaveStyle({
+      marginLeft: `${COMPACT_NESTED_INDENT}px`,
+      paddingLeft: `${COMPACT_NESTED_INDENT}px`,
+      borderLeft: '1px solid rgb(0, 0, 255)',
+    });
   });
 
   it('leaves the detailed row on its own indent', () => {

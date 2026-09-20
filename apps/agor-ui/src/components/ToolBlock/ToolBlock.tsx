@@ -15,6 +15,7 @@ import {
   COMPACT_CONTENT_OFFSET,
   COMPACT_GUTTER_GAP,
   COMPACT_GUTTER_SIZE,
+  COMPACT_NESTED_INDENT,
 } from '../ConversationView/compactLayout';
 
 export interface ToolBlockProps {
@@ -37,7 +38,8 @@ export interface ToolBlockProps {
   compact?: boolean;
   /**
    * Compact only. Set when the body is itself a list of compact rows, so they
-   * keep the shared gutter instead of insetting under this row's label.
+   * read as children of this row: slightly inset behind a guide line, keeping
+   * their own gutter rather than aligning to this row's content edge.
    */
   nestedRows?: boolean;
 }
@@ -154,9 +156,22 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
         <div
           style={{
             marginTop: 2,
-            paddingLeft: compact ? (nestedRows ? 0 : COMPACT_CONTENT_OFFSET) : token.sizeUnit * 4,
+            paddingLeft: compact
+              ? nestedRows
+                ? COMPACT_NESTED_INDENT
+                : COMPACT_CONTENT_OFFSET
+              : token.sizeUnit * 4,
             minWidth: 0,
             maxWidth: '100%',
+            // Nested rows are children of this one: a slight inset with a quiet
+            // guide line down the middle of it, while each child keeps its own
+            // [gutter][content] inside.
+            ...(compact && nestedRows
+              ? {
+                  marginLeft: COMPACT_NESTED_INDENT,
+                  borderLeft: `1px solid ${token.colorSplit}`,
+                }
+              : null),
           }}
         >
           {children}
