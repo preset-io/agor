@@ -1878,11 +1878,11 @@ function constructDaemonLocalUrl(config: AgorConfig): string {
 }
 
 /**
- * Shared base URL resolver for browser-reachable URLs.
+ * Shared deployment-config resolver for browser-reachable URLs.
  *
- * All three public resolvers ({@link getBaseUrl}, {@link getDaemonBaseUrl},
- * {@link requirePublicBaseUrl}) differ only in which config key they prefer
- * and whether a missing explicit URL should throw.
+ * Used by {@link getDaemonBaseUrl}, {@link requirePublicBaseUrl}, and the
+ * static/local path of {@link getBaseUrl}. Hosted entity links instead resolve
+ * trusted tenant routing from the database and never use this fallback.
  *
  * @param prefer - `'ui'` checks `ui.base_url` first (for browser entity links),
  *   `'daemon'` checks `daemon.base_url` first (for API endpoints / OAuth).

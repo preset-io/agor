@@ -1,10 +1,16 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os, { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
+import {
+  __resetConfigCacheForTests,
+  type AgorConfig,
+  loadConfig,
+  resolveExternalLaunchSettings,
+} from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
+  BoardRepository,
   createDatabase,
   eq,
   hash,
@@ -173,6 +179,58 @@ describe('one-time launch auth service', () => {
     mockExchange(signClaims({ public_base_url: 'https://new.example.test', iat: issuedAt + 1 }));
     await service().create({ launchCode: 'newer' });
     await expect(read()).resolves.toMatchObject({ public_base_url: 'https://new.example.test' });
+  });
+
+  it('projects hosted repository links from signed tenant routing, not caller tenant params', async () => {
+    // Install hosted config only after the isolated SQLite fixture is created.
+    // PostgreSQL RLS itself is covered by the core integration suite.
+    const home = mkdtempSync(join(tmpdir(), 'agor-hosted-launch-test-'));
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    mkdirSync(join(home, '.agor'));
+    writeFileSync(
+      join(home, '.agor/config.yaml'),
+      `database:
+  dialect: postgresql
+multi_tenancy:
+  mode: required_from_auth
+  auth_claim: tenant_id
+  filesystem_isolation_enabled: true
+execution:
+  branch_storage:
+    default_mode: clone
+    allowed_modes: [clone]
+`
+    );
+    vi.stubEnv('AGOR_BASE_URL', 'https://cell.example.test');
+    __resetConfigCacheForTests();
+    try {
+      mockExchange(
+        signClaims({ tenant_id: 'tenant-a', public_base_url: 'https://tenant-a.example.test' })
+      );
+      const callerParams = {
+        tenant: { tenant_id: 'tenant-b', source: 'auth_claim' },
+        headers: { 'x-agor-tenant-id': 'tenant-b', host: 'tenant-b.example.test' },
+      };
+      await service({ ...(await loadConfig()), ...baseConfig() }).create(
+        { launchCode: 'hosted' },
+        callerParams
+      );
+      await runWithTenantDatabaseScope(db, 'tenant-a', async (scoped) => {
+        const boards = await new BoardRepository(scoped).findAll();
+        expect(boards.length).toBeGreaterThan(0);
+        for (const board of boards) {
+          expect(board.url).toMatch(/^https:\/\/tenant-a\.example\.test\/ui\//);
+        }
+      });
+      await runWithTenantDatabaseScope(db, 'tenant-b', (scoped) =>
+        expect(new TenantPublicRoutingRepository(scoped).find()).resolves.toBeNull()
+      );
+    } finally {
+      homedir.mockRestore();
+      vi.unstubAllEnvs();
+      __resetConfigCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it.each(['https://user:secret@host.test', 'https://host.test?secret=value', '//host.test'])(
