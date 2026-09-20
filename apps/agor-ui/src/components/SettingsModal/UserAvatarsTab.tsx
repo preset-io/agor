@@ -185,7 +185,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <div>
-        <Typography.Title level={4} style={{ margin: 0 }}>
+        <Typography.Title level={4} style={{ margin: 0, fontWeight: 500 }}>
           User Slack avatars
         </Typography.Title>
         <Typography.Text type="secondary">
