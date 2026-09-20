@@ -318,13 +318,8 @@ it('refreshes separator bounds on a constraint-only resize without remounting th
   const oldMaximum = divider().getAttribute('aria-valuemax');
   const proportions = divider().getAttribute('aria-valuenow');
   rerender(<Harness count={25} height={500} />);
+  await expectCurrentResizeBounds();
   await waitFor(() => {
-    const available = transcript.clientHeight + queueHeight();
-    expect(divider()).toHaveAttribute('aria-valuemax', String(Math.round(100 - 8000 / available)));
-    expect(divider()).toHaveAttribute(
-      'aria-valuemin',
-      String(Math.round(Math.max(50, Math.min(240 / available, 0.6) * 100)))
-    );
     expect(divider().getAttribute('aria-valuemax')).not.toBe(oldMaximum);
     expect(divider()).toHaveAttribute('aria-valuenow', proportions);
   });
