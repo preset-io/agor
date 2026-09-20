@@ -24,9 +24,43 @@ import {
  *    catch into a generic refusal, or swallowed entirely;
  *  - and a suite that stubs every repository, so there is no guard to trip.
  *
- * Every fix so far was per-site. The durable answer is to make the policy
- * EXPLICIT AT REGISTRATION, so that adding a service without deciding where its
- * scope comes from is not something a pull request can do quietly.
+ * Every fix so far was per-site. This makes the policy EXPLICIT AT
+ * REGISTRATION, so that adding a service without deciding where its scope comes
+ * from is not something a pull request can do quietly.
+ *
+ * ## What this is, stated precisely
+ *
+ * A **Feathers registration coverage gate**, plus a safer data-access
+ * convention (`utils/tenant-bound-data-access.ts`). The gate compares
+ * `Object.keys(app.services)` against a table of declarations and refuses to
+ * boot when a path has none. That is the whole mechanism.
+ *
+ * It does NOT verify that a service's database access matches its declaration,
+ * and it cannot: nothing here reads a handler, inspects a registrar, or
+ * instruments a query. `tenant-service-classification.limits.test.ts` drives
+ * each escape below against this assertion and pins the PASSING result, so the
+ * limits are discoverable rather than assumed:
+ *
+ *  - a service declared `identity-only` that keeps a raw
+ *    `TenantScopeAwareDatabase` and makes exactly the unscoped call every
+ *    defect in this class was made of is admitted. A declaration is a claim,
+ *    not a proof;
+ *  - a `scoped` entry in {@link TENANT_SERVICE_CLASSIFICATIONS} is admitted
+ *    whether or not its registration installs the hook. Only membership in
+ *    {@link TENANT_OWNED_SERVICE_PATHS} — or registration through
+ *    `createTenantScopedAuthenticatedRouteRegistrar` — installs one; a
+ *    hand-written `scoped` here asserts something this file cannot check;
+ *  - new code INSIDE an already-classified service needs no new declaration: a
+ *    fresh method, a timer it starts, a sweep callback it registers;
+ *  - Express handlers are not services. `app.post('/mcp-egress/:serverId', …)`
+ *    never appears in `app.services`, so it is outside this gate entirely;
+ *  - the assertion runs ONCE, at boot (Phase 3.6 in `index.ts`). Anything
+ *    registered after it is never looked at.
+ *
+ * Closing those means connecting classification to the actual registrar or to
+ * injected dependencies, which is a platform change rather than this
+ * mechanism. What the gate does buy is the one thing every defect in the class
+ * shared at registration time: a path nobody had decided about.
  *
  * ## The three answers
  *
@@ -190,15 +224,19 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
  *  1. An entry that is no longer registered, or that has since been classified,
  *     FAILS the check with "remove it from the baseline" — so the list cannot
  *     go stale and quietly keep permitting something.
- *  2. `check:multitenancy-boundaries` caps the number of entries in this file
- *     at the count recorded in `scripts/check-multitenancy-boundaries.mjs`, and
- *     that number may only be lowered. A 58th entry fails CI.
+ *  2. `check:multitenancy-boundaries` compares the `BASELINE-ENTRY` names in
+ *     this file against `APPROVED_UNCLASSIFIED_SERVICE_BASELINE` in
+ *     `scripts/check-multitenancy-boundaries.mjs`. A name that is not approved
+ *     fails CI, and so does an approved name that has left this file without
+ *     leaving the script — which is what keeps a classified service from being
+ *     re-listed later. A count could not do either: swapping one entry for
+ *     another leaves the total at 57.
  *
  * So the way to add a service is to classify it, not to list it here. Shrinking
  * it is a platform sweep for another day; a feature pull request classifies
  * what it owns and leaves the rest.
  *
- * Each line is one `BASELINE-ENTRY` for the count in the check script.
+ * Each line is one `BASELINE-ENTRY`, which is what the check script reads.
  */
 export const UNCLASSIFIED_SERVICE_BASELINE: readonly string[] = [
   'session-streams', // BASELINE-ENTRY

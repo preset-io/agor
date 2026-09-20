@@ -53,6 +53,26 @@ import type { TenantID } from '@agor/core/types';
  * it is `bindRepositoryToTenantUnitOfWork` verbatim, shared with every other
  * binder in the codebase, and tightening it is a platform change rather than
  * this facade's.
+ *
+ * ## Not a capability sandbox
+ *
+ * This narrows what is reachable by ACCIDENT, not by construction, and the
+ * difference matters when reading the guarantee:
+ *
+ *  - `read` and `write` hand the callback the scoped handle itself. A callback
+ *    may retain it, pass it to a free function, or keep using it after the unit
+ *    has closed. Nothing revokes it at the end of the call.
+ *  - `read` is a name, not an enforcement. The handle it supplies is a normal
+ *    database handle and a `read` callback can write through it — what `write`
+ *    adds is the per-tenant write gate, not the ability.
+ *  - The holder of the facade cannot reach the RAW handle, which is the move
+ *    that produced the defects; a holder of one of ITS callbacks' arguments is
+ *    inside a scope already, which is the property that was missing.
+ *
+ * So the guarantee is narrow and exact: every access through this object enters
+ * a tenant database scope first, and names a tenant while doing it. Anything
+ * stronger needs a capability-restricted handle, which this is not.
+ * `tenant-bound-data-access.test.ts` pins both limits.
  */
 export interface TenantBoundDataAccess {
   /**

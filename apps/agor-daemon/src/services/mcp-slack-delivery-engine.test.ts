@@ -38,6 +38,7 @@ import {
   slackDeliveryClaim,
   slackDeliveryClaimIsLive,
   slackDeliveryRepairAt,
+  slackDeliveryRetryDisposition,
   slackRenderWasLost,
 } from './mcp-slack-delivery-engine.js';
 
@@ -463,6 +464,95 @@ describe('recordSlackDeliveryFailure', () => {
     });
     expect(target.current()!.delivery_attempt_count).toBe(MCP_SLACK_DELIVERY_MAX_ATTEMPTS);
     expect(retries).toHaveLength(0);
+  });
+
+  it('reports an exhausted retry window as stranded, before the attempt ceiling', async () => {
+    // The laundering this closes: terminal was tested by counting to six, but
+    // `applySlackDeliveryFailure` also gives up when the next backoff would
+    // land past `delivery_retry_until`. A card stranded that way — nothing
+    // reschedules it, nothing revisits it — was reported as a routine `warn`
+    // with `stranded=false`, indistinguishable from a first transient failure.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const target = store({
+      delivery_claim: claim,
+      delivery_attempt_count: 1,
+      // The window closes in a second; the next backoff is fifteen.
+      delivery_retry_until: new Date(Date.now() + 1_000).toISOString(),
+    });
+    const retries: number[] = [];
+    await recordSlackDeliveryFailure(target, {
+      lane: 'connect',
+      reason: 'slack_write_failed',
+      claimId: 'c1',
+      scheduleRetry: (delay) => retries.push(delay),
+    });
+
+    expect(target.current()!.delivery_next_retry_at).toBeUndefined();
+    expect(retries).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+    const line = error.mock.calls.at(-1)?.[0] as string;
+    expect(line).toContain('stranded=true');
+    expect(line).toContain('disposition=retry_window_exhausted');
+    // Two attempts, not six: the count is not what made it terminal.
+    expect(line).toContain(`attempt=2/${MCP_SLACK_DELIVERY_MAX_ATTEMPTS}`);
+    error.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('distinguishes lost ownership and failed accounting from an ending', async () => {
+    // Neither is terminal for the CARD, and neither is this daemon's to
+    // report as one: another claimant will retry the first, and the second
+    // leaves the claim to expire. They were both `stranded=false retrying=false`
+    // — the same line an exhausted card used to produce.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const foreign = store({ delivery_claim: { ...claim, claim_id: 'c2' } });
+    await recordSlackDeliveryFailure(foreign, {
+      lane: 'connect',
+      reason: 'slack_write_failed',
+      claimId: 'c1',
+      scheduleRetry: () => undefined,
+    });
+    expect(warn.mock.calls.at(-1)?.[0]).toContain('disposition=ownership_lost');
+
+    const broken: SlackDeliveryStore<SlackDeliveryRecord> = {
+      logIds: { entity_id: 'entity-1' },
+      identifies: () => true,
+      write: async () => {
+        throw new Error('row lock lost');
+      },
+    };
+    await recordSlackDeliveryFailure(broken, {
+      lane: 'recovery',
+      reason: 'slack_write_failed',
+      claimId: 'c1',
+      scheduleRetry: () => undefined,
+    });
+    const line = warn.mock.calls.at(-1)?.[0] as string;
+    expect(line).toContain('disposition=accounting_failed');
+    expect(line).toContain('stranded=false');
+    warn.mockRestore();
+  });
+
+  it('derives the disposition from the persisted record alone', () => {
+    // The unit underneath the three cases above: no re-decision, no clock.
+    expect(slackDeliveryRetryDisposition(undefined)).toBe('accounting_failed');
+    expect(slackDeliveryRetryDisposition({ changed: false, record: {} })).toBe('ownership_lost');
+    expect(
+      slackDeliveryRetryDisposition({
+        changed: true,
+        record: { delivery_attempt_count: 2, delivery_next_retry_at: 'later' },
+      })
+    ).toBe('retrying');
+    expect(
+      slackDeliveryRetryDisposition({ changed: true, record: { delivery_attempt_count: 2 } })
+    ).toBe('retry_window_exhausted');
+    expect(
+      slackDeliveryRetryDisposition({
+        changed: true,
+        record: { delivery_attempt_count: MCP_SLACK_DELIVERY_MAX_ATTEMPTS },
+      })
+    ).toBe('attempts_exhausted');
   });
 
   it('still reports a failure the durable write could not record', async () => {

@@ -120,8 +120,8 @@ reviewer: a route registered outside `TENANT_OWNED_SERVICE_PATHS` reaches a free
 function or unbound repository from identity-only context, the resulting
 `MissingTenantDatabaseScopeError` is laundered by a fail-closed catch into a
 generic refusal or swallowed by a sweep, and the suite stubs every repository so
-there is no guard to trip. Declaring the answer at registration is what stops
-new code from reintroducing it.
+there is no guard to trip. Declaring the answer at registration is what stops a
+pull request from adding a service nobody decided about.
 
 An `identity-only` service must reach the database through
 `createTenantBoundDataAccess` or a repository bound with
@@ -133,6 +133,36 @@ work; **a pinned tenant is not authorization** and must never be traceable to
 caller input that skipped identity resolution, which is why it demands a written
 justification at the construction site.
 
+### What the gate is, and what it does not catch
+
+It is a **Feathers registration coverage gate plus a safer data-access
+convention** — not a proof that a service's database access follows its
+declaration. `assertTenantServiceClassification` compares
+`Object.keys(app.services)` against the declaration tables and refuses to boot
+on a path with no answer. Nothing reads a handler, inspects a registrar, or
+instruments a query, so all of these pass today and are pinned as passing in
+`tenant-service-classification.limits.test.ts`:
+
+- an `identity-only` service that keeps a raw handle and makes exactly the
+  unscoped call every defect in this class was made of — a declaration is a
+  claim, not a proof;
+- a `scoped` entry in `TENANT_SERVICE_CLASSIFICATIONS` whose registration never
+  installed the hook (only `TENANT_OWNED_SERVICE_PATHS` and
+  `createTenantScopedAuthenticatedRouteRegistrar` install one);
+- new code inside an already-classified service, or in a timer or sweep callback
+  it starts;
+- Express handlers, which are not in `app.services` at all
+  (`app.post('/mcp-egress/:serverId', …)` is a live example);
+- anything registered after the one-time boot assertion.
+
+The facade is likewise not a capability sandbox: `read`/`write` hand the
+callback the scoped handle, which it may retain or pass on, and `read` is a name
+rather than an enforcement. What both mechanisms buy is that every access
+through the facade enters a scope naming a tenant first, and that a new service
+cannot be registered without someone writing down where its scope comes from.
+Connecting classification to the registrar or to injected dependencies is the
+platform change that would make the class impossible; it is not what shipped.
+
 ### The baseline, and its shrink-only rule
 
 Services that predate the mechanism are listed in
@@ -141,8 +171,11 @@ Services that predate the mechanism are listed in
 - A **new or newly-unclassified** service fails the boot assertion and its test.
 - An entry that has since been classified, or is no longer registered, fails the
   test with "remove it from the baseline".
-- `check:multitenancy-boundaries` caps the number of `BASELINE-ENTRY` markers in
-  that file; the number in the script may only be lowered.
+- `check:multitenancy-boundaries` compares the `BASELINE-ENTRY` NAMES in that
+  file against `APPROVED_UNCLASSIFIED_SERVICE_BASELINE` in the script. An
+  unapproved name fails, and so does an approved name that left the file without
+  leaving the script, so a classified service cannot be re-listed later. A count
+  could not express either: swapping one entry for another keeps the total.
 
 So the way to add a service is to classify it. Classifying the whole daemon is a
 platform sweep for another day — a feature pull request classifies the services

@@ -208,8 +208,19 @@ export function mcpSlackConnectCardCopy(
         button: clampButton(`Connect ${serverName}`),
       };
     case 'sign_in_pending':
+      // Two arrivals share this state, so the instruction is conditional. The
+      // common one is a sign-in actually in flight. The other is a resolution
+      // somebody started and abandoned that this card can never finish — most
+      // visibly a "Not now" whose resolver died, which holds a `dismiss` claim
+      // the finish button's `oauth_callback` may not take over (§7.1.13, B3).
+      // That reader has no browser tab, and telling them to go back to one is
+      // the only thing this copy could get wrong: the card offers nothing
+      // either way. A separate state would say it better and would mean a new
+      // persisted `rendered_state` value for a copy difference.
       return {
-        text: `*Connecting ${serverName}*\nSign-in is in progress. Finish it in the browser tab Agor opened — this message updates when it lands.`,
+        text:
+          `*Connecting ${serverName}*\nAgor is still working on this request. If you started a ` +
+          `sign-in, finish it in the browser tab Agor opened — this message updates when it lands.`,
       };
     case 'finish_required':
       return {

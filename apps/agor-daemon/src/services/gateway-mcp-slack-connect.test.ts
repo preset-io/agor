@@ -12,6 +12,7 @@ import {
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   isMCPSlackConnectCardEnabled,
+  MissingTenantDatabaseScopeError,
   runMigrations,
   runWithTenantContext,
 } from '@agor/core/db';
@@ -59,7 +60,12 @@ vi.mock('@agor/core/db', async () => {
 // the real read — which, against the harness's stand-in database handle,
 // answers "no grant" the same way the production read would for a user who has
 // not signed in.
-const grantLiveness = vi.hoisted(() => ({ live: false, refreshable: false }));
+const grantLiveness = vi.hoisted(() => ({
+  live: false,
+  refreshable: false,
+  /** A read that fails rather than answering. See the swallowed-read test. */
+  throws: null as null | Error,
+}));
 vi.mock('./mcp-oauth-grant-liveness.js', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('./mcp-oauth-grant-liveness.js');
   return {
@@ -68,11 +74,14 @@ vi.mock('./mcp-oauth-grant-liveness.js', async () => {
     // stubbed: the whole point of D4.1 is that the delivery loop asks the same
     // verdict every other surface asks, so a test that also stubbed the
     // verdict could not see it drift.
-    resolveMCPOAuthGrantLiveness: async () => ({
-      live: grantLiveness.live,
-      reason: grantLiveness.live ? 'live' : grantLiveness.refreshable ? 'expired' : 'no_grant',
-      refreshable: grantLiveness.refreshable,
-    }),
+    resolveMCPOAuthGrantLiveness: async () => {
+      if (grantLiveness.throws) throw grantLiveness.throws;
+      return {
+        live: grantLiveness.live,
+        reason: grantLiveness.live ? 'live' : grantLiveness.refreshable ? 'expired' : 'no_grant',
+        refreshable: grantLiveness.refreshable,
+      };
+    },
   };
 });
 
@@ -599,6 +608,7 @@ describe('Slack MCP connect durable delivery', () => {
     killSwitch.stub = async () => true;
     grantLiveness.live = false;
     grantLiveness.refreshable = false;
+    grantLiveness.throws = null;
   });
 
   const SECRET = 'connect-card-test-master-secret';
@@ -940,6 +950,47 @@ describe('Slack MCP connect durable delivery', () => {
     } finally {
       warn.mockRestore();
       error.mockRestore();
+    }
+  });
+
+  /**
+   * The other half of the same rule, on the read this lane swallows on
+   * purpose.
+   *
+   * A grant-liveness read that THROWS must still render the card as
+   * not-connected — offering a finish the resolver would refuse is the defect
+   * D4.1 closed — but the delivery then succeeds, so the sweep's per-item
+   * `.catch` never sees it. That silence is how four of six tenant-scope
+   * defects reached a running daemon: the symptom was "the card says you are
+   * not connected", which is also what a genuine absence looks like.
+   */
+  it('reports a grant-liveness read it swallowed, and still fails closed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      grantLiveness.live = true; // Connected — if the read had worked.
+      grantLiveness.throws = new MissingTenantDatabaseScopeError('card read of the grant');
+      const harness = deliveryHarness({ delivery: null });
+      await withSecret(() => harness.deliver());
+
+      // Fail closed: the verdict is still "no credential on file".
+      expect(harness.current()?.rendered_state).toBe('connect_required');
+
+      const line = warn.mock.calls
+        .map((call) => String(call[0]))
+        .find((text) => text.includes('event=mcp_slack_repair_failed'));
+      expect(line).toBeDefined();
+      expect(line).toContain('lane=connect');
+      // The stage is what separates this from a repair pass that threw: the
+      // delivery succeeded, and this one read did not.
+      expect(line).toContain('stage=grant_liveness');
+      expect(line).toContain('reason=missing_tenant_scope');
+      expect(line).toContain(`first_entity_id=${WIDGET_ID}`);
+      expect(line).toContain('tenant_id=tenant-a');
+      // Nothing the exception or the provider said.
+      expect(line).not.toMatch(/card read of the grant|Error|C123|1700000000/);
+      await harness.service.stopListeners();
+    } finally {
+      warn.mockRestore();
     }
   });
 

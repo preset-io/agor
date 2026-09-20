@@ -151,11 +151,15 @@ describe('unclassified service baseline', () => {
     expect(new Set(UNCLASSIFIED_SERVICE_BASELINE).size).toBe(UNCLASSIFIED_SERVICE_BASELINE.length);
   });
 
-  it('stays at the size the boundary check caps it at', () => {
-    // The upward ratchet lives in scripts/check-multitenancy-boundaries.mjs,
-    // which counts the `BASELINE-ENTRY` markers and fails above this number.
-    // Keep the two in step: lowering means classifying a service and lowering
-    // the number in the script too.
+  it('stays within the inventory the boundary check approved', () => {
+    // The upward ratchet lives in scripts/check-multitenancy-boundaries.mjs
+    // and compares NAMES, not a count: classifying one service and listing a
+    // different one leaves the total unchanged, which is a replenishable
+    // allowance rather than a closed debt inventory. That comparison — and the
+    // replacement case — is driven in
+    // `scripts/check-multitenancy-boundaries.test.mjs`, against this very file;
+    // it is not repeated here because the script is not part of the daemon's
+    // TypeScript program. What stays here is the ceiling.
     expect(UNCLASSIFIED_SERVICE_BASELINE.length).toBeLessThanOrEqual(57);
   });
 });

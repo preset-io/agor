@@ -258,8 +258,19 @@ const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
 /** Agor-owned reason a gateway read failed. Never a provider's, never the exception. */
 type GatewayReadFailureCategory = 'missing_tenant_scope' | 'unexpected';
 
+/**
+ * Where in a card's repair the read failed.
+ *
+ * `repair` is the whole pass throwing; `grant_liveness` is the one read this
+ * lane deliberately fails CLOSED on — a card whose grant cannot be read renders
+ * as not-connected, which is the right card and the wrong silence, because the
+ * delivery then succeeds and the failure is never counted anywhere.
+ */
+type GatewayReadFailureStage = 'repair' | 'grant_liveness';
+
 interface McpSlackRepairFailureTally {
   lane: 'recovery' | 'connect';
+  stage: GatewayReadFailureStage;
   category: GatewayReadFailureCategory;
   count: number;
   /** First item that failed this way, for correlation. */
@@ -1329,8 +1340,9 @@ export class GatewayService {
             ...(cursor ? { after: cursor } : {}),
           });
           for (const card of cards.messages) {
-            await this.deliverMcpSlackConnectCard(card.message_id as MessageID).catch((error) =>
-              this.tallyMcpSlackRepairFailure(failures, 'connect', card.message_id, error)
+            await this.deliverMcpSlackConnectCard(card.message_id as MessageID, 0, failures).catch(
+              (error) =>
+                this.tallyMcpSlackRepairFailure(failures, 'connect', card.message_id, error)
             );
           }
           if (cards.messages.length < MCP_SLACK_REPAIR_BATCH || !cards.cursor) break;
@@ -1500,13 +1512,44 @@ export class GatewayService {
     failures: Map<string, McpSlackRepairFailureTally>,
     lane: 'recovery' | 'connect',
     entityId: string,
-    error: unknown
+    error: unknown,
+    stage: GatewayReadFailureStage = 'repair'
   ): void {
     const category = this.classifyGatewayReadFailure(error);
-    const key = `${lane}:${category}`;
+    const key = `${lane}:${stage}:${category}`;
     const existing = failures.get(key);
     if (existing) existing.count += 1;
-    else failures.set(key, { lane, category, count: 1, entityId });
+    else failures.set(key, { lane, stage, category, count: 1, entityId });
+  }
+
+  /**
+   * Report a read this lane swallowed on purpose.
+   *
+   * The fail-closed answer stays — a card that cannot read its grant must not
+   * claim one — but the failure stops being invisible. Inside the sweep it
+   * joins that pass's tally, which is one line per (lane, stage, category)
+   * however many cards a page holds; outside it (a timer, an event-driven
+   * delivery) it is its own single line in the same shape.
+   *
+   * Nothing here is the provider's or the exception's:
+   * `context/guidelines/logging.md` applies exactly as it does to the delivery
+   * failure lines, and `classifyGatewayReadFailure` is the only thing that
+   * looks at the error at all.
+   */
+  private reportSwallowedGatewayRead(
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    lane: 'recovery' | 'connect',
+    entityId: string,
+    error: unknown,
+    stage: GatewayReadFailureStage
+  ): void {
+    if (failures) {
+      this.tallyMcpSlackRepairFailure(failures, lane, entityId, error, stage);
+      return;
+    }
+    const single = new Map<string, McpSlackRepairFailureTally>();
+    this.tallyMcpSlackRepairFailure(single, lane, entityId, error, stage);
+    this.reportMcpSlackRepairFailures(single);
   }
 
   /**
@@ -1525,6 +1568,7 @@ export class GatewayService {
           '[gateway] event=mcp_slack_repair_failed',
           `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
           `lane=${failure.lane}`,
+          `stage=${failure.stage}`,
           `reason=${failure.category}`,
           `count=${failure.count}`,
           `first_entity_id=${failure.entityId}`,
@@ -2348,7 +2392,18 @@ export class GatewayService {
    * crash lost it, and a no-op when the state already rendered is the state
    * that would render now.
    */
-  private async deliverMcpSlackConnectCard(widgetId: MessageID, attempt = 0): Promise<void> {
+  private async deliverMcpSlackConnectCard(
+    widgetId: MessageID,
+    attempt = 0,
+    /**
+     * The sweep pass's failure tally, when this delivery is one of its items.
+     *
+     * Only for reads this delivery swallows on purpose: a throw still leaves
+     * through the caller's `.catch`. Absent for a timer or an event-driven
+     * delivery, which report on their own.
+     */
+    failures?: Map<string, McpSlackRepairFailureTally>
+  ): Promise<void> {
     // Operator kill switch, checked before anything is read or posted. Off
     // stops the PROJECTION only: the canvas widget still renders a live
     // Connect button and `agor_widgets_request_oauth` still hands the agent a
@@ -2407,6 +2462,14 @@ export class GatewayService {
     //
     // Only asked while the widget is unresolved — a resolved card's state is
     // decided by the widget row alone — so a connected thread costs no read.
+    //
+    // Fails CLOSED, and says so out loud. A read that throws here — a missing
+    // tenant scope, a database that is not answering — is indistinguishable in
+    // the rendered card from a grant that genuinely is not there: the delivery
+    // then SUCCEEDS, so the sweep's per-item `.catch` never sees it and the
+    // failure is counted nowhere. That silence is how four of six tenant-scope
+    // defects reached a running daemon (§7.1.6), so the verdict stays `false`
+    // and the failure is reported.
     const grantConnected =
       binding.ok && (widget.status === 'pending' || widget.status === 'resolving')
         ? await this.readInTenantScope((db) =>
@@ -2417,7 +2480,16 @@ export class GatewayService {
             )
           )
             .then(mcpOAuthGrantIsConnected)
-            .catch(() => false)
+            .catch((error: unknown) => {
+              this.reportSwallowedGatewayRead(
+                failures,
+                'connect',
+                widgetId,
+                error,
+                'grant_liveness'
+              );
+              return false;
+            })
         : false;
     // A re-issue offers a fresh SIGN-IN link, which is exactly what a landed
     // grant makes pointless — and, since `finish_required` outranks the state
@@ -2467,7 +2539,7 @@ export class GatewayService {
     // flap, then render from the recorded fact.
     if (state === 'unavailable' && delivery && !delivery.binding_invalidated_at) {
       if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
-        await this.deliverMcpSlackConnectCard(widgetId);
+        await this.deliverMcpSlackConnectCard(widgetId, 0, failures);
         return;
       }
     }
@@ -2587,7 +2659,7 @@ export class GatewayService {
       // render would leave the thread showing its last live state permanently.
       if (state === 'connect_required') {
         if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
-          await this.deliverMcpSlackConnectCard(widgetId);
+          await this.deliverMcpSlackConnectCard(widgetId, 0, failures);
         } else {
           await this.releaseMcpSlackConnectClaim(widgetId, claimId);
         }
@@ -2654,7 +2726,8 @@ export class GatewayService {
             widgetId,
             reconciledMessageTs,
             state,
-            attempt
+            attempt,
+            failures
           );
         } else {
           await retireOrphanedSlackCard(connector, slack.threadId, {
@@ -2694,7 +2767,8 @@ export class GatewayService {
     widgetId: MessageID,
     editedTs: string,
     renderedState: MCPSlackConnectRenderedState,
-    attempt: number
+    attempt: number,
+    failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
     const cleared = await clearLostSlackRender(
       this.mcpSlackConnectStore(widgetId),
@@ -2705,7 +2779,7 @@ export class GatewayService {
     // still writing this row, and `next_repair_at` above already hands the
     // card to the sweep. Repainting in a loop would just race it harder.
     if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
-      await this.deliverMcpSlackConnectCard(widgetId, attempt + 1);
+      await this.deliverMcpSlackConnectCard(widgetId, attempt + 1, failures);
     }
   }
 

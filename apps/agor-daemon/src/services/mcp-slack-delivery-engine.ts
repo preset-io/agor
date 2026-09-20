@@ -12,12 +12,24 @@
  * of a discipline drift. They already had: the connect lane learned to retire
  * a post that lost its claim and the recovery lane never did.
  *
- * So this module owns the mechanics and nothing else:
+ * So this module owns the mechanics, and one authority question that is
+ * genuinely common to both:
  *
  * - **Shared here:** claim construction and liveness, the failure/backoff
  *   transition, the repair-clamp, the lost-edit repaint transition, metadata
  *   reconciliation, orphan retirement, connector acquisition under a
  *   configuration change, and the timer bookkeeping.
+ * - **Shared here, and it IS an authority decision:**
+ *   {@link acquireSlackDeliveryConnector} refuses to deliver when the channel
+ *   now belongs to a different Slack app (`teamId`) or when the recorded
+ *   thread is no longer a permitted write target
+ *   (`isSlackWriteTargetAllowed`). That is DELIVERY authority — may this
+ *   daemon, as this app, write this card here — and both lanes ask it
+ *   identically because it is a property of the channel rather than of either
+ *   record. It is deliberately not OAuth or redemption authority: nothing
+ *   here decides who may sign in, what a link grants, or whether one may be
+ *   redeemed. Each lane takes the `app_moved` answer and does its own thing
+ *   with it.
  * - **Deliberately NOT here:** which rendered state a record is in, what the
  *   card says, which token audience and binding set a link is sealed against,
  *   whether the record's generation predicates admit a re-issue, and whether
@@ -247,36 +259,96 @@ export type MCPSlackDeliveryFailureReason =
 export type MCPSlackLane = 'recovery' | 'connect';
 
 /**
+ * What the persisted retry decision says happens next to this card.
+ *
+ * Derived from the record the compare-and-set wrote, never re-decided here:
+ * `applySlackDeliveryFailure` is the one place that decides whether a card
+ * comes back, and reporting has to describe that decision rather than
+ * approximate it from the attempt count.
+ *
+ * The two terminal answers are separated because the operator questions are
+ * different. `attempts_exhausted` means the card was tried the full
+ * {@link MCP_SLACK_DELIVERY_MAX_ATTEMPTS} times; `retry_window_exhausted`
+ * means the 15-minute window closed FIRST — the next backoff would land past
+ * `delivery_retry_until`, so the card is just as permanently stranded after,
+ * say, four attempts. Counting to six was the old test for terminal, and it
+ * reported that card as a routine, retryable `warn`.
+ *
+ * The two non-terminal answers are separated for the same reason: neither is
+ * this daemon's failure to account for, and they are not the same event.
+ */
+export type SlackDeliveryRetryDisposition =
+  /** Accounted, and a next attempt is scheduled. */
+  | 'retrying'
+  /** Accounted, and terminal: the attempt ceiling was reached. */
+  | 'attempts_exhausted'
+  /** Accounted, and terminal: the retry window closed before the ceiling. */
+  | 'retry_window_exhausted'
+  /** Not accounted: another claimant owns this record, so it is theirs to retry. */
+  | 'ownership_lost'
+  /** Not accounted: the durable write itself failed, so nothing is known. */
+  | 'accounting_failed';
+
+/** Terminal means nothing revisits the card — not that six attempts happened. */
+export function slackDeliveryIsStranded(disposition: SlackDeliveryRetryDisposition): boolean {
+  return disposition === 'attempts_exhausted' || disposition === 'retry_window_exhausted';
+}
+
+/**
+ * Read the disposition off the write that accounted the failure.
+ *
+ * `delivery_next_retry_at` is the persisted decision: `applySlackDeliveryFailure`
+ * sets it when and only when something will come back for this card, and
+ * `recordSlackDeliveryFailure` schedules from the same field. So "will anything
+ * revisit this?" is answered by the record, and the attempt count only says
+ * WHICH terminal case it is.
+ */
+export function slackDeliveryRetryDisposition(
+  write: SlackDeliveryWrite<SlackDeliveryRecord> | undefined
+): SlackDeliveryRetryDisposition {
+  if (!write) return 'accounting_failed';
+  if (!write.changed || !write.record) return 'ownership_lost';
+  if (write.record.delivery_next_retry_at) return 'retrying';
+  return (write.record.delivery_attempt_count ?? 0) >= MCP_SLACK_DELIVERY_MAX_ATTEMPTS
+    ? 'attempts_exhausted'
+    : 'retry_window_exhausted';
+}
+
+/**
  * Report one failed Slack delivery attempt, and say when a card is stranded.
  *
- * Both lanes exhaust after `MCP_SLACK_DELIVERY_MAX_ATTEMPTS` inside a
- * 15-minute window, after which the card is permanently stranded and no sweep
- * revisits it. That is the one outcome an operator has to be able to see, so
- * it is an `error` with a `stranded=true` field rather than another
- * indistinguishable `warn`.
+ * Both lanes stop retrying at `MCP_SLACK_DELIVERY_MAX_ATTEMPTS` OR when the
+ * 15-minute window closes, whichever comes first; after either the card is
+ * permanently stranded and no sweep revisits it. That is the one outcome an
+ * operator has to be able to see, so it is an `error` with `stranded=true`
+ * rather than another indistinguishable `warn` — and the `disposition` field
+ * says which of the four non-retrying endings this was, because "nobody is
+ * coming back" and "somebody else owns it" are opposite instructions.
  *
  * Everything logged is Agor-owned: the operation, the entity ids needed to
- * correlate, the attempt count, and a `reason` the daemon chose at the call
- * site. No exception, message, provider error code, thread id, channel id,
- * server name, or URL — `context/guidelines/logging.md` prohibits all of them,
- * and the call site already knows the more useful thing anyway.
+ * correlate, the attempt count, a `reason` the daemon chose at the call site,
+ * and the disposition it derived from its own record. No exception, message,
+ * provider error code, thread id, channel id, server name, or URL —
+ * `context/guidelines/logging.md` prohibits all of them, and the call site
+ * already knows the more useful thing anyway.
  */
 export function logSlackDeliveryFailure(
   lane: MCPSlackLane,
   reason: MCPSlackDeliveryFailureReason,
   ids: Record<string, string | undefined>,
   attempt: number | undefined,
-  retrying: boolean
+  disposition: SlackDeliveryRetryDisposition
 ): void {
-  const stranded = !retrying && (attempt ?? 0) >= MCP_SLACK_DELIVERY_MAX_ATTEMPTS;
+  const stranded = slackDeliveryIsStranded(disposition);
   const fields = [
     `event=mcp_slack_${lane}_delivery_failed`,
     `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
     ...Object.entries(ids).map(([key, value]) => `${key}=${value ?? '<unknown>'}`),
     `reason=${reason}`,
     `attempt=${attempt ?? '<unknown>'}/${MCP_SLACK_DELIVERY_MAX_ATTEMPTS}`,
-    `retrying=${retrying}`,
+    `retrying=${disposition === 'retrying'}`,
     `stranded=${stranded}`,
+    `disposition=${disposition}`,
   ].join(' ');
   if (stranded) console.error(`[gateway] ${fields}`);
   else console.warn(`[gateway] ${fields}`);
@@ -517,13 +589,18 @@ export async function recordSlackDeliveryFailure<TRecord extends SlackDeliveryRe
         : null
     )
     .catch(() => undefined);
-  const nextRetryAt = failed?.changed ? failed.record?.delivery_next_retry_at : undefined;
+  // Reported from the persisted decision, not re-derived: the write is the
+  // only thing that knows whether this card comes back, and an exhausted retry
+  // window strands a card that never reached the attempt ceiling.
+  const disposition = slackDeliveryRetryDisposition(failed);
+  const nextRetryAt =
+    disposition === 'retrying' ? failed?.record?.delivery_next_retry_at : undefined;
   logSlackDeliveryFailure(
     params.lane,
     params.reason,
     store.logIds,
     failed?.record?.delivery_attempt_count,
-    !!nextRetryAt
+    disposition
   );
   if (nextRetryAt) {
     params.scheduleRetry(Math.max(100, new Date(nextRetryAt).getTime() - Date.now()));

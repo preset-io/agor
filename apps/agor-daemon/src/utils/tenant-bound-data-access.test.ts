@@ -177,3 +177,40 @@ describe('the pinned tenant is not an escape hatch', () => {
     ).rejects.toThrow(/Cannot enter tenant database scope/);
   });
 });
+
+/**
+ * The limits, pinned as passing.
+ *
+ * This facade is a convention with a guard behind it, not a capability
+ * sandbox, and the module doc says so. These are the two ways a holder can
+ * still reach the database outside the shape the facade describes. They pass
+ * on purpose: a test that documents what a mechanism does NOT catch is what
+ * stops the next reader from trusting it for more than it does.
+ */
+describe('what the facade still does not prevent', () => {
+  it('lets a callback keep the handle it was given and use it after the unit closed', async () => {
+    const data = createTenantBoundDataAccess(guarded);
+    let escaped: Parameters<Parameters<typeof data.read>[0]>[0] | undefined;
+    await runWithTenantContext(TENANT, () =>
+      data.read(async (db) => {
+        escaped = db;
+        return true;
+      })
+    );
+    // Outside every scope and every tenant context. Nothing revoked it at the
+    // end of the call, because nothing can: it is an ordinary handle.
+    await expect(isMCPSlackConnectCardEnabled(escaped as never)).resolves.toBe(true);
+  });
+
+  it('lets a `read` write, because `read` is a name and not an enforcement', async () => {
+    const data = createTenantBoundDataAccess(guarded);
+    await runWithTenantContext(TENANT, () =>
+      data.read((db) => setMCPSlackConnectCardEnabled(db, false))
+    );
+    // It persisted — and it did so without `write`'s per-tenant write gate.
+    // What the facade guarantees is the scope and the tenant, not the verb.
+    await expect(
+      runWithTenantContext(TENANT, () => data.read(isMCPSlackConnectCardEnabled))
+    ).resolves.toBe(false);
+  });
+});

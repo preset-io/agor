@@ -552,21 +552,31 @@ superseded. Nothing ages it out.
 
 What that is _not_ is a way in. Every question the mint asked is re-asked at
 resolve, against state read then: the role floor, the gateway identity
-alignment, the pinned server's existence / usability / enabled-ness / OAuth mode,
-and — the one that decides — a live grant for the caller. A card rendered a
-month ago and clicked today grants exactly what it would grant if minted today,
-by exactly the person clicking it. The residue is a stale button in a
-scrolled-back transcript, and the common way a card goes stale is already
+alignment, the pinned server's existence / usability / enabled-ness / OAuth
+mode, and — the one that decides — a grant for the caller that
+`mcpOAuthGrantIsConnected` accepts. (That last one said "a **live** grant" until
+D4.1 made the verdict `live || refreshable` at every surface in this lane,
+including this one. The point is unchanged: the authority comes from a grant row
+this daemon reads at resolve time, under the resolver's identity.) A card
+rendered a month ago and clicked today grants exactly what it would grant if
+minted today, by exactly the person clicking it. The residue is a stale button
+in a scrolled-back transcript, and the common way a card goes stale is already
 handled: a second request for the same (session, server) supersedes the first
 (§3.4.7), as does either short-circuit. "Handled" is bounded, not absolute —
 the supersede sweep reads the newest `OAUTH_SUPERSEDE_SCAN_LIMIT` (200) widget
 messages of the session, so a pending card further back than that survives a
 re-ask. That bound is deliberate (a pending card older than 200 widget messages
-is not one anybody is about to click) and it is only a presentation bound: an
-older card that is missed grants nothing when tapped, because every question is
-re-asked at resolve. One case supersede cannot reach — a
-post that outlived its delivery lease and left a second, unrecorded Slack row —
-is handled separately; see §7.1.1.
+is not one anybody is about to click) and it is only a presentation bound.
+
+Age supplies no authority in either direction, and the earlier phrasing here —
+"an older card that is missed grants nothing when tapped" — overstated it.
+An old pending card tapped today resolves perfectly legitimately if the checks
+above pass now; that is the same sentence as "grants exactly what it would
+grant if minted today", and it is the resolve-time re-derivation rather than
+the age that decides. What an old card cannot do is carry authority it was
+minted with. One case supersede cannot reach — a post that outlived its
+delivery lease and left a second, unrecorded Slack row — is handled
+separately; see §7.1.1.
 
 What building it would cost, weighed against that:
 
@@ -1283,13 +1293,32 @@ The architecture pass asked why the last two scope defects were invisible. Two
 answers, both now addressed.
 
 **They happened before delivery-failure accounting.** `stranded=true` describes
-a card Slack refused six times; a card whose repair threw before any Slack call
+a card nothing will revisit; a card whose repair threw before any Slack call
 was made has no attempt, no backoff and no log at all, because both lanes'
 per-item repair was `.catch(() => undefined)`. The sweep now tallies those
-failures and reports one bounded line per (lane, category) per pass —
-tenant, lane, count, the first entity id, and an Agor-owned category, never the
-exception and never anything a provider said. `missing_tenant_scope` is named
-on its own because it is the class that has now bitten five times.
+failures and reports one bounded line per (lane, stage, category) per pass —
+tenant, lane, stage, count, the first entity id, and an Agor-owned category,
+never the exception and never anything a provider said. `missing_tenant_scope`
+is named on its own because it is the class that has now bitten six times.
+
+Two laundering paths in the same shape survived that pass and are closed here:
+
+- **The connect card's grant-liveness read.** `.catch(() => false)` turned any
+  failure into "not connected" — the right card and the wrong silence, because
+  the delivery then SUCCEEDS and the sweep's per-item `.catch` never sees it.
+  The verdict still fails closed; the failure now joins the same tally under
+  `stage=grant_liveness` (and reports one line of its own when the delivery did
+  not come from a sweep pass).
+- **`stranded` was counted, not read.** `logSlackDeliveryFailure` derived
+  terminal from `attempt >= 6`, but `applySlackDeliveryFailure` also gives up
+  when the next backoff would land past `delivery_retry_until` — so a card
+  stranded by an exhausted 15-minute window after four attempts was reported as
+  a routine, retryable `warn`. Terminal is now read off the persisted retry
+  decision (`slackDeliveryRetryDisposition`), and the new `disposition` field
+  separates the four non-retrying endings: `attempts_exhausted`,
+  `retry_window_exhausted`, `ownership_lost` (another claimant owns the record,
+  so it is theirs to retry) and `accounting_failed` (the durable write itself
+  failed, so nothing is known). The first two are `stranded=true` at `error`.
 
 **The fixtures could not see them.** Three things changed:
 
@@ -1529,6 +1558,18 @@ adjusted to accommodate a lane that moved.
 | `SlackDeliveryTimers`                                                   | Five hand-rolled copies of don't-double-schedule / free-the-key-before-running / `unref` / clear-on-dispose.                                       |
 | `SlackDeliveryStore`                                                    | The one real difference between the lanes' storage: a notice on a Task's metadata versus a delivery on the widget message's.                       |
 
+One shared entry is an authority decision, and the table above states it
+flatly rather than as mechanics: `acquireSlackDeliveryConnector` refuses to
+deliver when the channel now belongs to a different Slack app, or when the
+recorded thread is no longer a permitted write target. That is **delivery**
+authority — may this daemon, as this app, write this card here — and it is
+common to both lanes because it is a property of the channel rather than of
+either record. It is not OAuth or redemption authority: nothing in the engine
+decides who may sign in, what a link grants, or whether one may be redeemed,
+and each lane takes the `app_moved` answer and does its own thing with it. The
+module doc says the same, so "the engine holds no authority" is not a
+conclusion a reader can draw from either.
+
 What deliberately did **not** move, and would have merged two authority models
 if it had:
 
@@ -1598,13 +1639,20 @@ What this drive could NOT discriminate:
 - **The provider round-trip**, as always. Every decision the daemon makes is
   real; obtaining a grant from a vendor is not.
 
-### 7.1.12 Making the tenant-scope class structurally impossible for new code
+### 7.1.12 A registration coverage gate for the tenant-scope class, and what it does not catch
 
 Five instances of one defect class, three of them found after a reviewer had
 already looked, and one of them (§7.1.3) proof that the shipped recovery lane's
 repair sweep had never once repaired a notice. Every fix so far was per-site.
-This is the durable answer, and it is deliberately bounded: it makes the policy
-**explicit at registration**, and leaves the platform-wide sweep undone.
+
+**What this is: a Feathers registration coverage gate, plus a safer
+data-access convention.** It makes the policy **explicit at registration** —
+adding a service without deciding where its scope comes from stops being
+something a pull request can do quietly — and it leaves the platform-wide sweep
+undone. An earlier draft of this section, and a reviewer's summary to the
+owner, described it as making the defect class _structurally impossible_. It
+does not do that, the difference is large, and the limits are now written down
+both here and at the mechanism (see "What it does not catch" below).
 
 **The classification.** Every service the daemon registers now declares where
 its tenant database scope is armed — `scoped`, `identity-only`, or a narrowly
@@ -1659,12 +1707,24 @@ that predate the mechanism are listed and permitted. The list may only shrink,
 and three ratchets say so: a **new or newly-unclassified** service fails the boot
 assertion; an entry that has since been classified or is no longer registered
 fails the test with "remove it from the baseline"; and
-`check:multitenancy-boundaries` caps the `BASELINE-ENTRY` markers in the file at
-57, a number that may only be lowered. What is left in it is deliberate — the
-session/branch/repo/artifact RPC routes, `authentication`, `health`, the
-streaming services — none of which this feature understands well enough to
-classify correctly, which is the whole reason the baseline exists rather than a
-guess.
+`check:multitenancy-boundaries` compares the `BASELINE-ENTRY` **names** in the
+file against an approved inventory in the script itself. What is left in it is
+deliberate — the session/branch/repo/artifact RPC routes, `authentication`,
+`health`, the streaming services — none of which this feature understands well
+enough to classify correctly, which is the whole reason the baseline exists
+rather than a guess. 57 stays, and there is deliberately no deadline on it: a
+deadline buys speculative classifications rather than correct ones.
+
+That third ratchet counted markers until this pass, and a count cannot express
+"may only shrink". Classify or delete one old entry, list one different
+newly-registered service, and the total is still 57 with every check green — a
+replenishable allowance rather than a closed debt inventory. Both reviewers
+found that independently. Membership closes it in both directions: an unapproved
+name fails, and so does an approved name that left the file without leaving the
+script, which is what stops a name from being re-listed later.
+`scripts/check-multitenancy-boundaries.test.mjs` drives the replacement case
+(one out, one in, same count) alongside the 58th-entry case, and states the old
+rule inline so the escape is visible rather than described.
 
 **What the tests see that the old ones could not.** §7.1.3 recorded the reason
 this class was never caught: _a test that stubs every repository has no guard to
@@ -1676,6 +1736,32 @@ the actual kill-switch read from the actual defect, rejects with
 resolves through `data.read(...)` from the identical caller shape. The
 classification suite proves a brand-new unclassified service is refused by name
 and that a classified one is admitted from any of the three inventories.
+
+**What it does not catch.** The gate compares `Object.keys(app.services)`
+against the declaration tables. It reads no handler, inspects no registrar and
+instruments no query, so a declaration is a claim rather than a proof. All of
+these pass today, and
+`apps/agor-daemon/src/utils/tenant-service-classification.limits.test.ts` drives
+each one and pins the passing result — a test that documents what the mechanism
+does not catch, so the next reader cannot over-read it:
+
+| Escape                                                                                 | Why it gets through                                                                                               |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| An `identity-only` service that keeps a raw handle and makes the unscoped call         | Nothing checks the handler. Only the runtime guard objects, and only once it runs.                                |
+| A `scoped` entry in the supplemental table whose registration never installed the hook | Only `TENANT_OWNED_SERVICE_PATHS` and the scoped route registrar install one; a hand-written `scoped` asserts it. |
+| New code inside an already-classified service, or a timer or sweep callback it starts  | The unit of declaration is a registered path, not a line of code.                                                 |
+| Express handlers — `app.post('/mcp-egress/:serverId', …)` is a live example            | They are not in `app.services` at all.                                                                            |
+| Anything registered after the one-time boot assertion                                  | Phase 3.6 runs once.                                                                                              |
+
+The facade is likewise **not a capability sandbox**: `read` and `write` hand the
+callback the scoped handle, which it may retain or pass on, and `read` is a name
+rather than an enforcement — nothing stops a `read` callback from writing.
+`tenant-bound-data-access.test.ts` pins both. What it does remove is the raw
+handle from the holder's reach, which is the move all six defects began with.
+
+Closing the escapes means connecting classification to the actual registrar or
+to injected dependencies. That is a platform change and is deliberately not in
+this branch.
 
 **Not touched.** No authorization decision, no route registration, and no
 service moved between the hook inventories. This is about _where a scope is
@@ -1783,10 +1869,14 @@ integration.test.ts` registers services and not routes, so
   resolver row from the resolver's own suite. Three real surfaces, three
   harnesses — not one transcript.
 - **What the card should say instead.** It falls through to the pre-existing
-  `sign_in_pending` copy ("Sign-in is in progress"), which is imprecise for a
-  reader who tapped "Not now". Left alone deliberately: it offers nothing, which
-  is the property that was broken, and a new state is a copy change rather than
-  a correctness one.
+  `sign_in_pending` copy, which used to read "Sign-in is in progress. Finish it
+  in the browser tab Agor opened" — imprecise for a reader who tapped "Not now"
+  and has no such tab. The card offering nothing is the property that was
+  broken and it is fixed; the wording is now conditional ("If you started a
+  sign-in, finish it in the browser tab Agor opened"), which is true of both
+  arrivals at this state. A separate rendered state would say it better and
+  would mean a new persisted `rendered_state` value for a copy difference, so
+  that is still not done.
 
 ### 7.2 Deliberately not built
 
@@ -1983,7 +2073,22 @@ Database)` from the raw handle, and their caller `acquireMCPOAuthGrant` has
   against a real migrated SQLite database behind `requireScope: true` with only
   the network replaced — 3 of its 4 cases fail without part 1. Three cases in
   `tenant-scope.test.ts` reproduce the module duplication in one process with
-  `vi.resetModules()` and fail without part 2. And `requireTenantScope` on the
+  `vi.resetModules()` and fail without part 2.
+
+  `vi.resetModules()` is a faithful model and not the packaging contract:
+  under vitest `@agor/core` resolves to SOURCE, so the copy count, the export
+  map and the `import`/`source` conditions are all different from what a daemon
+  loads — which is exactly the gap that let this defect reach production while
+  the fixture's evidence stopped at `getToken`, and why B1 was found on built
+  modules. So `packages/core/scripts/packaged-tenant-scope-smoke.mjs` now runs
+  in CI's build lane, after `dist` exists, importing `@agor/core` and
+  `@agor/core/db` through the package's own `exports` with no bundler and no
+  test runner in the way. It asserts the two entries really are separate
+  copies, then drives scope creation across them, a guarded proxy built by one
+  and admitted by the other's scope, dialect inspection outside any scope (the
+  line F4 actually failed on), and B1's `rootDb` fence. Checked against both
+  defects on the artifact: un-sharing the `Symbol.for` stores in one dist entry
+  fails the first probe, and neutering `scopeServesDatabase` fails the last. And `requireTenantScope` on the
   SQLite harness is now **on by default**, which is what a daemon runs with;
   the two tests that flipping it broke needed the harness to install the
   tenant-owned services' scope around-hook, which `registerHooks` installs in
@@ -1997,3 +2102,28 @@ Database)` from the raw handle, and their caller `acquireMCPOAuthGrant` has
   both gone, and with them the fallback that answered a WeakMap miss with a
   blank channel id and `enabled: false` — the right shape and the wrong answer.
   See §3.1 for what the union discriminates on now.
+
+  **And the union now requires one of the two.** An optional `buildResultMeta`
+  beside `applySubmit: … => Promise<TResultMeta | void>` still described a third
+  arrangement that is never correct: a real `TResultMeta`, no builder, and a
+  handler free to return nothing, which leaves `submissions.ts` passing
+  `undefined` to a `buildAutoResumePrompt` declared to receive the shape. That
+  is the same failure F3 had just removed by another route, so the submit
+  variant is now a union of "builder present, handler may return void" and "no
+  builder, handler must return the meta". A widget that computes no meta is
+  unchanged (`TResultMeta` is `void`). Asserted in
+  `apps/agor-daemon/src/widgets/registry.test-d.ts` rather than a `.test.ts`,
+  because the daemon's `tsconfig.json` excludes test files, so a
+  `@ts-expect-error` in one is checked by nothing.
+
+- **Two `globalAnalyticsLogger`s, one per bundled entry. Not fixed here.** The
+  same `splitting: false` module-identity property behind F4 also gives every
+  entry that inlines `analytics/logger.ts` a private copy of the
+  `globalAnalyticsLogger` singleton — six of them in the current `dist`,
+  `dist/db` and `dist/analytics` among them — so which one a caller configures
+  depends on which entry it imported. It predates this branch, is unrelated to the OAuth lanes, and gets
+  its own follow-up rather than a fix inside a feature pull request. The same
+  goes for the broader identity audit the packaged smoke test suggests — the
+  env lock, the OAuth caches, connector registration, and every `instanceof`
+  across entries (which the smoke test deliberately does not assert: it matches
+  errors by `name`).

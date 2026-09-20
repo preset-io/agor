@@ -192,65 +192,104 @@ interface WidgetRegistryEntryBase<TParams, TResultMeta> {
 }
 
 /**
- * A widget resolved by a browser-submitted form body.
+ * The fields every submit-resolved entry has, whichever way it produces its
+ * `result_meta`.
  *
  * Generic over its `params`, `submit`, and `result_meta` shapes so each
  * registered widget gets compile-time type checking on the four hand-off
  * boundaries (MCP tool → params, browser form → submit, daemon → result_meta,
  * daemon → auto-resume prompt).
  */
-export interface SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta>
+interface SubmitWidgetRegistryEntryBase<TParams, TSubmit, TResultMeta>
   extends WidgetRegistryEntryBase<TParams, TResultMeta> {
   /** Optional for back-compat: an entry that omits it is submit-resolved. */
   resolution?: 'submit';
   /** Validates `POST /widgets/:widget_id/submit` body. */
   submitSchema: z.ZodType<TSubmit>;
-  /**
-   * Build the sanitized `result_meta` from the submit body alone — the
-   * FALLBACK, used only when `applySubmit` returns nothing.
-   *
-   * Right for a meta that is a pure projection of what was submitted
-   * (`env_vars` reports the names it saved and their scope). A handler whose
-   * outcome depends on what its side-effect DID should return that outcome
-   * instead; deriving it here would mean carrying it across two calls.
-   *
-   * Either way the rule is the same and is not negotiable: MUST NOT include
-   * secret values from the submit body — only names, scope, labels, etc.
-   */
-  buildResultMeta?: (submit: TSubmit) => TResultMeta;
-  /**
-   * Apply the submission's side-effect (encrypt + write env var,
-   * attach MCP server, finalize OAuth, etc.). The submit endpoint runs
-   * this BEFORE patching the widget message status to 'submitted'.
-   *
-   * May RETURN the sanitized `result_meta`, which wins over
-   * `buildResultMeta`. That is what a handler should do whenever the outcome
-   * is decided by the side-effect rather than by the body — a credential
-   * probe's verdict, the row an upsert settled on — because the alternative is
-   * carrying the value from one call to the other outside the type.
-   *
-   * What it returns is `result_meta` and therefore reaches the agent's context
-   * through `buildAutoResumePrompt`, so it is under exactly the sanitization
-   * rule `buildResultMeta` is under: names, scopes, labels and outcomes, never
-   * a submitted value.
-   *
-   * `params` is the original agent-provided params stored on the widget row —
-   * available so the handler can cross-check the submit body against what was
-   * originally requested (e.g. env_vars validates names match exactly).
-   *
-   * The durable resolver releases a live claim after this method reports an
-   * error so the user can correct and retry the widget. Implementations must
-   * make that deliberate retry safe (normally by writing desired state
-   * idempotently). Daemon death after an unknown outcome is different: the
-   * claim stays `resolving` and is not replayed.
-   */
-  applySubmit: (
-    ctx: WidgetSubmitCtx,
-    submit: TSubmit,
-    params: TParams
-    // biome-ignore lint/suspicious/noConfusingVoidType: `undefined` would reject a handler declared `Promise<void>`, which is every handler that computes no meta
-  ) => Promise<TResultMeta | void>;
 }
+
+/**
+ * The two ways a submit-resolved entry can produce its `result_meta`, as a
+ * union rather than two optional fields.
+ *
+ * `buildResultMeta?` beside `applySubmit: … => Promise<TResultMeta | void>`
+ * described a third arrangement that is never correct: an entry whose
+ * `TResultMeta` is a real shape, with no builder and a handler free to return
+ * nothing. `submissions.ts` then passes `undefined` to
+ * `buildAutoResumePrompt(result_meta, params)`, which is declared to receive
+ * the shape — so the prompt the agent is resumed with reads properties off
+ * nothing. That is the failure F3 had already produced once by a different
+ * route (a `WeakMap` miss answering with a blank channel id and
+ * `enabled: false`: the right shape, the wrong answer), and the fix there was
+ * to let the handler return its own meta. This makes "one of the two" the
+ * type's rule rather than a convention.
+ *
+ * A widget that genuinely computes no meta is still expressible, and unchanged:
+ * `TResultMeta` is `void`, the handler is `Promise<void>`, and the second
+ * member admits it.
+ */
+type SubmitWidgetResultMetaSource<TSubmit, TParams, TResultMeta> =
+  | {
+      /**
+       * Build the sanitized `result_meta` from the submit body alone — the
+       * FALLBACK, used only when `applySubmit` returns nothing.
+       *
+       * Right for a meta that is a pure projection of what was submitted
+       * (`env_vars` reports the names it saved and their scope). A handler
+       * whose outcome depends on what its side-effect DID should return that
+       * outcome instead; deriving it here would mean carrying it across two
+       * calls.
+       *
+       * Either way the rule is the same and is not negotiable: MUST NOT
+       * include secret values from the submit body — only names, scope,
+       * labels, etc.
+       */
+      buildResultMeta: (submit: TSubmit) => TResultMeta;
+      applySubmit: (
+        ctx: WidgetSubmitCtx,
+        submit: TSubmit,
+        params: TParams
+        // biome-ignore lint/suspicious/noConfusingVoidType: with a builder present, a handler that computes no meta is exactly the fallback case
+      ) => Promise<TResultMeta | void>;
+    }
+  | {
+      /** No fallback: this entry's handler is the only source. */
+      buildResultMeta?: undefined;
+      applySubmit: (ctx: WidgetSubmitCtx, submit: TSubmit, params: TParams) => Promise<TResultMeta>;
+    };
+
+/**
+ * A widget resolved by a browser-submitted form body.
+ *
+ * `applySubmit` applies the submission's side-effect (encrypt + write env var,
+ * attach MCP server, finalize OAuth, etc.). The submit endpoint runs it BEFORE
+ * patching the widget message status to 'submitted'.
+ *
+ * It may RETURN the sanitized `result_meta`, which wins over
+ * `buildResultMeta` — and MUST return one when the entry declares no builder.
+ * Returning it is what a handler should do whenever the outcome is decided by
+ * the side-effect rather than by the body (a credential probe's verdict, the
+ * row an upsert settled on), because the alternative is carrying the value
+ * from one call to the other outside the type.
+ *
+ * What it returns is `result_meta` and therefore reaches the agent's context
+ * through `buildAutoResumePrompt`, so it is under exactly the sanitization
+ * rule `buildResultMeta` is under: names, scopes, labels and outcomes, never a
+ * submitted value.
+ *
+ * `params` is the original agent-provided params stored on the widget row —
+ * available so the handler can cross-check the submit body against what was
+ * originally requested (e.g. env_vars validates names match exactly).
+ *
+ * The durable resolver releases a live claim after `applySubmit` reports an
+ * error so the user can correct and retry the widget. Implementations must
+ * make that deliberate retry safe (normally by writing desired state
+ * idempotently). Daemon death after an unknown outcome is different: the claim
+ * stays `resolving` and is not replayed.
+ */
+export type SubmitWidgetRegistryEntry<TParams, TSubmit, TResultMeta> =
+  SubmitWidgetRegistryEntryBase<TParams, TSubmit, TResultMeta> &
+    SubmitWidgetResultMetaSource<TSubmit, TParams, TResultMeta>;
 
 /**
  * A widget the DAEMON resolves by re-reading its own durable state, after a
