@@ -822,8 +822,8 @@ importers:
         specifier: ^5.0.50
         version: 5.0.50(typescript@6.0.3)
       '@libsql/client':
-        specifier: ^0.17.4
-        version: 0.17.4
+        specifier: ^0.18.0
+        version: 0.18.0
       '@modelcontextprotocol/core':
         specifier: 2.0.0
         version: 2.0.0
@@ -886,7 +886,7 @@ importers:
         version: 17.4.2
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1))
+        version: 0.45.2(@libsql/client@0.18.0)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1))
       emojibase-data:
         specifier: ^17.0.0
         version: 17.0.0(emojibase@17.0.0)
@@ -1062,8 +1062,8 @@ importers:
         specifier: ^5.0.50
         version: 5.0.50(typescript@6.0.3)
       '@libsql/client':
-        specifier: ^0.17.4
-        version: 0.17.4
+        specifier: ^0.18.0
+        version: 0.18.0
       '@slack/socket-mode':
         specifier: ^2.0.7
         version: 2.0.7(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
@@ -1087,7 +1087,7 @@ importers:
         version: 0.38.55
       drizzle-orm:
         specifier: ^0.45.2
-        version: 0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1))
+        version: 0.45.2(@libsql/client@0.18.0)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1))
       emojibase-data:
         specifier: ^17.0.0
         version: 17.0.0(emojibase@17.0.0)
@@ -2885,11 +2885,11 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@libsql/client@0.17.4':
-    resolution: {integrity: sha512-lYayFWasDV78A+TjlEhr6ubb3odBV6OHjb+wdp8VQcyWWAEIjuwbCHaraEUS4m4yWoo0BvZo96It4VdzZRmRWw==}
+  '@libsql/client@0.18.0':
+    resolution: {integrity: sha512-zMCCo58vv7w27j7+cnt/GW+X6/Rih6cHZ86PKi0AxCMOqMfrVgG9OZ5lW2bDMJhSeOjsv2szH2nJF3A9l36UmA==}
 
-  '@libsql/core@0.17.4':
-    resolution: {integrity: sha512-LqF9gIvnJ38nmAH1y/ChizHqDO/MO1wLgA96XrraulEEbqXxLjleSH92YWTolbuJKgPUmGu4aJk9W3UnAcxLOQ==}
+  '@libsql/core@0.18.0':
+    resolution: {integrity: sha512-N8RR2CIpcgtbKZnXs2KVpw2lJQfinUj3I56e7qRDRpK18Hty0Rr8nr00VmFb4R/DsqOanPB/TaP3+QAQLZeXMg==}
 
   '@libsql/darwin-arm64@0.5.29':
     resolution: {integrity: sha512-K+2RIB1OGFPYQbfay48GakLhqf3ArcbHqPFu7EZiaUcRgFcdw8RoltsMyvbj5ix2fY0HV3Q3Ioa/ByvQdaSM0A==}
@@ -10685,6 +10685,18 @@ packages:
       utf-8-validate:
         optional: true
 
+  ws@8.21.3:
+    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   wsl-utils@0.1.0:
     resolution: {integrity: sha512-h3Fbisa2nKGPxCpm89Hk33lBLsnaGBvctQopaBSOW/uIs6FTe1ATyAnKFJrzVs9vpGdsTe73WF3V4lIsk4Gacw==}
     engines: {node: '>=18'}
@@ -12878,20 +12890,20 @@ snapshots:
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
 
-  '@libsql/client@0.17.4':
+  '@libsql/client@0.18.0':
     dependencies:
-      '@libsql/core': 0.17.4
+      '@libsql/core': 0.18.0
       '@libsql/hrana-client': 0.10.0
-      js-base64: 3.7.8
+      js-base64: 3.9.3
       libsql: 0.5.29
       promise-limit: 2.7.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@libsql/core@0.17.4':
+  '@libsql/core@0.18.0':
     dependencies:
-      js-base64: 3.7.8
+      js-base64: 3.9.3
 
   '@libsql/darwin-arm64@0.5.29':
     optional: true
@@ -12902,7 +12914,7 @@ snapshots:
   '@libsql/hrana-client@0.10.0':
     dependencies:
       '@libsql/isomorphic-ws': 0.1.5
-      js-base64: 3.7.8
+      js-base64: 3.9.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12910,7 +12922,7 @@ snapshots:
   '@libsql/isomorphic-ws@0.1.5':
     dependencies:
       '@types/ws': 8.18.1
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -15700,7 +15712,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.1.1
       vitest: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.3.0(@types/node@24.13.3)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -15718,7 +15730,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.1.1
       vitest: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.3.0(@types/node@24.13.3)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.1))
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -15737,7 +15749,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.1.1
       vitest: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.1))
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -17099,9 +17111,9 @@ snapshots:
       esbuild: 0.25.12
       tsx: 4.23.13
 
-  drizzle-orm@0.45.2(@libsql/client@0.17.4)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1)):
+  drizzle-orm@0.45.2(@libsql/client@0.18.0)(@opentelemetry/api@1.9.0)(postgres@3.4.9)(sqlite3@5.1.7(supports-color@8.1.1)):
     optionalDependencies:
-      '@libsql/client': 0.17.4
+      '@libsql/client': 0.18.0
       '@opentelemetry/api': 1.9.0
       postgres: 3.4.9
       sqlite3: 5.1.7(supports-color@8.1.1)
@@ -18601,7 +18613,7 @@ snapshots:
       whatwg-encoding: 3.1.1
       whatwg-mimetype: 4.0.0
       whatwg-url: 15.1.0
-      ws: 8.21.0
+      ws: 8.21.3
       xml-name-validator: 5.0.0
     transitivePeerDependencies:
       - bufferutil
@@ -21214,7 +21226,7 @@ snapshots:
   socket.io-adapter@2.5.5(supports-color@8.1.1):
     dependencies:
       debug: 4.3.7(supports-color@8.1.1)
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -22487,6 +22499,8 @@ snapshots:
   wrappy@1.0.2: {}
 
   ws@8.21.0: {}
+
+  ws@8.21.3: {}
 
   wsl-utils@0.1.0:
     dependencies:
