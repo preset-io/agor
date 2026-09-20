@@ -1681,6 +1681,113 @@ and that a classified one is admitted from any of the three inventories.
 service moved between the hook inventories. This is about _where a scope is
 armed_, not _who may do what_.
 
+### 7.1.13 Three blocking defects from the final correctness review
+
+Two of the three are in platform code this branch absorbed rather than in the
+Slack lane, and the third is the lane's own third instance of one rule.
+
+**B1 — a shared scope store could serve the wrong database.** §9's follow-up F4
+keyed the tenant scope stores and the proxy-target map on `Symbol.for` so they
+are the process's rather than each bundled copy's, which is what makes core's
+scoping mean anything in a built artifact. What that sharing did not come with
+is any check that the scope on the store belongs to the database being asked
+about. `scopedTarget` routed every guarded proxy to `store.db`, and
+`runWithTenantDatabaseScope` joined whatever scope was open — both
+database-agnostic within one module copy already; `Symbol.for` extended the
+reach to previously independent copies.
+
+Driven on the **built artifact**, because source resolution is what hid F4:
+`packages/core/dist/db/index.js` imported twice under different URLs, which is
+two independent evaluations of the file a daemon actually loads. Two SQLite
+databases, told apart by one app variable — A's card projection off, B's on.
+
+| Probe (two built copies, databases A and B)      | Before                                   | After                             |
+| ------------------------------------------------ | ---------------------------------------- | --------------------------------- |
+| B's guarded proxy outside any scope              | `MissingTenantDatabaseScopeError`        | `MissingTenantDatabaseScopeError` |
+| B's guarded proxy **inside A's scope**           | `false` — **A's row, through B's proxy** | `MissingTenantDatabaseScopeError` |
+| A scope opened explicitly for B, from inside A's | `false` — A's handle again               | `true` — B's row                  |
+| A's proxy inside A's scope (control)             | `false`                                  | `false`                           |
+
+The fix is a fence, not a redefinition: both scope shapes now carry `rootDb`,
+the fully unwrapped handle the scope was opened on, and routing and nested
+admission compare it before serving. Two handles count as the same database —
+the base, and the scoped handle the scope itself produced — so passing a
+transaction handle back into an entry point still joins rather than being told
+it is foreign. Nothing about what a scope _means_ changed, which is the line
+the fix was asked to stay behind.
+
+Called out precisely: this is confirmed **wrong-database routing**, not a
+demonstrated cross-tenant read. Agor runs one database per daemon, so the
+reachable population is test and tooling processes that hold two.
+
+What it could **not** discriminate: the drive is SQLite, so it shows routing
+and not RLS. On PostgreSQL the same fence decides which base a transaction is
+opened on; the PostgreSQL lane (393 tests, 79 files) is green, which says the
+fence broke nothing there, not that a second PostgreSQL database was driven.
+
+**B2 — the tenant-bound facade answered with no tenant.** With neither a pin
+nor ambient identity, `read`/`write` still entered
+`runWithTenantDatabaseScope(db, undefined, …)`. That is not a weaker scope: with
+no tenant it opens one the proxy guard does not accept and hands the callback
+the _unwrapped_ base handle, so the callback reached the database with no guard
+and no RLS tenant — and `write` had nothing to check the per-tenant write gate
+against, so it skipped it. A deferred caller that lost its identity became
+silently successful, the exact inverse of this facade's purpose. It now throws
+`MissingTenantIdentityError`, as a rejection rather than a synchronous throw.
+
+**Callers checked.** `GatewayService` is the only holder. It binds 13
+repositories through `repository()`, has six `read` call sites (all through its
+own `readInTenantScope`, all inside `runWithTenantContext` or a request), and
+**no `write` call site at all**. None relied on the permissive path. `repository()`
+is deliberately left as it was: it is core's `bindRepositoryToTenantUnitOfWork`
+verbatim, shared with every other binder in the codebase, so tightening it is a
+platform change rather than this facade's. Core's own tolerance of an absent
+tenant also stays — §9's standalone refresh path has never had trusted tenant
+identity and requiring one there would be an authorization change.
+
+**B3 — an abandoned dismissal advertised as a recoverable finish.** The third
+time this lane has produced an offer the resolver would refuse, and the second
+time the rule was written down before being broken. `mcpSlackConnectRenderedState`
+checked the resolution claim's AGE against `WIDGET_RECLAIM_ABANDONED_AFTER_MS`
+but not its ACTION. `submissions.ts` admits an abandoned claim only for its own
+action, and this card's button posts `oauth_callback` — so after "Not now" was
+tapped, the resolver died holding a `dismiss` claim, and sixty seconds passed,
+the card and the page both said _Finish connecting_ over a POST that comes back
+"already resolving; cannot oauth_callback again". The state machine now requires
+`resolution_claim.action === 'oauth_callback'`, which also excludes `submit` —
+this lane is `daemon_verified`, so nothing else could ever finish it.
+
+**The real-stack drive, re-run.** Same seed on a build without the fix and with
+it, through `createSlackLaneHarness` — a real registered app, a real migrated
+SQLite database with `requireTenantScope` armed, real repositories, and a link
+minted by `issueMCPOAuthConnectLink` rather than hand-built:
+
+| Surface                                               | Before                                                        | After                                   |
+| ----------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------- |
+| `POST /mcp-oauth-connect` (the page the button opens) | `finish_required`                                             | `sign_in_pending`                       |
+| The Slack card, through the delivery loop             | edited to _Finish connecting Notion_, with a re-sealed button | no edit; record stays `sign_in_pending` |
+| `resolveWidget(…, { kind: 'oauth_callback' })`        | `already resolving`                                           | `already resolving`                     |
+| The widget row afterwards                             | still `resolving`, claim untouched                            | still `resolving`, claim untouched      |
+
+What it could **not** discriminate:
+
+- **The refusal half moved at all.** It does not: the resolver's answer is
+  identical on both builds, which is the whole point — the card changed to
+  agree with it. Its column is a control, pinned in
+  `widgets/submissions.test.ts` (an abandoned `dismiss` claim refuses
+  `oauth_callback`, the mirror of the case that was already there).
+- **The two halves in ONE process.** `register-services.oauth-sqlite.
+integration.test.ts` registers services and not routes, so
+  `/widgets/:id/oauth-resolve` is not reachable from it; the card row comes
+  from the delivery-loop harness in `gateway-mcp-slack-connect.test.ts` and the
+  resolver row from the resolver's own suite. Three real surfaces, three
+  harnesses — not one transcript.
+- **What the card should say instead.** It falls through to the pre-existing
+  `sign_in_pending` copy ("Sign-in is in progress"), which is imprecise for a
+  reader who tapped "Not now". Left alone deliberately: it offers nothing, which
+  is the property that was broken, and a new state is a copy change rather than
+  a correctness one.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers

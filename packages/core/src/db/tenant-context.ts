@@ -1,9 +1,27 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { TenantID } from '../types/tenant';
-import type { Database } from './client';
+import type { Database, RawDatabase } from './client';
+
+/**
+ * Which database a scope was opened on.
+ *
+ * The scope stores are the PROCESS's (see `processScopeStore`), so an ambient
+ * scope is visible to every guarded proxy in the process — including proxies
+ * over other databases. Without this, "is a scope active?" and "is a scope
+ * active *for this database*?" were the same question, and the answer to the
+ * second was taken from the first: a proxy over database B, asked inside a
+ * scope opened for database A, returned A's handle and therefore A's rows.
+ *
+ * This is the fully unwrapped base handle (`databaseRootHandle` in
+ * `tenant-scope.ts`), not the scoped one: on PostgreSQL `db` is a transaction
+ * handle that shares no identity with the base a proxy closes over.
+ */
+export type TenantDatabaseIdentity = RawDatabase | Database;
 
 export interface TenantOwnedDatabaseScope {
   db: Database;
+  /** The database this scope may serve. See {@link TenantDatabaseIdentity}. */
+  rootDb: TenantDatabaseIdentity;
   kind: 'tenant';
   /** Whether `db` is a native transaction handle rather than an identity-only scope. */
   transactionActive: boolean;
@@ -14,6 +32,8 @@ export interface TenantOwnedDatabaseScope {
 
 export interface SystemDatabaseScope {
   db: Database;
+  /** The database this scope may serve. See {@link TenantDatabaseIdentity}. */
+  rootDb: TenantDatabaseIdentity;
   kind: 'system';
   systemReason: string;
   systemCapability?: SystemDatabaseCapability;

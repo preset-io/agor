@@ -1299,6 +1299,50 @@ describe('Slack MCP connect — finishing an abandoned sign-in', () => {
     ).toBe('finish_required');
   });
 
+  it('never offers a finish on an abandoned claim the resolver would refuse', () => {
+    // "Not now" claimed the widget for `dismiss`, the resolver died, and a
+    // minute passed. The claim is abandoned by the clock, so an age-only test
+    // called this `finish_required` — and the button submits `oauth_callback`,
+    // which `submissions.ts` refuses because the claim belongs to `dismiss`
+    // (see its mirror case in `widgets/submissions.test.ts`). The card must
+    // not offer what the resolver would refuse, so it stays the honest
+    // buttonless pending state until something resolves the claim.
+    const dismissClaim = widget({
+      status: 'resolving',
+      resolution_claim: {
+        ...abandonedClaim(WIDGET_RECLAIM_ABANDONED_AFTER_MS + 60_000),
+        action: 'dismiss' as const,
+      },
+    });
+    const state = mcpSlackConnectRenderedState(
+      { widget: dismissClaim, delivery: delivery(), grantConnected: true },
+      NOW
+    );
+    expect(state).toBe('sign_in_pending');
+    expect(
+      mcpSlackConnectCardCopy(state, { serverName: 'Notion', reason: 'r', oauthMode: 'per_user' })
+        .button
+    ).toBeUndefined();
+    // A `submit` claim is refused by the same rule — this lane is
+    // `daemon_verified`, so nothing but `oauth_callback` can ever finish it.
+    expect(
+      mcpSlackConnectRenderedState(
+        {
+          widget: widget({
+            status: 'resolving',
+            resolution_claim: {
+              ...abandonedClaim(WIDGET_RECLAIM_ABANDONED_AFTER_MS + 60_000),
+              action: 'submit' as const,
+            },
+          }),
+          delivery: delivery(),
+          grantConnected: true,
+        },
+        NOW
+      )
+    ).toBe('sign_in_pending');
+  });
+
   it('never offers a finish for a resolved, dismissed or retired card', () => {
     for (const widgetRow of [
       widget({ status: 'submitted', result_meta: { attached: true } }),
@@ -1524,6 +1568,34 @@ describe('Slack MCP connect delivery — finishing an abandoned sign-in', () => 
     const url = request.blocks.find((block) => block.type === 'actions')?.elements?.[0]?.url;
     expect(url).toMatch(/#token=/);
     expect(harness.current()).toMatchObject({ rendered_state: 'finish_required' });
+  });
+
+  it('leaves an abandoned dismissal alone rather than editing in a finish', async () => {
+    // The same shape as the case above, driven through the real delivery loop,
+    // with one field changed: the abandoned claim is a `dismiss`. The loop must
+    // reach the same verdict the state function does — no edit, no button, and
+    // the record still saying a sign-in is pending — because the URL this card
+    // would carry leads to a POST `submissions.ts` refuses by name.
+    const harness = deliveryHarness({
+      widget: {
+        status: 'resolving',
+        resolution_claim: {
+          token: 'claim-token',
+          action: 'dismiss',
+          claimed_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          claimed_by: OWNER,
+        },
+      } as Partial<WidgetMessageMetadata>,
+      delivery: liveLink({
+        slack_message_ts: '1700000000.000002',
+        rendered_state: 'sign_in_pending',
+        token_consumed_at: '2026-09-16T12:01:00.000Z',
+        oauth_succeeded_at: '2026-09-16T12:02:00.000Z',
+      }),
+    });
+    await withSecret(() => harness.deliver());
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.current()).toMatchObject({ rendered_state: 'sign_in_pending' });
   });
 
   it('leaves a claim younger than the takeover cutoff alone', async () => {

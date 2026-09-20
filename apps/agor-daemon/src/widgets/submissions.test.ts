@@ -1447,6 +1447,31 @@ describe('resolveWidget — interrupted OAuth resolutions', () => {
     ).rejects.toThrow(/already submitted/);
   });
 
+  it('will not finish a widget whose abandoned claim was a dismissal', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: { ...abandonedClaim(10 * 60_000), action: 'dismiss' as const },
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    // The mirror of the case below, and the half the Slack card has to agree
+    // with: "Not now" was tapped, the resolver died holding that claim, and
+    // sixty seconds later the claim is old enough to take over — but only by
+    // another dismissal. An `oauth_callback` is a different decision and is
+    // refused by name, which is why `mcpSlackConnectRenderedState` reads the
+    // claim's action and not only its age.
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+  });
+
   it('will not dismiss a widget whose OAuth resolution is in flight', async () => {
     const fixtures = makeFixtures({
       widgetStatus: 'resolving',

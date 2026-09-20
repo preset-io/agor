@@ -1655,6 +1655,59 @@ describe('Slack MCP connect authenticated route', () => {
     expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
   });
 
+  /**
+   * The same finish, withheld — because the resolver would refuse it.
+   *
+   * Everything the finish branch needs is present: a grant on file, a live
+   * link, an unresolved widget, and a claim old enough for `submissions.ts` to
+   * take over. The one thing that differs is what the claim is FOR. The user
+   * tapped "Not now", the resolver died holding a `dismiss` claim, and the
+   * reclaim gate admits an abandoned claim only for its own action — so the
+   * `oauth_callback` this page's button posts comes back "already resolving;
+   * cannot oauth_callback again". Reading the claim's age and not its action
+   * made the page offer exactly that.
+   */
+  it('preflights an abandoned dismissal as pending, not as a finish it would refuse', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    await new UserMCPOAuthTokenRepository(harness.rawDb).saveToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID,
+      {
+        accessToken: 'landed-access-token',
+        refreshToken: 'landed-refresh-token',
+        clientId: 'saved-client-id',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      }
+    );
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId as MessageID, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        status: 'resolving',
+        resolution_claim: {
+          token: 'claim-from-a-dead-dismissal',
+          action: 'dismiss',
+          claimed_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          claimed_by: harness.user.user_id as UserID,
+        },
+      },
+    }));
+
+    const preflight = (await harness.app
+      .service('mcp-oauth-connect')
+      .create({ token: seeded.token }, paramsFor(harness))) as { state: string };
+
+    expect(preflight).toMatchObject({ state: 'sign_in_pending' });
+    // Still a read, and the claim is still whoever's it was.
+    expect(await seeded.widgetStatus()).toBe('resolving');
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
   it('describes a request that already finished instead of calling the link invalid', async () => {
     const provider = await createTestProvider();
     providers.push(provider);

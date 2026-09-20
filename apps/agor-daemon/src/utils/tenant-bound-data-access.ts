@@ -6,6 +6,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
+import type { TenantID } from '@agor/core/types';
 
 /**
  * The one database handle an `identity-only` service is allowed to hold.
@@ -45,6 +46,13 @@ import {
  * Entering a scope that is already open is a no-op, so a request-path caller
  * that already holds one is unaffected; this is equally correct on the
  * `scoped` side of the classification.
+ *
+ * `read` and `write` fail closed when there is no tenant to bind to — see
+ * {@link MissingTenantIdentityError}, which is the one thing this facade must
+ * never do quietly. `repository` deliberately keeps core's ambient behaviour:
+ * it is `bindRepositoryToTenantUnitOfWork` verbatim, shared with every other
+ * binder in the codebase, and tightening it is a platform change rather than
+ * this facade's.
  */
 export interface TenantBoundDataAccess {
   /**
@@ -62,6 +70,9 @@ export interface TenantBoundDataAccess {
    * The callback receives the SCOPED handle, which is what makes this safe to
    * hand to a free function (`read(isMCPSlackConnectCardEnabled)`) — the thing
    * that was unsafe with a raw handle.
+   *
+   * Rejects with {@link MissingTenantIdentityError} when there is no tenant to
+   * bind to. A scope is only a scope if it names a tenant.
    */
   read<T>(read: (db: TenantScopedDatabase) => Promise<T>): Promise<T>;
 
@@ -72,6 +83,9 @@ export interface TenantBoundDataAccess {
    * Deferred writers that carry only tenant identity never pass through the
    * request hook's gate check, so the gate is enforced here for the same
    * reason `bindRepositoryToTenantUnitOfWork` enforces it on bound methods.
+   *
+   * Rejects with {@link MissingTenantIdentityError} when there is no tenant to
+   * bind to, rather than writing with the gate unchecked.
    */
   write<T>(write: (db: TenantScopedDatabase) => Promise<T>): Promise<T>;
 }
@@ -105,6 +119,32 @@ export interface TenantBoundDataAccessOptions {
 }
 
 /**
+ * A tenant-bound read or write was attempted with no tenant to bind it to.
+ *
+ * `runWithTenantDatabaseScope(db, undefined, work)` is not a weaker scope, it is
+ * a hole: with no tenant it opens a scope the proxy guard does not accept and
+ * hands `work` the UNWRAPPED base handle, so the callback reaches the database
+ * with no guard, no RLS `agor.tenant_id`, and — on the write path — nothing to
+ * check the per-tenant write gate against. A deferred caller that lost its
+ * identity would therefore succeed silently, which is the exact inverse of what
+ * this facade exists to guarantee.
+ *
+ * Core's `runWithTenantDatabaseScope` keeps tolerating an absent tenant, and
+ * deliberately: the standalone OAuth refresh path (§9, follow-up F4) has never
+ * had trusted tenant identity and requiring one there would be an authorization
+ * change. This is the daemon's tenant-BOUND facade, where the absence is
+ * unambiguously a bug in the caller.
+ */
+export class MissingTenantIdentityError extends Error {
+  constructor(operation: 'read' | 'write') {
+    super(
+      `Tenant-bound ${operation} requires a tenant: no pinned tenant and no ambient tenant identity`
+    );
+    this.name = 'MissingTenantIdentityError';
+  }
+}
+
+/**
  * Build the tenant-bound data access facade for an orchestration service.
  *
  * Hold this instead of the `TenantScopeAwareDatabase`. Where a service still
@@ -128,17 +168,29 @@ export function createTenantBoundDataAccess(
     }
   }
 
-  const tenantId = () => pinned?.pinnedTenantId ?? getCurrentTenantId();
+  // Fail closed, and resolve the tenant ONCE per call: the value the scope is
+  // opened with is the value the write gate is checked against, so they cannot
+  // disagree if ambient identity changes underneath.
+  const requireTenantId = (operation: 'read' | 'write'): TenantID | string => {
+    const tenantId = pinned?.pinnedTenantId ?? getCurrentTenantId();
+    if (!tenantId) throw new MissingTenantIdentityError(operation);
+    return tenantId;
+  };
 
   return {
     repository: (repository) =>
       bindRepositoryToTenantUnitOfWork(db, repository, pinned?.pinnedTenantId),
-    read: (read) => runWithTenantDatabaseScope(db, tenantId(), (scoped) => read(scoped)),
-    write: (write) =>
-      runWithTenantDatabaseScope(db, tenantId(), async (scoped) => {
-        const activeTenantId = tenantId();
-        if (activeTenantId) await assertTenantWritable(scoped, activeTenantId);
+    // `async` rather than a bare expression so a missing tenant arrives as a
+    // rejected promise, which is what every caller of a `Promise`-returning
+    // method is entitled to handle.
+    read: async (read) =>
+      runWithTenantDatabaseScope(db, requireTenantId('read'), (scoped) => read(scoped)),
+    write: async (write) => {
+      const tenantId = requireTenantId('write');
+      return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await assertTenantWritable(scoped, tenantId);
         return write(scoped);
-      }),
+      });
+    },
   };
 }

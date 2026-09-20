@@ -116,10 +116,20 @@ export function mcpSlackConnectRenderedState(
   // below — including an in-flight claim, once that claim is old enough for
   // `submissions.ts` to take it over, which is the point at which the card's
   // button would actually do something.
+  //
+  // Two things have to be true of the claim, not one. Age says `submissions.ts`
+  // is willing to take a claim over; the claim's ACTION says it would take over
+  // *this* one. Its reclaim gate requires `resolution_claim.action ===
+  // action.kind`, and this card's button submits `oauth_callback` — so an
+  // abandoned `dismiss` claim (the user tapped "Not now" and the resolver died)
+  // is old enough by the clock and still refused by name. Offering a finish
+  // there is the offer/refuse disagreement this lane has produced twice and
+  // forbids: the card must never offer what the resolver would refuse.
+  const claim = widget.resolution_claim;
   const claimIsAbandoned =
     widget.status === 'resolving' &&
-    now - new Date(widget.resolution_claim?.claimed_at ?? '').getTime() >=
-      WIDGET_RECLAIM_ABANDONED_AFTER_MS;
+    claim?.action === 'oauth_callback' &&
+    now - new Date(claim.claimed_at).getTime() >= WIDGET_RECLAIM_ABANDONED_AFTER_MS;
   if (input.grantConnected && (widget.status === 'pending' || claimIsAbandoned)) {
     // No delivery record yet means the first card has not been posted, and the
     // caller can mint a link for it — the same one `connect_required` gets.

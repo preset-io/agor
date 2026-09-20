@@ -10,7 +10,10 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTenantBoundDataAccess } from './tenant-bound-data-access';
+import {
+  createTenantBoundDataAccess,
+  MissingTenantIdentityError,
+} from './tenant-bound-data-access';
 
 const TENANT = 'tenant-a';
 
@@ -92,6 +95,49 @@ describe('what the facade refuses to allow', () => {
     await expect(
       runWithTenantContext(TENANT, () => users.findByEmail('nobody@example.test'))
     ).resolves.toBeFalsy();
+  });
+});
+
+describe('a facade with nothing to bind to', () => {
+  /**
+   * The inverse of everything above: no pin, and no ambient identity either.
+   *
+   * `runWithTenantDatabaseScope(db, undefined, work)` is not a weaker scope. It
+   * opens one the proxy guard does not accept and hands `work` the UNWRAPPED
+   * base handle, so the callback reaches the database with no guard and no RLS
+   * tenant — and `write` additionally had nothing to check the per-tenant write
+   * gate against, so it skipped it. A deferred caller that had lost its
+   * identity therefore became silently successful, which is the exact inverse
+   * of this facade's purpose.
+   */
+  it('refuses a read the direct call would have refused', async () => {
+    const data = createTenantBoundDataAccess(guarded);
+    // The direct call, for comparison: this is what the guard says.
+    await expect(isMCPSlackConnectCardEnabled(guarded)).rejects.toBeInstanceOf(
+      MissingTenantDatabaseScopeError
+    );
+    // The facade must not be the softer of the two doors into the same read.
+    await expect(data.read(isMCPSlackConnectCardEnabled)).rejects.toBeInstanceOf(
+      MissingTenantIdentityError
+    );
+  });
+
+  it('refuses a write, and persists nothing', async () => {
+    const data = createTenantBoundDataAccess(guarded);
+    await expect(
+      data.write((db) => setMCPSlackConnectCardEnabled(db, false))
+    ).rejects.toBeInstanceOf(MissingTenantIdentityError);
+    // End state, not just the throw: the kill switch is untouched.
+    await expect(
+      runWithTenantContext(TENANT, () => data.read(isMCPSlackConnectCardEnabled))
+    ).resolves.toBe(true);
+  });
+
+  it('rejects rather than throwing synchronously', async () => {
+    const data = createTenantBoundDataAccess(guarded);
+    // Every caller of a `Promise`-returning method is entitled to `.catch`.
+    const caught = await data.read(isMCPSlackConnectCardEnabled).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(MissingTenantIdentityError);
   });
 });
 

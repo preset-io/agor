@@ -220,6 +220,11 @@ describe('TasksService completion callbacks', () => {
         ...data,
       };
     });
+    // The service's own handle, and the one the ambient scope is opened on,
+    // must be the same database: a scope is fenced to the database it was
+    // opened on, so `this.db` left undefined here would no longer silently
+    // borrow the scope's handle. The real constructor always sets it.
+    (service as unknown as { db: unknown }).db = db;
     await runWithTenantDatabaseScope(db as never, 'tenant-1', async () => {
       await service.patch(taskId, {
         status: TaskStatus.COMPLETED,

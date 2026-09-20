@@ -81,6 +81,21 @@ describe('static-mode tenant DB scope for owned services', () => {
 describe('registerHooks static-mode owned-service scope wiring', () => {
   type AroundHook = (ctx: HookContext, next: () => Promise<void>) => Promise<void>;
 
+  /**
+   * The one database in this wiring test, unguarded, exactly as the daemon's
+   * own base handle is before `createTenantScopedDatabaseProxy` wraps it.
+   *
+   * The guarded probes below wrap THIS object rather than one of their own. A
+   * scope is fenced to the database it was opened on, so a probe over some
+   * other handle would refuse no matter how correctly the hook chain armed a
+   * scope — and would therefore stop testing the wiring and start testing the
+   * fence (which `packages/core/src/db/tenant-scope-database-identity.test.ts`
+   * does properly). `run` marks it as SQLite (`isPostgresDatabase` keys off the
+   * absence of `.run`), so the around hook opens a no-op scope rather than a
+   * native transaction.
+   */
+  const wiringBaseDb = { run: () => undefined };
+
   const artifactCustomRouteProbes = [
     ['artifacts/:id/payload', 'find'],
     ['artifacts/:id/console', 'create'],
@@ -110,12 +125,10 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     };
 
     registerHooks({
-      // Unguarded stub: registerHooks constructs repositories over this db at
-      // registration time, which must not trip the guard. The scope assertion
-      // below uses a SEPARATE guarded probe. `run` marks it as SQLite
-      // (isPostgresDatabase keys off the absence of `.run`), so the around hook
-      // opens a no-op scope rather than a native transaction.
-      db: { run: () => undefined } as unknown as RegisterHooksContext['db'],
+      // Unguarded: registerHooks constructs repositories over this db at
+      // registration time, which must not trip the guard. The scope assertions
+      // below use guarded probes over the SAME handle — see `wiringBaseDb`.
+      db: wiringBaseDb as unknown as RegisterHooksContext['db'],
       app: app as unknown as RegisterHooksContext['app'],
       config: {
         database: { dialect: 'sqlite' },
@@ -146,7 +159,7 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     // A guarded probe touched inside the composed around chain: it succeeds only
     // if a tenant DB scope is active. A revert to identity-only would leave no
     // scope, so this touch would throw MissingTenantDatabaseScopeError.
-    const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+    const probe = createTenantScopedDatabaseProxy(wiringBaseDb as never, {
       label: 'wiring probe db',
     });
     let scopeKind: string | undefined;
@@ -172,7 +185,7 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
       // Exercise the installed chain instead of relying on its structural
       // arity. Any refactor that leaves identity but drops database scope will
       // trip this guarded SQLite touch, including the trust write routes.
-      const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+      const probe = createTenantScopedDatabaseProxy(wiringBaseDb as never, {
         label: `${path} wiring probe db`,
       });
       const innermost = async () => {
