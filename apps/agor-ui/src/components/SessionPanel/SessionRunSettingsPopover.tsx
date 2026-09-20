@@ -8,13 +8,13 @@ import type {
   Session,
 } from '@agor-live/client';
 import { RobotOutlined, SettingOutlined } from '@ant-design/icons';
-import { Popover, Space, Typography, theme } from 'antd';
+import { Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { EffortSelector } from '../EffortSelector';
 import { type ModelConfig, ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
 import { getModelDisplayName } from '../Pill/modelDisplay';
-import { Tag } from '../Tag';
+import { Tag, TagPopover } from '../Tag';
 
 export interface SessionRunSettingsPopoverProps {
   client: AgorClient | null;
@@ -132,14 +132,8 @@ export const SessionRunSettingsPopover: React.FC<SessionRunSettingsPopoverProps>
   );
 
   return (
-    <Popover
-      trigger="click"
-      placement="top"
-      getPopupContainer={(node) => node.parentElement ?? document.body}
-      content={content}
-      title={null}
-    >
+    <TagPopover trigger="click" content={content} title={null}>
       {trigger}
-    </Popover>
+    </TagPopover>
   );
 };
