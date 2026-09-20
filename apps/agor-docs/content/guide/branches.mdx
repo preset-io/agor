@@ -315,6 +315,34 @@ detached/unmanaged processes are **not proven stopped**. Delegated/external exec
 is rejected until its containment is supported. Branch `updated_at` is metadata
 activity, not evidence of filesystem inactivity. There is no scheduler or age cutoff.
 
+### Restoring a workspace
+
+Unarchive admits an executor restore and clears the archive timestamp and actor
+atomically. Wait for `filesystem_status: ready` before starting a session; acceptance
+alone is not completion. A failure remains visible with a retryable error.
+
+An already-active branch left with `preserved`, `cleaned`, or `deleted` status can
+use **Recover** on its card, `agor_branches_retry_provisioning`, or
+`POST /branches/:id/retry-provisioning` with `{}`. Recovery requires branch Manager
+and filesystem write access and runs as the requesting user. It does not require
+archiving the branch again. An in-flight `creating` attempt or unsettled maintenance
+blocks recovery; elapsed time alone never authorizes a replacement executor.
+Stop or cancel unfinished tasks, stop the environment, and reconcile pending uploads
+before requesting recovery.
+
+The executor validates existing Git refs and repository linkage before readiness.
+Broken or foreign linkage fails without overwriting files. Local teammate homes
+are personal directories and need not have Git metadata; missing or empty homes
+must be restored from your own backup, never recreated from the public template.
+Clean removes ignored build outputs, not the working directory; Delete removes the
+workspace. Neither a historical `cleaned` status nor an archive timestamp establishes
+which action caused a later missing Git target.
+
+User and board **primary teammate** designations independently block cleanup,
+archive, and permanent deletion, regardless of repository cleanup policy. To retire
+a teammate intentionally, first reassign or clear all primary designations through
+the existing user and board controls, then use the normal archive/delete flow.
+
 ### Deletion and retained data
 
 Permanent deletion is not account-wide or provider-wide erasure. Shared repositories,

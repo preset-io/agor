@@ -16,6 +16,8 @@ import { branches } from '../schema';
 import { dbTest, ensureTestUser } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
+import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 
 // `db` is `any` because dbTest hands us a loosely-typed Database fixture.
 async function seedFailedBranch(
@@ -370,3 +372,136 @@ describe('BranchRepository provisioning CAS', () => {
     expect(result.branch.filesystem_status).toBe('creating');
   });
 });
+
+dbTest(
+  'restore claims active stale and archived terminal records, clears columns and fences interrupted generations',
+  async ({ db }) => {
+    const { branchRepo, branchId } = await seedFailedBranch(db, {
+      archived: true,
+      archived_at: new Date().toISOString(),
+      filesystem_status: 'cleaned',
+    });
+    const original = (await branchRepo.findById(branchId))!;
+    await branchRepo.update(branchId, { archived_by: original.created_by });
+    const claims = await Promise.all(
+      ['one', 'two'].map((attempt) =>
+        branchRepo.claimForProvisioning(branchId, attempt, { restore: true, archived: true })
+      )
+    );
+    expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+    const winner = claims.find((claim) => claim.claimed)!.branch;
+    expect(winner).toMatchObject({
+      archived: false,
+      filesystem_status: 'creating',
+      provisioning_operation: 'restore',
+    });
+    expect(winner.archived_at).toBeUndefined();
+    expect(winner.archived_by).toBeUndefined();
+    await expect(branchRepo.update(branchId, { path: '/wrong' })).rejects.toThrow(
+      'materialization inputs'
+    );
+    expect(
+      (await branchRepo.claimForProvisioning(branchId, 'takeover', { restore: true })).claimed
+    ).toBe(false);
+    await branchRepo.markProvisioningFailedIfCreating(
+      branchId,
+      'Interrupted',
+      winner.provisioning_attempt_id
+    );
+    const retry = await branchRepo.claimForProvisioning(branchId, 'retry', { restore: true });
+    expect(retry.claimed).toBe(true);
+    expect(
+      (
+        await branchRepo.acknowledgeProvisioningAttempt(
+          branchId,
+          { filesystem_status: 'ready' },
+          winner.provisioning_attempt_id
+        )
+      ).applied
+    ).toBe(false);
+    expect(
+      (
+        await branchRepo.markProvisioningFailedIfCreating(
+          branchId,
+          'late exit',
+          winner.provisioning_attempt_id
+        )
+      ).changed
+    ).toBe(false);
+    expect(
+      (
+        await branchRepo.acknowledgeProvisioningAttempt(
+          branchId,
+          { filesystem_status: 'ready' },
+          'retry'
+        )
+      ).applied
+    ).toBe(true);
+    for (const status of ['cleaned', 'preserved', 'deleted'] as const) {
+      await branchRepo.update(branchId, { filesystem_status: status });
+      const admitted = await branchRepo.claimForProvisioning(branchId, status, { restore: true });
+      expect(admitted.claimed).toBe(true);
+      await branchRepo.acknowledgeProvisioningAttempt(
+        branchId,
+        { filesystem_status: 'ready' },
+        status
+      );
+    }
+  }
+);
+
+dbTest(
+  'recovery excludes unfinished tasks and fences new producer admission while creating',
+  async ({ db }) => {
+    const { branchRepo, branchId } = await seedFailedBranch(db, { filesystem_status: 'cleaned' });
+    const owner = (await branchRepo.findById(branchId))!.created_by;
+    const sessions = new SessionRepository(db);
+    const session = await sessions.create({
+      branch_id: branchId,
+      created_by: owner,
+      agentic_tool: 'codex',
+    });
+    const tasks = new TaskRepository(db);
+    const task = await tasks.create({
+      session_id: session.session_id,
+      created_by: owner,
+      status: 'queued',
+    });
+    await expect(
+      branchRepo.claimForProvisioning(branchId, 'busy', { restore: true })
+    ).rejects.toThrow('unfinished tasks');
+    await tasks.update(task.task_id, { status: 'stopped' });
+    expect(
+      (await branchRepo.claimForProvisioning(branchId, 'idle', { restore: true })).claimed
+    ).toBe(true);
+    await expect(
+      tasks.create({ session_id: session.session_id, created_by: owner, status: 'queued' })
+    ).rejects.toThrow('provisioning');
+    await expect(
+      sessions.create({ branch_id: branchId, created_by: owner, agentic_tool: 'codex' })
+    ).rejects.toThrow('provisioning');
+  }
+);
+
+dbTest(
+  'materialization fences filesystem inputs without blocking teammate metadata bootstrap',
+  async ({ db }) => {
+    const { branchRepo, branchId } = await seedFailedBranch(db, {
+      filesystem_status: 'creating',
+      provisioning_operation: 'create',
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture', localHome: true } },
+    });
+    await expect(
+      branchRepo.update(branchId, {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Updated fixture' } },
+      })
+    ).resolves.toBeTruthy();
+    await expect(
+      branchRepo.update(branchId, {
+        custom_context: {
+          teammate: { kind: 'teammate', displayName: 'Fixture', localHome: false },
+        },
+      })
+    ).rejects.toThrow('materialization inputs');
+  }
+);

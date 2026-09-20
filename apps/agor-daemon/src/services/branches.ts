@@ -1,3 +1,4 @@
+import type { ReposService } from './repos.js';
 /**
  * Branches Service
  *
@@ -119,7 +120,6 @@ import {
   isSuperAdmin,
 } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
-import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
@@ -1459,6 +1459,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams,
     operationDb?: TenantScopedDatabase
   ): Promise<BranchWithZoneAndSessions> {
+    if (
+      params?.provider &&
+      (Object.hasOwn(data, 'provisioning_operation') ||
+        (Object.hasOwn(data, 'provisioning_attempt_id') &&
+          !Object.hasOwn(data, 'filesystem_status')))
+    )
+      throw new BadRequest('Provisioning ownership is server-managed.');
     if (params?.provider && Object.hasOwn(data, 'filesystem_status')) {
       const token = (params as AuthenticatedParams).authentication?.payload;
       if (
@@ -2277,7 +2284,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const requestUser = params?.user;
     if (!requestUser) throw new NotAuthenticated('Authentication required');
-    const branchFsAccess = await this.withTenantDatabase(params, () =>
+    await this.withTenantDatabase(params, () =>
       ensureBranchWorkspaceAccess(
         this.branchRepo,
         branch,
@@ -2294,214 +2301,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
     const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
 
-    // Update branch - clear archive metadata
-    const patchData: Partial<Branch> = {
-      archived: false,
-      archived_at: undefined,
-      archived_by: undefined,
-      filesystem_status: undefined,
-      updated_at: new Date().toISOString(),
-    };
+    // Placement still goes through the existing board authorization machinery.
+    // Do not clear archival state before the atomic provisioning admission.
     if (boardIdExplicitlyProvided) {
-      patchData.board_id = options?.boardId;
-    }
-
-    const unarchivedBranch = await this.withTenantDatabase(params, () =>
-      this.patch(id, patchData, params)
-    );
-    emitServiceEvent(this.app, {
-      path: 'branches',
-      event: 'patched',
-      data: unarchivedBranch,
-      params,
-      id: unarchivedBranch.branch_id,
-    });
-
-    // Recreate the git branch on filesystem if the directory is missing
-    // (e.g., it was archived with filesystemAction: 'deleted')
-    const userId = requestUser.user_id;
-    const statusToken = await issueExecutorCommandToken(
-      this.app,
-      'branch-filesystem-status',
-      userId,
-      branch.branch_id
-    );
-    const statusResult = await requestExecutor(
-      {
-        command: 'branch.filesystem.status',
-        sessionToken: statusToken,
-        daemonUrl: getDaemonUrl(),
-        params: { branchId: branch.branch_id },
-      },
-      {
-        logPrefix: `[BranchesService.unarchive.status ${branch.name}]`,
-        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
-          this.db,
-          params?.user?.user_id,
-          this.app.get('config')
-        ),
-        templateVariables: {
-          branch_id: branch.branch_id,
-          user_id: userId,
-          branch_fs_access: branchFsAccess,
-        },
-      }
-    );
-    if (!statusResult.success) {
-      throw new Error(
-        `Failed to inspect branch filesystem before unarchive: ${statusResult.error?.message ?? 'unknown executor error'}`
-      );
-    }
-    const branchPathExists =
-      !!statusResult.data &&
-      typeof statusResult.data === 'object' &&
-      (statusResult.data as { exists?: unknown }).exists === true;
-
-    if (!branchPathExists) {
-      console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
-
-      // Set filesystem_status to 'creating' while we rebuild
-      const provisioningAttemptId = generateId();
       await this.withTenantDatabase(params, () =>
-        this.patch(
-          id,
-          {
-            filesystem_status: 'creating',
-            provisioning_attempt_id: provisioningAttemptId,
-            provisioning_operation: 'restore',
-          },
-          { ...params, provider: undefined }
-        )
+        this.patch(id, { board_id: options?.boardId }, params)
       );
-
-      // Look up repo to get local_path
-      const reposService = this.app.service('repos');
-      const repo = await this.withTenantDatabase(
-        params,
-        () => reposService.get(branch.repo_id, params) as Promise<Repo>
-      );
-
-      // The executor derives the materialization mode from this persisted row.
-      const storageMode = branch.storage_mode ?? 'worktree';
-      if (getTeammateConfig(branch)?.localHome || (storageMode === 'clone' && !repo.remote_url)) {
-        const errMsg = getTeammateConfig(branch)?.localHome
-          ? 'Local teammate home is missing. Restore its files from your own backup; the public template cannot recover personal state.'
-          : `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
-            `repo has no remote_url. The clone source URL is unknown.`;
-        console.error(`⚠️  ${errMsg}`);
-        const result = await this.withTenantDatabase(params, () =>
-          this.branchRepo.acknowledgeProvisioningAttempt(
-            id,
-            { filesystem_status: 'failed', error_message: errMsg },
-            provisioningAttemptId
-          )
-        );
-        if (result.applied) {
-          emitServiceEvent(this.app, {
-            path: 'branches',
-            event: 'patched',
-            data: result.branch,
-            params,
-            id: result.branch.branch_id,
-          });
-        }
-        return this.withTenantDatabase(params, () =>
-          this.branchRepo.enrichWithZoneInfo(result.branch)
-        );
-      }
-
-      try {
-        const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
-        const sessionToken = await issueExecutorCommandToken(
-          this.app,
-          'git.branch.add',
-          userId,
-          branch.branch_id
-        );
-        spawnExecutor(
-          {
-            command: 'git.branch.add',
-            sessionToken,
-            daemonUrl: getDaemonUrl(),
-            params: {
-              branchId: branch.branch_id,
-              repoId: repo.repo_id,
-              // Use restore mode: checks if branch exists on remote via ls-remote,
-              // checks out existing branch if found, otherwise creates new branch from base_ref.
-              // This is safe because it only creates a new branch when ls-remote confirms
-              // the branch doesn't exist on the remote (no risk of force-deleting existing branches).
-              restoreMode: true,
-              provisioningAttemptId,
-              allowExistingCheckout: true,
-              useReference:
-                storageMode === 'clone' &&
-                !!repo.local_path &&
-                shouldUseCloneReferencePath(this.app.get('config')),
-            },
-          },
-          {
-            logPrefix: `[BranchesService.unarchive ${branch.name}]`,
-            delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
-              this.db,
-              userId,
-              this.app.get('config')
-            ),
-            templateVariables: {
-              branch_id: branch.branch_id,
-              user_id: userId,
-              branch_fs_access: branchFsAccess,
-            },
-            onExit: async (code) => {
-              if (code === 0) return;
-              await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
-                const result = await new BranchRepository(
-                  tenantDb
-                ).markProvisioningFailedIfCreating(
-                  branch.branch_id,
-                  `Branch restore exited with code ${code ?? 'unknown'} before confirming completion. Retry provisioning to try again.`,
-                  provisioningAttemptId
-                );
-                if (result.changed) {
-                  emitServiceEvent(this.app, {
-                    path: 'branches',
-                    event: 'patched',
-                    data: result.branch,
-                    params,
-                    id: result.branch.branch_id,
-                  });
-                }
-              });
-            },
-          }
-        );
-      } catch (error) {
-        console.error(
-          `⚠️  Failed to spawn executor for branch recreation:`,
-          error instanceof Error ? error.message : String(error)
-        );
-        // Mark as failed so the UI can show the error state
-        const errMsg = error instanceof Error ? error.message : String(error);
-        const result = await this.withTenantDatabase(params, () =>
-          this.branchRepo.acknowledgeProvisioningAttempt(
-            id,
-            {
-              filesystem_status: 'failed',
-              error_message: `Failed to spawn executor: ${errMsg}`,
-            },
-            provisioningAttemptId
-          )
-        );
-        if (result.applied) {
-          emitServiceEvent(this.app, {
-            path: 'branches',
-            event: 'patched',
-            data: result.branch,
-            params,
-            id: result.branch.branch_id,
-          });
-        }
-      }
     }
+    const reposService = this.app.service('repos') as unknown as ReposService;
+    const restored = await reposService.retryBranchProvisioning(branch.branch_id, params, true);
+    await this.withTenantDatabase(params, () =>
+      this.maintainPrimaryTeammateAfterPatch(branch, restored, params)
+    );
 
     // Ensure a board object exists when unarchiving to a board.
     // Older archived branches may have had their board object removed.
@@ -2536,7 +2347,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     console.log(`✅ Unarchived branch ${branch.name} and ${unarchivedSessions.count} session(s)`);
-    return unarchivedBranch;
+    return this.withTenantDatabase(params, () => this.get(id, params));
   }
 
   /**

@@ -8,7 +8,7 @@ import {
   SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { Branch, BranchID } from '@agor/core/types';
+import type { Branch, BranchID, TenantID } from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { boardMetadataTestApp } from '../../test/board-metadata-app';
@@ -32,7 +32,7 @@ vi.mock('../utils/spawn-executor', async (importOriginal) => ({
 }));
 
 dbTest(
-  'missing local home commits failed restore and delivers retry failure over authenticated sockets',
+  'restore launch failure commits failed and delivers retry failure over authenticated sockets',
   async ({ db: raw }) => {
     const owner = await new UsersRepository(raw).create({
       email: 'owner@example.test',
@@ -79,12 +79,17 @@ dbTest(
       multi_tenancy: { mode: 'static', static_tenant_id: 'provisioning-test' },
     } as RegisterHooksContext['config'];
     const server = await boardMetadataTestApp(db, config, true);
+    Object.assign(server.app.service('sessions'), {
+      unarchiveBranchSessions: async () => ({ count: 0 }),
+    });
     await server.app.unuse('repos');
     const repos = new ReposService(db, server.app);
     server.app.use('repos', repos);
-    server.app.sessionTokenService = {
-      generateCommandToken: vi.fn(async () => 'fictional-command-token'),
-    } as never;
+    Object.assign(server.app, {
+      sessionTokenService: {
+        generateCommandToken: vi.fn(async () => 'fictional-command-token'),
+      },
+    });
     configureRealtimePublish({
       db,
       app: server.app,
@@ -113,7 +118,7 @@ dbTest(
       foreign.service('branches').on('patched', (row) => forbiddenDeliveries.push(row));
       const params = {
         user: owner,
-        tenant: { tenant_id: 'provisioning-test', source: 'explicit' as const },
+        tenant: { tenant_id: 'provisioning-test' as TenantID, source: 'explicit' as const },
       };
       const result = await (server.app.service('branches') as unknown as BranchesService).unarchive(
         branch.branch_id,
@@ -121,17 +126,18 @@ dbTest(
         params
       );
       expect(result.filesystem_status).toBe('failed');
-      expect(result.error_message).toContain('cannot recover personal state');
+      expect(result.error_message).toContain('launcher unavailable');
       expect((await rows.findById(branch.branch_id))?.provisioning_operation).toBe('restore');
       expect(result.provisioning_attempt_id).not.toBe('prior-attempt');
-      expect(requestExecutor).toHaveBeenCalled();
+      expect(requestExecutor).not.toHaveBeenCalled();
       expect(spawnExecutor).not.toHaveBeenCalled();
       await vi.waitFor(() =>
         expect(deliveries.some((row) => row.filesystem_status === 'failed')).toBe(true)
       );
       deliveries.length = 0;
       const retried = await repos.retryBranchProvisioning(branch.branch_id, params);
-      expect(retried.filesystem_status).toBe('failed');
+      // Dispatch waits for command credential commit; realtime carries failure.
+      expect(['creating', 'failed']).toContain(retried.filesystem_status);
       expect(spawnExecutorFireAndForget).toHaveBeenCalledWith(
         expect.objectContaining({ params: expect.objectContaining({ restoreMode: true }) }),
         expect.anything()

@@ -20,6 +20,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
+import { assertNotPrimaryTeammate } from '../primary-teammate-protection';
 import { branches, sessions, uploads } from '../schema';
 import { requireCurrentTenantId } from '../tenant-context';
 import { assertTenantWritable } from '../tenant-write-gate';
@@ -70,6 +71,7 @@ export class BranchMaintenanceRepository {
   ): Promise<{ claim: BranchMaintenanceClaim; acquired: boolean }> {
     return this.locked(branchId, async (tx, row) => {
       await validate?.(tx);
+      if (kind === 'cleanup' || kind === 'delete') await assertNotPrimaryTeammate(tx, branchId);
       if (row.data.maintenance) {
         if (row.data.maintenance.kind !== kind)
           throw new RepositoryError('Branch maintenance is already in progress');

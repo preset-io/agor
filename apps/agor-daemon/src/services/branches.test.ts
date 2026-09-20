@@ -250,6 +250,7 @@ function createServiceHarness() {
   };
 
   const reposService = {
+    retryBranchProvisioning: vi.fn(async () => ({})),
     get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo' })),
   };
 
@@ -1395,62 +1396,8 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 describe('BranchesService.unarchive', () => {
   const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
 
-  it.each([
-    [true, 'spawn'],
-    [false, 'spawn'],
-    [true, 'missing-remote'],
-    [false, 'missing-remote'],
-    [true, 'local-home'],
-    [false, 'local-home'],
-  ] as const)(
-    'publishes restore failure only after an applied CAS (%s, %s)',
-    async (applied, failure) => {
-      const { service, branchRepo, branchesService } = createServiceHarness();
-      const branchId = 'restore-failure' as BranchID;
-      const current = {
-        branch_id: branchId,
-        repo_id: 'repo-1',
-        name: 'Restore',
-        path: '/tmp/restore',
-        archived: true,
-        storage_mode: failure === 'missing-remote' ? 'clone' : 'worktree',
-        ...(failure === 'local-home'
-          ? { custom_context: { teammate: { ...teammateContext.teammate, localHome: true } } }
-          : {}),
-      };
-      vi.spyOn(service, 'get').mockResolvedValue(current as never);
-      vi.spyOn(service, 'patch').mockImplementation(
-        async (_id, data) => ({ ...current, ...data }) as never
-      );
-      mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
-      mockedSpawnExecutor.mockImplementation(() => {
-        throw new Error('launcher unavailable');
-      });
-      vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
-        applied,
-        branch: {
-          ...current,
-          archived: false,
-          filesystem_status: applied ? 'failed' : 'ready',
-        } as never,
-      });
-      vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(
-        async (branch) => branch as never
-      );
-      await service.unarchive(branchId, undefined, userParams);
-      expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
-        branchId,
-        expect.objectContaining({ filesystem_status: 'failed' }),
-        expect.any(String)
-      );
-      const failures = branchesService.emit.mock.calls.filter(
-        (args) => args[1]?.filesystem_status === 'failed'
-      );
-      expect(failures).toHaveLength(applied ? 1 : 0);
-      if (applied)
-        expect(failures[0][2].params.user).toEqual({ user_id: 'user-1', role: 'member' });
-    }
-  );
+  // Filesystem restoration, failure publication, and missing homes are tested
+  // through real repositories and executor handlers in branches.restore.integration.test.ts.
 
   it('preserves existing board_id when options.boardId is not provided', async () => {
     const { service, boardObjectsService, sessionsService } = createServiceHarness();
@@ -1478,17 +1425,7 @@ describe('BranchesService.unarchive', () => {
 
     await service.unarchive(branchId, undefined, userParams);
 
-    expect(patchSpy).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({
-        archived: false,
-        archived_at: undefined,
-        archived_by: undefined,
-        filesystem_status: undefined,
-      }),
-      userParams
-    );
-    expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
+    expect(patchSpy).not.toHaveBeenCalled();
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).toHaveBeenCalledWith({
@@ -1560,7 +1497,6 @@ describe('BranchesService.unarchive', () => {
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
       expect.objectContaining({
-        archived: false,
         board_id: newBoardId,
       }),
       userParams
@@ -3349,45 +3285,5 @@ describe('server-selected local teammate homes', () => {
     get.mockRejectedValueOnce(new Error('Repo not found in tenant-b'));
     await expect(internal.applyBranchCreateDefaults(data, params)).rejects.toThrow('tenant-b');
     expect(get).toHaveBeenCalledWith(data.repo_id, params);
-  });
-
-  it('does not recreate a lost marked home during unarchive', async () => {
-    const { service, branchRepo } = createServiceHarness();
-    const branchId = 'lost-home' as BranchID;
-    const branch = {
-      branch_id: branchId,
-      name: 'Lost',
-      path: '/lost-home',
-      archived: true,
-      storage_mode: 'clone',
-      custom_context: { teammate: { ...teammateContext.teammate, localHome: true } },
-    };
-    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    vi.spyOn(service, 'patch').mockImplementation(
-      async (_id, data) => ({ ...branch, ...data }) as never
-    );
-    vi.mocked(requestExecutor).mockResolvedValueOnce({
-      success: true,
-      data: { exists: false },
-    } as never);
-    vi.mocked(spawnExecutor).mockClear();
-    vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
-      applied: true,
-      branch: { ...branch, archived: false, filesystem_status: 'failed' } as never,
-    });
-    vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(async (row) => row as never);
-    const result = await service.unarchive(branchId, undefined, {
-      user: { user_id: 'user-1' as UUID, role: 'member' },
-    } as never);
-    expect(result.filesystem_status).toBe('failed');
-    expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({
-        filesystem_status: 'failed',
-        error_message: expect.stringContaining('cannot recover personal state'),
-      }),
-      expect.anything()
-    );
-    expect(spawnExecutor).not.toHaveBeenCalled();
   });
 });

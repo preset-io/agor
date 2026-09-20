@@ -9,16 +9,35 @@ import { branches, sessions } from './schema';
  * before locking a Session/Task or committing new branch work. Holding this lock
  * is not a process-containment proof; lifecycle owners must settle admitted work.
  */
-export async function lockBranchForAdmission(db: Database, branchId: string) {
+export async function lockBranchForAdmission(
+  db: Database,
+  branchId: string,
+  options: { primaryDesignationOnly?: boolean } = {}
+) {
   await lockRowForUpdate(db, db, branches, eq(branches.branch_id, branchId));
   const branch = await select(db).from(branches).where(eq(branches.branch_id, branchId)).one();
   if (!branch) throw new EntityNotFoundError('Branch', branchId);
-  assertBranchActivityAllowed(branch);
+  assertBranchActivityAllowed(branch, options);
   return branch;
 }
 
 /** Inspect only while holding the Branch row lock at the write boundary. */
-export function assertBranchActivityAllowed(branch: typeof branches.$inferSelect): void {
+export function assertBranchActivityAllowed(
+  branch: typeof branches.$inferSelect,
+  options: { primaryDesignationOnly?: boolean } = {}
+): void {
+  // Restore excludes producers on historical sessions until executor validation.
+  // Initial creation retains its existing metadata/bootstrap admission behavior.
+  // Primary designations protect a restoring teammate; they do not launch work.
+  if (
+    !options.primaryDesignationOnly &&
+    branch.filesystem_status === 'creating' &&
+    branch.data.provisioning_operation === 'restore'
+  ) {
+    throw new RepositoryError(
+      'Branch filesystem provisioning is in progress; new activity is disabled'
+    );
+  }
   if (branch.deletion_status) {
     throw new RepositoryError(
       'Branch deletion is in progress or failed; only deletion recovery is allowed'

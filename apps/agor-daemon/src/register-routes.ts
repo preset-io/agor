@@ -4129,7 +4129,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // Explicit, non-destructive repair for a branch whose filesystem provisioning
-  // landed in 'failed'. A stranded 'creating' attempt is not retryable. Shares
+  // landed in 'failed', or an active stale archive outcome. Creating is not retryable. Shares
   // the exact same service implementation the MCP tool and UI use, so REST, MCP
   // and UI can never drift. A live 'creating' attempt conflicts, 'ready' no-ops;
   // the transition is an atomic claim. Returns the (possibly-updated) branch row.
@@ -4152,11 +4152,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // in the service (not here) is what keeps REST, MCP and the UI on one
       // check.
       //
-      // Identity split (intentional): the caller must hold branch control, but
-      // the executor runs as `branch.created_by`, not as the caller. That
-      // mirrors the create path (the directory must be materialized as its
-      // owner to be usable) and re-runs provisioning the owner already
-      // initiated, so it grants no capability the owner had not exercised.
+      // Recovery uses the authorized caller's execution identity and credentials.
       create: { role: ROLES.MEMBER, action: 'retry branch provisioning' },
     },
     requireAuth

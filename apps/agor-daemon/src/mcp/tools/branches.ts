@@ -1816,23 +1816,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   );
 
   // Tool: agor_branches_retry_provisioning
-  // Explicit, non-destructive repair for a branch whose filesystem provisioning
-  // landed in 'failed'. Wraps the exact same `reposService.retryBranchProvisioning`
-  // implementation used by the REST route and the UI, so all three surfaces share
-  // one code path. Only `failed → creating` is retryable; the transition is an
-  // atomic claim, so concurrent calls can never dispatch two materializers.
+  // Shared attempt-fenced recovery for failed provisioning and stale active archive states.
   server.registerTool(
     'agor_branches_retry_provisioning',
     {
       description:
-        'Repair a branch whose git working directory failed to materialize ' +
-        "(filesystem_status 'failed') by re-dispatching provisioning. Also recovers a branch " +
-        "left 'creating' by a daemon restart. Requires branch control ('all' permission, branch " +
-        "owner, or admin). Not retryable otherwise: 'ready' is returned unchanged, a " +
-        "still-in-flight 'creating' attempt is rejected as a conflict, and " +
-        "archived/'preserved'/'cleaned'/'deleted' branches must use the restore/unarchive flow " +
-        'instead. Non-destructive — never deletes refs or directories. ' +
-        'Returns the updated branch with its new filesystem_status.',
+        'Retry failed provisioning or recover an active branch with stale preserved/cleaned/deleted filesystem status. ' +
+        'Requires branch Manager authority and filesystem write access. The executor validates existing files; ' +
+        'invalid Git linkage fails without overwriting them. Missing local teammate homes require personal backup restoration. ' +
+        'Archived branches must use unarchive. Ready is a no-op; creating is always a conflict, including after a restart. ' +
+        'Returns admission state, not proof of completion; wait for ready before creating sessions.',
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
       }),

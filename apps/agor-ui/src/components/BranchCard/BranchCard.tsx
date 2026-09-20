@@ -1,3 +1,4 @@
+import { BRANCH_FILESYSTEM_ACTIONS } from '@agor/core/types';
 import type {
   AgorClient,
   Branch,
@@ -250,13 +251,17 @@ const BranchCardComponent = ({
 
   // Check if branch is still being created on filesystem
   const isCreating = branch.filesystem_status === 'creating';
+  const isUnavailable =
+    !branch.archived &&
+    !branch.deletion_status &&
+    BRANCH_FILESYSTEM_ACTIONS.some((status) => status === branch.filesystem_status);
   const isFailed =
     branch.filesystem_status === 'failed' || branch.deletion_status === 'deletion_failed';
 
   // Retry provisioning for a branch whose working directory failed to
   // materialize. Hits POST /branches/:id/retry-provisioning, which runs the
   // exact same non-destructive `retryBranchProvisioning` service the MCP tool
-  // uses. Only offered while `isFailed` — the server accepts `failed` alone and
+  // uses. Active stale archive statuses use the same authorized recovery, and
   // conflicts on an in-flight `creating`. Feedback is surfaced explicitly so a
   // failed request never looks like a no-op.
   const { message } = App.useApp();
@@ -609,7 +614,7 @@ const BranchCardComponent = ({
       {/* Provisioning failure banner + retry. The working directory did not
           materialize; surface the sanitized error and a one-click, idempotent
           retry that hits the shared retry-provisioning service. */}
-      {isFailed && (
+      {(isFailed || isUnavailable) && (
         <div
           className={REACT_FLOW_NO_DRAG_CLASS}
           style={{
@@ -625,7 +630,7 @@ const BranchCardComponent = ({
         >
           <div style={{ flex: 1, minWidth: 0 }}>
             <Typography.Text type="danger" strong style={{ fontSize: 12 }}>
-              Provisioning failed
+              {isUnavailable ? 'Filesystem unavailable' : 'Provisioning failed'}
             </Typography.Text>
             {branch.error_message && (
               <Tooltip title={branch.error_message}>
@@ -650,7 +655,7 @@ const BranchCardComponent = ({
               void handleRetryProvisioning();
             }}
           >
-            Retry
+            {isUnavailable ? 'Recover' : 'Retry'}
           </Button>
         </div>
       )}

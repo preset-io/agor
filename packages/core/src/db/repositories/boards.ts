@@ -1,3 +1,5 @@
+import { lockBranchForAdmission } from '../branch-admission';
+import { lockBranchReferenceMutation } from '../branch-reference-admission';
 /**
  * Board Repository
  *
@@ -809,6 +811,20 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * teammate branch already attached to the board.
    */
   async setPrimaryTeammate(boardId: string, branchId: string): Promise<Board> {
+    const branch = await new BranchRepository(this.db).findById(branchId);
+    if (!branch) throw new EntityNotFoundError('Branch', branchId);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockBranchReferenceMutation(tx);
+        await lockBranchForAdmission(tx, branch.branch_id, { primaryDesignationOnly: true });
+        return new BoardRepository(tx).setPrimaryTeammateLocked(boardId, branch.branch_id);
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  private async setPrimaryTeammateLocked(boardId: string, branchId: string): Promise<Board> {
     try {
       const fullBoardId = await this.resolveId(boardId);
       const board = await this.findById(fullBoardId);
@@ -847,6 +863,23 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * are validated before attempting the conditional write.
    */
   async setPrimaryTeammateIfUnset(boardId: string, branchId: string): Promise<Board | null> {
+    const branch = await new BranchRepository(this.db).findById(branchId);
+    if (!branch) throw new EntityNotFoundError('Branch', branchId);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockBranchReferenceMutation(tx);
+        await lockBranchForAdmission(tx, branch.branch_id, { primaryDesignationOnly: true });
+        return new BoardRepository(tx).setPrimaryTeammateIfUnsetLocked(boardId, branch.branch_id);
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  private async setPrimaryTeammateIfUnsetLocked(
+    boardId: string,
+    branchId: string
+  ): Promise<Board | null> {
     try {
       const fullBoardId = await this.resolveId(boardId);
       const branch = await this.getValidatedPrimaryTeammateBranch(fullBoardId, branchId);

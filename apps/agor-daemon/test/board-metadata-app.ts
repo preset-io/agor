@@ -7,6 +7,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import {
+  type Application,
   AuthenticationService,
   authenticate,
   errorHandler,
@@ -36,7 +37,8 @@ export async function boardMetadataTestApp(
   db: TenantScopeAwareDatabase,
   config: RegisterHooksContext['config'],
   withSocketIO = false,
-  withMcp = false
+  withMcp = false,
+  configure?: (app: Application) => Promise<void>
 ) {
   const app = feathersExpress(feathers());
   app.use(express.json());
@@ -87,6 +89,7 @@ export async function boardMetadataTestApp(
   app.use('board-objects', new BoardObjectsService(db, app));
   setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin: false });
   setupCapabilityPolicyServices(app, db, { allowSuperadmin: false });
+  await configure?.(app);
   registerHooks({
     db,
     app,

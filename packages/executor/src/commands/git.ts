@@ -1,4 +1,5 @@
 import { resolveExecutorBranch } from './branch-filesystem.js';
+import { validateExistingRestore } from './branch-restore-validation.js';
 /**
  * Git Command Handlers for Executor
  *
@@ -887,7 +888,10 @@ export async function handleGitBranchAdd(
     // user's delegated Feathers authority in this same executor.
     const repo = await client.service('repos').get(payload.params.repoId);
     const branchRecord = await resolveExecutorBranch(client, branchId);
-    if (branchRecord.filesystem_status !== 'creating')
+    if (
+      branchRecord.filesystem_status !== 'creating' ||
+      branchRecord.provisioning_attempt_id !== payload.params.provisioningAttemptId
+    )
       throw new Error('Branch materialization is not admitted');
     if (branchRecord.repo_id !== payload.params.repoId) {
       throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
@@ -921,8 +925,10 @@ export async function handleGitBranchAdd(
       );
     }
     localHome = getTeammateConfig(branchRecord)?.localHome === true;
+    const existingRestore = restoreMode ? await validateExistingRestore(branchRecord, repo) : false;
     if (
       localHome &&
+      !existingRestore &&
       (restoreMode ||
         storageMode !== 'clone' ||
         cloneDepth != null ||
@@ -950,9 +956,11 @@ export async function handleGitBranchAdd(
     // by the daemon safety net). If a checkout for exactly this ref is already
     // present, adopt it instead of re-running materialization — `git worktree
     // add` / `git clone` would otherwise fail on the already-attached ref.
-    const alreadyMaterialized = payload.params.allowExistingCheckout
-      ? await isBranchAlreadyMaterialized(branchPath, branch, branchId)
-      : false;
+    const alreadyMaterialized =
+      existingRestore ||
+      (payload.params.allowExistingCheckout
+        ? await isBranchAlreadyMaterialized(branchPath, branch, branchId)
+        : false);
     if (alreadyMaterialized) {
       console.log(
         `[git.branch.add] Existing checkout for '${branch}' already present at ${branchPath} — adopting it (idempotent retry)`
@@ -1053,9 +1061,11 @@ export async function handleGitBranchAdd(
 
     // Durable workspace ownership prevents a retry/restore from adopting an
     // archived or unrelated checkout which merely happens to use the same ref.
-    const { git: materializedGit } = createGit(branchPath);
-    const markerPath = (await materializedGit.revparse(['--git-path', 'agor-branch-id'])).trim();
-    await writeFile(resolve(branchPath, markerPath), `${branchId}\n`, { mode: 0o600 });
+    if (!existingRestore) {
+      const { git: materializedGit } = createGit(branchPath);
+      const markerPath = (await materializedGit.revparse(['--git-path', 'agor-branch-id'])).trim();
+      await writeFile(resolve(branchPath, markerPath), `${branchId}\n`, { mode: 0o600 });
+    }
 
     // Persist only filesystem outcome directly. Executable environment
     // rendering belongs to the daemon's existing authorization/validation
@@ -1105,7 +1115,12 @@ export async function handleGitBranchAdd(
     // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    if (fallbackPath && !materializationWritesSettled && !localHome) {
+    if (
+      fallbackPath &&
+      !materializationWritesSettled &&
+      !localHome &&
+      !payload.params.restoreMode
+    ) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {
