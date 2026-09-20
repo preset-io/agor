@@ -142,7 +142,6 @@ describe('MobileBoardPage', () => {
                     ],
                   ])
                 }
-                onMenuClick={vi.fn()}
                 onOpenBranch={onOpenBranch}
                 onNewSession={vi.fn()}
                 onGiveFirstTask={vi.fn()}
@@ -152,6 +151,13 @@ describe('MobileBoardPage', () => {
         </Routes>
       </MemoryRouter>
     );
+
+    // Board identity lives in the header; only its description remains in the content.
+    expect(screen.getAllByText('Delivery board')).toHaveLength(1);
+    expect(screen.getByText('Everything shipping this week').closest('.ant-card')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Open comments for Delivery board' })
+    ).not.toBeInTheDocument();
 
     // Zone label appears as the collapsible zone header and on the card's zone tag.
     expect(screen.getAllByText('Review')).toHaveLength(2);
@@ -183,7 +189,6 @@ describe('MobileBoardPage', () => {
                 boardObjectsByBoardId={new Map()}
                 cardById={new Map()}
                 artifactById={new Map()}
-                onMenuClick={vi.fn()}
                 onOpenBranch={vi.fn()}
                 onNewSession={vi.fn()}
                 onGiveFirstTask={onGiveFirstTask}

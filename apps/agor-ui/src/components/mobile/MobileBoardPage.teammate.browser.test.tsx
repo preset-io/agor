@@ -89,9 +89,11 @@ it('leads with the assigned teammate, keeps ordinary browsing, and opens all tea
     name: `Primary teammate: ${teammate.custom_context?.teammate?.displayName}`,
   });
   expect(screen.getAllByText('Primary teammate')).toHaveLength(1);
+  expect(screen.getAllByText('Delivery')).toHaveLength(1);
+  expect(screen.queryByRole('heading', { name: 'Delivery', level: 4 })).not.toBeInTheDocument();
   expect(screen.getByText('Ordinary branch')).toBeInTheDocument();
   expect(region.getBoundingClientRect().top).toBeLessThan(
-    screen.getByRole('heading', { name: 'Delivery', level: 4 }).getBoundingClientRect().top + 1
+    screen.getByText('Ordinary branch').getBoundingClientRect().top
   );
   expect(region.scrollWidth).toBeLessThanOrEqual(region.clientWidth + 1);
   expect(region.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);

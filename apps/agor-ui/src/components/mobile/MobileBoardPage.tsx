@@ -13,7 +13,6 @@ import {
   AppstoreOutlined,
   CalendarOutlined,
   CodeOutlined,
-  CommentOutlined,
   FileMarkdownOutlined,
   GitlabOutlined,
   LinkOutlined,
@@ -73,10 +72,6 @@ interface MobileBoardPageProps {
   commentsBadge?: number;
   /** Opens comments/mentions from the header bell. */
   onOpenComments?: () => void;
-}
-
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
 function statusColor(status: Branch['filesystem_status']): string {
@@ -306,35 +301,11 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
       >
         <Flex vertical gap={token.marginMD} style={{ maxWidth: 680, margin: '0 auto' }}>
           {primaryTeammate && renderBranchCard(primaryTeammate, true)}
-          <Card size="small">
-            <Flex justify="space-between" align="flex-start" gap={token.marginSM}>
-              <Space align="start">
-                <span aria-hidden style={{ fontSize: 28, lineHeight: 1 }}>
-                  {getBoardEmoji(board, branchById)}
-                </span>
-                <div>
-                  <Title level={4} style={{ margin: 0 }}>
-                    {board.name}
-                  </Title>
-                  <Text type="secondary">
-                    {plural(branches.length + (primaryTeammate ? 1 : 0), 'branch', 'branches')} ·{' '}
-                    {plural(cards.length, 'card')} · {plural(annotations.length, 'canvas object')}
-                  </Text>
-                </div>
-              </Space>
-              <Button
-                type="text"
-                aria-label={`Open comments for ${board.name}`}
-                icon={<CommentOutlined />}
-                onClick={() => navigate(`/m/comments/${board.board_id}`)}
-              />
-            </Flex>
-            {board.description && (
-              <Paragraph type="secondary" style={{ marginBlock: token.marginSM, marginBottom: 0 }}>
-                {board.description}
-              </Paragraph>
-            )}
-          </Card>
+          {board.description?.trim() && (
+            <Paragraph type="secondary" style={{ margin: 0, overflowWrap: 'anywhere' }}>
+              {board.description}
+            </Paragraph>
+          )}
 
           {isEmpty && (
             <Card>
