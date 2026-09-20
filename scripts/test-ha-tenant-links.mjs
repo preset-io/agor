@@ -88,6 +88,16 @@ for (const { tenant, origin } of identities) {
     );
   }
 }
+for (const base of replicas) {
+  const response = await fetch(`${base}/health`, {
+    headers: { origin: 'https://unconfigured.example.test' },
+  });
+  assert.equal(
+    response.headers.get('access-control-allow-origin'),
+    null,
+    'Unconfigured origin must not receive a CORS grant'
+  );
+}
 console.log(
   'PASS: two signed tenant origins, both replicas, repeated isolated board projections, deep-link shells and exact CORS'
 );
