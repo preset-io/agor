@@ -127,6 +127,20 @@ const queueList = () => screen.getByRole('region', { name: 'Queued task list' })
 const divider = () =>
   screen.getByRole('separator', { name: 'Resize conversation and queued tasks' });
 
+// Opening a conversation also requests a spring scroll, which takes nearly 1s
+// to settle even without CI frame delays. Keep the pixel tolerance strict, but
+// allow the real animation to finish rather than racing waitFor's 1s default.
+const expectBottom = () =>
+  waitFor(
+    () => {
+      const transcript = conversation();
+      expect(
+        Math.abs(transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop)
+      ).toBeLessThanOrEqual(3);
+    },
+    { timeout: 5000 }
+  );
+
 async function expectBounded() {
   await waitFor(() => {
     const transcript = conversation().getBoundingClientRect();
@@ -155,11 +169,7 @@ it('bounds 30 queued tasks, independently scrolls to the last action, and keeps 
   await expectBounded();
   const headerTop = screen.getByText('Queued Tasks (30)').getBoundingClientRect().top;
   const transcript = conversation();
-  await waitFor(() =>
-    expect(
-      Math.abs(transcript.scrollTop - (transcript.scrollHeight - transcript.clientHeight))
-    ).toBeLessThanOrEqual(3)
-  );
+  await expectBottom();
   const transcriptTop = transcript.scrollTop;
   const list = queueList();
   expect(list.scrollHeight).toBeGreaterThan(list.clientHeight * 3);
@@ -218,13 +228,6 @@ it('supports keyboard and pointer resizing without sacrificing the conversation 
 });
 
 const queueHeight = () => screen.getByRole('region', { name: 'Queued tasks' }).clientHeight;
-const expectBottom = () =>
-  waitFor(() => {
-    const transcript = conversation();
-    expect(
-      Math.abs(transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop)
-    ).toBeLessThanOrEqual(3);
-  });
 
 it.each(['keyboard', 'pointer'])(
   'restores %s resize intent after 25 → 1 → 25, empty/refill, and viewport clamps',
