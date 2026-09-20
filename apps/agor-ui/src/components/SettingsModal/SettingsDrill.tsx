@@ -1,5 +1,4 @@
-import { ArrowLeftOutlined } from '@ant-design/icons';
-import { App as AntApp, Button, Flex, Typography, theme } from 'antd';
+import { App as AntApp, Breadcrumb, Flex, Typography, theme } from 'antd';
 import {
   createContext,
   type ReactNode,
@@ -11,6 +10,27 @@ import {
   useState,
 } from 'react';
 import type { SettingsSection } from '../../hooks/useSettingsRoute';
+
+/**
+ * Labels for the first breadcrumb crumb — the section/list a drill-in was opened
+ * from. Keyed by `DrillTarget.kind` so the shared frame derives it without every
+ * caller passing a section name.
+ */
+const SECTION_LABELS: Record<SettingsSection, string> = {
+  boards: 'Boards',
+  repos: 'Repositories',
+  branches: 'Branches',
+  teammates: 'Teammates',
+  'card-types': 'Card Types',
+  cards: 'Cards',
+  artifacts: 'Artifacts',
+  'workspace-preferences': 'Preferences',
+  'agentic-tools': 'Agentic Tools',
+  gateway: 'Gateway Channels',
+  groups: 'Groups',
+  users: 'Users',
+  about: 'About',
+};
 
 /**
  * Drill-in navigation for the Workspace Settings modal.
@@ -182,7 +202,10 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   children,
 }) => {
   const { token } = theme.useToken();
-  const { confirmLeaveIfDirty, closeDrill, registerController } = useSettingsDrill();
+  const { drill, confirmLeaveIfDirty, closeDrill, registerController } = useSettingsDrill();
+  // First crumb = the section/list this drill-in was opened from, derived from
+  // the active drill target (no caller needs to pass it).
+  const sectionLabel = drill ? SECTION_LABELS[drill.kind] : undefined;
 
   const back = useCallback(() => {
     if (onBack) {
@@ -235,18 +258,40 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
 
   return (
     <Flex vertical style={{ height: '100%' }}>
-      <Flex align="center" gap={token.marginXS} style={{ marginBottom: token.marginLG }}>
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          onClick={back}
-          aria-label="Back"
-          style={{ marginInlineStart: -token.marginXS }}
+      <Flex
+        align="center"
+        justify="space-between"
+        gap={token.marginXS}
+        style={{ marginBottom: token.marginLG }}
+      >
+        {/* Breadcrumb replaces the old back-arrow + title. The section crumb is a
+            clickable link that goes back to the list; it routes through the same
+            guarded `back` as before, so the unsaved-changes confirmation still
+            fires. The current-record crumb is the (non-clickable) page marker. */}
+        <Breadcrumb
+          items={[
+            ...(sectionLabel
+              ? [
+                  {
+                    key: 'section',
+                    title: (
+                      <Typography.Link onClick={back} style={{ fontWeight: 500 }}>
+                        {sectionLabel}
+                      </Typography.Link>
+                    ),
+                  },
+                ]
+              : []),
+            {
+              key: 'current',
+              title: (
+                <Typography.Text style={{ fontWeight: 500, color: token.colorText }}>
+                  {title}
+                </Typography.Text>
+              ),
+            },
+          ]}
         />
-        {/* Size — not boldness — carries hierarchy: regular/medium weight. */}
-        <Typography.Title level={4} style={{ margin: 0, flex: 1, fontWeight: 500 }}>
-          {title}
-        </Typography.Title>
         {extra}
       </Flex>
       <div style={{ flex: 1, minHeight: 0 }}>{children}</div>

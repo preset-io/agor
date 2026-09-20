@@ -77,7 +77,8 @@ describe('TeammatesTable', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create AI teammate/i }));
 
     // Drill-in opened with the teammate form — the callback fires on Save, not open.
-    expect(screen.getByRole('heading', { name: /New AI teammate/i })).toBeInTheDocument();
+    // The title is now the current crumb of the DrillInFrame breadcrumb (not a heading).
+    expect(screen.getByText(/New AI teammate/i)).toBeInTheDocument();
     expect(screen.getByTestId('teammate-tab')).toBeInTheDocument();
     expect(onCreateTeammate).not.toHaveBeenCalled();
   });
