@@ -111,6 +111,9 @@ describe('teammate drawer archive reconciliation', () => {
         await readGate;
         if (race === 'failed-read') throw new Error('Read unavailable');
         if (race === 'churn') {
+          // Six read rounds plus retry backoff exceed RTL's default 1s wait,
+          // even without CI scheduling and toast-animation overhead.
+          await new Promise((done) => setTimeout(done, 100));
           bumpRevision('sessions');
           enqueueSessionPatch('browser-fixture:user:1', { ...unrelated, title: 'Unrelated' });
         }
@@ -201,12 +204,16 @@ describe('teammate drawer archive reconciliation', () => {
         expect(screen.getByRole('button', { name: `Open session ${s.title}` })).toBeVisible();
       }
       if (race === 'failed-read' || race === 'churn') {
-        await waitFor(() =>
-          expect(
-            screen.getByText(
-              'Session and same-branch children archived; refresh required to update the session list.'
-            )
-          ).toBeVisible()
+        // Allow the bounded retries and the real toast entrance animation to
+        // settle; the default 1s assertion deadline races both under CI load.
+        await waitFor(
+          () =>
+            expect(
+              screen.getByText(
+                'Session and same-branch children archived; refresh required to update the session list.'
+              )
+            ).toBeVisible(),
+          { timeout: 5_000 }
         );
         expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
         expect(
