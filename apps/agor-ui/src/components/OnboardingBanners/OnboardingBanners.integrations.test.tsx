@@ -36,10 +36,10 @@ afterEach(() => {
 });
 
 it('snoozes for 24 hours across mobile-style unmount/remount and still honors integration eligibility', async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date('2026-09-20T12:00:00Z'));
   const first = render(<OnboardingBanners {...props} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   expect(JSON.parse(localStorage.getItem(key)!)).toBe(Date.now() + DAY);
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   first.unmount();
@@ -48,18 +48,18 @@ it('snoozes for 24 hours across mobile-style unmount/remount and still honors in
   await act(() => vi.advanceTimersByTimeAsync(DAY - 1));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   second.rerender(<OnboardingBanners {...props} gatewayChannelCount={1} />);
   await act(() => vi.advanceTimersByTimeAsync(DAY));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   second.rerender(<OnboardingBanners {...props} />);
-  expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
 });
 
 it('does not transfer a user snooze across logout or a different user/workspace identity', async () => {
   const view = render(<OnboardingBanners {...props} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   view.rerender(<OnboardingBanners {...props} user={null} />);
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   view.rerender(<OnboardingBanners {...props} user={user('user-b')} />);
@@ -83,19 +83,35 @@ it('synchronizes another tab snoozing or clearing storage', async () => {
 
 it.each(['{}', '"tomorrow"', '1', '1e100', 'null'])(
   'ignores unusable/expired snooze %s',
-  (stored) => {
+  async (stored) => {
     localStorage.setItem(key, stored);
     render(<OnboardingBanners {...props} />);
-    expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
   }
 );
 
-it('still dismisses in memory if browser storage writes fail', () => {
+it('still dismisses in memory if browser storage writes fail', async () => {
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new Error('storage disabled');
   });
   vi.spyOn(console, 'error').mockImplementation(() => {});
   render(<OnboardingBanners {...props} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+});
+
+it('keeps the integrations snooze separate from the permanent credential opt-out', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const check = vi
+    .fn<OnboardingBannersProps['onCheckAuth']>()
+    .mockResolvedValueOnce({ status: 'authenticated', authenticated: true, method: 'api-key' })
+    .mockResolvedValue({ status: 'unauthenticated', authenticated: false, method: 'api-key' });
+  const view = render(<OnboardingBanners {...props} onCheckAuth={check} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
+  view.rerender(<OnboardingBanners {...props} onCheckAuth={check} credentialVersion={1} />);
+  fireEvent.click(await screen.findByRole('button', { name: "Don't remind me about Claude Code" }));
+  await act(() => vi.advanceTimersByTimeAsync(DAY + 1));
+  expect(screen.queryByRole('button', { name: 'Maybe later' })).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(check).toHaveBeenCalledTimes(2);
 });

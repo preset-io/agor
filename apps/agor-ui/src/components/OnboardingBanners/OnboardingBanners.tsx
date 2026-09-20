@@ -18,6 +18,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -29,6 +30,8 @@ import {
   resolveGovernedProbeAgent,
   resolveProbeState,
 } from './bannerLogic';
+
+const INTEGRATIONS_SNOOZE_MS = 24 * 60 * 60 * 1000;
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
@@ -99,9 +102,6 @@ export function OnboardingBanners(props: OnboardingBannersProps) {
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
   const hydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
   const { user } = props;
-  // Integrations dismissal remains separate from the per-agent opt-out.
-  // Its persistence/snooze policy is owned by the integrations-banner work.
-  const [integrationsDismissal, setIntegrationsDismissal] = useState<string | null>(null);
   if (!user) return null;
 
   const probeAgent = resolveGovernedProbeAgent(user, settings);
@@ -117,8 +117,6 @@ export function OnboardingBanners(props: OnboardingBannersProps) {
       probeAgent={probeAgent}
       probeSettings={settings.get(probeAgent)}
       policyHydrated={hydrated}
-      integrationsBannerDismissed={integrationsDismissal === owner}
-      onDismissIntegrations={() => setIntegrationsDismissal(owner)}
     />
   );
 }
@@ -137,8 +135,6 @@ function OwnedOnboardingBanners({
   onOpenWorkspaceSettings,
   onCheckAuth,
   onOpenCatalog,
-  integrationsBannerDismissed,
-  onDismissIntegrations,
   credentialVersion,
   connectionReady,
 }: OnboardingBannersProps & {
@@ -147,11 +143,26 @@ function OwnedOnboardingBanners({
   probeAgent: AgenticToolName;
   probeSettings?: TenantAgenticToolSettings;
   policyHydrated: boolean;
-  integrationsBannerDismissed: boolean;
-  onDismissIntegrations: () => void;
 }) {
   const catalog = useMCPCatalogModal();
   const isMobile = useIsMobileViewport();
+  const [integrationsSnoozedUntil, setIntegrationsSnoozedUntil] = useUserLocalStorage<
+    number | null
+  >(user?.user_id, 'onboarding:integrations-snoozed-until:v1', null);
+  const integrationsBannerDismissed =
+    typeof integrationsSnoozedUntil === 'number' &&
+    Number.isFinite(integrationsSnoozedUntil) &&
+    integrationsSnoozedUntil > Date.now() &&
+    integrationsSnoozedUntil <= Date.now() + INTEGRATIONS_SNOOZE_MS;
+
+  useEffect(() => {
+    if (!integrationsBannerDismissed || integrationsSnoozedUntil === null) return;
+    const timer = window.setTimeout(
+      () => setIntegrationsSnoozedUntil(null),
+      Math.min(integrationsSnoozedUntil - Date.now(), 2_147_483_647)
+    );
+    return () => window.clearTimeout(timer);
+  }, [integrationsBannerDismissed, integrationsSnoozedUntil, setIntegrationsSnoozedUntil]);
   // The keyed parent keeps useLocalStorage keys stable for this mount. No
   // fingerprint, snooze expiry, recovery invalidation or per-tool revision:
   // "Don't remind me" stays respected, even after a different credential save.
@@ -231,7 +242,12 @@ function OwnedOnboardingBanners({
       'Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.';
     const integrationsActions = (
       <Space size="small" wrap={isMobile}>
-        <Button type="text" size="small" onClick={() => onDismissIntegrations()}>
+        <Button
+          type="text"
+          size="small"
+          title="Hide this reminder for 24 hours"
+          onClick={() => setIntegrationsSnoozedUntil(Date.now() + INTEGRATIONS_SNOOZE_MS)}
+        >
           Maybe later
         </Button>
         <Button
