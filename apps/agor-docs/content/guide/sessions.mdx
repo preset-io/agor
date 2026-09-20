@@ -95,12 +95,14 @@ The tree is rendered on the branch card on the board, and in full detail in the 
 The session view renders a transcript in one of two views, chosen from the
 session **⋯** menu under **Transcript view**:
 
-- **Detailed** shows every task's metadata pills, bordered thinking blocks, and
-  the full subagent summary with its tool tags.
-- **Compact** keeps your prompts and the agent's written answers in view and
-  folds the rest into quiet one-line rows: thinking, each tool call, and a whole
-  subagent chain (`Worked for 1m 2s · 21 steps · 3 files`). Task metadata
-  becomes a single muted `model · duration` line whose tooltip carries the rest.
+- **Detailed** groups each prompt into its own collapsible task section, with
+  metadata pills, bordered thinking blocks, and the full subagent summary.
+- **Compact** reads as one continuous conversation with no per-prompt section to
+  open. Your prompts and the agent's written answers are always fully visible;
+  only the work in between folds into quiet one-line rows — thinking, each tool
+  call, and a whole subagent chain (`Worked for 1m 2s · 21 steps · 3 files`).
+  Task boundaries are a thin separator carrying `model · duration`, whose
+  tooltip holds the tokens, context, git ref, and author.
 
 Nothing is hidden permanently — every collapsed row expands in place.
 

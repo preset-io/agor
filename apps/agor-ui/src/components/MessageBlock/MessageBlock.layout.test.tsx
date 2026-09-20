@@ -24,6 +24,26 @@ describe('MessageBlock layout', () => {
     expect(body).toHaveStyle({ minWidth: '0' });
   });
 
+  it('keeps the compact bubble bounded so narrow viewports do not scroll sideways', () => {
+    const message = {
+      message_id: 'message-compact',
+      session_id: 'session-1',
+      type: 'message',
+      role: 'user',
+      index: 0,
+      timestamp: '2026-07-23T00:00:00.000Z',
+      content: '```json\n{"path":"/an/intrinsically/very/wide/path"}\n```',
+      content_preview: 'wide code',
+    } as unknown as Message;
+
+    const { container } = render(<MessageBlock message={message} compact />);
+
+    expect(container.querySelector<HTMLElement>('.ant-bubble')).toHaveStyle({ maxWidth: '100%' });
+    expect(container.querySelector<HTMLElement>('.ant-bubble-body')).toHaveStyle({
+      minWidth: '0',
+    });
+  });
+
   it('renders provider billing recovery instead of raw zero-turn text', () => {
     const onOpenSettings = vi.fn();
     const message = {

@@ -478,6 +478,7 @@ export interface OnboardingState {
  * in view while collapsing thinking, tool calls, subagent chains, and task
  * metadata behind one-line, expandable summaries.
  */
+/** Declaration order is the order the session menu offers them in. */
 export const TRANSCRIPT_VIEW_MODES = ['compact', 'detailed'] as const;
 
 export type TranscriptViewMode = (typeof TRANSCRIPT_VIEW_MODES)[number];

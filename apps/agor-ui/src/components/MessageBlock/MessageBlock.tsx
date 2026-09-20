@@ -712,7 +712,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           );
 
           return (
-            <div style={{ margin: `${token.sizeUnit}px 0` }}>
+            <div style={{ margin: `${token.sizeUnit * (compact ? 3 : 1)}px 0` }}>
               <Bubble
                 placement={isUser ? 'end' : 'start'}
                 avatar={
@@ -752,7 +752,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                                defaultExpanded={compact || isLatestMessage}
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -862,7 +862,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token });
 
           return (
-            <div style={{ margin: `${token.sizeUnit}px 0` }}>
+            <div style={{ margin: `${token.sizeUnit * (compact ? 3 : 1)}px 0` }}>
               <Bubble
                 placement="start"
                 avatar={
@@ -893,7 +893,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
                             maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                            defaultExpanded={compact || isLatestMessage}
                             isStreaming={isStreaming}
                           >
                             {combinedText}

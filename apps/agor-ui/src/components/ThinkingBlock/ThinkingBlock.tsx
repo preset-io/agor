@@ -63,13 +63,15 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   // Compact reuses the tool row so reasoning and actions share one grammar.
   if (compact) {
     return (
-      <ToolBlock
-        icon={<BulbOutlined />}
-        name={isStreaming ? 'Thinking…' : 'Thought'}
-        expandedByDefault={defaultExpanded}
-      >
-        {body}
-      </ToolBlock>
+      <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
+        <ToolBlock
+          icon={<BulbOutlined />}
+          name={isStreaming ? 'Thinking…' : 'Thought'}
+          expandedByDefault={defaultExpanded}
+        >
+          {body}
+        </ToolBlock>
+      </div>
     );
   }
 
