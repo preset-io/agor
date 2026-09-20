@@ -23,7 +23,7 @@ x-daemon-environment: &daemon-environment
   # ingress origin must be shared by both replicas' CORS configuration.
   AGOR_HA_PUBLIC_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
   AGOR_BASE_URL: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
-  CORS_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
+  CORS_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030},${AGOR_HA_ACME_ORIGIN:-${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}},${AGOR_HA_GLOBEX_ORIGIN:-${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}}
   DAEMON_PORT: '3030'
   DAEMON_HOST: 0.0.0.0
   NODE_ENV: ${AGOR_HA_NODE_ENV:-production}
@@ -72,6 +72,8 @@ services:
     environment:
       PORT: '4000'
       AGOR_HA_PUBLIC_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
+      AGOR_HA_ACME_ORIGIN: ${AGOR_HA_ACME_ORIGIN:-}
+      AGOR_HA_GLOBEX_ORIGIN: ${AGOR_HA_GLOBEX_ORIGIN:-}
       AGOR_EXTERNAL_LAUNCH_ISSUER: http://dev-launcher:4000
       AGOR_EXTERNAL_LAUNCH_AUDIENCE: agor-runtime:ha-dev
       AGOR_EXTERNAL_LAUNCH_INSTANCE_ID: agor-ha-dev
@@ -173,6 +175,9 @@ services:
     image: nginx:1.27-alpine
     ports:
       - '${HA_PORT:-3030}:8080'
+      # Random host port unless explicitly configured; old managed templates
+      # must not make unrelated branches contend for a fixed second port.
+      - '${HA_TENANT_PORT:-0}:8080'
     volumes:
       - ./docker/ha/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
