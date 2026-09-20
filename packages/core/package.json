@@ -496,6 +496,7 @@
     "dev": "concurrently -k -n js,dts -c cyan,magenta \"TSUP_CLEAN=false NODE_OPTIONS='--max-old-space-size=4096' tsup --watch\" \"tsc -p tsconfig.build.json --emitDeclarationOnly --noEmit false --watch --preserveWatchOutput\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:runtime": "node --test test/tenant-public-url.runtime.mjs",
     "test:postgres": "tsx src/db/scripts/test-postgres.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
