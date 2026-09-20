@@ -216,6 +216,7 @@ export function createDevLauncher(options) {
       return [tenant, origin];
     })
   );
+  const formOrigins = [...new Set(Object.values(tenantOrigins))].join(' ');
   const issuer = options.issuer;
   const audience = options.audience;
   const instanceId = options.instanceId;
@@ -255,8 +256,7 @@ export function createDevLauncher(options) {
         response.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
-          'content-security-policy':
-            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+          'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self' ${formOrigins}; base-uri 'none'; frame-ancestors 'none'`,
         });
         return response.end(renderPicker(publicOrigin, url.searchParams.get('return_to')));
       }

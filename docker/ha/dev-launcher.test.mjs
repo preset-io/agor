@@ -199,6 +199,11 @@ test('snapshots trusted tenant origins and issuance time at mint, independently 
   await new Promise((resolve) => instance.server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => instance.server.close(resolve)));
   const base = `http://127.0.0.1:${instance.server.address().port}`;
+  const picker = await fetch(`${base}/dev-auth/`);
+  assert.match(
+    picker.headers.get('content-security-policy'),
+    /form-action 'self' https:\/\/acme\.example\.test https:\/\/globex\.example\.test;/
+  );
   for (const [tenant, persona] of [
     ['acme', 'acme-alice'],
     ['globex', 'globex-beatrice'],
