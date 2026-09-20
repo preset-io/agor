@@ -137,7 +137,17 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   if (!session) {
     return (
       <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
-        {loading ? <Spin size="large" /> : <Alert type="warning" title="Session unavailable" />}
+        {loading ? (
+          <Spin size="large" />
+        ) : (
+          // Bootstrap may be complete while the data owner fetches an uncached
+          // session. Do not infer a failed request from its absence in the store.
+          <Alert
+            type="info"
+            title="Session not loaded"
+            description="It may still be loading or may no longer be available."
+          />
+        )}
         <Button onClick={closeSession}>Back to home</Button>
       </Flex>
     );

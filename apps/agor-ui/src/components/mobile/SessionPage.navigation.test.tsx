@@ -101,7 +101,7 @@ describe('mobile session exit versus history', () => {
   it('offers an exit for a removed/inaccessible session instead of spinning forever', () => {
     agorStore.getState().setLoading(false);
     const router = setup(['/m/session/missing']);
-    expect(screen.getByText('Session unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Session not loaded')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to home' }));
     expect(router.state.location.pathname).toBe('/m');
   });

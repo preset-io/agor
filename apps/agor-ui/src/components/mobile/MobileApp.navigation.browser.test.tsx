@@ -151,7 +151,28 @@ it('tracks a live branch move rather than a stale session board projection', asy
 it('lets the user exit when an open session is removed or becomes inaccessible', async () => {
   mount('/m/session/child');
   await act(async () => agorStore.setState({ sessionById: new Map() }));
-  expect(await screen.findByText('Session unavailable')).toBeInTheDocument();
+  expect(await screen.findByText('Session not loaded')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Back to home' }));
   expect(window.location.pathname).toBe('/m');
+});
+
+it('keeps uncached session wording neutral after bootstrap and renders a late targeted result', async () => {
+  mount('/m/session/archived');
+  expect(screen.getByText('Session not loaded')).toBeInTheDocument();
+  expect(
+    screen.getByText('It may still be loading or may no longer be available.')
+  ).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Back to home' })).toBeInTheDocument();
+  await act(async () =>
+    agorStore.setState({
+      sessionById: new Map([
+        ['archived', { session_id: 'archived', branch_id: 'other', archived: true } as Session],
+      ]),
+    })
+  );
+  expect(await screen.findByRole('heading', { name: 'archived' })).toBeInTheDocument();
+  expect(screen.queryByText('Session not loaded')).not.toBeInTheDocument();
+  expect(window.location.pathname).toBe('/m/session/archived');
+  await userEvent.click(screen.getByRole('button', { name: 'Close session' }));
+  expect(window.location.pathname).toBe('/m/board/b');
 });
