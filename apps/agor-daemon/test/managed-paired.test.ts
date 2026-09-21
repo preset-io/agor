@@ -11,7 +11,12 @@
  * operator evidence; the test Console shell is not production Console visual coverage.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { MCPServerRepository, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  MCPManagedOAuthOutboxRepository,
+  MCPServerRepository,
+  runWithTenantDatabaseScope,
+  UserMCPOAuthTokenRepository,
+} from '@agor/core/db';
 import {
   MCP_OAUTH_ROUTES,
   type MCPCatalogEntry,
@@ -98,6 +103,24 @@ describe('actual paired provider browser and registered runtime', () => {
   let browser: Browser;
   let authenticatedState: Awaited<ReturnType<BrowserContext['storageState']>> | undefined;
   let unregisterSourceLoader: (() => void) | undefined;
+  const pendingCleanup = (serverId: string) =>
+    runWithTenantDatabaseScope(runtime.db, runtime.tenantId, async (tx) =>
+      (await new MCPManagedOAuthOutboxRepository(tx).listPending(runtime.tenantId)).filter(
+        (job) => job.mcp_server_id === serverId
+      )
+    );
+  const drainCleanup = async (serverId: string) => {
+    // runOnce is single-flight, not a post-write barrier: it can join a pass
+    // whose outbox snapshot predates disconnect. Require durable completion,
+    // with at most one subsequent pass, not a retry of consent/provider work.
+    for (let pass = 0; pass < 2; pass++) {
+      const result = await runtime.maintenance!.runOnce();
+      expect(result.failures).toBe(0);
+      expect(result.capacityLimited).toBe(false);
+      if ((await pendingCleanup(serverId)).length === 0) return;
+    }
+    throw new Error('Paired cleanup obligations remain after two maintenance passes');
+  };
   beforeAll(async () => {
     unregisterSourceLoader = register();
     vi.stubEnv('AGOR_MASTER_SECRET', 'synthetic-paired-master-only');
@@ -144,6 +167,12 @@ describe('actual paired provider browser and registered runtime', () => {
                 ).toString('base64'),
               }),
         })) as { status: number; headers: Record<string, string>; bodyBase64: string };
+        if (
+          runtime &&
+          new URL(target).pathname === MCP_OAUTH_ROUTES.prepare &&
+          response.status !== 200
+        )
+          runtime.observations.push({ path: 'prepare-http', outcome: String(response.status) });
         if (runtime && /\/(?:refresh|receipt)$/.test(new URL(target).pathname)) {
           try {
             const parsed = McpOAuthOperationResponseSchema.safeParse(
@@ -315,7 +344,7 @@ describe('actual paired provider browser and registered runtime', () => {
                   .waitFor({ state: 'hidden', timeout: 5000 })
                   .catch(() => undefined);
                 throw new Error(
-                  `Managed start failed ${JSON.stringify(runtime.observations.slice(-8))}: ${(await page.locator('body').innerText()).slice(0, 2400)}`
+                  `Managed start failed ${JSON.stringify(runtime.observations.slice(-8))} frames=${JSON.stringify(failureFrames.map((line) => line.match(/(mcp-oauth-[\w-]+\.ts):(\d+):(\d+)/)?.[0]).filter(Boolean))}: ${(await page.locator('body').innerText()).slice(0, 2400)}`
                 );
               });
             // Deterministically run the real 30s maintenance owner after prepare, before consent.
@@ -479,7 +508,7 @@ describe('actual paired provider browser and registered runtime', () => {
               afterTask[provider].mcp
             );
             await runtime.call('mcp-servers/oauth-disconnect', request);
-            await runtime.maintenance!.runOnce();
+            await drainCleanup(server.mcp_server_id);
             const beforeDeniedUse = (await cloud.call('counters')) as typeof afterRefresh;
             await expect(taskGateway.forward('tools/call')).rejects.toMatchObject({
               code: 'grant_changed',
@@ -494,13 +523,62 @@ describe('actual paired provider browser and registered runtime', () => {
                 client_nonce: randomUUID(),
               });
               expect(canceled.success).toBe(true);
-              await runtime.call('mcp-servers/oauth-disconnect', request);
               await runtime.maintenance!.runOnce();
+              // Force the actual 30s worker overlap, without moving any clock or
+              // changing a response: pause AFTER its outbox snapshot/transaction,
+              // before ACK scanning. The new cancel must miss that old snapshot.
+              const entered = deferred();
+              const release = deferred();
+              const original =
+                UserMCPOAuthTokenRepository.prototype.listManagedReceiptsForAcknowledgement;
+              const paused = vi
+                .spyOn(
+                  UserMCPOAuthTokenRepository.prototype,
+                  'listManagedReceiptsForAcknowledgement'
+                )
+                .mockImplementationOnce(async function (
+                  this: UserMCPOAuthTokenRepository,
+                  ...args
+                ) {
+                  entered.resolve();
+                  await release.promise;
+                  return original.apply(this, args);
+                });
+              const priorPass = runtime.maintenance!.runOnce();
+              try {
+                await entered.promise;
+                await runtime.call('mcp-servers/oauth-disconnect', request);
+                expect(runtime.maintenance!.runOnce()).toBe(priorPass);
+              } finally {
+                release.resolve();
+                try {
+                  expect((await priorPass).failures).toBe(0);
+                } finally {
+                  paused.mockRestore();
+                }
+              }
+              expect(
+                (await pendingCleanup(server.mcp_server_id)).some(
+                  (job) => job.attempt_id === canceled.attempt_id && job.kind === 'cancel'
+                )
+              ).toBe(true);
               const terminal = await runtime.read(
                 'mcp-servers/oauth-attempt-status',
                 String(canceled.attempt_id)
               );
               expect(terminal.status).toBe('failed');
+              // Local terminal status is NOT remote cancellation delivery. The
+              // real worker still owns its subject-concurrency slot and refuses
+              // a premature new prepare (no provider dispatch and no replay).
+              const blocked = await runtime.call('mcp-servers/oauth-start', {
+                ...request,
+                client_nonce: randomUUID(),
+              });
+              expect(blocked.success).toBe(false);
+              expect(
+                runtime.observations.filter((item) => item.path === 'prepare-http').at(-1)
+              ).toEqual({ path: 'prepare-http', outcome: '429' });
+              await drainCleanup(server.mcp_server_id);
               const afterCancel = (await cloud.call('counters')) as typeof afterRefresh;
               expect(afterCancel[provider].token).toBe(beforeDeniedUse[provider].token);
               expect(afterCancel[provider].mcp).toBe(beforeDeniedUse[provider].mcp);
