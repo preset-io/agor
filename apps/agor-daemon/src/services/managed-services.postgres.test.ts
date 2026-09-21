@@ -60,8 +60,9 @@ import {
 } from './test-support/managed-pilot-enrollment';
 import { registerManagedTestServices } from './test-support/registered-managed-services.js';
 
-// This sandbox mounts / as unmapped uid 65534. Normalize ONLY that test mount's
-// owner observation; retain the real deployment reader's path/mode/size/key checks.
+// This sandbox reports uid 65534 for / and the physical /var/lib/agor mount
+// ancestors (the JSON-reporter lane resolves that physical path). Normalize
+// ONLY those fixed test mount owners; retain all path/mode/link/key checks.
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof import('node:fs')>();
   return {
@@ -71,7 +72,12 @@ vi.mock('node:fs', async (original) => {
       options?: Parameters<typeof fs.lstatSync>[1]
     ) => {
       const stat = fs.lstatSync(path, options);
-      if (String(path) === '/' && stat && stat.uid === 65534) stat.uid = 0;
+      if (
+        ['/', '/var', '/var/lib', '/var/lib/agor'].includes(String(path)) &&
+        stat &&
+        stat.uid === 65534
+      )
+        stat.uid = 0;
       return stat;
     },
   };

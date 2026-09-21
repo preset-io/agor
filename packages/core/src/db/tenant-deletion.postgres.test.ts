@@ -666,14 +666,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     let emptyDb: Database | undefined;
 
     try {
-      const watermarkResult = await executeRaw(
-        db,
-        sql`SELECT max(created_at) AS max_ts FROM drizzle.__drizzle_migrations`
+      // Copy actual run-owned receipts, not a forged highest watermark. This
+      // fixture isolates empty catalog discovery after migration admission.
+      const receipts = rowsOf(
+        await executeRaw(db, sql`SELECT hash, created_at FROM drizzle.__drizzle_migrations`)
       );
-      const watermark = rowsOf(watermarkResult)[0]?.max_ts;
-      if (watermark === undefined || watermark === null) {
-        throw new Error('Expected an applied migration watermark');
-      }
+      if (receipts.length === 0) throw new Error('Expected applied migration receipts');
 
       // Use the actual isolated test login, not a dev/CI-specific role name.
       const applicationRole = rowsOf(await executeRaw(db, sql`SELECT current_user AS role`))[0]
@@ -696,13 +694,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
           )
         `
       );
-      await executeRaw(
-        emptyDb,
-        sql`
+      for (const receipt of receipts) {
+        await executeRaw(
+          emptyDb,
+          sql`
           INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
-          VALUES ('empty-catalog-test', ${watermark})
-        `
-      );
+          VALUES (${receipt.hash}, ${receipt.created_at})`
+        );
+      }
 
       await expect(
         deleteTenantData(emptyDb, `td-empty-${generateId()}`, { dryRun: true })
