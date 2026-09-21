@@ -99,7 +99,9 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
         case 'board':
           return navigate(`/m/board/${result.item.board_id}`);
         case 'artifact':
-          return navigate(artifactFullscreenPath(result.item.artifact_id));
+          // Mark the origin so the fullscreen surface (a non-/m route) offers a
+          // Back into the mobile shell instead of only a desktop board link.
+          return navigate(`${artifactFullscreenPath(result.item.artifact_id)}?from=m`);
         case 'mcp':
           return onOpenWorkspaceSettings('mcp');
       }

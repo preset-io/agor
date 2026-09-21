@@ -18,6 +18,8 @@ import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
+import { mobilePageStyle } from './constants';
+import { MobileHeader } from './MobileHeader';
 import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
 
@@ -137,21 +139,34 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   }
 
   if (!session) {
+    // Give the missing/loading state the same shell chrome as every other mobile
+    // page: a header with a working Back (plus the persistent bottom tab bar,
+    // rendered by MobileApp), instead of a bare centered card. Back and the
+    // in-body button share the same history-aware handler.
     return (
-      <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
-        {loading ? (
-          <Spin size="large" />
-        ) : (
-          // Bootstrap may be complete while the data owner fetches an uncached
-          // session. Do not infer a failed request from its absence in the store.
-          <Alert
-            type="info"
-            title="Session not loaded"
-            description="It may still be loading or may no longer be available."
-          />
-        )}
-        <Button onClick={closeSession}>Back to home</Button>
-      </Flex>
+      <div style={mobilePageStyle}>
+        <MobileHeader title="Session" onBack={closeSession} />
+        <Flex
+          vertical
+          align="center"
+          justify="center"
+          gap="middle"
+          style={{ flex: 1, minHeight: 0, padding: 16 }}
+        >
+          {loading ? (
+            <Spin size="large" />
+          ) : (
+            // Bootstrap may be complete while the data owner fetches an uncached
+            // session. Do not infer a failed request from its absence in the store.
+            <Alert
+              type="info"
+              title="Session not loaded"
+              description="It may still be loading or may no longer be available."
+            />
+          )}
+          <Button onClick={closeSession}>Back to home</Button>
+        </Flex>
+      </div>
     );
   }
 

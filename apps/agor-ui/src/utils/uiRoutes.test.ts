@@ -68,4 +68,16 @@ describe('responsiveRoutePath', () => {
       responsiveRoutePath('/m/board/01a012d8-9999-7909-b6f4-2024dfc7c51e', 'desktop', entities)
     ).toBe('/b/01a012d899997909b6f42024/');
   });
+
+  // Marketplace and search are desktop modals with no route, so hand off a flag
+  // the workspace opens on arrival instead of dumping the user on a bare Home.
+  it('hands the marketplace and search tabs to the matching desktop surface', () => {
+    expect(responsiveRoutePath('/m/marketplace', 'desktop', entities)).toBe('/?open=mcp-catalog');
+    expect(responsiveRoutePath('/m/search', 'desktop', entities)).toBe('/?open=search');
+  });
+
+  it('still sends other mobile-only tabs (e.g. sessions) to desktop Home', () => {
+    expect(responsiveRoutePath('/m/sessions', 'desktop', entities)).toBe('/');
+    expect(responsiveRoutePath('/m', 'desktop', entities)).toBe('/');
+  });
 });
