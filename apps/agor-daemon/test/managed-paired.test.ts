@@ -518,70 +518,78 @@ describe('actual paired provider browser and registered runtime', () => {
               beforeDeniedUse[provider].mcp
             );
             if (cycle === 0) {
-              const canceled = await runtime.call('mcp-servers/oauth-start', {
-                ...request,
-                client_nonce: randomUUID(),
-              });
-              expect(canceled.success).toBe(true);
-              await runtime.maintenance!.runOnce();
-              // Force the actual 30s worker overlap, without moving any clock or
-              // changing a response: pause AFTER its outbox snapshot/transaction,
-              // before ACK scanning. The new cancel must miss that old snapshot.
-              const entered = deferred();
-              const release = deferred();
-              const original =
-                UserMCPOAuthTokenRepository.prototype.listManagedReceiptsForAcknowledgement;
-              const paused = vi
-                .spyOn(
-                  UserMCPOAuthTokenRepository.prototype,
-                  'listManagedReceiptsForAcknowledgement'
-                )
-                .mockImplementationOnce(async function (
-                  this: UserMCPOAuthTokenRepository,
-                  ...args
-                ) {
-                  entered.resolve();
-                  await release.promise;
-                  return original.apply(this, args);
-                });
-              const priorPass = runtime.maintenance!.runOnce();
+              // Drive this one schedule explicitly so an unrelated timer tick
+              // cannot drain the witness before its pending-journal assertion.
+              // stop/start does not reset clocks, authority, or operation state.
+              await runtime.maintenance!.stop();
               try {
-                await entered.promise;
-                await runtime.call('mcp-servers/oauth-disconnect', request);
-                expect(runtime.maintenance!.runOnce()).toBe(priorPass);
-              } finally {
-                release.resolve();
+                const canceled = await runtime.call('mcp-servers/oauth-start', {
+                  ...request,
+                  client_nonce: randomUUID(),
+                });
+                expect(canceled.success).toBe(true);
+                await runtime.maintenance!.runOnce();
+                // Force the actual 30s worker overlap, without moving any clock or
+                // changing a response: pause AFTER its outbox snapshot/transaction,
+                // before ACK scanning. The new cancel must miss that old snapshot.
+                const entered = deferred();
+                const release = deferred();
+                const original =
+                  UserMCPOAuthTokenRepository.prototype.listManagedReceiptsForAcknowledgement;
+                const paused = vi
+                  .spyOn(
+                    UserMCPOAuthTokenRepository.prototype,
+                    'listManagedReceiptsForAcknowledgement'
+                  )
+                  .mockImplementationOnce(async function (
+                    this: UserMCPOAuthTokenRepository,
+                    ...args
+                  ) {
+                    entered.resolve();
+                    await release.promise;
+                    return original.apply(this, args);
+                  });
+                const priorPass = runtime.maintenance!.runOnce();
                 try {
-                  expect((await priorPass).failures).toBe(0);
+                  await entered.promise;
+                  await runtime.call('mcp-servers/oauth-disconnect', request);
+                  expect(runtime.maintenance!.runOnce()).toBe(priorPass);
                 } finally {
-                  paused.mockRestore();
+                  release.resolve();
+                  try {
+                    expect((await priorPass).failures).toBe(0);
+                  } finally {
+                    paused.mockRestore();
+                  }
                 }
+                expect(
+                  (await pendingCleanup(server.mcp_server_id)).some(
+                    (job) => job.attempt_id === canceled.attempt_id && job.kind === 'cancel'
+                  )
+                ).toBe(true);
+                const terminal = await runtime.read(
+                  'mcp-servers/oauth-attempt-status',
+                  String(canceled.attempt_id)
+                );
+                expect(terminal.status).toBe('failed');
+                // Local terminal status is NOT remote cancellation delivery. The
+                // real worker still owns its subject-concurrency slot and refuses
+                // a premature new prepare (no provider dispatch and no replay).
+                const blocked = await runtime.call('mcp-servers/oauth-start', {
+                  ...request,
+                  client_nonce: randomUUID(),
+                });
+                expect(blocked.success).toBe(false);
+                expect(
+                  runtime.observations.filter((item) => item.path === 'prepare-http').at(-1)
+                ).toEqual({ path: 'prepare-http', outcome: '429' });
+                await drainCleanup(server.mcp_server_id);
+                const afterCancel = (await cloud.call('counters')) as typeof afterRefresh;
+                expect(afterCancel[provider].token).toBe(beforeDeniedUse[provider].token);
+                expect(afterCancel[provider].mcp).toBe(beforeDeniedUse[provider].mcp);
+              } finally {
+                runtime.maintenance!.start();
               }
-              expect(
-                (await pendingCleanup(server.mcp_server_id)).some(
-                  (job) => job.attempt_id === canceled.attempt_id && job.kind === 'cancel'
-                )
-              ).toBe(true);
-              const terminal = await runtime.read(
-                'mcp-servers/oauth-attempt-status',
-                String(canceled.attempt_id)
-              );
-              expect(terminal.status).toBe('failed');
-              // Local terminal status is NOT remote cancellation delivery. The
-              // real worker still owns its subject-concurrency slot and refuses
-              // a premature new prepare (no provider dispatch and no replay).
-              const blocked = await runtime.call('mcp-servers/oauth-start', {
-                ...request,
-                client_nonce: randomUUID(),
-              });
-              expect(blocked.success).toBe(false);
-              expect(
-                runtime.observations.filter((item) => item.path === 'prepare-http').at(-1)
-              ).toEqual({ path: 'prepare-http', outcome: '429' });
-              await drainCleanup(server.mcp_server_id);
-              const afterCancel = (await cloud.call('counters')) as typeof afterRefresh;
-              expect(afterCancel[provider].token).toBe(beforeDeniedUse[provider].token);
-              expect(afterCancel[provider].mcp).toBe(beforeDeniedUse[provider].mcp);
             }
           }
         }
