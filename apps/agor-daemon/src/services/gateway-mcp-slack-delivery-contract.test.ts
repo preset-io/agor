@@ -61,6 +61,7 @@ vi.mock('@agor/core/gateway', async () => {
 });
 
 import { GatewayService } from './gateway.js';
+import type { SlackDeliveryRecord } from './mcp-slack-delivery-engine.js';
 
 const THREAD = 'C1-1700000000.000001';
 const OWNED_TS = '1700000000.000009';
@@ -88,11 +89,27 @@ interface LaneHarness {
   deleted: { threadId: string; messageId: string }[];
   recordedTs(): string | undefined;
   renderedState(): string | undefined;
+  /** The durable delivery record, for the accounting assertions. */
+  record(): SlackDeliveryRecord | undefined;
 }
 
 interface LaneOptions {
   /** `'post'` starts with no recorded row; `'edit'` starts with one. */
   start: 'post' | 'edit';
+  /**
+   * Make the channel read throw ONCE THE CLAIM IS ON THE RECORD.
+   *
+   * Both lanes read the channel again inside the delivery, after the claim
+   * CAS and before any Slack call, so "a claim is recorded" is what separates
+   * that read from the binding read above it — and it is the property the
+   * assertion is about, rather than a call index either lane could change.
+   *
+   * Stands in for every unclassified exception in the delivery's prologue —
+   * a missing tenant database scope, a database that is not answering, a
+   * repository wrapping either — which is the class that produced the
+   * 2026-09-16 incident and wrote nothing durable at all.
+   */
+  failAfterClaim?: boolean;
   /**
    * Runs during the Slack call: a second claimant took the expired lease,
    * rendered the row that counts, and released it.
@@ -210,14 +227,18 @@ function connectLane(options: LaneOptions): LaneHarness {
     },
     usersRepo: { findById: async () => ({ user_id: 'user-1', role: 'member' }) as User },
     channelRepo: {
-      findById: async () =>
-        ({
+      findById: async () => {
+        if (options.failAfterClaim && message.metadata?.widget?.slack_connect?.delivery_claim) {
+          throw new Error('channel read failed');
+        }
+        return {
           id: 'gateway-1',
           enabled: true,
           channel_type: 'slack',
           provider_config_generation: 7,
           config: { align_slack_users: true, allowed_channel_ids: ['C1'] },
-        }) as GatewayChannel,
+        } as GatewayChannel;
+      },
     },
     mcpServerRepo: {
       findById: async () =>
@@ -263,6 +284,7 @@ function connectLane(options: LaneOptions): LaneHarness {
     stop: () => service.stopListeners(),
     recordedTs: () => message.metadata?.widget?.slack_connect?.slack_message_ts,
     renderedState: () => message.metadata?.widget?.slack_connect?.rendered_state,
+    record: () => message.metadata?.widget?.slack_connect,
   };
 }
 
@@ -364,14 +386,21 @@ function recoveryLane(options: LaneOptions): LaneHarness {
       },
     },
     channelRepo: {
-      findById: async () =>
-        ({
+      findById: async () => {
+        if (
+          options.failAfterClaim &&
+          currentTask.metadata?.mcp_slack_recovery_notice?.delivery_claim
+        ) {
+          throw new Error('channel read failed');
+        }
+        return {
           id: 'gateway-1',
           enabled: true,
           channel_type: 'slack',
           provider_config_generation: 1,
           config: { bot_token: 'redacted', allowed_channel_ids: ['C1'] },
-        }) as unknown as GatewayChannel,
+        } as unknown as GatewayChannel;
+      },
     },
     activeListeners: new Map([
       [
@@ -404,6 +433,7 @@ function recoveryLane(options: LaneOptions): LaneHarness {
     stop: () => service.stopListeners(),
     recordedTs: () => currentTask.metadata?.mcp_slack_recovery_notice?.slack_message_ts,
     renderedState: () => currentTask.metadata?.mcp_slack_recovery_notice?.rendered_state,
+    record: () => currentTask.metadata?.mcp_slack_recovery_notice,
   };
 }
 
@@ -428,13 +458,21 @@ describe.each(LANES)(
   'MCP Slack $name lane delivery contract',
   ({ build, winnerState, repaintedState }) => {
     let previousSecret: string | undefined;
+    let previousBaseUrl: string | undefined;
     beforeEach(() => {
       previousSecret = process.env.AGOR_MASTER_SECRET;
       process.env.AGOR_MASTER_SECRET = SECRET;
+      // Both lanes now refuse to build a link on a base URL no other browser
+      // can open, and without this `getBaseUrl` answers the localhost
+      // fallback. The refusal itself is pinned in the per-lane suites.
+      previousBaseUrl = process.env.AGOR_BASE_URL;
+      process.env.AGOR_BASE_URL = 'https://agor.example.test';
       killSwitch.enabled = true;
       return () => {
         if (previousSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
         else process.env.AGOR_MASTER_SECRET = previousSecret;
+        if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = previousBaseUrl;
       };
     });
 
@@ -491,6 +529,56 @@ describe.each(LANES)(
       // Nothing was orphaned, so nothing is deleted.
       expect(harness.deleted).toEqual([]);
       await harness.stop();
+    });
+
+    /**
+     * An UNCLASSIFIED exception, while this pass holds the claim.
+     *
+     * The hole D1 closed, stated once for both lanes. Every classified refusal
+     * either releases the claim or records a delivery failure; a throw did
+     * neither. `recordSlackDeliveryFailure` cannot see one on its own — it
+     * writes only when the record is still the one this delivery started on
+     * AND the live claim is the one it took — and the whole prologue (the
+     * kill-switch read, the deps, the binding, the channel read) runs above
+     * both. So the claim leaked, the attempt was never counted, the backoff
+     * never advanced, and the record's own overdue `next_repair_at` brought
+     * the same card back on the sweep's thirty-second tick until its horizon
+     * closed a day later.
+     *
+     * Asserted as the END STATE rather than as a call sequence: what matters
+     * is that the claim is gone and the attempt is on the record, however the
+     * lane got there. The rethrow is part of the contract too — the sweep's
+     * per-pass tally is what names the exception's category, and swallowing
+     * here would take that away.
+     */
+    it('counts an unclassified throw against the claim it was holding', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const harness = build({ start: 'post', failAfterClaim: true });
+
+        await expect(harness.deliver()).rejects.toThrow();
+
+        // Nothing reached Slack — the throw is above every provider call.
+        expect(harness.sends).toEqual([]);
+        const record = harness.record();
+        // The leaked claim is gone...
+        expect(record?.delivery_claim).toBeUndefined();
+        // ...the attempt is counted against the ladder...
+        expect(record?.delivery_attempt_count).toBe(1);
+        // ...and something is coming back for this card, on the backoff
+        // rather than on the sweep's bare tick.
+        expect(record?.delivery_next_retry_at).toEqual(expect.any(String));
+        expect(Date.parse(record!.delivery_next_retry_at!)).toBeGreaterThan(Date.now());
+        // Accounted out loud, with the lane's own reason.
+        expect(
+          warn.mock.calls.some(
+            (call) => typeof call[0] === 'string' && call[0].includes('reason=unexpected_failure')
+          )
+        ).toBe(true);
+        await harness.stop();
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     /**

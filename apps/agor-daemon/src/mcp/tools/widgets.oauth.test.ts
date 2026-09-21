@@ -892,6 +892,14 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     expect(appendStub.mock.calls[0][0].metadata.widget.slack_connect_due_at).toBeUndefined();
   });
 
+  /**
+   * The canvas case is the ONLY one that may now say nothing.
+   *
+   * The tool's description defines the absence of `session_url` as "not a
+   * gateway thread, the user can see the card", so an absence that means
+   * anything else licenses the agent to promise a button — which is exactly
+   * what it did on 2026-09-16. `link_unavailable` is what separates the two.
+   */
   it('says nothing about a link on the canvas, where the card is already visible', async () => {
     const { app } = makeApp();
     const tools = registerAndCapture({ app });
@@ -902,10 +910,14 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     expect(result.status).toBe('requested');
     expect(result.session_url).toBeUndefined();
     expect(result.relay_to_user).toBeUndefined();
+    expect(result.link_unavailable).toBeUndefined();
   });
 
-  it('omits the link rather than relaying a bind address nobody can open', async () => {
-    vi.stubEnv('AGOR_BASE_URL', 'http://0.0.0.0:3030');
+  it.each([
+    ['a bind address', 'http://0.0.0.0:3030'],
+    ['a loopback address', 'http://localhost:3030'],
+  ])('says the link is unavailable rather than relaying %s', async (_label, baseUrl) => {
+    vi.stubEnv('AGOR_BASE_URL', baseUrl);
     const { app } = makeApp({
       ...gatewaySession('discord'),
       gatewayChannel: { channel_type: 'discord', config: { align_discord_users: true } },
@@ -917,6 +929,17 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     );
     expect(result.status).toBe('requested');
     expect(result.session_url).toBeUndefined();
+    // The negative, stated. Absence alone reads as the canvas case.
+    expect(result.link_unavailable).toBe(true);
+    expect(result.relay_to_user).toEqual(expect.any(String));
+    // Relayed into a Slack channel, so it carries nothing an administrator
+    // would act on and nothing an attacker would learn: no configuration key,
+    // no hostname, no internal category.
+    expect(result.relay_to_user).not.toMatch(
+      /AGOR_BASE_URL|base_url|config\.yaml|localhost|0\.0\.0\.0|not_browser_reachable/i
+    );
+    // And no URL of any kind, which is the whole reason it exists.
+    expect(result.relay_to_user).not.toMatch(/https?:\/\//);
   });
 });
 
@@ -984,7 +1007,7 @@ describe('agor_widgets_request_oauth — the deep link on a hosted tenant', () =
     expect(result.relay_to_user).toContain(result.session_url);
   });
 
-  it('says nothing rather than relaying a link for a tenant with no routing yet', async () => {
+  it('says the link is unavailable for a tenant with no routing yet', async () => {
     hosted = await hostedTenantRouting({ tenantId: TENANT });
 
     const { app } = makeApp(gatewayDiscord);
@@ -995,12 +1018,20 @@ describe('agor_widgets_request_oauth — the deep link on a hosted tenant', () =
       )
     );
 
-    // The widget is still minted — the canvas card is real — but an
-    // uninitialised tenant resolves to `''`, which is not a URL and must not
-    // become the cell origin, a relative path, or a sentence with a hole in it.
+    // The widget is still minted — the canvas card is real, and is what the
+    // user actually used — but an uninitialised tenant resolves to `''`, which
+    // is not a URL and must not become the cell origin, a relative path, or a
+    // sentence with a hole in it.
     expect(result.status).toBe('requested');
     expect(result.session_url).toBeUndefined();
-    expect(result.relay_to_user).toBeUndefined();
+    // And the absence is NAMED. `gatewaySessionConnectUrl` answered `null` for
+    // both "canvas session" and "gateway session, no link", while the tool's
+    // description defined the absence as the first — so the agent was told, by
+    // contract, that the user could see a card they could not.
+    expect(result.link_unavailable).toBe(true);
+    expect(result.relay_to_user).toEqual(expect.any(String));
+    expect(result.relay_to_user).not.toContain(TENANT_ORIGIN);
+    expect(result.relay_to_user).not.toContain(new URL(hosted.cellBaseUrl).host);
   });
 });
 

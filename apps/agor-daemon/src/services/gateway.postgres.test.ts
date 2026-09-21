@@ -247,13 +247,26 @@ function makeApp(
 describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway reply admission (PostgreSQL)', () => {
   let db: Database;
 
+  let previousBaseUrl: string | undefined;
+
   beforeAll(async () => {
     process.env.AGOR_MASTER_SECRET ||= 'gateway-postgres-test-secret';
+    // A browser-reachable origin, because the follow-up routing message this
+    // suite asserts is a LINK pasted into a Discord thread and
+    // `fetchExistingSessionUrlForGatewayUser` now refuses to build one nobody
+    // else can open. Without this the resolver answers the
+    // `http://localhost:{port}` fallback, the routing message is correctly
+    // suppressed, and the connector is never reached — which is a real
+    // behaviour this suite is not about. `gateway.test.ts` pins it directly.
+    previousBaseUrl = process.env.AGOR_BASE_URL;
+    process.env.AGOR_BASE_URL = 'https://agor.example.test';
     db = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
     await initializeDatabase(db);
   });
 
   afterAll(async () => {
+    if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+    else process.env.AGOR_BASE_URL = previousBaseUrl;
     await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
   });
 

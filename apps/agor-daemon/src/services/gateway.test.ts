@@ -434,29 +434,9 @@ afterEach(() => {
 });
 
 describe('GatewayService session links', () => {
-  it('builds browser-facing links from the configured UI origin', async () => {
-    vi.stubEnv('AGOR_BASE_URL', 'http://localhost:5173');
-    const { service } = makeGatewayHarness({});
-    const sessionId = '01927f9d-0000-7000-8000-000000000001' as SessionID;
-
-    const sessionUrl = await (
-      service as unknown as {
-        fetchExistingSessionUrlForGatewayUser: (
-          sessionId: SessionID,
-          user: User
-        ) => Promise<string | null>;
-      }
-    ).fetchExistingSessionUrlForGatewayUser(sessionId, user);
-
-    expect(sessionUrl).toBe(`http://localhost:5173/ui/s/${shortId(sessionId)}/`);
-  });
-
-  it('does not expose a 0.0.0.0 gateway link', async () => {
-    vi.stubEnv('AGOR_BASE_URL', 'http://0.0.0.0:5173');
-    const { service } = makeGatewayHarness({});
-
-    const sessionUrl = await (
-      service as unknown as {
+  const sessionLink = (service: unknown) =>
+    (
+      service as {
         fetchExistingSessionUrlForGatewayUser: (
           sessionId: SessionID,
           user: User
@@ -467,7 +447,42 @@ describe('GatewayService session links', () => {
       user
     );
 
-    expect(sessionUrl).toBeNull();
+  it('builds browser-facing links from the configured UI origin', async () => {
+    vi.stubEnv('AGOR_BASE_URL', 'https://agor.example.test');
+    const { service } = makeGatewayHarness({});
+    const sessionId = '01927f9d-0000-7000-8000-000000000001' as SessionID;
+
+    expect(await sessionLink(service)).toBe(
+      `https://agor.example.test/ui/s/${shortId(sessionId)}/`
+    );
+  });
+
+  /**
+   * This link is sent to somebody on Slack, Discord or GitHub, so the only
+   * question worth asking about its host is whether THEIR browser can open it.
+   * The `0.0.0.0` case below was the only one checked, and the two other
+   * callers that build a gateway link each carried their own half of the same
+   * check — which is how the Slack connect card came to post a button on
+   * `http://localhost:3030`, the fallback a deployment that never configured a
+   * public URL gets. One `isBrowserReachableUrl` now answers for all three.
+   *
+   * The consequence worth stating out loud, because it reaches past the MCP
+   * lanes: a `null` here suppresses the Discord/GitHub follow-up routing
+   * message entirely (`create`, where it is guarded by `if (sessionUrl && ...)`),
+   * so a deployment with only the localhost fallback stops pasting a link
+   * nobody in the thread can open. That is the intent, and
+   * `gateway.postgres.test.ts` configures a public origin because it is
+   * asserting the routing message rather than this rule.
+   */
+  it.each([
+    ['0.0.0.0', 'http://0.0.0.0:5173'],
+    ['localhost', 'http://localhost:5173'],
+    ['a loopback address', 'http://127.0.0.1:5173'],
+  ])('does not expose a gateway link on %s', async (_label, baseUrl) => {
+    vi.stubEnv('AGOR_BASE_URL', baseUrl);
+    const { service } = makeGatewayHarness({});
+
+    expect(await sessionLink(service)).toBeNull();
   });
 });
 

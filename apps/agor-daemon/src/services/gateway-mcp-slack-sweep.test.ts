@@ -73,13 +73,22 @@ const SECRET = 'connect-sweep-test-master-secret';
  * channel outside the secret cannot read its own config back.
  */
 let previousSecret: string | undefined;
+let previousBaseUrl: string | undefined;
 beforeAll(() => {
   previousSecret = process.env.AGOR_MASTER_SECRET;
   process.env.AGOR_MASTER_SECRET = SECRET;
+  // A public URL is the other ingredient of a link. Without one `getBaseUrl`
+  // answers `http://localhost:{port}` and the lane refuses the binding as
+  // `no_public_url` — correct behaviour, pinned in
+  // `gateway-mcp-slack-connect.test.ts`, and not what this file is about.
+  previousBaseUrl = process.env.AGOR_BASE_URL;
+  process.env.AGOR_BASE_URL = 'https://agor.example.test';
 });
 afterAll(() => {
   if (previousSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousSecret;
+  if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+  else process.env.AGOR_BASE_URL = previousBaseUrl;
 });
 
 const services: GatewayService[] = [];

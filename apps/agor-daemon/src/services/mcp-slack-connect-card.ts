@@ -381,9 +381,9 @@ export function mcpSlackConnectExpiryDelay(
  * How long a first-card marker waits after a refusal an administrator can undo.
  *
  * Five minutes rather than the sweep's own 30s tick, because none of the
- * reversible refusals (`unaligned`, `authority_moved`, `no_secret`) changes
- * without a human doing something, and rather than an hour, because the human
- * who changes it is usually waiting on the card.
+ * reversible refusals (`unaligned`, `authority_moved`, `no_secret`,
+ * `no_public_url`) changes without a human doing something, and rather than an
+ * hour, because the human who changes it is usually waiting on the card.
  */
 export const MCP_SLACK_CONNECT_MARKER_BACKOFF_MS = 5 * 60_000;
 

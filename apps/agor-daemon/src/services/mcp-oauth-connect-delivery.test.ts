@@ -21,6 +21,7 @@ import {
   type MCPOAuthConnectLinkDeps,
   mutateSlackConnectDelivery,
   readPendingOAuthConnectWidget,
+  resolveSlackConnectBinding,
 } from './mcp-oauth-connect-delivery.js';
 import type { SlackMCPOAuthAuthorityRepositories } from './mcp-slack-oauth-authority.js';
 
@@ -150,6 +151,36 @@ describe('Slack MCP connect delivery', () => {
       masterSecret: SECRET,
       baseUrl: 'https://agor.example.test',
     };
+  });
+
+  /**
+   * The two ingredients a link needs from the DEPLOYMENT, refused the same way.
+   *
+   * `no_secret` has always been classified here rather than thrown, and it is
+   * the template the base URL now follows. An unbuildable base URL used to
+   * throw on the delivery's first line instead — above the refusal classifier,
+   * the marker reschedule and the claim — which is why one missing argument
+   * presented as an unbounded thirty-second retry and a `reason=unexpected`.
+   *
+   * `http://localhost:3030` is in the table because it is the condition
+   * nothing checked: it is what a deployment that never configured a public
+   * URL falls back to, it reads as a perfectly good URL, and the card it posts
+   * carries a button that works for nobody in the thread.
+   */
+  it.each([
+    ['no master secret', { masterSecret: '' }, 'no_secret'],
+    ['an uninitialised hosted tenant', { baseUrl: '' }, 'no_public_url'],
+    ['the localhost fallback', { baseUrl: 'http://localhost:3030' }, 'no_public_url'],
+    ['a bind address', { baseUrl: 'http://0.0.0.0:3030' }, 'no_public_url'],
+  ])('refuses the binding for %s', async (_label, patch, reason) => {
+    const binding = await resolveSlackConnectBinding({ ...deps, ...patch }, WIDGET_ID);
+
+    expect(binding.ok).toBe(false);
+    expect(binding.ok === false && binding.reason).toBe(reason);
+    // Refused, not thrown, and with the card's thread still known — which is
+    // what lets the projection keep the widget's durable trigger rather than
+    // dropping it.
+    expect(binding.slack).toBeDefined();
   });
 
   it('mints a fragment-only link whose claims bind the widget and the Slack sender', async () => {

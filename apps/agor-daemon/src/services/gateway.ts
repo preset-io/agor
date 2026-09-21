@@ -34,7 +34,6 @@ import {
   MCPServerRepository,
   type MCPSlackConnectDueCursor,
   MessagesRepository,
-  MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
@@ -126,12 +125,17 @@ import { getMcpSlackRecoveryUrl, getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
+import { isBrowserReachableUrl } from '../utils/browser-reachable-url.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
+import {
+  classifyGatewayReadFailure,
+  type GatewayReadFailureCategory,
+} from '../utils/gateway-read-failure.js';
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import {
@@ -170,6 +174,7 @@ import {
   clearLostSlackRender,
   MCP_SLACK_REPAINT_ATTEMPTS,
   type MCPSlackDeliveryFailureReason,
+  type MCPSlackLane,
   recordSlackDeliveryFailure,
   retireOrphanedSlackCard,
   type SlackDeliveryStore,
@@ -255,23 +260,59 @@ const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
 const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
 const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
 
-/** Agor-owned reason a gateway read failed. Never a provider's, never the exception. */
-type GatewayReadFailureCategory = 'missing_tenant_scope' | 'unexpected';
+/**
+ * A refusal this lane decided for itself, reported in the same tally as a
+ * failed read.
+ *
+ * Not an error and not derived from one: the lane looked at what it had and
+ * declined to post. It rides the tally because the alternative — what the
+ * first-card path used to do — is to return in silence, which is a real part
+ * of why the 2026-09-16 incident took thirty seconds a card and no log line
+ * to read.
+ */
+type GatewaySlackRefusalCategory = 'no_public_url';
+
+/** Everything the MCP Slack tally can report, classified or decided. */
+type McpSlackFailureCategory = GatewayReadFailureCategory | GatewaySlackRefusalCategory;
 
 /**
- * Where in a card's repair the read failed.
+ * Where in a card's repair the read failed, or the refusal was decided.
  *
  * `repair` is the whole pass throwing; `grant_liveness` is the one read this
  * lane deliberately fails CLOSED on — a card whose grant cannot be read renders
  * as not-connected, which is the right card and the wrong silence, because the
  * delivery then succeeds and the failure is never counted anywhere.
+ * `binding` is the lane declining to build a link at all.
  */
-type GatewayReadFailureStage = 'repair' | 'grant_liveness';
+type GatewayReadFailureStage = 'repair' | 'grant_liveness' | 'binding';
+
+/**
+ * The connect delivery claim this pass currently holds, if any.
+ *
+ * A mutable ref rather than a return value because the claim outlives the
+ * frame that took it: the delivery re-renders itself three times (a binding
+ * that moved, a revalidated connector, a lost repaint), and the accounting
+ * has to know which claim — if any — is still outstanding when an exception
+ * leaves the whole delivery.
+ */
+interface McpSlackConnectClaimRef {
+  claimId?: string;
+}
+
+/**
+ * The same ref for the recovery lane, which fences every write on `notice_id`
+ * as well — a Task's notice is REPLACED in place by a later generation, so
+ * "the claim" is a pair rather than an id.
+ */
+interface McpSlackRecoveryClaimRef {
+  claimId?: string;
+  noticeId?: string;
+}
 
 interface McpSlackRepairFailureTally {
-  lane: 'recovery' | 'connect';
+  lane: MCPSlackLane;
   stage: GatewayReadFailureStage;
-  category: GatewayReadFailureCategory;
+  category: McpSlackFailureCategory;
   count: number;
   /** First item that failed this way, for correlation. */
   entityId: string;
@@ -1317,7 +1358,7 @@ export class GatewayService {
           horizon,
         });
         for (const task of page.tasks) {
-          await this.syncMcpSlackRecoveryNotice(task.task_id).catch((error) =>
+          await this.syncMcpSlackRecoveryNotice(task.task_id, failures).catch((error) =>
             this.tallyMcpSlackRepairFailure(failures, 'recovery', task.task_id, error)
           );
         }
@@ -1350,7 +1391,14 @@ export class GatewayService {
         }
         this.reportMcpSlackRepairFailures(failures);
       })
-        .catch(() => console.warn('[gateway] MCP Slack recovery bounded repair failed'))
+        .catch((error: unknown) =>
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_bounded_repair_failed',
+            'recovery',
+            { tenant_sweep: tenantId },
+            error
+          )
+        )
         .finally(() => this.mcpSlackRepairTenants.delete(tenantId));
     }, 0).unref?.();
   }
@@ -1449,9 +1497,24 @@ export class GatewayService {
     return typeof secret === 'string' && secret.length > 0 ? secret : null;
   }
 
+  /**
+   * The recovery notice's Reconnect link, or `undefined` when none can be
+   * built.
+   *
+   * `undefined` is the lane's existing answer for an absent
+   * `AGOR_MASTER_SECRET` and for a token that has already been redeemed: the
+   * card still goes out, without a button. An unbuildable base URL now joins
+   * them rather than throwing, which is the same trade D2 makes on the connect
+   * lane. Throwing lands above every durable write in
+   * `deliverMcpSlackRecoveryNotice` — including the claim this delivery is
+   * holding — so a deployment with no public URL took the notice's
+   * permanently-overdue `next_repair_at` around the sweep every thirty
+   * seconds and never said why.
+   */
   private async mcpSlackRecoveryUrl(
     tenantId: string,
-    notice: MCPSlackRecoveryNotice
+    notice: MCPSlackRecoveryNotice,
+    failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<string | undefined> {
     const secret = this.recoveryEnvelopeSecret();
     if (!secret || notice.token_consumed_at) return undefined;
@@ -1480,8 +1543,21 @@ export class GatewayService {
       secret,
       new Date(notice.issued_at)
     );
-    const baseUrl = await getBaseUrl(this.db);
-    if (!baseUrl) throw new Error('Tenant public URL is not initialized');
+    const baseUrl = await getBaseUrl(this.db).catch((error: unknown) => {
+      console.warn(
+        `[gateway] event=mcp_slack_base_url_unresolved tenant_id=${
+          getCurrentTenantId() ?? '<unknown>'
+        } lane=recovery reason=${classifyGatewayReadFailure(error)}`
+      );
+      return '';
+    });
+    if (!isBrowserReachableUrl(baseUrl)) {
+      // Same predicate, same reason as the connect card's `no_public_url`
+      // refusal: a `#token=` deep link on `localhost` is a button that works
+      // for the daemon's own machine and nobody in the Slack thread.
+      this.reportMcpSlackRefusal(failures, 'recovery', notice.notice_id, 'no_public_url');
+      return undefined;
+    }
     const page = getMcpSlackRecoveryUrl(baseUrl);
     return `${page}#token=${encodeURIComponent(token)}`;
   }
@@ -1496,30 +1572,81 @@ export class GatewayService {
   }
 
   /**
-   * Why a gateway read failed, in Agor's own words.
+   * One classified line for a failure nothing else will account for.
    *
-   * `missing_tenant_scope` is named on its own because it is the failure this
-   * lane has now shipped five times — a caller holding tenant CONTEXT but no
-   * tenant database SCOPE — and because it is invisible in every other way:
-   * it happens before any delivery is attempted, so the `stranded=true`
-   * delivery accounting never sees it.
+   * The MCP Slack lanes' out-of-band triggers — the retry timers, the expiry
+   * timers, the after-commit projections — all end in a `.catch` whose whole
+   * job is to stop an unhandled rejection. Every one of them discarded the
+   * error and printed a fixed sentence, so the incident's thirty-second loop
+   * produced one indistinguishable line per pass with nothing in it but the
+   * lane's name. `context/guidelines/logging.md` asks for a stable category
+   * and the relevant ids; this supplies both, and still never the exception,
+   * the message, the stack, or anything a provider said.
    */
-  private classifyGatewayReadFailure(error: unknown): GatewayReadFailureCategory {
-    return error instanceof MissingTenantDatabaseScopeError ? 'missing_tenant_scope' : 'unexpected';
+  private logMcpSlackOperationFailure(
+    event: string,
+    lane: MCPSlackLane,
+    ids: Record<string, string | undefined>,
+    error: unknown
+  ): void {
+    console.warn(
+      [
+        `[gateway] event=${event}`,
+        `tenant_id=${getCurrentTenantId() ?? '<unknown>'}`,
+        `lane=${lane}`,
+        ...Object.entries(ids).map(([key, value]) => `${key}=${value ?? '<unknown>'}`),
+        `reason=${classifyGatewayReadFailure(error)}`,
+      ].join(' ')
+    );
   }
 
   private tallyMcpSlackRepairFailure(
     failures: Map<string, McpSlackRepairFailureTally>,
-    lane: 'recovery' | 'connect',
+    lane: MCPSlackLane,
     entityId: string,
     error: unknown,
     stage: GatewayReadFailureStage = 'repair'
   ): void {
-    const category = this.classifyGatewayReadFailure(error);
+    this.tallyMcpSlackCategory(failures, lane, entityId, classifyGatewayReadFailure(error), stage);
+  }
+
+  /** One tally entry per (lane, stage, category), however many items share it. */
+  private tallyMcpSlackCategory(
+    failures: Map<string, McpSlackRepairFailureTally>,
+    lane: MCPSlackLane,
+    entityId: string,
+    category: McpSlackFailureCategory,
+    stage: GatewayReadFailureStage
+  ): void {
     const key = `${lane}:${stage}:${category}`;
     const existing = failures.get(key);
     if (existing) existing.count += 1;
     else failures.set(key, { lane, stage, category, count: 1, entityId });
+  }
+
+  /**
+   * Report a refusal this lane decided, in the same shape as a swallowed read.
+   *
+   * The reversible refusals return quietly on purpose — they are not errors —
+   * but a FIRST card that is refused writes nothing anywhere and posts
+   * nothing, so before this the only trace a blocked card left was its
+   * absence. `no_public_url` in particular is a deployment-level condition
+   * that silently affects every card at once, which is exactly the thing a
+   * per-pass tally exists to say in one line.
+   */
+  private reportMcpSlackRefusal(
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    lane: MCPSlackLane,
+    entityId: string,
+    category: GatewaySlackRefusalCategory
+  ): void {
+    if (failures) {
+      this.tallyMcpSlackCategory(failures, lane, entityId, category, 'binding');
+      return;
+    }
+    const single = new Map<string, McpSlackRepairFailureTally>();
+    this.tallyMcpSlackCategory(single, lane, entityId, category, 'binding');
+    this.reportMcpSlackRepairFailures(single);
   }
 
   /**
@@ -1538,7 +1665,7 @@ export class GatewayService {
    */
   private reportSwallowedGatewayRead(
     failures: Map<string, McpSlackRepairFailureTally> | undefined,
-    lane: 'recovery' | 'connect',
+    lane: MCPSlackLane,
     entityId: string,
     error: unknown,
     stage: GatewayReadFailureStage
@@ -1619,7 +1746,47 @@ export class GatewayService {
     });
   }
 
-  private async deliverMcpSlackRecoveryNotice(task: Task, attempt = 0): Promise<void> {
+  /**
+   * Post or edit the one Slack row that belongs to this recovery notice, and
+   * account for an exception that escapes the attempt.
+   *
+   * The connect lane's contract, on this lane's record — see
+   * {@link deliverMcpSlackConnectCard} for the argument. The one difference is
+   * what the other branch can do: a notice has no mint-time marker, so when no
+   * claim is held there is nothing durable to move and the rethrow into the
+   * sweep's tally is the whole answer.
+   */
+  private async deliverMcpSlackRecoveryNotice(
+    task: Task,
+    attempt = 0,
+    failures?: Map<string, McpSlackRepairFailureTally>
+  ): Promise<void> {
+    const claimRef: McpSlackRecoveryClaimRef = {};
+    try {
+      await this.renderMcpSlackRecoveryNotice(task, attempt, failures, claimRef);
+    } catch (error) {
+      if (claimRef.claimId && claimRef.noticeId) {
+        await this.recordMcpSlackDeliveryFailure(
+          task.task_id,
+          claimRef.noticeId,
+          claimRef.claimId,
+          'unexpected_failure'
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The delivery itself. Always reached through
+   * {@link deliverMcpSlackRecoveryNotice}, which owns the accounting.
+   */
+  private async renderMcpSlackRecoveryNotice(
+    task: Task,
+    attempt: number,
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    claimRef: McpSlackRecoveryClaimRef
+  ): Promise<void> {
     const initial = task.metadata?.mcp_slack_recovery_notice;
     if (!initial) return;
     const state = mcpSlackRecoveryRenderedState(task, initial);
@@ -1656,6 +1823,10 @@ export class GatewayService {
       }
       return;
     }
+    // From here an exception leaves a claim behind, and the accounting in
+    // `deliverMcpSlackRecoveryNotice` is what clears it.
+    claimRef.claimId = claimId;
+    claimRef.noticeId = notice.notice_id;
 
     let parsedThread: ReturnType<typeof parseSlackThreadId>;
     try {
@@ -1665,6 +1836,7 @@ export class GatewayService {
     }
     const channel = await this.channelRepo.findById(notice.gateway_channel_id);
     if (!channel?.enabled || channel.channel_type !== 'slack') {
+      claimRef.claimId = undefined;
       await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
         current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
           ? { ...current, delivery_claim: undefined, next_repair_at: undefined }
@@ -1676,6 +1848,7 @@ export class GatewayService {
       parsedThread.channel !== notice.slack_channel_id ||
       !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
     ) {
+      claimRef.claimId = undefined;
       await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
         current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
           ? {
@@ -1695,6 +1868,7 @@ export class GatewayService {
       activeListener: () => this.getActiveListener(channel.id),
     });
     if (acquired.outcome === 'failed') {
+      claimRef.claimId = undefined;
       await this.recordMcpSlackDeliveryFailure(
         task.task_id,
         notice.notice_id,
@@ -1704,6 +1878,7 @@ export class GatewayService {
       return;
     }
     if (acquired.outcome === 'app_moved') {
+      claimRef.claimId = undefined;
       await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
         current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
           ? { ...current, delivery_claim: undefined, next_repair_at: undefined }
@@ -1728,14 +1903,17 @@ export class GatewayService {
                 }
               : null
         );
-        if (invalidated.changed) await this.deliverMcpSlackRecoveryNotice(invalidated.task);
+        claimRef.claimId = undefined;
+        if (invalidated.changed) {
+          await this.renderMcpSlackRecoveryNotice(invalidated.task, 0, failures, claimRef);
+        }
         return;
       }
     }
     const copy = mcpSlackRecoveryMessageCopy(state, notice.provider_dispatch);
     const url =
       state === 'reconnect_required'
-        ? await this.mcpSlackRecoveryUrl(requireCurrentTenantId(), notice)
+        ? await this.mcpSlackRecoveryUrl(requireCurrentTenantId(), notice, failures)
         : undefined;
     const blocks: unknown[] = [
       {
@@ -1786,6 +1964,8 @@ export class GatewayService {
             }
           : null
       );
+      // Settled or lost, the claim is no longer this pass's to account for.
+      claimRef.claimId = undefined;
       if (!settled.changed) {
         // The same lease, the same two outcomes as the connect lane. This one
         // fenced its receipt from the start and then did nothing about what it
@@ -1801,7 +1981,9 @@ export class GatewayService {
             notice.notice_id,
             reconciledMessageTs,
             state,
-            attempt
+            attempt,
+            failures,
+            claimRef
           );
         } else {
           await retireOrphanedSlackCard(connector, notice.slack_thread_id, {
@@ -1814,6 +1996,7 @@ export class GatewayService {
       }
       this.mcpSlackDeliveryRetryTimers.cancel(notice.notice_id);
     } catch {
+      claimRef.claimId = undefined;
       await this.recordMcpSlackDeliveryFailure(
         task.task_id,
         notice.notice_id,
@@ -1834,7 +2017,9 @@ export class GatewayService {
     noticeId: string,
     editedTs: string,
     renderedState: MCPSlackRecoveryRenderedState,
-    attempt: number
+    attempt: number,
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    claimRef: McpSlackRecoveryClaimRef
   ): Promise<void> {
     const cleared = await clearLostSlackRender(
       this.mcpSlackRecoveryStore(taskId, noticeId),
@@ -1842,7 +2027,7 @@ export class GatewayService {
       renderedState
     );
     if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
-      await this.deliverMcpSlackRecoveryNotice(cleared.task, attempt + 1);
+      await this.renderMcpSlackRecoveryNotice(cleared.task, attempt + 1, failures, claimRef);
     }
   }
 
@@ -1855,7 +2040,14 @@ export class GatewayService {
         if (task?.metadata?.mcp_slack_recovery_notice?.notice_id === noticeId) {
           await this.deliverMcpSlackRecoveryNotice(task);
         }
-      }).catch(() => console.warn('[gateway] MCP recovery Slack retry failed'));
+      }).catch((error: unknown) =>
+        this.logMcpSlackOperationFailure(
+          'mcp_slack_delivery_retry_failed',
+          'recovery',
+          { task_id: taskId, notice_id: noticeId },
+          error
+        )
+      );
     });
   }
 
@@ -1872,8 +2064,14 @@ export class GatewayService {
     if (this.mcpSlackRecoveryExpiryTimers.has(notice.notice_id)) return;
     const tenantId = requireCurrentTenantId();
     this.mcpSlackRecoveryExpiryTimers.schedule(notice.notice_id, delay, () => {
-      void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(() =>
-        console.warn('[gateway] MCP recovery expiry projection failed')
+      void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(
+        (error: unknown) =>
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_expiry_projection_failed',
+            'recovery',
+            { task_id: taskId, notice_id: notice.notice_id },
+            error
+          )
       );
     });
   }
@@ -1897,8 +2095,13 @@ export class GatewayService {
       Math.max(0, new Date(notice.oauth_start_claim_expires_at).getTime() - Date.now() + 100);
     this.mcpSlackOAuthStartClaimTimers.schedule(notice.notice_id, delay, () => {
       void runWithTenantContext(tenantId, () => this.syncMcpSlackRecoveryNotice(taskId)).catch(
-        () => {
-          console.warn('[gateway] MCP recovery OAuth start claim repair failed');
+        (error: unknown) => {
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_oauth_start_claim_repair_failed',
+            'recovery',
+            { task_id: taskId, notice_id: notice.notice_id },
+            error
+          );
           runWithTenantContext(tenantId, () =>
             this.scheduleMcpSlackOAuthStartClaimRepair(taskId, notice, 5_000)
           );
@@ -1938,7 +2141,11 @@ export class GatewayService {
   }
 
   /** Project authoritative Task recovery into one idempotently editable Slack row. */
-  async syncMcpSlackRecoveryNotice(taskId: string): Promise<void> {
+  async syncMcpSlackRecoveryNotice(
+    taskId: string,
+    /** The sweep pass's failure tally, when this notice is one of its items. */
+    failures?: Map<string, McpSlackRepairFailureTally>
+  ): Promise<void> {
     const { recoveryEnabled, mode } = await this.readInTenantScope(async (db) => ({
       recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
       mode: await getMCPEgressGatewayMode(db),
@@ -1969,7 +2176,11 @@ export class GatewayService {
                 }
               : null
         );
-        await this.deliverMcpSlackRecoveryNotice(orphaned.changed ? orphaned.task : task);
+        await this.deliverMcpSlackRecoveryNotice(
+          orphaned.changed ? orphaned.task : task,
+          0,
+          failures
+        );
         return;
       }
       this.scheduleMcpSlackOAuthStartClaimRepair(task.task_id, existing);
@@ -1986,7 +2197,11 @@ export class GatewayService {
             }
           : null
       );
-      await this.deliverMcpSlackRecoveryNotice(disabled.changed ? disabled.task : task);
+      await this.deliverMcpSlackRecoveryNotice(
+        disabled.changed ? disabled.task : task,
+        0,
+        failures
+      );
       return;
     }
 
@@ -2107,7 +2322,7 @@ export class GatewayService {
               };
             }
           );
-          if (created.changed) await this.deliverMcpSlackRecoveryNotice(created.task);
+          if (created.changed) await this.deliverMcpSlackRecoveryNotice(created.task, 0, failures);
           return;
         }
       } else if (
@@ -2126,7 +2341,11 @@ export class GatewayService {
                 }
               : null
         );
-        await this.deliverMcpSlackRecoveryNotice(invalidated.changed ? invalidated.task : task);
+        await this.deliverMcpSlackRecoveryNotice(
+          invalidated.changed ? invalidated.task : task,
+          0,
+          failures
+        );
         return;
       }
     }
@@ -2158,18 +2377,24 @@ export class GatewayService {
         }
       );
       if (relinked.changed) {
-        await this.deliverMcpSlackRecoveryNotice(relinked.task);
+        await this.deliverMcpSlackRecoveryNotice(relinked.task, 0, failures);
         return;
       }
     }
-    await this.deliverMcpSlackRecoveryNotice(task);
+    await this.deliverMcpSlackRecoveryNotice(task, 0, failures);
   }
 
   syncMcpSlackRecoveryNoticeAfterCommit(taskId: string, params?: unknown): void {
     deferWithTenantContext(
       params,
       () => this.syncMcpSlackRecoveryNotice(taskId),
-      () => console.warn('[gateway] MCP recovery notice synchronization failed')
+      (error: unknown) =>
+        this.logMcpSlackOperationFailure(
+          'mcp_slack_after_commit_projection_failed',
+          'recovery',
+          { task_id: taskId },
+          error
+        )
     );
   }
 
@@ -2213,16 +2438,26 @@ export class GatewayService {
     // "Tenant public links require a tenant database" on this line, above the
     // refusal classifier and the claim, so the lane reported `unexpected` and
     // retried for thirty seconds without ever reaching Slack.
-    const baseUrl = await getBaseUrl(this.db);
-    // The same guard the recovery lane has carried since it shipped
-    // (`mcpSlackRecoveryUrl`). A handle is not routing: an uninitialised
-    // tenant routing row answers `''`, `getMcpOAuthConnectUrl('')` then
-    // returns `''`, and the card's button URL degrades to a bare
-    // `#token=<jwt>`. Slack rejects those blocks, and because the token is
-    // minted before the post, every one of the six attempts burns a fresh
-    // one-use link before the card strands. Refusing here instead makes it one
-    // classified failure with nothing consumed.
-    if (!baseUrl) throw new Error('Tenant public URL is not initialized');
+    //
+    // Tolerated, not thrown — the template is one line below. `masterSecret`
+    // has always answered `''` for an absent secret and let
+    // `resolveSlackConnectBinding` classify it as `no_secret`, and an
+    // unbuildable base URL is the same KIND of fact: a deployment-level
+    // condition an administrator can fix, not an exception. Throwing it here
+    // lands above the refusal classifier, the marker reschedule and the claim,
+    // which is precisely the shape D1 exists to stop. `''` and a value no
+    // browser could open both become the `no_public_url` refusal.
+    const baseUrl = await getBaseUrl(this.db).catch((error: unknown) => {
+      // The one place the exception is looked at, and only for its Agor-owned
+      // category. The refusal itself is reported by the delivery, once per
+      // pass, because that is where the widget id is.
+      console.warn(
+        `[gateway] event=mcp_slack_base_url_unresolved tenant_id=${
+          getCurrentTenantId() ?? '<unknown>'
+        } lane=connect reason=${classifyGatewayReadFailure(error)}`
+      );
+      return '';
+    });
     return {
       repositories: {
         sessions: this.sessionRepo,
@@ -2409,7 +2644,44 @@ export class GatewayService {
   }
 
   /**
-   * Post or edit the one Slack row that belongs to this widget.
+   * Post or edit the one Slack row that belongs to this widget, and account
+   * for an exception that escapes the attempt.
+   *
+   * Every classified refusal below writes something durable — a marker
+   * reschedule, a released claim, a recorded delivery failure — and an
+   * UNCLASSIFIED throw wrote nothing at all. `recordSlackDeliveryFailure`
+   * cannot see one: it needs a delivery record AND a live claim it owns, and
+   * the whole prologue (the kill-switch read, the deps, the binding, the
+   * re-seal, the channel read, the mint) runs above both. On 2026-09-16 there
+   * was no delivery record to write to even in principle, and the throw also
+   * landed above {@link rescheduleMcpSlackConnectDueMarker} — so
+   * `slack_connect_due_at` kept its permanently-overdue mint timestamp, the
+   * sweep re-selected the card every thirty seconds for the full 24-hour
+   * horizon, and 2880 attempts produced no card, no accounting and one
+   * `reason=unexpected`.
+   *
+   * So the exception is routed into whichever durable trigger the widget
+   * actually has:
+   *
+   * - **This pass holds the claim** → account it as a delivery attempt
+   *   (`unexpected_failure`). That clears the claim this pass leaked, counts
+   *   the attempt, applies the backoff ladder, and strands the card through
+   *   the disposition every other failure uses.
+   * - **Otherwise** → reschedule the first-card marker, which self-guards to
+   *   the case where it is the only trigger there is (no delivery record).
+   *   30s → 5 min, still anchored to `requested_at` and still aged out at
+   *   `requested_at + 24h`.
+   *
+   * Then it is RETHROWN, so the sweep's per-pass tally still counts the pass
+   * and names its category.
+   *
+   * The trade, stated once: where a delivery record exists, an unclassified
+   * throw now consumes the ladder, so a genuinely transient fault can strand
+   * a card that previously would have retried past it. That is preferred to
+   * the alternative — a leaked claim plus an unbounded retry — and it is why
+   * §7.2's argument against an attempt counter on the MARKER still holds for
+   * the other branch: a refused visit costs one binding read and makes no
+   * Slack call, which is exactly true of a throw in the prologue.
    *
    * Idempotent by construction: one durable `delivery_claim` at a time, one
    * `slack_message_ts` reconciled from Slack's own message metadata when a
@@ -2427,6 +2699,38 @@ export class GatewayService {
      * delivery, which report on their own.
      */
     failures?: Map<string, McpSlackRepairFailureTally>
+  ): Promise<void> {
+    // One ref for the whole delivery, re-entrant calls included, because a
+    // claim is held by the DELIVERY and not by a stack frame: the three
+    // internal re-renders below hand it down rather than wrapping themselves,
+    // so the ladder is consumed once per pass however many times the card
+    // re-rendered inside it.
+    const claimRef: McpSlackConnectClaimRef = {};
+    try {
+      await this.renderMcpSlackConnectCard(widgetId, attempt, failures, claimRef);
+    } catch (error) {
+      if (claimRef.claimId) {
+        await this.recordMcpSlackConnectDeliveryFailure(
+          widgetId,
+          claimRef.claimId,
+          'unexpected_failure'
+        ).catch(() => undefined);
+      } else {
+        await this.rescheduleMcpSlackConnectDueMarker(widgetId);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The delivery itself. Always reached through
+   * {@link deliverMcpSlackConnectCard}, which owns the accounting.
+   */
+  private async renderMcpSlackConnectCard(
+    widgetId: MessageID,
+    attempt: number,
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    claimRef: McpSlackConnectClaimRef
   ): Promise<void> {
     // Operator kill switch, checked before anything is read or posted. Off
     // stops the PROJECTION only: the canvas widget still renders a live
@@ -2447,9 +2751,9 @@ export class GatewayService {
     // widget this lane can never post for, so a Discord/GitHub/Teams mint —
     // or a card that resolved before it was ever issued — costs one visit
     // rather than a day of them. Only the PERMANENT refusals qualify:
-    // `no_secret`, `unaligned` and `authority_moved` can all be undone by an
-    // administrator, and dropping the marker for those would take away the
-    // durable trigger for a card that becomes postable later.
+    // `no_secret`, `no_public_url`, `unaligned` and `authority_moved` can all
+    // be undone by an administrator, and dropping the marker for those would
+    // take away the durable trigger for a card that becomes postable later.
     if (
       !delivery &&
       widget?.slack_connect_due_at &&
@@ -2462,6 +2766,14 @@ export class GatewayService {
     // every Discord/GitHub/Teams session — has no row here and must not
     // acquire one. B3's session deep link remains their answer.
     if (!widget || !slack) return;
+    // Say the deployment-level refusal out loud, once per pass. It is not this
+    // widget's fault and it is not an error, so it returns quietly below —
+    // but it is the same condition for every card at once, and a first-card
+    // refusal that returned in SILENCE is a real part of why the incident
+    // took thirty seconds a card and no log line to read.
+    if (!binding.ok && binding.reason === 'no_public_url') {
+      this.reportMcpSlackRefusal(failures, 'connect', widgetId, 'no_public_url');
+    }
     if (!delivery && (!binding.ok || !this.recoveryEnvelopeSecret())) {
       // Keep the trigger, give up the queue position. The reversible refusals
       // are why the marker survives the block above; leaving it at its
@@ -2563,7 +2875,7 @@ export class GatewayService {
     // flap, then render from the recorded fact.
     if (state === 'unavailable' && delivery && !delivery.binding_invalidated_at) {
       if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
-        await this.deliverMcpSlackConnectCard(widgetId, 0, failures);
+        await this.renderMcpSlackConnectCard(widgetId, 0, failures, claimRef);
         return;
       }
     }
@@ -2603,6 +2915,9 @@ export class GatewayService {
         }
         return;
       }
+      // From here an exception leaves a claim behind, and the accounting in
+      // `deliverMcpSlackConnectCard` is what clears it.
+      claimRef.claimId = claimId;
       current = result.delivery;
     }
 
@@ -2622,11 +2937,15 @@ export class GatewayService {
       });
       if (!issued) {
         // The widget resolved under the claim, or another daemon holds it.
+        claimRef.claimId = undefined;
         if (current) await this.releaseMcpSlackConnectClaim(widgetId, claimId, true);
         return;
       }
       url = issued.url;
       current = issued.delivery;
+      // On a first card the MINT is the claim, so this is where the ref starts
+      // naming one.
+      claimRef.claimId = claimId;
     }
     if (!current) return;
     const fence = {
@@ -2636,6 +2955,7 @@ export class GatewayService {
 
     const channel = await this.channelRepo.findById(slack.gatewayChannelId);
     if (!channel?.enabled || channel.channel_type !== 'slack') {
+      claimRef.claimId = undefined;
       await this.releaseMcpSlackConnectClaim(widgetId, claimId);
       return;
     }
@@ -2649,6 +2969,7 @@ export class GatewayService {
       parsedThread.channel !== slack.channelId ||
       !isSlackWriteTargetAllowed(channel.config, parsedThread.channel)
     ) {
+      claimRef.claimId = undefined;
       await this.invalidateMcpSlackConnectBinding(widgetId);
       return;
     }
@@ -2664,10 +2985,12 @@ export class GatewayService {
       activeListener: () => this.getActiveListener(channel.id),
     });
     if (acquired.outcome === 'failed') {
+      claimRef.claimId = undefined;
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, acquired.reason);
       return;
     }
     if (acquired.outcome === 'app_moved') {
+      claimRef.claimId = undefined;
       await this.releaseMcpSlackConnectClaim(widgetId, claimId);
       return;
     }
@@ -2682,8 +3005,9 @@ export class GatewayService {
       // then `binding_invalidated_at` is usually already set, and refusing to
       // render would leave the thread showing its last live state permanently.
       if (state === 'connect_required') {
+        claimRef.claimId = undefined;
         if (await this.invalidateMcpSlackConnectBinding(widgetId)) {
-          await this.deliverMcpSlackConnectCard(widgetId, 0, failures);
+          await this.renderMcpSlackConnectCard(widgetId, 0, failures, claimRef);
         } else {
           await this.releaseMcpSlackConnectClaim(widgetId, claimId);
         }
@@ -2736,6 +3060,10 @@ export class GatewayService {
           ),
         };
       });
+      // Settled or lost, the claim is no longer this pass's to account for:
+      // a settlement cleared it, and anything else means another claimant
+      // holds it.
+      claimRef.claimId = undefined;
       if (!settled.changed) {
         // A lost claim has to reconcile whatever this delivery actually did,
         // and that is two different things. A fresh POST left a second Slack
@@ -2751,7 +3079,8 @@ export class GatewayService {
             reconciledMessageTs,
             state,
             attempt,
-            failures
+            failures,
+            claimRef
           );
         } else {
           await retireOrphanedSlackCard(connector, slack.threadId, {
@@ -2764,6 +3093,7 @@ export class GatewayService {
       }
       this.mcpSlackConnectRetryTimers.cancel(widgetId);
     } catch {
+      claimRef.claimId = undefined;
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'slack_write_failed');
     }
   }
@@ -2792,7 +3122,8 @@ export class GatewayService {
     editedTs: string,
     renderedState: MCPSlackConnectRenderedState,
     attempt: number,
-    failures?: Map<string, McpSlackRepairFailureTally>
+    failures: Map<string, McpSlackRepairFailureTally> | undefined,
+    claimRef: McpSlackConnectClaimRef
   ): Promise<void> {
     const cleared = await clearLostSlackRender(
       this.mcpSlackConnectStore(widgetId),
@@ -2803,7 +3134,7 @@ export class GatewayService {
     // still writing this row, and `next_repair_at` above already hands the
     // card to the sweep. Repainting in a loop would just race it harder.
     if (cleared?.changed && attempt < MCP_SLACK_REPAINT_ATTEMPTS) {
-      await this.deliverMcpSlackConnectCard(widgetId, attempt + 1, failures);
+      await this.renderMcpSlackConnectCard(widgetId, attempt + 1, failures, claimRef);
     }
   }
 
@@ -2812,7 +3143,13 @@ export class GatewayService {
     const tenantId = requireCurrentTenantId();
     this.mcpSlackConnectRetryTimers.schedule(widgetId, delay, () => {
       void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
-        () => console.warn('[gateway] MCP connect Slack retry failed')
+        (error: unknown) =>
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_delivery_retry_failed',
+            'connect',
+            { widget_id: widgetId },
+            error
+          )
       );
     });
   }
@@ -2838,7 +3175,13 @@ export class GatewayService {
     const tenantId = requireCurrentTenantId();
     this.mcpSlackConnectExpiryTimers.schedule(widgetId, delay, () => {
       void runWithTenantContext(tenantId, () => this.deliverMcpSlackConnectCard(widgetId)).catch(
-        () => console.warn('[gateway] MCP connect expiry projection failed')
+        (error: unknown) =>
+          this.logMcpSlackOperationFailure(
+            'mcp_slack_expiry_projection_failed',
+            'connect',
+            { widget_id: widgetId },
+            error
+          )
       );
     });
   }
@@ -2860,7 +3203,16 @@ export class GatewayService {
     deferWithTenantContext(
       params,
       () => this.syncMcpSlackConnectCard(widgetId),
-      () => console.warn('[gateway] MCP connect card synchronization failed')
+      // `deferWithTenantContext` has always PASSED the error here and this
+      // callback has always ignored it, so the incident's after-commit
+      // projection failures were one fixed sentence apiece.
+      (error: unknown) =>
+        this.logMcpSlackOperationFailure(
+          'mcp_slack_after_commit_projection_failed',
+          'connect',
+          { widget_id: widgetId },
+          error
+        )
     );
   }
 
@@ -3946,6 +4298,17 @@ export class GatewayService {
     };
   }
 
+  /**
+   * A session link for a platform user, or nothing.
+   *
+   * Both branches now ask the one `isBrowserReachableUrl` predicate rather
+   * than the `0.0.0.0` half-check they each carried. This is the third caller
+   * of it, and the reason it exists: the check here and the one in
+   * `gatewaySessionConnectUrl` were copies, and the Slack connect card had
+   * neither, so `http://localhost:3030` — what a deployment that never
+   * configured a public URL falls back to — passed every one of them and got
+   * pasted into a conversation.
+   */
   private async fetchExistingSessionUrlForGatewayUser(
     sessionId: SessionID,
     user?: User
@@ -3954,10 +4317,13 @@ export class GatewayService {
       const baseUrl = await getBaseUrl(this.db);
       if (!baseUrl) return null;
       const sessionUrl = getSessionUrl(sessionId, baseUrl);
-      if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
-      return sessionUrl;
-    } catch (_error) {
-      console.warn('[gateway] Failed to build public session URL');
+      return isBrowserReachableUrl(sessionUrl) ? sessionUrl : null;
+    } catch (error) {
+      console.warn(
+        `[gateway] event=gateway_session_link_unresolved tenant_id=${
+          getCurrentTenantId() ?? '<unknown>'
+        } session_id=${sessionId} reason=${classifyGatewayReadFailure(error)}`
+      );
     }
 
     if (!user) return null;
@@ -3968,12 +4334,13 @@ export class GatewayService {
       };
       const sessionWithUrl = await sessionsService.get(sessionId, { user });
       const sessionUrl = sessionWithUrl.url || null;
-      if (!sessionUrl) return null;
-      const hostname = new URL(sessionUrl).hostname;
-      if (hostname === '0.0.0.0') return null;
-      return sessionUrl;
-    } catch (_error) {
-      console.warn('[gateway] Failed to fetch session URL');
+      return isBrowserReachableUrl(sessionUrl) ? sessionUrl : null;
+    } catch (error) {
+      console.warn(
+        `[gateway] event=gateway_session_link_unresolved tenant_id=${
+          getCurrentTenantId() ?? '<unknown>'
+        } session_id=${sessionId} reason=${classifyGatewayReadFailure(error)}`
+      );
       return null;
     }
   }
@@ -4857,7 +5224,7 @@ export class GatewayService {
             console.warn(
               `[gateway] event=mcp_auth_warning_check_failed tenant_id=${
                 getCurrentTenantId() ?? '<unknown>'
-              } mcp_server_id=${serverId} reason=${this.classifyGatewayReadFailure(error)}`
+              } mcp_server_id=${serverId} reason=${classifyGatewayReadFailure(error)}`
             );
           }
         }

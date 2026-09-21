@@ -55,7 +55,12 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { isBrowserReachableUrl } from '../../utils/browser-reachable-url.js';
 import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
+import {
+  classifyGatewayReadFailure,
+  type GatewayReadFailureCategory,
+} from '../../utils/gateway-read-failure.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
@@ -463,6 +468,27 @@ async function installCatalogOAuthServer(
 }
 
 /**
+ * What this mint can honestly tell the agent about where to send the user.
+ *
+ * Three answers, not two, and the third is the point. The previous shape
+ * returned `string | null`, and `null` meant BOTH "canvas session, the user is
+ * already looking at the transcript" and "gateway session, no link could be
+ * built". The tool's own description then defined the absence of `session_url`
+ * as the first of those — "you are in a thread where the user cannot see the
+ * card" was the positive case — so a deployment that could not build a link
+ * handed the agent a result that says, in the contract it was given, that the
+ * user can see the card. On 2026-09-16 the agent did exactly what it was told
+ * and promised a button nobody could see.
+ */
+type GatewaySessionConnectLink =
+  /** Not a gateway session. The user is looking at the transcript already. */
+  | { kind: 'not_gateway' }
+  /** A link this session's user can open. */
+  | { kind: 'url'; url: string }
+  /** A gateway session with NO link. The one answer that used to be silent. */
+  | { kind: 'unavailable'; reason: GatewayReadFailureCategory | 'not_browser_reachable' };
+
+/**
  * Where a gateway user has to go to press Connect.
  *
  * The widget renders in the Agor transcript. For a session that came from
@@ -470,28 +496,27 @@ async function installCatalogOAuthServer(
  * looking at. Slack now gets a Block Kit card in its own thread (§7); every
  * other platform still does not, and even on Slack the card can be refused —
  * an unaligned channel, a moved binding, a deployment with no
- * `AGOR_MASTER_SECRET`, or the operator kill switch. So a gateway session can
- * pass the alignment guard, mint a real widget, and still have nothing to show
- * for it: the agent returns `status: "requested"` and, having no link, can
- * only say a button exists somewhere.
+ * `AGOR_MASTER_SECRET` or no public URL, or the operator kill switch. So a
+ * gateway session can pass the alignment guard, mint a real widget, and still
+ * have nothing to show for it.
  *
  * So EVERY gateway-sourced mint carries the session URL back to the agent, to
  * relay into the thread — including Slack's, where it is the fallback the card
- * degrades to rather than a duplicate of it. Returns null for a canvas session
- * (the user is already looking at the transcript), for a hosted tenant whose
- * routing metadata has not landed yet (`fullUrl` answers `''`, which is not a
- * URL and is dropped here), and for a deployment whose configured base URL is
- * a bind address rather than somewhere a browser can reach — the same
- * `0.0.0.0` guard `fetchExistingSessionUrlForGatewayUser` applies, for the
- * same reason: a link nobody can open is worse than none, because the agent
- * will relay it.
+ * degrades to rather than a duplicate of it. `unavailable` covers a hosted
+ * tenant whose routing metadata has not landed (`getBaseUrl` answers `''`), a
+ * resolution that threw, and a base URL that is a bind or loopback address
+ * rather than somewhere else's browser can reach — the shared
+ * `isBrowserReachableUrl` predicate the Slack card's `no_public_url` refusal
+ * uses, for the same reason: a link nobody can open is worse than none,
+ * because the agent will relay it.
  */
 async function gatewaySessionConnectUrl(
   ctx: McpContext,
   session: Pick<Session, 'custom_context'>,
   sessionId: SessionID
-): Promise<string | null> {
-  if (!isGatewaySession(session)) return null;
+): Promise<GatewaySessionConnectLink> {
+  if (!isGatewaySession(session)) return { kind: 'not_gateway' };
+  let url: string;
   try {
     // Hosted deployments resolve this from durable tenant routing, which needs
     // a tenant database scope — and an MCP tool boundary enters tenant CONTEXT
@@ -502,13 +527,36 @@ async function gatewaySessionConnectUrl(
     // button the Slack user could not see, and the kill-switch runbook's
     // "the deep link always still works" promise was not true on any platform.
     const baseUrl = await runWithMcpTenantDatabaseScope(ctx, (db) => getBaseUrl(db));
-    const url = getSessionUrl(sessionId, baseUrl);
-    return new URL(url).hostname === '0.0.0.0' ? null : url;
-  } catch {
-    console.warn('[widgets] could not build a session URL for a gateway oauth widget');
-    return null;
+    url = getSessionUrl(sessionId, baseUrl);
+  } catch (error) {
+    // Admin-actionable detail stays HERE. The sentence the agent relays goes
+    // into a Slack channel, so it names no configuration key and no hostname.
+    console.warn(
+      `[widgets] event=gateway_session_link_unavailable session_id=${sessionId} reason=${classifyGatewayReadFailure(
+        error
+      )}`
+    );
+    return { kind: 'unavailable', reason: classifyGatewayReadFailure(error) };
   }
+  if (!isBrowserReachableUrl(url)) {
+    console.warn(
+      `[widgets] event=gateway_session_link_unavailable session_id=${sessionId} reason=not_browser_reachable`
+    );
+    return { kind: 'unavailable', reason: 'not_browser_reachable' };
+  }
+  return { kind: 'url', url };
 }
+
+/**
+ * What to say in the thread when there is no link to give.
+ *
+ * Relayed verbatim into a Slack/Discord/GitHub conversation, so it names no
+ * configuration key, no hostname and no internal category — those are in the
+ * daemon log, where the person who can act on them is looking.
+ */
+const GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT =
+  'I could not get a link to this Agor session, so there is nothing for you to click here yet. ' +
+  "Ask an Agor administrator to check this workspace's public link setup, then ask me again.";
 
 /**
  * Attach a server that needs no further authorization and wake the agent.
@@ -702,7 +750,11 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         'PREFER this tool whenever the user asks you to "connect me to X" or a task needs an MCP server they have not authorized: call it instead of telling them to open Settings or the MCP Catalog. ' +
         'Resolve the server FIRST: use `agor_mcp_catalog_list` to turn a product name into a `catalogEntryName` (e.g. "Notion" -> "com.notion/mcp"), or `agor_mcp_servers_list` for a server that already exists. NEVER invent a URL — pass exactly one of `mcpServerId` or `catalogEntryName`. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it resolves. ' +
-        'If the result contains `session_url` you are in a Slack/Discord/GitHub thread where the user CANNOT see the inline card: you MUST relay the link in your reply (the `relay_to_user` sentence is ready to paste), or the user will never find the button. ' +
+        'In a Slack/Discord/GitHub/Teams thread the user CANNOT see the inline card, so a link is the only thing that reaches them. ' +
+        'If the result contains `session_url`, you MUST relay it in your reply (the `relay_to_user` sentence is ready to paste) or the user will never find the button. ' +
+        'If the result contains `link_unavailable`, there is NO link to give: relay the `relay_to_user` sentence as written and do NOT tell the user to click, open or look for anything. ' +
+        'If it contains neither, you are on the Agor canvas and the user is already looking at the card. ' +
+        'This tool NEVER promises a message in the thread itself: a Slack card, where one is posted at all, is sent separately and may not arrive, so never say one is coming. A link is the only thing it can promise. ' +
         'If the account is already connected the tool attaches it and resumes you immediately (status "already_present") — no button is shown. ' +
         'Tokens never enter your context: only the server name and OAuth mode do. The server is attached to this session only AFTER the grant lands, so its tools appear on a later turn, not this one. ' +
         'Keep `reason` to ONE short sentence (<=200 chars).',
@@ -858,18 +910,29 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // `slack_connect_due_at`, so a projection that never runs costs latency
       // — the bounded repair sweep still posts it. Every other platform — and
       // the canvas — is served by the deep link below, which stays regardless.
+      //
+      // Fire-and-forget is also why nothing in this result may promise a card:
+      // this call returns before the sweep has looked at the widget once, so
+      // the tool genuinely cannot know whether one will ever be posted.
       queueMcpSlackConnectCard(ctx, widgetId);
 
       // The card renders in the Agor transcript, which a gateway user is not
-      // looking at. Hand the agent something it can say.
-      const sessionUrl = await gatewaySessionConnectUrl(ctx, session, targetSessionId);
+      // looking at. Hand the agent something it can say — including when the
+      // honest answer is that there is nothing to click.
+      const link = await gatewaySessionConnectUrl(ctx, session, targetSessionId);
       return textResult({
         widget_id: widgetId,
         status: 'requested',
-        ...(sessionUrl
+        ...(link.kind === 'url'
           ? {
-              session_url: sessionUrl,
-              relay_to_user: `Open ${sessionUrl} and click Connect to sign in to "${serverName}".`,
+              session_url: link.url,
+              relay_to_user: `Open ${link.url} and click Connect to sign in to "${serverName}".`,
+            }
+          : {}),
+        ...(link.kind === 'unavailable'
+          ? {
+              link_unavailable: true,
+              relay_to_user: GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT,
             }
           : {}),
       });

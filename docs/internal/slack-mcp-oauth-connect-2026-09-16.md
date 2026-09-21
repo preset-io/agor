@@ -1178,8 +1178,10 @@ runbook above is executable rather than remembered.
 
 What it does not touch is the fallback. The canvas widget still renders a live
 Connect button, and `agor_widgets_request_oauth` still hands the agent the
-`session_url` and the sentence to relay. Off is a degraded Slack experience,
-never a removed feature — which is also why it is **on by default**: the card
+`session_url` and the sentence to relay — or, on a deployment with no
+browser-reachable public URL, `link_unavailable` and a sentence that says so
+rather than a link nobody can open (§7.1.15/D3). Off is a degraded Slack
+experience, never a removed feature — which is also why it is **on by default**: the card
 is additive to a link that still works, so a bad card costs a bad-looking Slack
 message rather than a broken flow, and a lane that ships dark is a lane nobody
 ever reports a bug against.
@@ -1961,6 +1963,152 @@ by `stripWidgetSlackConnectDelivery`, and the URL was never in it. The
 hosted-mode unit coverage above is their fence; the harness adds the half no
 unit test can have, which is two live tenants on two live origins resolved by a
 real daemon.
+
+### 7.1.15 What made a one-line bug take thirty seconds a card to read
+
+`428f4929f` fixed the argument. Three defects around it are why one missing
+argument presented as an unreadable loop rather than as a failure, and all
+three are closed here.
+
+**D1 — an unclassified exception bypassed delivery accounting.**
+`recordSlackDeliveryFailure` writes only when the lane still owns both the
+delivery record and the live claim it took, and it is reached from exactly one
+narrow `try` plus connector acquisition. Everything above it — the kill-switch
+read, `mcpSlackConnectDeps`, `resolveSlackConnectBinding`,
+`resealMCPOAuthConnectLink`, the channel read, `issueMCPOAuthConnectLink` —
+threw straight past it. In the incident there was no delivery record at all, so
+there was nowhere to write even in principle, and the throw also landed above
+`rescheduleMcpSlackConnectDueMarker`: `slack_connect_due_at` kept its
+permanently-overdue mint timestamp and the sweep re-selected the widget every
+thirty seconds for the full 24-hour horizon. **2880 attempts, no card, no
+accounting, one `reason=unexpected`.**
+
+Both lanes' delivery now runs inside one outer `try/catch` that routes an
+unclassified exception into whichever durable trigger the widget actually has,
+and then **rethrows** so the sweep's per-pass tally still counts and classifies
+the pass:
+
+- **Claim held** → `unexpected_failure`, a new `MCPSlackDeliveryFailureReason`
+  and the only member that is not a decision. It clears the leaked claim,
+  counts the attempt, applies the ladder, and strands through the existing
+  disposition.
+- **No delivery record** → the marker is rescheduled, 30s → 5 min, still
+  anchored to `requested_at` and still aged out at `requested_at + 24h`.
+
+The claim is tracked in one mutable ref for the whole delivery rather than per
+frame, because each lane re-renders itself internally (a binding that moved, a
+revalidated connector, a lost repaint) and the ladder must be consumed once per
+pass however many times the card re-rendered inside it.
+
+**No attempt counter was added to the marker**, for §7.2's reason unchanged: a
+refused visit costs one binding read and makes no Slack call, which is exactly
+what a throw in the prologue is, and a durable counter would strand a card that
+a transient blip would otherwise have let recover.
+
+One behaviour change, stated plainly: where a delivery record exists, an
+unclassified throw now consumes the ladder, so a genuinely transient fault can
+strand a card that previously would have retried past it. That is the intended
+trade against a leaked claim plus an unbounded retry.
+
+**Not closed, and named rather than hidden:** a throw with a delivery record
+present but no claim taken — the kill-switch read, say — still has nothing this
+pass owns to consume, so it rethrows into the tally and the record's own
+overdue `next_repair_at` brings it back. It is now a classified line per pass
+rather than a silence, which is the part that made the incident unreadable; the
+remaining bound would need the durable counter §7.2 declined.
+
+**D2 — an unbuildable link is a classified refusal, not a throw.** The template
+was one line above the bug: `masterSecret` has always tolerated an absent
+secret and let `resolveSlackConnectBinding` classify it `no_secret`. So
+`mcpSlackConnectDeps` now writes `getBaseUrl(this.db).catch(() => '')` — which
+replaces the `if (!baseUrl) throw` guard `428f4929f` added — and a new
+`SlackConnectBindingRefusal` member **`no_public_url`** sits beside the
+`no_secret` guard, covering both `''` and a value no other browser could open.
+No rendered-state or copy change: like `no_secret` it falls through
+`mcpSlackConnectRenderedState`'s `unaligned || authority_moved` test, so the
+`!delivery && !binding.ok` branch reschedules the marker and renders nothing.
+Reversible by construction — an administrator fixing the configuration gets the
+card within one backoff.
+
+The second condition is the one nothing checked. A static deployment that never
+configured a public URL falls back to `http://localhost:3030`, which today
+_succeeded_ and posted a card whose button works for nobody but whoever is
+sitting at the daemon; `gatewaySessionConnectUrl` rejected `0.0.0.0` and not
+`localhost`, and `fetchExistingSessionUrlForGatewayUser` was the copy it was
+taken from. One shared predicate — `isBrowserReachableUrl`: non-empty, parses,
+not a bind address, not loopback — now answers for all three.
+
+The refusal is **logged once per pass** through the existing tally, as
+`stage=binding reason=no_public_url`. A first-card refusal previously returned
+in silence, which is a real part of why this was hard to read.
+
+The recovery lane's `mcpSlackRecoveryUrl` threw on an empty base URL — the same
+D1 shape, above its own settlement CAS while holding the claim — so it now
+answers `undefined`, which is what that lane has always answered for an absent
+`AGOR_MASTER_SECRET` and a consumed token: the card goes out, without a button.
+
+**D3 — the tool's contract made absence mean the opposite of the truth.**
+`agor_widgets_request_oauth`'s description said that a result containing
+`session_url` means a gateway thread where the user cannot see the inline card
+— defining its ABSENCE as "not a gateway thread, the user can see the card".
+`gatewaySessionConnectUrl` returned `null` for both "canvas session" and
+"gateway session, link unbuildable". In the incident the agent did exactly what
+it was told and promised a button nobody could see.
+
+It now returns a discriminated
+`{ kind: 'not_gateway' } | { kind: 'url', url } | { kind: 'unavailable', reason }`.
+`unavailable` surfaces `link_unavailable` in the tool result with a
+ready-to-relay sentence that names no configuration key, no hostname, no
+internal category and no URL — it gets pasted into a Slack channel, and the
+admin-actionable detail stays in the daemon log. The description now says that
+absence of both keys is the canvas case, and that the tool **never promises a
+card at all**: `queueMcpSlackConnectCard` is fire-and-forget over the sweep, so
+the tool genuinely cannot know whether one will ever be posted. A link is the
+only thing it can honestly promise. The widget is still minted — the canvas
+surface worked, and is what the user actually used.
+
+**The failure classifier.** `reason=unexpected` under-served
+`context/guidelines/logging.md`, which asks for a stable category/code, the
+operation, the relevant UUIDs and retryability. The repo already had the
+pattern in `gatewayFailureCode`: a closed Agor-owned code set derived from
+error SHAPE, never the message. `classifyGatewayReadFailure` moved to
+`utils/gateway-read-failure.ts` (the MCP tool boundary needs it too) and
+widened from a two-value type test to `missing_tenant_scope`,
+`missing_tenant_identity`, `no_public_base_url`, `repository_error`,
+`unexpected`. It matches on `name` and a stable `code` rather than
+`instanceof`, for §9/F4's module-identity reason, and walks the `cause` chain
+because the tenant-scope class arrives wrapped in a `RepositoryError` as often
+as not.
+
+`getTenantPublicBaseUrl`'s two bare `new Error(...)`s became
+`TenantPublicBaseUrlError` with a stable `code`, mirroring
+`PublicBaseUrlNotConfiguredError.code`. Every MCP Slack `onError` and `.catch`
+that printed a fixed sentence and discarded its error — including
+`deferWithTenantContext`'s, which has always PASSED one — now emits one
+classified line with the lane and the Agor-owned ids. Never the message, the
+stack, or anything the provider said.
+
+The incident's own exception classifies as `missing_tenant_scope`, which is the
+class §7.1.14 names it as; with D2's refusal line beside it, 14:57:12 would
+have read `stage=binding reason=no_public_url` instead of thirty seconds of
+`reason=unexpected`.
+
+**Coverage.** The D1 property is stated once, for both lanes, in
+`gateway-mcp-slack-delivery-contract.test.ts` — a channel read that throws once
+the claim is on the record (which is what separates it from the binding read
+above it, rather than a call index either lane could change), asserted as the
+END STATE: nothing sent, the claim gone, the attempt counted, a backoff
+scheduled, `reason=unexpected_failure` logged, and the exception rethrown. Both
+lanes fail it without the fix. D1's marker branch and both D2 conditions are in
+`gateway-mcp-slack-connect.test.ts`; the recovery lane's buttonless card is in
+`gateway-mcp-slack-recovery.test.ts`, which asserted nothing about the button
+before this. D3 is in `widgets.oauth.test.ts`, including that the relayed
+sentence carries no URL and no configuration key. The two new utilities have
+their own suites.
+
+**Out of scope, still open.** No Agor-side deadline on any Slack call —
+`withGatewayTimeout` exists and is used only for `stopListening` — and the
+`setThreadStatus` guard. Separate ticket.
 
 ### 7.2 Deliberately not built
 

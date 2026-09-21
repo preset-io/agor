@@ -32,6 +32,7 @@ import type {
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { getMcpOAuthConnectUrl } from '@agor/core/utils/url';
+import { isBrowserReachableUrl } from '../utils/browser-reachable-url.js';
 import {
   issueMCPOAuthConnectToken,
   MCP_OAUTH_CONNECT_TOKEN_TTL_MS,
@@ -194,6 +195,23 @@ export interface MCPOAuthConnectLinkResult {
 export type SlackConnectBindingRefusal =
   /** No `AGOR_MASTER_SECRET`, so no link can be sealed anywhere in this deployment. */
   | 'no_secret'
+  /**
+   * No base URL a browser elsewhere could open, so the button would lead
+   * nowhere.
+   *
+   * Two conditions, one refusal, because the card cannot tell them apart and
+   * neither can be fixed from here. `''` is a hosted tenant whose durable
+   * routing has not landed (or whose resolution threw and was tolerated);
+   * `http://localhost:3030` is the static fallback a deployment that never
+   * configured a public URL gets, which reads as a perfectly good URL and
+   * works for nobody but the daemon's own machine.
+   *
+   * Reversible on purpose: routing lands, or an administrator sets the public
+   * base URL, and the next backoff posts the card. Refusing costs one binding
+   * read; posting would burn a one-use token on a Block Kit button Slack
+   * either rejects outright (`''`) or renders as a dead link.
+   */
+  | 'no_public_url'
   /** Not a still-pending `oauth` widget — resolved, dismissed, or another type. */
   | 'not_connectable'
   /** The Task that minted the widget did not come from a Slack thread. */
@@ -266,6 +284,11 @@ export async function resolveSlackConnectBinding(
   });
 
   if (!deps.masterSecret) return refuse('no_secret');
+  // Beside `no_secret`, and for the same reason: both are the deployment
+  // failing to supply an ingredient of a link, and neither is this widget's
+  // fault. See `no_public_url` above for why an unusable URL is refused rather
+  // than posted.
+  if (!isBrowserReachableUrl(deps.baseUrl)) return refuse('no_public_url');
   // `resolving` is admitted as well as `pending`, and it is not a widening of
   // what may be granted.
   //

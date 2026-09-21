@@ -470,6 +470,24 @@ interface HarnessOptions {
   db?: unknown;
 }
 
+/**
+ * A deployment with a public URL, which is now part of what a card needs.
+ *
+ * Without one `getBaseUrl` falls back to `http://localhost:{port}`, the lane
+ * refuses the binding as `no_public_url`, and no card is posted — which is the
+ * D2 behaviour two tests below pin directly. Every other test in this file is
+ * about something else, so they are given the deployment a card is possible on.
+ */
+const PUBLIC_BASE_URL = 'https://agor.example.test';
+beforeEach(() => {
+  const previous = process.env.AGOR_BASE_URL;
+  process.env.AGOR_BASE_URL = PUBLIC_BASE_URL;
+  return () => {
+    if (previous === undefined) delete process.env.AGOR_BASE_URL;
+    else process.env.AGOR_BASE_URL = previous;
+  };
+});
+
 function deliveryHarness(options: HarnessOptions = {}) {
   const initialDelivery =
     options.delivery === null
@@ -793,6 +811,44 @@ describe('Slack MCP connect durable delivery', () => {
     expect(harness.dueMarker()).toBe(requestedAt);
   });
 
+  /**
+   * D1's other branch: a widget with no delivery record has exactly one
+   * durable trigger, and a throw must not leave it where it was.
+   *
+   * This is the 2026-09-16 shape exactly. The exception landed above every
+   * write — there was no delivery record to account against even in principle
+   * — so `slack_connect_due_at` kept its permanently-overdue mint timestamp
+   * and the sweep re-selected the same widget every thirty seconds for the
+   * full 24-hour horizon: 2880 attempts, no card, no accounting.
+   *
+   * Deliberately no attempt counter on the marker (§7.2): a refused visit
+   * costs one read and makes no Slack call, which is exactly true of a throw
+   * in the prologue, and a transient fault must not strand a card that would
+   * have recovered.
+   */
+  it('moves the mint marker off the queue when the delivery throws before claiming', async () => {
+    const requestedAt = new Date(Date.now() - 60_000).toISOString();
+    // The kill-switch read is the very first line of delivery, above the
+    // deps, the binding, the marker and the claim — where the incident's own
+    // `MissingTenantDatabaseScopeError` landed.
+    killSwitch.stub = async () => {
+      throw new Error('read failed');
+    };
+    const harness = deliveryHarness({
+      delivery: null,
+      widget: { requested_at: requestedAt, slack_connect_due_at: requestedAt },
+    });
+
+    // Rethrown, so the sweep's per-pass tally still counts and classifies it.
+    await expect(withSecret(() => harness.deliver())).rejects.toThrow();
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.current()).toBeUndefined();
+    const marker = harness.dueMarker();
+    expect(marker).not.toBe(requestedAt);
+    expect(Date.parse(marker!)).toBeGreaterThan(Date.now());
+  });
+
   it('hands the due column to the delivery record once a link is issued', async () => {
     const harness = deliveryHarness({
       delivery: null,
@@ -927,20 +983,79 @@ describe('Slack MCP connect durable delivery', () => {
     }
   });
 
-  it('refuses to post a card for a tenant whose public routing is not initialized', async () => {
-    const hosted = await hostedTenantRouting({ tenantId: 'tenant-a' });
+  /**
+   * D2: an unbuildable link is a classified REFUSAL, not a throw.
+   *
+   * The template was one line away the whole time — `masterSecret` has always
+   * tolerated an absent secret and let `resolveSlackConnectBinding` classify it
+   * as `no_secret`. A throw here lands above the refusal classifier, above the
+   * marker reschedule and above the claim, which is the D1 shape: nothing
+   * accounted, nothing rescheduled, and the sweep coming back every thirty
+   * seconds for a day.
+   *
+   * Two conditions, one refusal, because the card cannot tell them apart and
+   * an administrator fixes both the same way. An uninitialised hosted tenant
+   * answers `''`; a deployment that never configured a public URL answers
+   * `http://localhost:{port}`, which reads as a perfectly good URL and posts a
+   * card whose button works for nobody.
+   */
+  it.each([
+    [
+      'a hosted tenant whose public routing is not initialized',
+      async () => {
+        const hosted = await hostedTenantRouting({ tenantId: 'tenant-a' });
+        return { db: hosted.db, cleanup: hosted.cleanup };
+      },
+    ],
+    [
+      'a deployment with only the localhost fallback',
+      async () => {
+        const previous = process.env.AGOR_BASE_URL;
+        delete process.env.AGOR_BASE_URL;
+        return {
+          db: undefined,
+          cleanup: async () => {
+            if (previous !== undefined) process.env.AGOR_BASE_URL = previous;
+          },
+        };
+      },
+    ],
+  ])('refuses to post a card for %s', async (_label, setup) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { db, cleanup } = await setup();
     try {
-      killSwitch.stub = null;
-      const harness = deliveryHarness({ delivery: null, db: hosted.db });
+      const requestedAt = new Date(Date.now() - 60_000).toISOString();
+      const harness = deliveryHarness({
+        delivery: null,
+        widget: { requested_at: requestedAt, slack_connect_due_at: requestedAt },
+        ...(db ? { db } : {}),
+      });
 
-      await expect(withSecret(() => harness.deliver())).rejects.toThrow(/public URL/i);
+      // A refusal, not an exception.
+      await withSecret(() => harness.deliver());
 
       // Nothing posted, and — crucially — no one-use token minted and burned.
       expect(harness.sendMessage).not.toHaveBeenCalled();
       expect(harness.current()).toBeUndefined();
+      // Reversible: the marker keeps the trigger and gives up its queue
+      // position, so an administrator fixing the configuration gets the card
+      // within one backoff.
+      const marker = harness.dueMarker();
+      expect(Date.parse(marker!)).toBeGreaterThan(Date.now());
+      // And it is no longer silent. A first-card refusal used to return with
+      // nothing written and nothing logged.
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            typeof call[0] === 'string' &&
+            call[0].includes('stage=binding') &&
+            call[0].includes('reason=no_public_url')
+        )
+      ).toBe(true);
       await harness.service.stopListeners();
     } finally {
-      await hosted.cleanup();
+      warn.mockRestore();
+      await cleanup();
     }
   });
 

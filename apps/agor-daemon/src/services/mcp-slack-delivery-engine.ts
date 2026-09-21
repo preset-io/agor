@@ -245,7 +245,7 @@ export class SlackDeliveryTimers {
  * Chosen at the call site, never derived from the thrown value: an exception
  * from `@slack/web-api` carries a provider error code and often a message, and
  * `context/guidelines/logging.md` prohibits logging either. The call site
- * distinguishes the three cases an operator would act on differently anyway.
+ * distinguishes the cases an operator would act on differently anyway.
  */
 export type MCPSlackDeliveryFailureReason =
   /** No connector could be constructed for the channel's stored credentials. */
@@ -253,7 +253,19 @@ export type MCPSlackDeliveryFailureReason =
   /** The connector was built but could not identify its own Slack app. */
   | 'app_identity_unavailable'
   /** The post or edit itself was refused. */
-  | 'slack_write_failed';
+  | 'slack_write_failed'
+  /**
+   * An exception escaped the whole delivery while this pass held the claim.
+   *
+   * The one member that is not a decision: every other reason names something
+   * the lane inspected and concluded, while this one names the absence of a
+   * conclusion. It exists because an unclassified throw otherwise wrote
+   * nothing at all — it leaks the claim, skips the accounting, and leaves an
+   * overdue durable trigger to bring the same card back in thirty seconds
+   * forever. A card reported this way did NOT reach Slack, and the sweep's
+   * own tally carries the category of the exception on the same pass.
+   */
+  | 'unexpected_failure';
 
 /** Which MCP Slack lane a delivery, failure or repair belongs to. */
 export type MCPSlackLane = 'recovery' | 'connect';
