@@ -46,6 +46,24 @@ client's earlier Session GET.
 `POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a
 different executing Task.
 
+## Agent queue management
+
+Public `tasks.cancelQueued` and `tasks.reorderQueued` share
+`TaskRepository.mutateQueued`: Session lock first, then queued Task locks,
+validation and mutation in one transaction. Single-task `tasks.remove` uses the
+same fence. Cancellation deletes only queued rows (no terminal transition or
+completion callback). Reorder compares the full expected ordered ID snapshot
+and requires an exact permutation, then compacts positions inside the lock so
+subsequent max+1 admission stays after the reordered tail. Unique-index-safe
+position clearing is transaction-private.
+
+Both commands reuse Task deletion's Member + Branch Manager authorization.
+MCP passes the acting user's external provider/tenant params to these public
+methods, not to a repository bypass. Standard removed/patched events and a
+promptable-only queue wakeup occur after commit. Session projections and
+failure holds are unchanged. See [the MCP guide](../../apps/agor-docs/content/guide/internal-mcp.mdx#managing-a-sessions-pending-queue)
+for conflicts, result shape and examples.
+
 ## Fleet-wide draining and recovery
 
 Every daemon runs a bounded `SessionQueueWorker`. It discovers routing-only

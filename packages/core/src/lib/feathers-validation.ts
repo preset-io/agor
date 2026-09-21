@@ -181,6 +181,7 @@ export const taskQuerySchema = Type.Intersect(
               status: taskSortDirection,
               created_at: taskSortDirection,
               created_by: taskSortDirection,
+              queue_position: taskSortDirection,
             },
             { additionalProperties: false }
           )

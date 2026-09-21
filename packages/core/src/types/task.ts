@@ -506,3 +506,24 @@ export interface Task {
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }
+
+/** Explicit Session queue commands; task IDs are full UUIDs, never ambiguous prefixes. */
+export interface CancelQueuedTasksInput {
+  session_id: SessionID;
+  task_ids: TaskID[];
+}
+
+export interface ReorderQueuedTasksInput {
+  session_id: SessionID;
+  /** Exact ordered snapshot observed by the caller. */
+  expected_task_ids: TaskID[];
+  /** Exact permutation of expected_task_ids, in desired dispatch order. */
+  task_ids: TaskID[];
+}
+
+/** Authoritative queue at the mutation's serialization point, not a reservation. */
+export interface TaskQueueMutationResult {
+  session_id: SessionID;
+  queue: Pick<Task, 'task_id' | 'queue_position'>[];
+  cancelled_task_ids: TaskID[];
+}

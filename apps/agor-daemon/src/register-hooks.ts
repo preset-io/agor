@@ -3460,6 +3460,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
   const redactTaskMcpRecoveryAfter = createRedactTaskMcpRecoveryAfter(sessionsRepository);
+  // Queue management has the same capability as tasks.remove: Branch Manager
+  // ('all'), not mere prompt access. MCP retains the acting user's provider.
+  const manageTaskQueueGuards = [
+    requireMinimumRole(ROLES.MEMBER, 'manage queued tasks'),
+    resolveSessionContext(),
+    loadSession(sessionsRepository),
+    loadBranchFromSession(branchRepository),
+    ensureBranchPermission('all', 'manage queued tasks', superadminOpts),
+  ];
   tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth],
@@ -3484,6 +3493,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         loadBranchFromSession(branchRepository),
         ensureCanPromptInSession({ ...superadminOpts, branchRepository }),
       ],
+      cancelQueued: manageTaskQueueGuards,
+      reorderQueued: manageTaskQueueGuards,
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],

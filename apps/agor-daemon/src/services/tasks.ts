@@ -36,15 +36,18 @@ import {
   type TerminationSettlementResult,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   BranchID,
+  CancelQueuedTasksInput,
   ContentBlock,
   ExecutorTerminationCompleteInput,
   MessageID,
   Paginated,
   QueryParams,
+  ReorderQueuedTasksInput,
   RuntimeTelemetryInput,
   SdkFailure,
   SdkHealthFailureInput,
@@ -53,6 +56,7 @@ import type {
   Task,
   TaskID,
   TaskPendingDispatchStatus,
+  TaskQueueMutationResult,
   UUID,
 } from '@agor/core/types';
 import {
@@ -109,7 +113,14 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
-const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
+const TASK_SORT_FIELDS = new Set([
+  'task_id',
+  'session_id',
+  'status',
+  'created_at',
+  'created_by',
+  'queue_position',
+]);
 
 /**
  * Public Task transport surface. `update` is deliberately absent so whole-row
@@ -121,6 +132,8 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'create',
   'patch',
   'remove',
+  'cancelQueued',
+  'reorderQueued',
   'connectExecutor',
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
@@ -191,6 +204,78 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.db = db;
     const heartbeatConfig = resolveExecutorHeartbeatConfig(app.get?.('config')?.execution);
     this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig);
+  }
+
+  async cancelQueued(
+    data: CancelQueuedTasksInput,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    return this.manageQueue(data, false, params);
+  }
+
+  async reorderQueued(
+    data: ReorderQueuedTasksInput,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    return this.manageQueue(data, true, params);
+  }
+
+  private async manageQueue(
+    data: CancelQueuedTasksInput | ReorderQueuedTasksInput,
+    reorder: boolean,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    const validIds = (ids: unknown): ids is TaskID[] =>
+      Array.isArray(ids) &&
+      ids.every((id) => typeof id === 'string' && isValidUUID(id)) &&
+      new Set(ids).size === ids.length;
+    if (
+      !data ||
+      !isValidUUID(data.session_id) ||
+      !validIds(data.task_ids) ||
+      (!reorder && data.task_ids.length === 0) ||
+      (reorder && (!('expected_task_ids' in data) || !validIds(data.expected_task_ids)))
+    ) {
+      throw new BadRequest(
+        'Queue commands require a session UUID and unique full task UUIDs; reorder also requires expected_task_ids'
+      );
+    }
+    const result = await this.taskRepo.mutateQueued(
+      data.session_id,
+      reorder
+        ? { order: data.task_ids, expected: (data as ReorderQueuedTasksInput).expected_task_ids }
+        : { cancel: data.task_ids }
+    );
+    if (result.outcome === 'conflict') {
+      throw new Conflict(
+        'Queue changed or IDs are not queued in this session. Reread queued tasks and retry with the current order.',
+        { code: 'TASK_QUEUE_CONFLICT', session_id: data.session_id }
+      );
+    }
+    for (const task of reorder ? result.queue : result.removed) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: reorder ? 'patched' : 'removed',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    }
+    if (result.wake) {
+      // Postcommit, tenant-bound wakeup only. Never resume a failure-held queue
+      // or run completion side effects for prompts that were merely removed.
+      deferWithTenantContext(params, () =>
+        (this.app.service('sessions') as unknown as SessionsService).triggerQueueProcessing(
+          data.session_id,
+          { ...params, provider: undefined } as SessionParams
+        )
+      );
+    }
+    return {
+      session_id: data.session_id,
+      queue: result.queue.map(({ task_id, queue_position }) => ({ task_id, queue_position })),
+      cancelled_task_ids: result.removed.map((task) => task.task_id),
+    };
   }
 
   /** Atomic daemon-side launch-intent fence plus its Session projection. */

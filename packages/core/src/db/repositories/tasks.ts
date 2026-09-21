@@ -726,6 +726,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: tasks.status,
       created_at: tasks.created_at,
       created_by: tasks.created_by,
+      queue_position: tasks.queue_position,
     } as const;
     const orderBy = Object.entries(opts.sort ?? {})
       .map(([field, direction]) => {
@@ -2420,26 +2421,100 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * Delete task by ID
    */
   async delete(id: string): Promise<void> {
-    try {
-      const fullId = await this.resolveId(id);
-
-      const result = await deleteFrom(this.db, tasks)
-        .where(and(eq(tasks.task_id, fullId), eq(tasks.status, TaskStatus.QUEUED)))
-        .run();
-
-      if (result.rowsAffected === 0) {
-        const existing = await select(this.db).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!existing) throw new EntityNotFoundError('Task', id);
-        throw new RepositoryError('Only queued tasks can be deleted');
-      }
-    } catch (error) {
-      if (error instanceof RepositoryError) throw error;
-      if (error instanceof EntityNotFoundError) throw error;
-      throw new RepositoryError(
-        `Failed to delete task: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
+    const fullId = await this.resolveId(id);
+    const task = await this.findById(fullId);
+    if (!task) throw new EntityNotFoundError('Task', id);
+    const result = await this.mutateQueued(task.session_id, { cancel: [task.task_id] });
+    if (result.outcome === 'conflict') {
+      throw new RepositoryError('Only queued tasks can be deleted; reread the queue');
     }
+  }
+
+  /**
+   * Session-first fence shared with admission, dispatch and single-row removal.
+   * No lifecycle transition: cancelled prompts have never executed and must not
+   * produce completion callbacks. No Session projection or hold is modified.
+   */
+  async mutateQueued(
+    sessionId: SessionID,
+    command: { cancel: TaskID[] } | { order: TaskID[]; expected: TaskID[] }
+  ): Promise<{
+    outcome: 'changed' | 'conflict';
+    queue: Task[];
+    removed: Task[];
+    wake: boolean;
+  }> {
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, sessionId));
+          const session = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, sessionId))
+            .one();
+          if (!session) throw new EntityNotFoundError('Session', sessionId);
+          const predicate = and(
+            eq(tasks.session_id, sessionId),
+            eq(tasks.status, TaskStatus.QUEUED)
+          );
+          await lockRowForUpdate(txDb, this.db, tasks, predicate!);
+          const rows = await select(txDb)
+            .from(tasks)
+            .where(predicate)
+            .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
+            .all();
+          const queue: Task[] = rows.map((row: TaskRow) => this.rowToTask(row));
+          const byId = new Map(queue.map((task) => [task.task_id, task]));
+          const ids = [...byId.keys()];
+          const requested = 'cancel' in command ? command.cancel : command.order;
+          const unique = new Set(requested);
+          const valid =
+            unique.size === requested.length &&
+            requested.every((id) => byId.has(id)) &&
+            ('cancel' in command
+              ? requested.length > 0
+              : requested.length === ids.length &&
+                command.expected.length === ids.length &&
+                command.expected.every((id, index) => id === ids[index]));
+          if (!valid) return { outcome: 'conflict', queue, removed: [], wake: false };
+          const removed =
+            'cancel' in command ? queue.filter((task) => unique.has(task.task_id)) : [];
+          let resulting: Task[];
+          if ('cancel' in command) {
+            await deleteFrom(txDb, tasks)
+              .where(and(predicate, inArray(tasks.task_id, requested)))
+              .run();
+            resulting = queue.filter((task) => !unique.has(task.task_id));
+          } else {
+            // Clear positions inside this transaction to avoid transient unique-index
+            // collisions on swaps. Compact positions; max+1 admission
+            // remains strictly after the reordered tail, without position inflation.
+            await update(txDb, tasks).set({ queue_position: null }).where(predicate).run();
+            resulting = [];
+            for (const [index, id] of command.order.entries()) {
+              const position = index + 1;
+              await update(txDb, tasks)
+                .set({ queue_position: position })
+                .where(and(predicate, eq(tasks.task_id, id)))
+                .run();
+              resulting.push({
+                ...byId.get(id)!,
+                queue_position: position,
+              });
+            }
+          }
+          return {
+            outcome: 'changed',
+            queue: resulting,
+            removed,
+            wake:
+              resulting.length > 0 && sessionCanStartTask(session.status, session.ready_for_prompt),
+          };
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      )
+    );
   }
 
   /**

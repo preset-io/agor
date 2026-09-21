@@ -1450,3 +1450,21 @@ describe('stream reconciliation authority and lazy cache boundaries', () => {
     handle.dispose();
   });
 });
+
+describe('queue-management realtime compatibility', () => {
+  it('applies reordered positions and selected removals without disturbing active work', async () => {
+    const active = makeTask('active', TaskStatus.RUNNING);
+    const a = { ...makeTask('a', TaskStatus.QUEUED), queue_position: 1 };
+    const b = { ...makeTask('b', TaskStatus.QUEUED), queue_position: 2 };
+    const mock = createMockClient({ tasks: [active, a, b], messagesByTask: {} });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    mock.emitServiceEvent('tasks', 'patched', { ...b, queue_position: 1 });
+    mock.emitServiceEvent('tasks', 'patched', { ...a, queue_position: 2 });
+    expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual(['b', 'a']);
+    mock.emitServiceEvent('tasks', 'removed', b);
+    expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual(['a']);
+    expect(handle.state.tasks.find((t) => t.task_id === active.task_id)).toEqual(active);
+    handle.dispose();
+  });
+});
