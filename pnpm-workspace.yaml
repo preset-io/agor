@@ -104,6 +104,9 @@ allowBuilds:
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
 patchedDependencies:
+  # Vitest 5.0.1 leaves CDP event listeners attached after tester RPC close.
+  # Remove once upstream disposes them; regression runs before test:browser.
+  '@vitest/browser@5.0.1': patches/@vitest__browser@5.0.1.patch
   # AntD Form's delayed-state hook must cancel timers/frames on unmount.
   # Remove once upstream useDelayState includes effect cleanup; regression:
   # apps/agor-ui/src/test/antdDelayState.test.tsx.

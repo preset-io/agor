@@ -14,7 +14,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "gen:streamdown-css": "node scripts/gen-streamdown-css.mjs",
-    "test:browser": "vitest run --config vitest.browser.config.ts"
+    "test:browser": "node ../../scripts/test-vitest-cdp-lifecycle.mjs && vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",
