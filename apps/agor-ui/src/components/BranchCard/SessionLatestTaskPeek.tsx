@@ -6,7 +6,6 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
-import { LEAN_TRANSCRIPT_POC } from '../../utils/leanTranscriptPoc';
 import { REACT_FLOW_NO_WHEEL_CLASS } from '../../utils/reactFlowDragClasses';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
@@ -46,7 +45,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       sessionId,
       {
         enabled,
-        reactiveOptions: { taskHydration: 'lazy' },
+        reactiveOptions: { taskHydration: 'lean' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
@@ -287,7 +286,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               sessionModel={currentSession.model_config?.model}
               userById={userById}
               currentUserId={currentUserId}
-              leanTranscript={LEAN_TRANSCRIPT_POC}
+              leanTranscript
               isExpanded={true}
               onExpandChange={handleExpandChange}
               sessionId={currentSession.session_id}

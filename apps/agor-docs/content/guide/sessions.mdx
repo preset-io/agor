@@ -352,14 +352,13 @@ without creating a session, avoiding repeated retries while their configuration 
 
 ---
 
-## Lean transcript experiment (development only)
+## Conversation history
 
-This branch includes an opt-in prototype, not a saved display preference. Run this
-branch’s daemon and set `VITE_LEAN_TRANSCRIPT_POC=true` for its UI process to try it;
-unset the flag to restore the existing transcript. No database migration is needed.
-The flag is read when Vite starts; it does not start a managed preview environment.
+Conversations show user and assistant messages without task-level accordions. This
+is the default experience, not a display preference or environment feature flag.
+No database migration is needed.
 
-The prototype opens the latest ten tasks with user and assistant text visible. Scroll
+The conversation opens the latest ten tasks with user and assistant text visible. Scroll
 up (or use **Load older history**) to fetch earlier tasks. **Load tool activity** fetches
 one task’s full messages and restores tool blocks in their original positions. Tool
 groups start collapsed; active tasks continue receiving full live activity and approvals.

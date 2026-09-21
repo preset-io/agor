@@ -541,10 +541,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    // ConversationView retains the same lazy handle. Keeping the cache key
+    // ConversationView retains the same lean handle. Keeping the cache key
     // identical collapses duplicate Session bootstrap/reconnect reads while
-    // preserving the transcript's latest-task hydration contract.
-    reactiveOptions: { taskHydration: 'lazy' },
+    // preserving paged history without eager historical tool hydration.
+    reactiveOptions: { taskHydration: 'lean' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;

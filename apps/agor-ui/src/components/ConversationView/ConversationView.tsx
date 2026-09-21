@@ -26,7 +26,6 @@ import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
-import { LEAN_TRANSCRIPT_POC } from '../../utils/leanTranscriptPoc';
 import { BrandMark } from '../BrandMark';
 import { TaskBlock } from '../TaskBlock';
 
@@ -261,7 +260,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       sessionId,
       {
         enabled: isActive,
-        reactiveOptions: { taskHydration: 'lazy' },
+        reactiveOptions: { taskHydration: 'lean' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
@@ -432,7 +431,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // re-pinning are all handled by use-stick-to-bottom's persistent
     // ResizeObserver — no manual scroll listeners or streaming effect needed.
 
-    if (error && (!LEAN_TRANSCRIPT_POC || isTerminalError || tasks.length === 0)) {
+    if (error && (isTerminalError || tasks.length === 0)) {
       // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
       // TOKENS_REFRESHED_EVENT listener, visibility-change listener in
       // useSharedReactiveSession) didn't catch the error — e.g. the user
@@ -564,15 +563,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
       <div
         ref={setScrollViewport}
         data-testid="conversation-scroll-container"
-        onScroll={
-          LEAN_TRANSCRIPT_POC
-            ? (event) => {
-                const top = event.currentTarget.scrollTop;
-                if (top < previousScrollTop.current && top < 80) void loadOlder();
-                previousScrollTop.current = top;
-              }
-            : undefined
-        }
+        onScroll={(event) => {
+          const top = event.currentTarget.scrollTop;
+          if (top < previousScrollTop.current && top < 80) void loadOlder();
+          previousScrollTop.current = top;
+        }}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -584,25 +579,19 @@ export const ConversationView = React.memo<ConversationViewProps>(
           {/* Genealogy Banner */}
           <GenealogyBanner />
 
-          {LEAN_TRANSCRIPT_POC && (
-            <>
-              <Text type="secondary">
-                Lean transcript POC · older history loads above · search covers loaded content
-              </Text>
-              {error && <Alert type="error" title={error} />}
-              {currentReactiveState?.hasOlderTasks && (
-                <Button loading={loadingOlder} onClick={() => void loadOlder()}>
-                  Load older history
-                </Button>
-              )}
-            </>
+          <Text type="secondary">Older history loads above · search covers loaded content</Text>
+          {error && <Alert type="error" title={error} />}
+          {currentReactiveState?.hasOlderTasks && (
+            <Button loading={loadingOlder} onClick={() => void loadOlder()}>
+              Load older history
+            </Button>
           )}
           {/* Task-organized conversation */}
           {tasks.map((task, taskIndex) => (
             <TaskBlock
               key={task.task_id}
               task={task}
-              leanTranscript={LEAN_TRANSCRIPT_POC}
+              leanTranscript
               latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)?.toolName}
               agentic_tool={agentic_tool}
               sessionModel={sessionModel}

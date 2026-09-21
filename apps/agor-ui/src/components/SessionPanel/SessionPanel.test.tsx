@@ -274,12 +274,12 @@ describe('SessionPanel search control', () => {
     expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
   });
 
-  it('retains the same lazy reactive-session cache key as ConversationView', () => {
+  it('retains the same lean reactive-session cache key as ConversationView', () => {
     renderPanel();
 
     expect(reactive.useSharedReactiveSession).toHaveBeenLastCalledWith(null, session.session_id, {
       enabled: true,
-      reactiveOptions: { taskHydration: 'lazy' },
+      reactiveOptions: { taskHydration: 'lean' },
     });
   });
 });

@@ -7,7 +7,6 @@ import {
   retainReactiveSession,
 } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
-import { LEAN_TRANSCRIPT_POC } from '../utils/leanTranscriptPoc';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseSharedReactiveSessionOptions {
@@ -26,9 +25,7 @@ export function useSharedReactiveSession(
   options: UseSharedReactiveSessionOptions = {}
 ): UseSharedReactiveSessionResult {
   const { enabled = true, reactiveOptions } = options;
-  const requestedHydration = reactiveOptions?.taskHydration ?? 'lazy';
-  const taskHydration =
-    LEAN_TRANSCRIPT_POC && requestedHydration === 'lazy' ? 'lean' : requestedHydration;
+  const taskHydration = reactiveOptions?.taskHydration ?? 'lean';
   const binding = useRef<{ client: AgorClient; sessionId: string; taskHydration: string } | null>(
     null
   );

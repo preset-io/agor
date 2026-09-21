@@ -39,7 +39,6 @@ function render(element: ReactElement) {
   );
 }
 
-vi.mock('../../utils/leanTranscriptPoc', () => ({ LEAN_TRANSCRIPT_POC: true }));
 vi.mock('../../hooks/useSharedReactiveSession', async () => {
   const { useSyncExternalStore } = await import('react');
   return {
