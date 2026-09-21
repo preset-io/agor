@@ -234,8 +234,10 @@ manifest and is pruned later. The workspace runtime config's ephemeral-storage
 limit is not guaranteed on legacy rows, which is why the volume carries its own
 bound. Network
 posture is unchanged (OpenCode binds `127.0.0.1` only; the pod has no
-service-account token). Cell enablement is an operator config value rendered
-into the daemon config (section 8).
+service-account token). Enablement uses the existing daemon config mechanism
+(section 8), not a Cell API/console field or provisioning-spec mapping. The
+standard provisioning path does not enable it; deployment configuration and
+reconciliation must preserve the explicitly supplied value.
 
 ## 6. Storage decision: checkpointed local DB versus block-backed live DB
 
@@ -379,9 +381,9 @@ account and delivered only to your own executor runs".
 3. **Native-state checkpointing** (runtime): v2 executor context, executor
    copy-in/verify, durability barrier, publication through the task terminal
    transition, session pointer, prune, executor patch-field allowlist.
-4. **Cloud realization** (agor-cloud): scratch `emptyDir`, operator opt-in
-   value rendered into daemon config only for tested Cells, doc/runbook updates
-   referencing this contract, executor Job template tests.
+4. **Cloud realization** (agor-cloud): scratch `emptyDir`, doc/runbook updates
+   referencing this contract, executor Job template tests. Enablement remains
+   explicit deployment-owned daemon configuration, outside Cell provisioning.
 5. **Independent code/security review**, remediation, then formal QA (paused
    pending explicit continuation).
 
