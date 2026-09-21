@@ -266,6 +266,20 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-MIGRATION-LEDGER-001",
+    "class": "A",
+    "file": "packages/core/src/db/migrate.ts",
+    "import": "node:fs/promises",
+    "symbol": "readFile",
+    "local": "readFile",
+    "operation": "call:readFile@checkMigrationStatus#2",
+    "owner": "daemon host/operator runtime",
+    "boundary": "installed migration artifact read for divergent-ledger refusal",
+    "rationale": "Reads only SQL files named by the binary-owned migration journal under its installed migration directory to verify the collision tail; no caller, tenant, archive or database path becomes a filesystem selector. Never rewrites an applied receipt.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "id": "DAEMON-FS-CAP-084",
     "class": "A",
     "file": "apps/agor-daemon/src/utils/spawn-executor.ts",
