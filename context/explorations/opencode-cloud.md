@@ -236,8 +236,9 @@ bound. Network
 posture is unchanged (OpenCode binds `127.0.0.1` only; the pod has no
 service-account token). Enablement uses the existing daemon config mechanism
 (section 8), not a Cell API/console field or provisioning-spec mapping. The
-standard provisioning path does not enable it; deployment configuration and
-reconciliation must preserve the explicitly supplied value.
+hosting chart may supply this deployment policy by default; the generic runtime
+default stays absent. A configured value never bypasses the prerequisites in
+section 8 or supplies provider credentials.
 
 ## 6. Storage decision: checkpointed local DB versus block-backed live DB
 
@@ -383,7 +384,8 @@ account and delivered only to your own executor runs".
    transition, session pointer, prune, executor patch-field allowlist.
 4. **Cloud realization** (agor-cloud): scratch `emptyDir`, doc/runbook updates
    referencing this contract, executor Job template tests. Enablement remains
-   explicit deployment-owned daemon configuration, outside Cell provisioning.
+   deployment-owned daemon configuration, which a hosting chart may default; no
+   per-Cell configuration surface is required.
 5. **Independent code/security review**, remediation, then formal QA (paused
    pending explicit continuation).
 
