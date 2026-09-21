@@ -21,6 +21,18 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
 }));
 
 const nativeState = vi.hoisted(() => ({
+  layout: vi.fn((input: { taskId: string }) => ({
+    scratchRoot: `/scratch/${input.taskId}`,
+    xdg: {
+      data: `/scratch/${input.taskId}/xdg-data`,
+      config: `/scratch/${input.taskId}/xdg-config`,
+      cache: `/scratch/${input.taskId}/xdg-cache`,
+      state: `/scratch/${input.taskId}/xdg-state`,
+    },
+    liveDbPath: `/scratch/${input.taskId}/opencode.db`,
+    attemptsDir: '/home/user/attempts',
+    attemptTaskId: input.taskId,
+  })),
   assertRuntime: vi.fn(async () => undefined),
   prepare: vi.fn(async () => undefined),
   prune: vi.fn(async () => []),
@@ -37,18 +49,7 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
     }
     runTurn = mocks.runTurn;
   },
-  resolveOpenCodeNativeStateLayout: (input: { taskId: string }) => ({
-    scratchRoot: `/scratch/${input.taskId}`,
-    xdg: {
-      data: `/scratch/${input.taskId}/xdg-data`,
-      config: `/scratch/${input.taskId}/xdg-config`,
-      cache: `/scratch/${input.taskId}/xdg-cache`,
-      state: `/scratch/${input.taskId}/xdg-state`,
-    },
-    liveDbPath: `/scratch/${input.taskId}/opencode.db`,
-    attemptsDir: '/home/user/attempts',
-    attemptTaskId: input.taskId,
-  }),
+  resolveOpenCodeNativeStateLayout: (input: { taskId: string }) => nativeState.layout(input),
   assertOpenCodeCheckpointRuntime: nativeState.assertRuntime,
   prepareOpenCodeScratch: nativeState.prepare,
   pruneOpenCodeAttempts: nativeState.prune,
@@ -395,6 +396,19 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       /lacks node:sqlite/
     );
     expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+  });
+
+  it('fails before any credential read when the scratch root is not pinned', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    nativeState.layout.mockImplementationOnce(() => {
+      throw new Error('OpenCode managed scratch root is not pinned');
+    });
+    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
+      /not pinned/
+    );
+    expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
+    expect(nativeState.prepare).not.toHaveBeenCalled();
     expect(mocks.runTurn).not.toHaveBeenCalled();
   });
 

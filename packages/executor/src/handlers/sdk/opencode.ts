@@ -116,6 +116,14 @@ export async function executeOpenCodeTask(params: {
       // Fail early on an executor image that cannot run the durability barrier
       // instead of spending a full provider turn first.
       await assertOpenCodeCheckpointRuntime();
+      // Resolve the layout (which requires the pinned scratch root) before the
+      // owner's keys enter executor memory, so an unpinned image fails before
+      // any credential read.
+      const nativeState = resolveOpenCodeNativeStateLayout({
+        namespaceKey: managedContext.namespaceKey,
+        agorSessionId: managedContext.agorSessionId,
+        taskId,
+      });
       const resolution = await resolveApiKeyForTask(
         'OPENCODE_API_KEY_ANTHROPIC',
         client,
@@ -133,11 +141,6 @@ export async function executeOpenCodeTask(params: {
           'No OpenCode provider key is saved for this session owner. Save one in Settings > OpenCode.'
         );
       }
-      const nativeState = resolveOpenCodeNativeStateLayout({
-        namespaceKey: managedContext.namespaceKey,
-        agorSessionId: managedContext.agorSessionId,
-        taskId,
-      });
       await prepareOpenCodeScratch(nativeState);
       managedScratch = nativeState;
       await pruneOpenCodeAttempts(nativeState, managedContext.accepted);

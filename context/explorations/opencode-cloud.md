@@ -219,8 +219,10 @@ Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
    later Job published and the daemon has since accepted, leaving the pointer
    dangling. Orphans from lost completions (checkpoint written, completion
    patch never accepted) are removed by the next launch once they are older
-   than the accepted pointer. Before the turn starts, the executor also probes
-   `node:sqlite` and fails early on an image older than Node 22.13.
+   than the accepted pointer. Before any credential read, the executor probes
+   `node:sqlite` (failing early on an image older than Node 22.13) and resolves
+   the scratch layout, so an unpinned scratch root fails the turn before the
+   owner's keys enter executor memory.
 
 Cloud-side realization (agor-cloud): no new endpoint, table, or storage class.
 The Job template already provides the immutable per-user home; an `emptyDir`
