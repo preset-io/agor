@@ -24,7 +24,7 @@ import {
 
 export const BASELINE_SHA = 'c675abdd306d866860483b6d7289078951f71f37';
 export const SCHEMA_SHA = '34676f927ad09f46ad6f1bd7f392a2589d6bdfed';
-const EXPECTED_WATERMARK = '1789344000008';
+const EXPECTED_WATERMARK = '1789344000009';
 const REFUSAL =
   'Database schema is newer than this Agor binary. Refusing to start because an older daemon cannot safely interpret newer authorization state. Upgrade this binary to match the database.';
 

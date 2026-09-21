@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { classifyMigrationWatermark, readManagedOAuthSchemaDigest } from './migrate';
+import {
+  checkMigrationStatus,
+  classifyMigrationWatermark,
+  readManagedOAuthSchemaDigest,
+  runMigrations,
+} from './migrate';
 import { seedManagedRefreshGrant } from './test-support/managed-oauth-fixture';
 import {
   assertNonOwnerPostgres,
@@ -40,13 +45,28 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const [row] =
         await owned.sql`SELECT MAX(created_at) AS latest FROM drizzle.__drizzle_migrations`;
       const latest = Number(row.latest);
-      expect(latest).toBe(1789344000008);
+      expect(latest).toBe(1789344000009);
       expect(
         classifyMigrationWatermark(
           [{ tag: '0109_branch_cleanup_policy', when: 1789344000003 }],
           latest
         )
       ).toMatchObject({ dbAheadOfBinary: true, hasPending: false });
+    });
+    it('refuses a divergent applied managed ledger before migration and preserves its receipts', async () => {
+      await owned.withMigrationLedgerDrift('hash', async () => {
+        const before = await owned.sql`SELECT * FROM drizzle.__drizzle_migrations ORDER BY id`;
+        await expect(checkMigrationStatus(owned.db)).rejects.toThrow(
+          'explicit reviewed forward migration'
+        );
+        await expect(runMigrations(owned.db, { allowOfflineCutover: true })).rejects.toThrow(
+          'Migration failed'
+        );
+        expect(await owned.sql`SELECT * FROM drizzle.__drizzle_migrations ORDER BY id`).toEqual(
+          before
+        );
+      });
+      await expect(checkMigrationStatus(owned.db)).resolves.toMatchObject({ hasPending: false });
     });
     for (const kind of ['hash', 'missing', 'extra'] as const)
       it(`rejects ${kind} migration ledger drift without trusting a high watermark`, async () => {

@@ -1,47 +1,74 @@
 import type {
   AgorClient,
+  Board,
   Branch,
   PermissionMode,
-  Repo,
   Session,
-  SessionID,
+  SpawnConfig,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig, isTeammate, PermissionScope } from '@agor-live/client';
-import { Alert, Spin } from 'antd';
-import { useParams } from 'react-router-dom';
-import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { Alert, Button, Flex, Spin } from 'antd';
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
+import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { useAgorStore } from '../../store/agorStore';
+import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
-import { ConversationView } from '../ConversationView';
-import { MobileHeader } from './MobileHeader';
-import { MobilePromptInput } from './MobilePromptInput';
+import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { SessionPanel } from '../SessionPanel';
+import { SessionSettingsModal } from '../SessionSettingsModal';
+import { sessionBoardId } from './sessionBoardId';
 
 interface SessionPageProps {
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
+  sessionById: Map<string, Session>;
   branchById: Map<string, Branch>;
-  repoById: Map<string, Repo>;
-  userById: Map<string, User>;
+  boardById: Map<string, Board>;
   currentUser?: User | null;
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
-  onMenuClick?: () => void;
+  onForkSession: (sessionId: string, prompt: string) => Promise<void>;
+  onBtwForkSession: (sessionId: string, prompt: string) => Promise<void>;
+  onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
+  onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
+  onDeleteSession: (sessionId: string) => void;
+  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
+  onOpenBranch?: AppActionsContextValue['onOpenBranch'];
+  onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
 
+const EMPTY_MCP_IDS: string[] = [];
+
+/**
+ * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
+ * (which owns the whole composer: model / effort / permission / MCP / attach /
+ * fork / spawn / btw / stop) so mobile has full feature parity; the previous
+ * lossy `MobilePromptInput` is gone. Close exits to the owning board, not history.
+ */
 export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessionById,
   branchById,
-  repoById,
-  userById,
+  boardById,
   currentUser,
   onSendPrompt,
-  onMenuClick,
+  onForkSession,
+  onBtwForkSession,
+  onSpawnSession,
+  onUpdateSession,
+  onDeleteSession,
+  onUpdateSessionMcpServers,
+  onUpdateSessionEnvSelections,
+  onOpenBranch,
+  onOpenAgenticToolSettings,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const resolvedSessionId = sessionId
     ? sessionById.has(sessionId)
@@ -49,7 +76,55 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       : (resolveSessionFromShortIdPure(sessionId, sessionById) ?? undefined)
     : undefined;
   const session = resolvedSessionId ? sessionById.get(resolvedSessionId) : undefined;
-  const branch = session?.branch_id ? branchById.get(session.branch_id) || null : null;
+  const branch = session?.branch_id ? (branchById.get(session.branch_id) ?? null) : null;
+  const canonicalSessionId = session?.session_id;
+
+  const sessionMcpServerIds =
+    useAgorStore(
+      useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
+    ) ?? EMPTY_MCP_IDS;
+
+  const navigate = useNavigate();
+  const loading = useAgorStore((state) => state.loading);
+  const boardId = sessionBoardId(session, branchById, boardById);
+  // X is an exit, not browser Back. Replace this detail entry so a cold link
+  // also closes inside Agor. Earlier deliberate navigations remain in history.
+  const closeSession = useCallback(() => {
+    navigate(boardId ? `/m/board/${boardId}` : '/m', { replace: true });
+  }, [navigate, boardId]);
+
+  const handlePermissionDecision = usePermissionDecision(client);
+
+  const appActions = useMemo(
+    () => ({
+      onSendPrompt,
+      onFork: onForkSession,
+      onBtwFork: onBtwForkSession,
+      onSubsession: onSpawnSession,
+      onUpdateSession,
+      onDeleteSession: (id: string) => {
+        onDeleteSession(id);
+        closeSession();
+      },
+      onPermissionDecision: handlePermissionDecision,
+      onOpenBranch,
+      onOpenAgenticToolSettings,
+      onOpenSettings: () => setSettingsOpen(true),
+      availableAgents: AVAILABLE_AGENTS,
+    }),
+    [
+      onSendPrompt,
+      onForkSession,
+      onBtwForkSession,
+      onSpawnSession,
+      onUpdateSession,
+      onDeleteSession,
+      closeSession,
+      handlePermissionDecision,
+      onOpenBranch,
+      onOpenAgenticToolSettings,
+    ]
+  );
 
   if (!sessionId) {
     return (
@@ -61,97 +136,46 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   if (!session) {
     return (
-      <div
-        style={{
-          height: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Spin size="large" />
-      </div>
+      <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
+        {loading ? (
+          <Spin size="large" />
+        ) : (
+          // Bootstrap may be complete while the data owner fetches an uncached
+          // session. Do not infer a failed request from its absence in the store.
+          <Alert
+            type="info"
+            title="Session not loaded"
+            description="It may still be loading or may no longer be available."
+          />
+        )}
+        <Button onClick={closeSession}>Back to home</Button>
+      </Flex>
     );
   }
 
-  // Responsive cold navigation may preserve a canonical short token in the
-  // route until data arrives. Once resolved, all mutations and draft storage
-  // must use the full durable ID rather than creating a second short-ID key.
-  const canonicalSessionId = session.session_id;
-  const handleSendPrompt = (prompt: string) => onSendPrompt?.(canonicalSessionId, prompt);
-
-  const handlePermissionDecision = async (
-    _sessionId: string,
-    requestId: string,
-    taskId: string,
-    allow: boolean,
-    scope: PermissionScope
-  ) => {
-    if (!client) return;
-
-    try {
-      await client.service(`sessions/${_sessionId}/permission-decision`).create({
-        requestId,
-        taskId,
-        allow,
-        reason: allow ? 'Approved by user' : 'Denied by user',
-        remember: scope !== PermissionScope.ONCE,
-        scope,
-      });
-    } catch (error) {
-      console.error('Failed to send permission decision:', error);
-    }
-  };
-
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <MobileHeader
-        title={
-          branch?.name ||
-          getSessionDisplayTitle(session, { fallbackChars: 30, includeIdFallback: true })
-        }
-        showMenu
-        user={currentUser}
-        onMenuClick={onMenuClick}
-      />
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          minWidth: 0,
-          paddingInline: 8,
-          paddingBottom: 80, // Space for fixed input
-          boxSizing: 'border-box',
-        }}
-      >
-        <ConversationView
+    <AppActionsProvider value={appActions}>
+      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <SessionPanel
           client={client}
-          sessionId={session.session_id}
-          agentic_tool={session.agentic_tool}
-          sessionModel={session.model_config?.model}
-          userById={userById}
+          session={session}
+          branch={branch}
           currentUserId={currentUser?.user_id}
-          onPermissionDecision={handlePermissionDecision}
-          scheduledFromBranch={session.scheduled_from_branch}
-          scheduledRunAt={session.scheduled_run_at}
-          genealogy={session.genealogy}
-          emptyStateMessage="Tap the menu icon to browse boards and sessions"
-          teammateEmoji={
-            branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
-          }
-          compact
+          sessionMcpServerIds={sessionMcpServerIds}
+          open
+          onClose={closeSession}
         />
       </div>
-      <MobilePromptInput
-        key={`${currentUser?.user_id ?? 'anonymous'}:${canonicalSessionId}`}
-        onSend={handleSendPrompt}
-        disabled={session.status === 'running'}
-        placeholder={session.status === 'running' ? 'Agent is working...' : 'Send a prompt...'}
-        currentUserId={currentUser?.user_id}
+      <SessionSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        session={session}
+        onUpdate={onUpdateSession}
+        onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+        onUpdateSessionEnvSelections={onUpdateSessionEnvSelections}
         client={client}
-        sessionId={canonicalSessionId as SessionID}
-        userById={userById}
+        currentUser={currentUser}
       />
-    </div>
+    </AppActionsProvider>
   );
 };

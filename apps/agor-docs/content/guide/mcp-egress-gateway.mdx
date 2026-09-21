@@ -224,9 +224,13 @@ changes. PostgreSQL/HA numbers require `AGOR_TEST_POSTGRES_URL` and the managed
 HA environment.
 
 On a quiet, otherwise idle host, the implementation review run on 2026-08-25 measured 200 warmed SQLite
-admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with
-`AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run
-src/mcp-egress/gateway.test.ts`. These local figures are not a PostgreSQL/HA
+admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with:
+
+```bash
+AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run src/mcp-egress/gateway.test.ts
+```
+
+These local figures are not a PostgreSQL/HA
 availability measurement. The opt-in harness reports host-sensitive figures and
 does not enforce them as a CI release threshold; run it only on a quiet idle host
 and compare with a recorded baseline.
@@ -494,6 +498,13 @@ This is **startup downgrade refusal**, not containment of an already running
 old daemon or executor: terminate old processes/connections and verify the
 complete cohort before admitting managed OAuth. Do not treat a successful
 compatibility test as permission to perform a rolling migration.
+
+The shipped `0111_management_ownership_transfer` migration precedes managed
+authority migrations `0112`–`0115`. Databases that applied the earlier feature
+branch's conflicting `0111`–`0114` ledger are **not silently upgraded or relabeled**:
+startup and migration refuse the mismatched receipts before applying SQL. Keep
+the database and its ledger intact; a non-disposable store requires a separately
+reviewed forward migration. Feature-gated or unmerged does not mean unapplied.
 
 ### Source lifecycle commands
 

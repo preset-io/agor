@@ -102,6 +102,9 @@ jobs:
       - run: pnpm --filter @agor/daemon exec tsc -p tsconfig.managed-paired.json
       - run: pnpm check:mcp-oauth-build
 
+      # Source aliases hide cross-entrypoint AsyncLocalStorage duplication.
+      - run: pnpm --filter @agor/core test:runtime
+
       # @agor/executor#test includes this runtime check, which requires dist.
       # Keep both executor checks here: a filtered test runner cannot compile
       # all of its workspace declaration dependencies cheaply or reliably.

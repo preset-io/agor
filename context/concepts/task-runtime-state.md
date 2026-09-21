@@ -88,6 +88,14 @@ QUEUED -----> DISPATCHING <----- CREATED
                        STOPPED or FAILED
 ```
 
+Claude completion requires an SDK result, not merely iterator exhaustion or a
+persisted assistant-message ID. A result with `is_error: true` is a failure even
+when its subtype is `success`; a synthesized missing-assistant notice is also a
+failure, not model output. A stream closing without a result fails unless it
+was interrupted. Real assistant/tool messages already persisted remain intact.
+These adapter outcomes use the existing executor terminal patch; they do not
+supersede daemon-owned containment or retry/replay the prompt.
+
 Terminal task state is immutable at the row-locked repository boundary. A late
 executor claim, result, or permission resume cannot revive or overwrite it.
 `dispatching`, `running`, `stopping`, and permission/input waits are

@@ -169,7 +169,7 @@ export interface BannerDecisionInput {
   /** Whether both integration collections (mcp-servers + gateway-channels) have finished their first hydration. */
   integrationsHydrated: boolean;
   integrationsBannerDismissed: boolean;
-  /** A user-scoped 24-hour snooze of the selected tool's warning. */
+  /** A browser-local opt-out of reminders for the selected tool. */
   credentialWarningDismissed: boolean;
 }
 
@@ -187,14 +187,13 @@ export interface BannerDecisionInput {
  * connections live in the latter, a separate store map).
  */
 export function decideBanner(input: BannerDecisionInput): BannerDecision {
-  if (!input.onboardingCompleted) return BannerDecision.None;
+  if (!input.onboardingCompleted || input.credentialWarningDismissed) return BannerDecision.None;
 
   if (input.probeState === ProbeState.Unauthenticated) {
-    if (input.credentialWarningDismissed) return BannerDecision.None;
     return input.hasLlm ? BannerDecision.KeyInvalid : BannerDecision.NoAi;
   }
 
-  const aiOk = input.probeState === ProbeState.Authenticated || input.hasLlm;
+  const aiOk = input.probeState === ProbeState.Authenticated;
   const showIntegrations =
     aiOk &&
     input.integrationsHydrated &&

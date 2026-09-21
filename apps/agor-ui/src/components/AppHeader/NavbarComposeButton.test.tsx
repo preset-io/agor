@@ -151,19 +151,16 @@ vi.mock('../AutocompleteTextarea', () => ({
   ),
 }));
 
-vi.mock('../AgenticToolConfigForm', () => ({
-  buildConfigFromFormValues: () => ({ modelConfig: undefined }),
-  getFormValuesFromConfig: () => ({}),
-}));
-
-vi.mock('../AgenticToolConfigurationPicker', () => ({
-  INLINE_AGENTIC_CONFIGURATION: '__inline__',
-}));
-
-vi.mock('../AgenticToolConfigurationPicker/useAgenticConfigurationSources', () => ({
-  getUserAgenticToolDefault: () => ({ configuration: {} }),
-  getUserDefaultConfigurationSource: () => 'default',
-}));
+vi.mock(
+  '../AgenticToolConfigurationPicker/useAgenticConfigurationSources',
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('../AgenticToolConfigurationPicker/useAgenticConfigurationSources')
+    >()),
+    getUserAgenticToolDefault: () => ({ configuration: {} }),
+    getUserDefaultConfigurationSource: () => 'default',
+  })
+);
 
 // The Settings picker is reused verbatim in the null-primary case; here it just
 // needs to surface an `onPicked` trigger so we can assert the send resumes.

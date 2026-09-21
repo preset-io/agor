@@ -23,6 +23,7 @@
 
 import type { Artifact } from '../types/artifact.js';
 import type { Board } from '../types/board.js';
+import type { BoardComment } from '../types/board-comment.js';
 import { type Branch, getTeammateConfig } from '../types/branch.js';
 import type { MCPServer } from '../types/mcp.js';
 import type { Session } from '../types/session.js';
@@ -43,6 +44,7 @@ export const SEARCHABLE_FIELDS = {
   artifact: ((a) => [a.name, a.description]) as SearchFieldExtractor<Artifact>,
   board: ((b) => [b.name, b.description]) as SearchFieldExtractor<Board>,
   mcp: ((m) => [m.name, m.display_name, m.description]) as SearchFieldExtractor<MCPServer>,
+  comment: ((c) => [c.content]) as SearchFieldExtractor<BoardComment>,
 } as const;
 
 /**

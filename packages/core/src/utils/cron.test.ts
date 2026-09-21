@@ -5,11 +5,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  getNextRuns,
   getNextRunTime,
   isValidCron,
   resolveScheduleTz,
   roundToMinute,
   validateCron,
+  validateCronWithResult,
 } from './cron';
 
 describe('isValidCron', () => {
@@ -21,6 +23,13 @@ describe('isValidCron', () => {
   it('rejects garbage', () => {
     expect(isValidCron('not a cron')).toBe(false);
     expect(isValidCron('99 99 99 99 99')).toBe(false);
+  });
+
+  it('rejects duplicate zero fields through every schedule validation entry point', () => {
+    const cron = '0,0 * * * *';
+    expect(isValidCron(cron)).toBe(false);
+    expect(() => validateCron(cron)).toThrow(/Invalid cron expression/);
+    expect(validateCronWithResult(cron)).toMatchObject({ valid: false });
   });
 
   it('validates against a custom IANA timezone', () => {
@@ -36,6 +45,23 @@ describe('validateCron', () => {
 });
 
 describe('getNextRunTime', () => {
+  it.each([
+    [
+      '2026-03-07',
+      ['2026-03-07T17:00:00.000Z', '2026-03-08T16:00:00.000Z', '2026-03-09T16:00:00.000Z'],
+    ],
+    [
+      '2026-10-31',
+      ['2026-10-31T16:00:00.000Z', '2026-11-01T17:00:00.000Z', '2026-11-02T17:00:00.000Z'],
+    ],
+  ])('keeps a local daily schedule at 9am across the DST boundary after %s', (date, expected) => {
+    const from = new Date(`${date}T00:00:00Z`);
+    const runs = getNextRuns('0 9 * * *', 3, from, 'America/Los_Angeles');
+    expect(runs.map((run) => new Date(run).toISOString())).toEqual(expected);
+    // The scheduler's single-run calculation and UI preview must agree.
+    expect(getNextRunTime('0 9 * * *', from, 'America/Los_Angeles')).toBe(runs[0]);
+  });
+
   it('returns a future timestamp aligned to the cron expression in UTC by default', () => {
     // Pick a fixed "from" date so the test is deterministic.
     const from = new Date('2026-05-24T08:30:00Z');

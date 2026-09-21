@@ -977,7 +977,7 @@ export class KnowledgeDocumentRepository
 
   private async rowToDocumentWithUrl(row: KBDocumentRow): Promise<KnowledgeDocument> {
     const [baseUrl, namespace] = await Promise.all([
-      getBaseUrl(),
+      getBaseUrl(this.db),
       new KnowledgeNamespaceRepository(this.db).findById(row.namespace_id as KnowledgeNamespaceID),
     ]);
     return this.rowToDocument(row, { baseUrl, namespaceSlug: namespace?.slug });
@@ -1086,7 +1086,7 @@ export class KnowledgeDocumentRepository
     const versionId = generateId() as KnowledgeDocumentVersionID;
     const content = data.content_text;
     const hashes = hashContent(content);
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -1338,7 +1338,7 @@ export class KnowledgeDocumentRepository
       .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     const [baseUrl, namespaceRows] = await Promise.all([
-      getBaseUrl(),
+      getBaseUrl(this.db),
       select(this.db).from(kbNamespaces).all(),
     ]);
     const namespaceSlugById = new Map<string, string>(
@@ -1357,7 +1357,7 @@ export class KnowledgeDocumentRepository
     if (updates.mime_type && updates.mime_type !== MARKDOWN_MIME_TYPE) {
       throw new RepositoryError('Knowledge V1 only supports text/markdown documents');
     }
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -1658,7 +1658,7 @@ export class KnowledgeSearchRepository {
       .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return rows
       .map((row: Record<string, unknown>): KnowledgeSearchResult => {

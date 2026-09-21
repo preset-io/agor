@@ -3,7 +3,7 @@ import type { Message, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
-import type { ProcessedEvent } from './message-processor.js';
+import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 
 const promptState = vi.hoisted(() => ({ events: [] as unknown[] }));
 
@@ -148,6 +148,81 @@ describe('ClaudeTool provider-failure settlement', () => {
     promptState.events = [];
   });
 
+  describe.each(['streaming', 'non-streaming'] as const)('%s terminal evidence', (mode) => {
+    const assistant: ProcessedEvent = {
+      type: 'complete',
+      role: MessageRole.ASSISTANT,
+      content: [{ type: 'text', text: 'Partial model response' }],
+    };
+
+    it.each([
+      ['empty success', () => [synthesizedAssistantEvent(), resultEvent(rawResult('success'))]],
+      [
+        'success with error flag',
+        () => [assistant, resultEvent({ ...rawResult('success'), is_error: true })],
+      ],
+      ['EOF before any result', () => []],
+      ['EOF after assistant output', () => [assistant]],
+      [
+        'error after assistant output',
+        () => [assistant, resultEvent(rawResult('error_during_execution'))],
+      ],
+    ] as const)('fails %s without losing persisted model output', async (_name, events) => {
+      const harness = createHarness();
+      promptState.events = events();
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(true);
+      expect(result.errorDetails?.length).toBeGreaterThan(0);
+      if (promptState.events.includes(assistant)) {
+        expect(
+          harness.persisted.some((message) =>
+            JSON.stringify(message.content).includes('Partial model response')
+          )
+        ).toBe(true);
+      }
+    });
+
+    it('propagates recorded SDK success/is_error through the real processor without exposing its body', async () => {
+      const harness = createHarness();
+      const processor = new SDKMessageProcessor({ sessionId: generateId() as SessionID });
+      // Synthetic shape from the pinned SDK contract, not a production trace.
+      const raw = { ...rawResult('success'), is_error: true, num_turns: 0 };
+      promptState.events = await processor.process(raw as never);
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(true);
+      expect(result.rawSdkResponse).toMatchObject({
+        subtype: 'success',
+        is_error: true,
+        num_turns: 0,
+      });
+      expect(
+        harness.persisted.filter((message) => message.metadata?.is_provider_failure_result)
+      ).toHaveLength(1);
+      expect(JSON.stringify({ outgoing: harness.outgoing, result })).not.toContain(
+        RAW_PROVIDER_BODY
+      );
+    });
+
+    it('accepts a tool-only assistant turn with an explicit successful result', async () => {
+      const harness = createHarness();
+      promptState.events = [
+        { ...assistant, content: [{ type: 'tool_use', id: 'tool-1', name: 'example', input: {} }] },
+        resultEvent(rawResult('success')),
+      ];
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(false);
+      expect(result.assistantMessageIds).toHaveLength(1);
+    });
+
+    it('does not reinterpret an interrupted turn as missing-result failure', async () => {
+      const harness = createHarness();
+      promptState.events = [assistant, { type: 'stopped' }];
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.wasStopped).toBe(true);
+      expect(result.hadError).toBe(false);
+    });
+  });
+
   it.each(['streaming', 'non-streaming'] as const)(
     'uses the daemon-confirmed assistant message for classified zero-turn %s turns',
     async (mode) => {
@@ -182,7 +257,8 @@ describe('ClaudeTool provider-failure settlement', () => {
         total_cost_usd: raw.total_cost_usd,
       });
       expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
-      expect(result.errorDetails).toBeUndefined();
+      expect(result.hadError).toBe(true);
+      expect(result.errorDetails).toEqual([SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE]);
       expect(result.rawContextUsage).toEqual({
         totalTokens: 123,
         maxTokens: 200_000,

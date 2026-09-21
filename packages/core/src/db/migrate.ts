@@ -31,10 +31,12 @@ import {
 } from '../types/mcp-managed-oauth';
 import type { Database } from './client';
 import {
+  executeRaw,
   getDatabaseInstanceDialect,
   insert,
   isPostgresDatabase,
   isSQLiteDatabase,
+  rawRows,
   runDatabaseTransaction,
 } from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
@@ -137,7 +139,20 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
-    '0114_mcp_managed_oauth_cell_retirement',
+    '0111_management_ownership_transfer',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Removes immutable-owner triggers. Shared application commands validate and authorize management transfers. Existing reference guards and tenant isolation remain; no resource rows are rewritten.',
+      }),
+    },
+  ],
+  [
+    '0115_mcp_managed_oauth_cell_retirement',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -150,7 +165,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0113_mcp_managed_oauth_cleanup_delivery',
+    '0115_mcp_managed_oauth_cleanup_delivery',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -163,7 +178,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0112_mcp_managed_oauth_maintenance_routing',
+    '0115_mcp_managed_oauth_maintenance_routing',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -176,7 +191,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     },
   ],
   [
-    '0111_mcp_managed_oauth_authority',
+    '0114_mcp_managed_oauth_authority',
     {
       requiresOfflineCutover: true,
       impact: defineMigrationImpact({
@@ -570,6 +585,46 @@ export async function checkMigrationStatus(db: Database): Promise<{
       );
       const row = result[0] as Record<string, unknown> | undefined;
       maxAppliedMillis = row ? Number(row.max_ts ?? 0) : 0;
+    }
+
+    // Main shipped ownership transfer at a watermark previously used by the
+    // feature branch. Never interpret an applied feature ledger as main (or
+    // silently skip migrations based on its larger timestamp). SQL bytes are
+    // retained; existing divergent stores need a separately reviewed forward
+    // migration, not an automatic receipt rewrite or presumed disposability.
+    const collisionStart = 1789344000005;
+    if (maxAppliedMillis >= collisionStart) {
+      const { createHash } = await import('node:crypto');
+      const expected = journalEntries.filter(
+        (entry) => entry.when >= collisionStart && entry.when <= maxAppliedMillis
+      );
+      const rows = rawRows(
+        await executeRaw(
+          db,
+          isSQLiteDatabase(db)
+            ? sql`SELECT hash, created_at FROM __drizzle_migrations WHERE created_at >= ${collisionStart}`
+            : sql`SELECT hash, created_at FROM drizzle.__drizzle_migrations WHERE created_at >= ${collisionStart}`
+        )
+      );
+      const failure = () =>
+        new Error(
+          'Migration history differs from this binary; an explicit reviewed forward migration is required. No ledger was rewritten.'
+        );
+      if (
+        rows.some(
+          (row) =>
+            Number(row.created_at) <= journalMaxWhen &&
+            !expected.some((entry) => entry.when === Number(row.created_at))
+        )
+      )
+        throw failure();
+      for (const entry of expected) {
+        const matching = rows.filter((row) => Number(row.created_at) === entry.when);
+        const hash = createHash('sha256')
+          .update(await readFile(join(migrationsFolder, `${entry.tag}.sql`), 'utf8'))
+          .digest('hex');
+        if (matching.length !== 1 || matching[0].hash !== hash) throw failure();
+      }
     }
 
     return classifyMigrationWatermark(journalEntries, maxAppliedMillis, journalMaxWhen);

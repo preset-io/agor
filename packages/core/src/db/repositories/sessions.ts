@@ -315,7 +315,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       );
 
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       // LEFT JOIN with branches and boards to get board_id and slug
       const result = await select(this.db)
@@ -350,7 +350,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findById(id: string): Promise<Session | null> {
     try {
       const fullId = await this.resolveId(id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       // LEFT JOIN with branches and boards to get board_id and slug in a single query
       const result = await select(this.db)
@@ -437,7 +437,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }): Promise<Session[]> {
     if (filter?.branchIds?.length === 0) return [];
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [];
       if (filter?.branchId) conditions.push(eq(sessions.branch_id, filter.branchId));
@@ -489,7 +489,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findByStatus(status: Session['status']): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const results = await select(this.db)
         .from(sessions)
@@ -528,7 +528,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findByBoard(boardId: string, filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [eq(branches.board_id, boardId)];
       if (filter?.visibleToUserId) {
@@ -588,7 +588,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total: number }> {
     try {
       if (opts.branchIds?.length === 0) return { data: [], total: 0 };
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [];
       if (opts.status !== undefined) conditions.push(eq(sessions.status, opts.status));
@@ -665,7 +665,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findChildren(sessionId: string): Promise<Session[]> {
     try {
       const fullId = await this.resolveId(sessionId);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const results = await select(this.db)
         .from(sessions)
@@ -725,7 +725,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           fullId: await this.resolveId(sessionId),
         }))
       );
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -843,7 +843,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         throw new RepositoryError('Session sdk_home_scope is immutable after creation');
       }
       const fullId = await this.resolveId(id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const statusInfo = updates.status
         ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
@@ -977,7 +977,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ...target,
         id: fullIds[index],
       }));
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const now = new Date();
       const result = await this.db.transaction(async (tx) => {
         const groups = new Map<string, SessionArchiveStateUpdate[]>();
@@ -1121,7 +1121,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     scheduledRunAt: number
   ): Promise<Session | null> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const result = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -1343,7 +1343,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     opts: { orderByScheduledRunAt?: 'asc' | 'desc' } = {}
   ): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       let query = select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -1508,7 +1508,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * @returns Array of accessible sessions with urls populated
    */
   async findAccessibleSessions(userId: UUID, boardId?: UUID): Promise<Session[]> {
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.

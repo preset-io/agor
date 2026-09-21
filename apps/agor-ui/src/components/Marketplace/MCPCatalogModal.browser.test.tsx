@@ -95,7 +95,11 @@ describe('MCP Catalog real Chromium flows', () => {
     const browse = await screen.findByRole('button', {
       name: 'Browse the MCP Catalog for all available MCPs',
     });
-    // The no-results action remains in the native keyboard tab order.
+    // Tab reaches the catalog action even when Select portals before its input.
+    await userEvent.tab();
+    expect(browse).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(within(disclosure).getByRole('combobox')).toHaveFocus();
     await userEvent.tab();
     expect(browse).toHaveFocus();
     await userEvent.keyboard('{Enter}');

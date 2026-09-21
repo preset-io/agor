@@ -3,7 +3,7 @@
  * to — and, as much to the point, which servers it will not name to them.
  */
 
-import type { UserMCPOAuthToken } from '@agor/core/db';
+import type { MCPOAuthGrantStatusRecord } from '@agor/core/db';
 import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { type OAuthStatusDeps, resolveAuthenticatedServerIds } from './mcp-oauth-status.js';
@@ -11,8 +11,8 @@ import { type OAuthStatusDeps, resolveAuthenticatedServerIds } from './mcp-oauth
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-00000000b0b0' as UserID;
 
-const grantFor = (serverId: string, overrides: Partial<UserMCPOAuthToken> = {}) =>
-  ({ mcp_server_id: serverId as MCPServerID, ...overrides }) as UserMCPOAuthToken;
+const grantFor = (serverId: string, overrides: Partial<MCPOAuthGrantStatusRecord> = {}) =>
+  ({ mcp_server_id: serverId as MCPServerID, ...overrides }) as MCPOAuthGrantStatusRecord;
 
 const serverOwnedBy = (serverId: string, owner?: UserID) =>
   ({ mcp_server_id: serverId as MCPServerID, owner_user_id: owner }) as MCPServer;
@@ -133,6 +133,38 @@ describe('resolveAuthenticatedServerIds', () => {
     });
 
     await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual([]);
+  });
+
+  it('keeps an expired access token authenticated while its refresh grant is durable', async () => {
+    const deps = buildDeps({
+      now: new Date('2026-01-02T00:00:00.000Z'),
+      listShared: async () => [
+        grantFor('server-shared', {
+          oauth_token_expires_at: new Date('2026-01-01T00:00:00.000Z'),
+          has_refresh_token: true,
+          refresh_status: 'idle',
+        }),
+      ],
+      findServers: async () => [serverOwnedBy('server-shared')],
+    });
+
+    await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-shared']);
+  });
+
+  it('keeps a concurrently refreshing grant authenticated', async () => {
+    const deps = buildDeps({
+      now: new Date('2026-01-02T00:00:00.000Z'),
+      listShared: async () => [
+        grantFor('server-shared', {
+          oauth_token_expires_at: new Date('2026-01-01T00:00:00.000Z'),
+          has_refresh_token: true,
+          refresh_status: 'refreshing',
+        }),
+      ],
+      findServers: async () => [serverOwnedBy('server-shared')],
+    });
+
+    await expect(resolveAuthenticatedServerIds(deps)).resolves.toEqual(['server-shared']);
   });
 
   it('revalidates a grant against its server before advertising it', async () => {

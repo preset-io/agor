@@ -86,6 +86,12 @@ export default defineConfig({
   dts: false,
   clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,
+  esbuildOptions(options) {
+    options.define = {
+      ...options.define,
+      __AGOR_CORE_CJS__: String(options.format === 'cjs'),
+    };
+  },
   // These pure-JS, high-fanout feature dependencies are compiled into the
   // copied core artifact. Keeping them out of the consumer dependency graph
   // materially lowers cold-cache npm extraction concurrency and inode use.
@@ -93,7 +99,8 @@ export default defineConfig({
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
-    // Stateful DB authority must be shared by independently bundled tools.
+    // Tenant-aware config resolution must use the DB entrypoint's ambient scope,
+    // not an inlined copy.
     '@agor/core/db',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',

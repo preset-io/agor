@@ -18,7 +18,7 @@ import {
   type SearchEntityType,
   type SearchResultItem,
 } from './types';
-import { sectionOffsets } from './utils';
+import { searchResultKey, sectionOffsets } from './utils';
 
 const { Text } = Typography;
 
@@ -120,7 +120,7 @@ export const GlobalSearchDropdown: React.FC<GlobalSearchDropdownProps> = ({
                 const flatIndex = offset + i;
                 return (
                   <SearchResult
-                    key={resultKey(result)}
+                    key={searchResultKey(result)}
                     rowId={rowDomId(result)}
                     result={result}
                     selected={flatIndex === selectedIndex}
@@ -179,28 +179,10 @@ const EmptyHint: React.FC<{
   </div>
 );
 
-/** Stable React key per result row. Uses `-` separator so the same value is a
- * valid CSS selector when reused as a DOM id (see rowDomId). */
-function resultKey(result: SearchResultItem): string {
-  switch (result.type) {
-    case 'session':
-      return `session-${result.item.session_id}`;
-    case 'branch':
-    case 'teammate':
-      return `${result.type}-${result.item.branch_id}`;
-    case 'artifact':
-      return `artifact-${result.item.artifact_id}`;
-    case 'board':
-      return `board-${result.item.board_id}`;
-    case 'mcp':
-      return `mcp-${result.item.mcp_server_id}`;
-  }
-}
-
 /** DOM id namespace for combobox aria-activedescendant wiring. */
 export const GLOBAL_SEARCH_LISTBOX_ID = 'global-search-listbox';
 
 /** Stable DOM id for a result row — used by aria-activedescendant. */
 export function rowDomId(result: SearchResultItem): string {
-  return `global-search-row-${resultKey(result)}`;
+  return `global-search-row-${searchResultKey(result)}`;
 }

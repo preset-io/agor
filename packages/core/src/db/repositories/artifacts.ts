@@ -301,7 +301,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new RepositoryError('Failed to retrieve created artifact');
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
@@ -320,7 +320,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .where(eq(artifacts.artifact_id, fullId))
         .one();
       if (!row) return null;
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
@@ -397,7 +397,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         const query = select(this.db).from(artifacts);
         rows = predicate ? await query.where(predicate).all() : await query.all();
       }
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return rows.map((row) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
@@ -421,7 +421,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
@@ -437,7 +437,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .from(artifacts)
         .where(eq(artifacts.branch_id, branchId))
         .all();
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
@@ -471,7 +471,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       }
 
       const rows = await query.all();
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
@@ -541,7 +541,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         .one();
 
       if (!row) throw new EntityNotFoundError('Artifact', id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       return this.rowToArtifact(row, baseUrl);
     } catch (error) {
       if (error instanceof RepositoryError) throw error;

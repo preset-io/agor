@@ -614,8 +614,8 @@ export const boards = pgTable(
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
-    // Deletion guards are handled by the dedicated user lifecycle flow. This
-    // owner pointer is immutable and is never cascaded or re-attributed.
+    // User deletion is a separate lifecycle flow. Only an explicit management
+    // transfer changes this owner pointer; attribution is never reassigned.
     primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
@@ -906,6 +906,10 @@ export const branches = pgTable(
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
+        // Generation owning the in-flight provisioning attempt. Fences stale
+        // acknowledgements from a superseded attempt (see Branch type).
+        provisioning_attempt_id?: string;
+        provisioning_operation?: 'create' | 'retry' | 'restore';
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: BranchEnvironmentInstance;

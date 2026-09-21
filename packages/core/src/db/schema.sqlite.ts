@@ -575,8 +575,8 @@ export const boards = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
-    // User deletion guards are a separate lifecycle flow; this immutable
-    // logical owner pointer intentionally does not cascade or transfer.
+    // User deletion is a separate lifecycle flow. Only an explicit management
+    // transfer changes this owner pointer; attribution is never reassigned.
     primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
@@ -861,6 +861,10 @@ export const branches = sqliteTable(
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
+        // Generation owning the in-flight provisioning attempt. Fences stale
+        // acknowledgements from a superseded attempt (see Branch type).
+        provisioning_attempt_id?: string;
+        provisioning_operation?: 'create' | 'retry' | 'restore';
 
         // Environment instance (runtime state only, no variables)
         environment_instance?: BranchEnvironmentInstance;

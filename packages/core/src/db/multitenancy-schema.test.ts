@@ -67,7 +67,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
   const managedOAuthMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0111_mcp_managed_oauth_authority.sql'
+    'packages/core/drizzle/postgres/0112_mcp_managed_oauth_authority.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -107,7 +107,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
     readRepoFile('packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0111_mcp_managed_oauth_authority.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0112_mcp_managed_oauth_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),

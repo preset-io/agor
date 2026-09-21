@@ -24,14 +24,14 @@
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "zod": "^4.6.5"
   },
   "optionalDependencies": {
     "@lydell/node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
-    "@cursor/sdk": "^1.0.26",
+    "@cursor/sdk": "1.0.31",
     "@google/gemini-cli-core": "0.59.0",
     "@google/genai": "^1.52.0",
     "@modelcontextprotocol/sdk": "^1.30.0",

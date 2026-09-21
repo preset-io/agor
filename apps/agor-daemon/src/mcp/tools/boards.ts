@@ -1,6 +1,6 @@
 import { PAGINATION } from '@agor/core/config';
 import type { Board, BoardEntityType, BoardObject, BoardObjectType } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
@@ -286,11 +286,40 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
   );
 
   server.registerTool(
+    'agor_boards_transfer_ownership',
+    {
+      description:
+        'Transfer management ownership of one board to another workspace member. Only the current owner or a workspace administrator may transfer. ' +
+        'Preserves authorship and access entries; does not transfer related resources, sessions, schedules, gateway run-as, memory ownership or credentials. ' +
+        'Existing work keeps its execution identity. This is not offboarding or a pause. Returns the previous owner’s remaining policy access.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.strictObject({
+        boardId: z.uuid().describe('Full board UUID'),
+        expectedOwnerUserId: z
+          .uuid()
+          .describe('Current primary owner UUID from a fresh board read'),
+        targetUserId: z.uuid().describe('Successor workspace member UUID'),
+      }),
+    },
+    async (args) =>
+      textResult(
+        await ctx.app.service(OWNERSHIP_TRANSFER_SERVICES.board).patch(
+          null,
+          {
+            expected_owner_user_id: args.expectedOwnerUserId,
+            target_user_id: args.targetUserId,
+          },
+          { ...ctx.baseServiceParams, route: { id: args.boardId } }
+        )
+      )
+  );
+
+  server.registerTool(
     'agor_boards_permissions_update',
     {
       description:
         'Replace a board permission policy and its complete default branch configuration. ' +
-        'Read the current revision with agor_boards_get first. Primary ownership is immutable.',
+        'Read the current revision with agor_boards_get first. Use agor_boards_transfer_ownership to change the primary owner separately.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         boardId: mcpRequiredId('boardId', 'Board'),

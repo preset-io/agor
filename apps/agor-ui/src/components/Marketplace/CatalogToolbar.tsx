@@ -71,13 +71,24 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
         />
-        <Segmented<CategoryFilter>
-          options={CATEGORY_OPTIONS}
-          value={category ?? ALL_CATEGORIES}
-          onChange={(value) =>
-            onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
-          }
-        />
+        <div
+          style={{
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            maxWidth: '100%',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
+          <Segmented<CategoryFilter>
+            options={CATEGORY_OPTIONS}
+            value={category ?? ALL_CATEGORIES}
+            onChange={(value) =>
+              onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
+            }
+          />
+        </div>
         <Row gutter={[token.paddingSM, token.paddingSM]} align="middle">
           <Col flex="auto" style={{ minWidth: 220 }}>
             <Select

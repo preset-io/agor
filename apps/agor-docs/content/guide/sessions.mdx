@@ -90,6 +90,40 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
 
+### Large tool transcripts
+
+Agor bounds each complete executor message write to 800,000 serialized UTF-8
+JSON bytes, including wrappers, escaping, and duplicated fields. Application-generated
+Edit/Write/`edit_files` diffs have a separate 256,000-byte (250 KiB) preview cap,
+including the `diff` wrapper and both `structuredPatch` and `files` copies. A diff
+that exceeds this cap is omitted as a whole, not cut into partial hunks.
+
+If the complete write still exceeds its budget, Agor omits known generated diffs
+**before** reducing original tool inputs or results, regardless of which field is
+largest. This also applies across messages in a bulk write. Original inputs and
+results stay exact whenever removing enrichment (including its omission notice)
+is enough. Provider-original fields are not classified as generated previews.
+
+If original tool data still cannot fit, Agor deliberately uses a **lossy fallback**
+to keep transcript processing moving: inputs are omitted as whole objects, and
+results may be shortened or omitted. The notice lists affected fields and their
+original serialized sizes. **Full data for those fields is unavailable in the
+saved transcript.** Shortened entries use a plain display, not a full diff preview.
+Valid outer message JSON does not mean that shortened JSON text inside a result
+is parseable, complete, or suitable for copying as the original data.
+
+These limits change only saved history/UI projections, not tool execution or
+model inputs. They do not promise retrieval from provider-local history. Pagination
+and filtering can reduce large tool outputs, but cannot fix generated enrichment
+or every legitimate large payload. Full-payload upload, storage, retrieval,
+permissions, retention, and cleanup require a separate future design; no payload
+archive or retrieval mechanism is provided by this fallback. The final transport
+guard and finite acknowledgement timeout remain in effect.
+
+If omitted fields are needed to reconstruct the sticky task list, Agor shows
+that the current list is unavailable until a complete snapshot arrives, rather
+than displaying an empty or apparently current list.
+
 ### Large session lists
 
 Branch cards and the branch teammate panel keep manual and gateway genealogy
@@ -282,6 +316,23 @@ reference and the task to an authorized administrator. The reference correlates
 bounded, content-free executor operational logs; it does not grant access to logs
 or expose the provider payload. High-volume diagnostics are summarized after the
 per-run log limit, without hiding notices or tool failures in the conversation.
+
+### Credential reminders
+
+After onboarding, Agor may show a credential reminder for the enabled agent that
+New Session initially selects. It checks only that agent, not the health of all
+your AIs. Loading, network errors and unverified native logins are inconclusive,
+so they do not produce a disconnected reminder.
+
+**Don't remind me about this agent** is a persistent opt-out in this browser,
+scoped to your workspace, user and agent. It stays dismissed after credential
+changes and reconnects, and stops the reminder's background checks. No other
+setup reminder replaces it while that agent is selected. It does not
+change authentication, permissions, or errors reported by sessions. Clearing
+this site's browser storage resets the opt-out. Older temporary credential
+snoozes are not migrated to permanent opt-outs; you may see one fresh reminder.
+The separate integrations **Maybe later** reminder remains a 24-hour snooze,
+shared across tabs for your workspace user in this browser.
 
 ### Historical Claude CLI sessions
 

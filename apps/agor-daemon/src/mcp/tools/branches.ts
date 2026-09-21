@@ -21,6 +21,7 @@ import {
   getBranchCleanupBlockReason,
   getTeammateConfig,
   isTeammate,
+  OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
 } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
@@ -1232,11 +1233,40 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   );
 
   server.registerTool(
+    'agor_branches_transfer_ownership',
+    {
+      description:
+        'Transfer management ownership of one branch to another workspace member. Only the current owner or a workspace administrator may transfer. ' +
+        'Preserves authorship and access entries; does not transfer related resources, sessions, schedules, gateway run-as, memory ownership or credentials. ' +
+        'Existing work keeps its execution identity. This is not offboarding or a pause. Returns the previous owner’s remaining policy access.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.strictObject({
+        branchId: z.uuid().describe('Full branch UUID'),
+        expectedOwnerUserId: z
+          .uuid()
+          .describe('Current primary owner UUID from a fresh branch read'),
+        targetUserId: z.uuid().describe('Successor workspace member UUID'),
+      }),
+    },
+    async (args) =>
+      textResult(
+        await ctx.app.service(OWNERSHIP_TRANSFER_SERVICES.branch).patch(
+          null,
+          {
+            expected_owner_user_id: args.expectedOwnerUserId,
+            target_user_id: args.targetUserId,
+          },
+          { ...ctx.baseServiceParams, route: { id: args.branchId } }
+        )
+      )
+  );
+
+  server.registerTool(
     'agor_branches_permissions_update',
     {
       description:
         'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
-        'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
+        'Read the current revision with agor_branches_get first. Use agor_branches_transfer_ownership to change the primary owner separately.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
@@ -1783,5 +1813,42 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     listTeammatesHandler
+  );
+
+  // Tool: agor_branches_retry_provisioning
+  // Explicit, non-destructive repair for a branch whose filesystem provisioning
+  // landed in 'failed'. Wraps the exact same `reposService.retryBranchProvisioning`
+  // implementation used by the REST route and the UI, so all three surfaces share
+  // one code path. Only `failed → creating` is retryable; the transition is an
+  // atomic claim, so concurrent calls can never dispatch two materializers.
+  server.registerTool(
+    'agor_branches_retry_provisioning',
+    {
+      description:
+        'Repair a branch whose git working directory failed to materialize ' +
+        "(filesystem_status 'failed') by re-dispatching provisioning. Also recovers a branch " +
+        "left 'creating' by a daemon restart. Requires branch control ('all' permission, branch " +
+        "owner, or admin). Not retryable otherwise: 'ready' is returned unchanged, a " +
+        "still-in-flight 'creating' attempt is rejected as a conflict, and " +
+        "archived/'preserved'/'cleaned'/'deleted' branches must use the restore/unarchive flow " +
+        'instead. Non-destructive — never deletes refs or directories. ' +
+        'Returns the updated branch with its new filesystem_status.',
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+      }),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, args.branchId);
+      const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.retryBranchProvisioning(branchId, ctx.baseServiceParams)
+      );
+      return textResult({
+        branch_id: branch.branch_id,
+        filesystem_status: branch.filesystem_status,
+        error_message: branch.error_message ?? null,
+        path: branch.path,
+      });
+    }
   );
 }

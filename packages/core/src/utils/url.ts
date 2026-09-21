@@ -138,9 +138,13 @@ export function knowledgePath(namespaceSlug?: string | null, documentPath?: stri
  *  Also strips a trailing `/ui` suffix so operators who set
  *  a base URL to the full UI address (e.g. `https://agor.example.com/ui`)
  *  don't end up with double-prefixed `/ui/ui/...` entity URLs.
- *  `baseUrl` here comes from `getBaseUrl()` in config-manager, which
- *  prefers `ui.base_url` before the daemon fallback. */
+ *  `baseUrl` comes from tenant routing in hosted mode or deployment config in
+ *  static/local mode. All full-URL helpers return an empty string when the
+ *  base is unavailable; they never substitute a relative link. */
 function fullUrl(path: string, baseUrl: string): string {
+  // Hosted tenants may not have received routing metadata yet. Do not turn an
+  // unavailable absolute URL into a misleading relative link in MCP/gateways.
+  if (!baseUrl) return '';
   // Strip trailing slash first, then any trailing /ui suffix.
   let base = baseUrl.replace(/\/$/, '');
   if (base.endsWith(UI_MOUNT_PATH)) {
@@ -158,20 +162,20 @@ export function getBoardUrl(
   return fullUrl(boardPath(boardId, boardSlug), baseUrl);
 }
 
-/** Generate a session URL. Always returns a URL — the entity resolves
- *  to its board at click time. */
+/** Generate a session URL, or an empty string without a base URL.
+ *  The entity resolves to its board at click time. */
 export function getSessionUrl(sessionId: SessionID, baseUrl: string): string {
   return fullUrl(sessionPath(sessionId), baseUrl);
 }
 
-/** Generate a branch URL. Always returns a URL — the entity resolves
- *  to its board at click time. */
+/** Generate a branch URL, or an empty string without a base URL.
+ *  The entity resolves to its board at click time. */
 export function getBranchUrl(branchId: BranchID, baseUrl: string): string {
   return fullUrl(branchPath(branchId), baseUrl);
 }
 
-/** Generate an artifact URL. Always returns a URL — the entity
- *  resolves to its board at click time. */
+/** Generate an artifact URL, or an empty string without a base URL.
+ *  The entity resolves to its board at click time. */
 export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string {
   return fullUrl(artifactPath(artifactId), baseUrl);
 }

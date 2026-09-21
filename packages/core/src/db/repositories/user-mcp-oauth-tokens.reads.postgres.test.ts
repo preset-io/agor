@@ -66,6 +66,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
                 oauth_refresh_token: seal('synthetic-refresh', 'refresh-token', 'refresh'),
                 oauth_client_id: seal('synthetic-client', 'client-id', 'client-id'),
                 oauth_client_secret: seal('synthetic-secret', 'client-secret', 'client-secret'),
+                // Expired access remains usable as grant status only through
+                // refresh-token presence, without selecting either ciphertext.
+                oauth_token_expires_at: new Date('2000-01-01T00:00:00Z'),
                 grant_generation: 1,
                 created_at: new Date(),
               })
@@ -106,11 +109,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             ]);
             const status = await repo.listStatusForSubject(own.user);
             expect(status).toHaveLength(1);
+            expect(status[0].has_refresh_token).toBe(true);
             expect(status[0]).not.toHaveProperty('oauth_access_token');
             expect(status[0]).not.toHaveProperty('oauth_refresh_token');
             await expect(repo.listStatusForSubject(foreign.user)).resolves.toEqual([]);
             const sharedStatus = await repo.listStatusForSubject(null);
             expect(sharedStatus).toHaveLength(1);
+            expect(sharedStatus[0].has_refresh_token).toBe(true);
             expect(sharedStatus[0].mcp_server_id).toBe(own.server);
             const servers = await new MCPServerRepository(scoped).findByIds([
               own.server,

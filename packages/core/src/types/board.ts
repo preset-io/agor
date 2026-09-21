@@ -46,6 +46,9 @@ export interface BoardEntityObject {
   /** Zone this entity is pinned to (optional) */
   zone_id?: string;
 
+  /** Ephemeral PATCH correlation echoed in the response/event; never persisted or used for access. */
+  placement_write_id?: string;
+
   /** When this entity was added to the board */
   created_at: string;
 }
@@ -280,7 +283,7 @@ export interface Board {
   /** User ID of the user who created this board */
   created_by: string;
 
-  /** Immutable primary owner. This is intentionally independent of attribution. */
+  /** Primary owner, changed only by explicit ownership transfer; independent of attribution. */
   primary_owner_user_id?: string;
 
   /** Board-level visibility. Existing boards default/read as 'shared'. */

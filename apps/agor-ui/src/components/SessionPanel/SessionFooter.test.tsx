@@ -587,3 +587,84 @@ describe('SessionFooter pinned items', () => {
     expect(screen.getByTitle('Advanced upload')).toBeDisabled();
   });
 });
+
+describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
+  beforeEach(() => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(width);
+    localStorage.clear();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it('keeps Stop independent of Queue, attachments, and draft content', () => {
+    const onStop = vi.fn();
+    const onSendPrompt = vi.fn();
+    const view = render(
+      <SessionFooter
+        {...baseProps}
+        isRunning
+        hasInput
+        onStop={onStop}
+        onSendPrompt={onSendPrompt}
+      />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Queue').closest('button')!);
+    expect(onSendPrompt).toHaveBeenCalledOnce();
+    view.rerender(
+      <SessionFooter {...baseProps} isRunning composerAttachmentUploading onStop={onStop} />
+    );
+    expect(screen.getByText('Send').closest('button')!).toBeDisabled();
+    expect(screen.getByText('Stop').closest('button')!).toBeEnabled();
+  });
+
+  it('retains pending feedback, disables duplicate/offline Stop, and allows stopping retries', () => {
+    const onStop = vi.fn();
+    const view = render(
+      <SessionFooter {...baseProps} isRunning stopRequestInFlight onStop={onStop} />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    expect(onStop).not.toHaveBeenCalled();
+    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByText('Stop').closest('button')!).toHaveAttribute('aria-busy', 'true');
+    view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
+    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
+    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    expect(onStop).toHaveBeenCalledOnce();
+    view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
+    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    view.rerender(<SessionFooter {...baseProps} />);
+    expect(screen.queryByText('Stop')).not.toBeInTheDocument();
+  });
+
+  if (width < 1024) {
+    it('keeps desktop pins in the sheet and gives primary actions touch-sized targets', async () => {
+      localStorage.setItem(
+        'agor-footer-prefs',
+        JSON.stringify({ pinnedItems: ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'] })
+      );
+      render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
+      expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
+      for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
+        const button = ['Stop', 'Queue'].includes(name)
+          ? screen.getByText(name).closest('button')!
+          : screen.getByLabelText(name);
+        expect(button.style.minHeight).toBe('44px');
+      }
+      fireEvent.click(screen.getByLabelText('More options'));
+      const sheet = (await screen.findByText('Session controls')).closest('[role=dialog]')!;
+      expect(within(sheet as HTMLElement).getByLabelText('Fork session')).toBeInTheDocument();
+      expect(within(sheet as HTMLElement).getByLabelText('Spawn subsession')).toHaveAttribute(
+        'aria-disabled',
+        'true'
+      );
+    });
+  }
+});

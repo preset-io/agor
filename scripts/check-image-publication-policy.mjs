@@ -9,6 +9,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workflowPath = '.github/workflows/build-image.yml';
 const workflow = await readFile(path.join(root, workflowPath), 'utf8');
 
+// Production copies the full source tree; managed development builds copy only
+// dependency inputs. Keep every pnpm patch in that earlier install layer too.
+const dockerfile = await readFile(path.join(root, 'docker/Dockerfile'), 'utf8');
+const developmentInstallInputs = dockerfile
+  .split('FROM base AS development')[1]
+  ?.split('pnpm install --frozen-lockfile')[0];
+assert.match(
+  developmentInstallInputs ?? '',
+  /^COPY patches\/ \.\/patches\/$/m,
+  'development must copy the complete patches directory before the frozen install'
+);
+
 function step(name) {
   const marker = `      - name: ${name}`;
   const start = workflow.indexOf(marker);
