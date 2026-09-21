@@ -117,7 +117,10 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
     ),
   };
 });
-vi.mock('@agor/core/mcp-catalog', () => ({
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  // Preserve the pure recipe lookup now used by configured-app issuer pinning.
+  findCatalogEntry: (await importOriginal<typeof import('@agor/core/mcp-catalog')>())
+    .findCatalogEntry,
   loadCatalog: vi.fn().mockResolvedValue([]),
   probeRemoteAuthType,
   probeRemoteBearerToken,
