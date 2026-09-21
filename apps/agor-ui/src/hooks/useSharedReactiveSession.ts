@@ -6,7 +6,8 @@ import {
   releaseReactiveSession,
   retainReactiveSession,
 } from '@agor-live/client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { LEAN_TRANSCRIPT_POC } from '../utils/leanTranscriptPoc';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseSharedReactiveSessionOptions {
@@ -25,17 +26,24 @@ export function useSharedReactiveSession(
   options: UseSharedReactiveSessionOptions = {}
 ): UseSharedReactiveSessionResult {
   const { enabled = true, reactiveOptions } = options;
-  const taskHydration = reactiveOptions?.taskHydration ?? 'lazy';
+  const requestedHydration = reactiveOptions?.taskHydration ?? 'lazy';
+  const taskHydration =
+    LEAN_TRANSCRIPT_POC && requestedHydration === 'lazy' ? 'lean' : requestedHydration;
+  const binding = useRef<{ client: AgorClient; sessionId: string; taskHydration: string } | null>(
+    null
+  );
   const [handle, setHandle] = useState<ReactiveSessionHandle | null>(null);
   const [state, setState] = useState<ReactiveSessionState | null>(null);
 
   useEffect(() => {
     if (!client || !sessionId || !enabled) {
+      binding.current = null;
       setHandle(null);
       setState(null);
       return;
     }
 
+    binding.current = { client, sessionId, taskHydration };
     const sharedHandle = retainReactiveSession(client, sessionId, { taskHydration });
     setHandle(sharedHandle);
     let disposed = false;
@@ -101,5 +109,11 @@ export function useSharedReactiveSession(
     };
   }, [handle]);
 
-  return { handle, state };
+  // Fence identity/session replacement during render, not just passive cleanup.
+  const current =
+    enabled &&
+    binding.current?.client === client &&
+    binding.current?.sessionId === sessionId &&
+    binding.current?.taskHydration === taskHydration;
+  return { handle: current ? handle : null, state: current ? state : null };
 }

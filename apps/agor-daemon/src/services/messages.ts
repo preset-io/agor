@@ -54,6 +54,8 @@ export type MessageParams = QueryParams<{
       };
   session_id?: SessionID;
   task_id?: TaskID;
+  /** Experimental historical projection. Full details remain the default. */
+  transcript?: 'lean';
   type?: Message['type'];
   role?: Message['role'];
 }> & {
@@ -101,6 +103,20 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
   for (const field of Object.keys(rawQuery)) {
     if (!MESSAGE_QUERY_FIELDS.has(field)) {
       throw new BadRequest(`Unsupported messages query field: ${field}`);
+    }
+  }
+  if (rawQuery.transcript !== undefined) {
+    if (
+      rawQuery.transcript !== 'lean' ||
+      (Array.isArray(rawQuery.$select) &&
+        rawQuery.$select.some(
+          (field) => !['message_id', 'session_id', 'task_id', 'index'].includes(String(field))
+        )) ||
+      (typeof rawQuery.session_id !== 'string' && typeof rawQuery.task_id !== 'string')
+    ) {
+      throw new BadRequest(
+        'Lean transcript requires an exact session_id or task_id and only identity $select fields'
+      );
     }
   }
   const query = { ...rawQuery } as Query;
@@ -167,6 +183,7 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
 }
 
 const MESSAGE_QUERY_FIELDS = new Set([
+  'transcript',
   'message_id',
   'session_id',
   'task_id',
@@ -294,6 +311,7 @@ export class MessagesService extends DrizzleService<
       );
     }
     const pageOptions: Parameters<MessagesRepository['findPage']>[0] = {
+      lean: query.transcript === 'lean',
       limit: actualLimit,
       skip,
       sort: query.$sort,

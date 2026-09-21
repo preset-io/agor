@@ -21,11 +21,12 @@ import type {
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
+import { LEAN_TRANSCRIPT_POC } from '../../utils/leanTranscriptPoc';
 import { BrandMark } from '../BrandMark';
 import { TaskBlock } from '../TaskBlock';
 
@@ -384,11 +385,54 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const olderInflight = useRef(false);
+    const previousScrollTop = useRef(0);
+    const olderAnchor = useRef<{
+      element: HTMLElement;
+      top: number;
+      sessionId: SessionID | null;
+    } | null>(null);
+    const loadOlder = useCallback(async () => {
+      if (!reactiveSession || olderInflight.current || !currentReactiveState?.hasOlderTasks) return;
+      const viewport = scrollRef.current;
+      if (!viewport) return;
+      stopScroll();
+      const anchor = Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
+        (element) => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top
+      );
+      if (anchor)
+        olderAnchor.current = {
+          element: anchor,
+          top: anchor.getBoundingClientRect().top,
+          sessionId,
+        };
+      olderInflight.current = true;
+      setLoadingOlder(true);
+      try {
+        await reactiveSession.loadOlderTasks();
+      } catch {
+        /* Existing history stays visible; the state carries a retryable error. */
+      } finally {
+        olderInflight.current = false;
+        setLoadingOlder(false);
+      }
+    }, [reactiveSession, currentReactiveState?.hasOlderTasks, scrollRef, stopScroll, sessionId]);
+    useLayoutEffect(() => {
+      const anchor = olderAnchor.current;
+      if (!anchor || loadingOlder || !scrollRef.current) return;
+      if (anchor.sessionId === sessionId && anchor.element.isConnected) {
+        scrollRef.current.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
+        previousScrollTop.current = scrollRef.current.scrollTop;
+      }
+      olderAnchor.current = null;
+    }, [loadingOlder, scrollRef, sessionId]);
+
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent
     // ResizeObserver — no manual scroll listeners or streaming effect needed.
 
-    if (error) {
+    if (error && (!LEAN_TRANSCRIPT_POC || isTerminalError || tasks.length === 0)) {
       // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
       // TOKENS_REFRESHED_EVENT listener, visibility-change listener in
       // useSharedReactiveSession) didn't catch the error — e.g. the user
@@ -520,6 +564,15 @@ export const ConversationView = React.memo<ConversationViewProps>(
       <div
         ref={setScrollViewport}
         data-testid="conversation-scroll-container"
+        onScroll={
+          LEAN_TRANSCRIPT_POC
+            ? (event) => {
+                const top = event.currentTarget.scrollTop;
+                if (top < previousScrollTop.current && top < 80) void loadOlder();
+                previousScrollTop.current = top;
+              }
+            : undefined
+        }
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -531,11 +584,26 @@ export const ConversationView = React.memo<ConversationViewProps>(
           {/* Genealogy Banner */}
           <GenealogyBanner />
 
+          {LEAN_TRANSCRIPT_POC && (
+            <>
+              <Text type="secondary">
+                Lean transcript POC · older history loads above · search covers loaded content
+              </Text>
+              {error && <Alert type="error" title={error} />}
+              {currentReactiveState?.hasOlderTasks && (
+                <Button loading={loadingOlder} onClick={() => void loadOlder()}>
+                  Load older history
+                </Button>
+              )}
+            </>
+          )}
           {/* Task-organized conversation */}
           {tasks.map((task, taskIndex) => (
             <TaskBlock
               key={task.task_id}
               task={task}
+              leanTranscript={LEAN_TRANSCRIPT_POC}
+              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)?.toolName}
               agentic_tool={agentic_tool}
               sessionModel={sessionModel}
               userById={userById}

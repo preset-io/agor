@@ -331,6 +331,28 @@ export interface Message {
   };
 }
 
+/** Display metadata needed by the experimental lean transcript, never tool data. */
+export const LEAN_TRANSCRIPT_METADATA_FIELDS = [
+  'model',
+  'source',
+  'system_authored',
+  'widget_id',
+  'widget',
+  'is_agor_callback',
+  'is_btw_result',
+  'btw_prompt',
+  'btw_session_id',
+  'btw_caller_session_id',
+  'btw_caller_title',
+  'error_kind',
+  'tool',
+  'is_task_failure',
+  'is_missing_credential_failure',
+  'is_zero_turn_result',
+  'is_provider_failure_result',
+  'persistence_omission',
+] as const;
+
 /**
  * Message creation input (without generated fields)
  */

@@ -1,13 +1,25 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
-import { MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
+import {
+  EXECUTING_TASK_STATUSES,
+  isTaskExecuting,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+  TaskStatus,
+} from '@agor/core/client';
 
-export type TaskHydrationMode = 'none' | 'lazy' | 'eager';
+export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
+
+/** POC task page, not a byte limit: an individual turn may still be large. */
+export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
+const LEAN_ACTIVE_STATUSES = EXECUTING_TASK_STATUSES;
+const isLeanActive = isTaskExecuting;
 
 export interface ReactiveSessionOptions {
   /**
    * Message hydration policy:
    * - none: do not auto-load task messages
    * - lazy: load messages per task via loadTaskMessages() (default)
+   * - lean: POC, ten recent tasks with SQL-projected history and explicit details
    * - eager: load all session messages during bootstrap
    */
   taskHydration?: TaskHydrationMode;
@@ -55,6 +67,8 @@ export interface ReactiveSessionState {
   streamingMessages: ReactiveStreamingMessagesById;
   toolsByTask: ReactiveToolsByTask;
   loadedTaskIds: ReactiveLoadedTaskIds;
+  /** POC-only older-history cursor state. */
+  hasOlderTasks?: boolean;
   connected: boolean;
   loading: boolean;
   error: string | null;
@@ -175,6 +189,11 @@ export class ReactiveSessionHandle {
   private readonly taskFetches = new Map<number, number>();
   private readonly taskMutations: TaskMutation[] = [];
   private sessionMutationSequence = 0;
+  private leanConnectionGeneration = 0;
+  private leanOldestTaskId: string | undefined;
+  private leanSyncInflight: Promise<void> | null = null;
+  private readonly detailInflight = new Map<string, Promise<Message[]>>();
+  private readonly leanLiveTaskIds = new Set<string>();
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -232,7 +251,23 @@ export class ReactiveSessionHandle {
     subscribed: Promise<void>,
     hydrate: () => Promise<void>
   ): Promise<void> {
-    await subscribed;
+    try {
+      await subscribed;
+    } catch (error) {
+      if (this.options.taskHydration !== 'lean') throw error;
+      if (this.disposed) return;
+      this.updateState((prev) => ({
+        ...prev,
+        loading: false,
+        terminal: [403, 404].includes(errorStatusCode(error) ?? 0),
+        error: 'Could not subscribe to this conversation. Reload to retry.',
+        tasks: [],
+        messagesByTask: new Map(),
+        loadedTaskIds: new Set(),
+        streamingMessages: new Map(),
+      }));
+      return;
+    }
     // Learn the canonical id from the ack so events (full-UUID) arriving before
     // hydration completes already match — the mid-stream chunk case.
     const canonical = getCanonicalSessionId(this.client, this.sessionId);
@@ -252,6 +287,8 @@ export class ReactiveSessionHandle {
    * id, so a short-id handle relies on the canonical match.
    */
   private matchesSession(id: string): boolean {
+    if (this.options.taskHydration === 'lean' && (this.disposed || this.stateSnapshot.terminal))
+      return false;
     return id === this.sessionId || id === this.canonicalSessionId;
   }
 
@@ -318,12 +355,30 @@ export class ReactiveSessionHandle {
     return this.client.sessions.prompt(this.sessionId, prompt, options);
   }
 
-  async loadTaskMessages(taskId: string): Promise<Message[]> {
+  loadTaskMessages(taskId: string): Promise<Message[]> {
+    if (this.options.taskHydration !== 'lean') return this.loadTaskMessagesOnce(taskId);
+    const existing = this.detailInflight.get(taskId);
+    if (existing) return existing;
+    const promise = this.loadTaskMessagesOnce(taskId).finally(() => {
+      if (this.detailInflight.get(taskId) === promise) this.detailInflight.delete(taskId);
+    });
+    this.detailInflight.set(taskId, promise);
+    return promise;
+  }
+
+  private async loadTaskMessagesOnce(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
+    const generation = this.leanConnectionGeneration;
     const cacheMutationSequence = this.recordMessageCacheMutation(taskId);
     const fetchToken = this.beginMessageFetch();
     try {
       const snapshot = await this.fetchTaskMessagesAtHighWater(taskId);
+      if (
+        this.disposed ||
+        this.stateSnapshot.terminal ||
+        generation !== this.leanConnectionGeneration
+      )
+        return [];
       let committed = snapshot;
       this.updateState((prev) => {
         // A later unload (or newer load) owns cache membership. The older
@@ -359,11 +414,9 @@ export class ReactiveSessionHandle {
           lastSyncedAt: new Date().toISOString(),
         };
       });
-      this.cancelMessageFetch(fetchToken);
       return committed;
-    } catch (error) {
+    } finally {
       this.cancelMessageFetch(fetchToken);
-      throw error;
     }
   }
 
@@ -520,6 +573,7 @@ export class ReactiveSessionHandle {
 
   unloadTaskMessages(taskId: string): void {
     this.assertNotDisposed();
+    if (this.options.taskHydration === 'lean') return; // Disclosure is not cache eviction.
     // Record the intent even when no bucket exists yet. A resync may currently
     // be fetching this Task as its automatic latest-Task hydration target.
     this.recordMessageCacheMutation(taskId);
@@ -669,7 +723,212 @@ export class ReactiveSessionHandle {
     };
   }
 
+  /** Older paging is single-flight, never findAll() over the entire Session. */
+  loadOlderTasks(): Promise<void> {
+    if (this.options.taskHydration !== 'lean' || !this.stateSnapshot.hasOlderTasks)
+      return Promise.resolve();
+    return this.syncLeanHistory(true);
+  }
+
+  private syncLeanHistory(older = false): Promise<void> {
+    if (this.disposed || this.stateSnapshot.terminal) return Promise.resolve();
+    if (this.leanSyncInflight)
+      return older
+        ? this.leanSyncInflight
+        : this.leanSyncInflight.then(() => this.syncLeanHistory());
+    const operation = this.doSyncLeanHistory(older).finally(() => {
+      if (this.leanSyncInflight === operation) this.leanSyncInflight = null;
+    });
+    this.leanSyncInflight = operation;
+    return operation;
+  }
+
+  private async fetchLeanTaskMessages(taskId: string): Promise<Message[]> {
+    return this.fetchMessagesAtHighWater({
+      session_id: this.sessionId,
+      task_id: taskId,
+      transcript: 'lean',
+      $sort: { index: 1 },
+    });
+  }
+
+  private async doSyncLeanHistory(older: boolean): Promise<void> {
+    const generation = this.leanConnectionGeneration;
+    const stale = () =>
+      this.disposed || this.stateSnapshot.terminal || generation !== this.leanConnectionGeneration;
+    const taskToken = this.beginTaskFetch();
+    const messageToken = this.beginMessageFetch();
+    const sessionSequence = this.sessionMutationSequence;
+    try {
+      const session = await this.client.service('sessions').get(this.sessionId);
+      if (stale()) return;
+      this.canonicalSessionId = session.session_id;
+      const cursor = older ? this.leanOldestTaskId : undefined;
+      const result = await this.client.service('tasks').find({
+        query: {
+          session_id: this.sessionId,
+          $sort: { task_id: -1 },
+          $limit: LEAN_TRANSCRIPT_TASK_PAGE_SIZE + 1,
+          ...(cursor ? { task_id: { $lte: cursor } } : {}),
+        },
+      });
+      if (stale()) return;
+      const rows = Array.isArray(result) ? result : result.data;
+      const candidates = rows.filter((task) => task.task_id !== cursor);
+      const page = candidates.slice(0, LEAN_TRANSCRIPT_TASK_PAGE_SIZE);
+      const hasOlder = cursor
+        ? candidates.length >= LEAN_TRANSCRIPT_TASK_PAGE_SIZE
+        : candidates.length > LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
+      const byId = new Map(this.stateSnapshot.tasks.map((task) => [task.task_id, task]));
+      const queue = (await this.client
+        .service(`/sessions/${this.sessionId}/tasks/queue`)
+        .find()) as QueueFindResult;
+      if (stale()) return;
+      for (const task of queue.data ?? []) byId.set(task.task_id, task);
+      if (!older) {
+        // A reconnect can span more than ten newly completed turns. Fill the
+        // already-open ID window so advancing the latest page cannot strand
+        // an invisible gap above the older-history cursor. Never walk before
+        // the oldest turn the reader has reached.
+        const through = rows[0]?.task_id;
+        let after = this.leanOldestTaskId;
+        while (through && after && after < through) {
+          if (stale()) return;
+          const window = await this.client.service('tasks').find({
+            query: {
+              session_id: this.sessionId,
+              task_id: { $gt: after, $lte: through },
+              $sort: { task_id: 1 },
+              $limit: 100,
+            },
+          });
+          const windowTasks = Array.isArray(window) ? window : window.data;
+          if (!windowTasks.length) break;
+          for (const task of windowTasks) byId.set(task.task_id, task);
+          const next = windowTasks.at(-1)!.task_id;
+          if (next <= after) throw new Error('History cursor did not advance');
+          after = next;
+        }
+        // Active work must remain reachable even behind more than a page of
+        // queued prompts. Existing status-filtered queries, no new auth route.
+        for (const status of LEAN_ACTIVE_STATUSES) {
+          if (stale()) return;
+          const active = await this.client.service('tasks').find({
+            query: {
+              session_id: this.sessionId,
+              status,
+              $limit: 1,
+              $sort: { task_id: -1 },
+            },
+          });
+          for (const task of Array.isArray(active) ? active : active.data)
+            byId.set(task.task_id, task);
+        }
+        // Refresh previously reached history without widening its membership.
+        for (const task of this.stateSnapshot.tasks) {
+          if (stale()) return;
+          if (page.some((item) => item.task_id === task.task_id)) continue;
+          try {
+            byId.set(task.task_id, await this.client.service('tasks').get(task.task_id));
+          } catch (error) {
+            if (errorStatusCode(error) === 404) byId.delete(task.task_id);
+            else throw error;
+          }
+        }
+      }
+      for (const task of page) byId.set(task.task_id, task);
+      const tasks = this.reconcileTaskFetch(taskToken, [...byId.values()]);
+      const fullIds = new Set(this.stateSnapshot.loadedTaskIds);
+      const snapshots = new Map<string, Message[]>();
+      const sequences = new Map<string, number>();
+      for (const task of tasks) {
+        if (stale()) return;
+        if (older && !page.some((item) => item.task_id === task.task_id)) continue;
+        if (task.status === TaskStatus.QUEUED) continue;
+        if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+        if (this.leanLiveTaskIds.has(task.task_id)) fullIds.add(task.task_id);
+        sequences.set(task.task_id, this.messageCacheMutationsByTask.get(task.task_id) ?? 0);
+        snapshots.set(
+          task.task_id,
+          fullIds.has(task.task_id)
+            ? await this.fetchTaskMessagesAtHighWater(task.task_id)
+            : await this.fetchLeanTaskMessages(task.task_id)
+        );
+      }
+      if (
+        this.disposed ||
+        this.stateSnapshot.terminal ||
+        generation !== this.leanConnectionGeneration
+      )
+        return;
+      if (page.length && (older || !this.leanOldestTaskId))
+        this.leanOldestTaskId = page.at(-1)!.task_id;
+      this.updateState((prev) => {
+        const committedTasks = orderTasksBySession(
+          this.reconcileTaskFetch(taskToken, tasks),
+          session.tasks
+        );
+        const ids = new Set<string>(committedTasks.map((task) => task.task_id));
+        const messagesByTask = new Map([...prev.messagesByTask].filter(([id]) => ids.has(id)));
+        const loadedTaskIds = new Set([...prev.loadedTaskIds].filter((id) => ids.has(id)));
+        const fetched = new Map<string, Message[]>();
+        for (const [id, snapshot] of snapshots) {
+          if (!ids.has(id) || sequences.get(id) !== (this.messageCacheMutationsByTask.get(id) ?? 0))
+            continue;
+          const merged = this.reconcileMessageFetch(
+            messageToken,
+            snapshot,
+            (message) => message.task_id === id && this.matchesSession(message.session_id)
+          );
+          messagesByTask.set(id, merged);
+          fetched.set(id, merged);
+          if (fullIds.has(id)) loadedTaskIds.add(id);
+        }
+        return {
+          ...prev,
+          session: this.sessionMutationSequence > sessionSequence ? prev.session : session,
+          tasks: committedTasks,
+          messagesByTask,
+          loadedTaskIds,
+          queuedTasks: sortTasksByQueuePosition(
+            committedTasks.filter((task) => task.status === TaskStatus.QUEUED)
+          ),
+          streamingMessages: restampStreamingTaskIds(
+            this.reconcilePersistedStreams(prev.streamingMessages, fetched, messageToken),
+            committedTasks
+          ),
+          hasOlderTasks: older || prev.hasOlderTasks === undefined ? hasOlder : prev.hasOlderTasks,
+          loading: false,
+          error: null,
+          lastSyncedAt: new Date().toISOString(),
+        };
+      });
+    } catch (error) {
+      if (stale()) return;
+      const terminal = [403, 404].includes(errorStatusCode(error) ?? 0);
+      this.updateState((prev) => ({
+        ...prev,
+        loading: false,
+        terminal: prev.terminal || terminal,
+        error: error instanceof Error ? error.message : 'Could not load history',
+        ...(terminal
+          ? {
+              messagesByTask: new Map(),
+              tasks: [],
+              loadedTaskIds: new Set(),
+              streamingMessages: new Map(),
+            }
+          : {}),
+      }));
+      if (older) throw error;
+    } finally {
+      this.cancelTaskFetch(taskToken);
+      this.cancelMessageFetch(messageToken);
+    }
+  }
+
   private async bootstrap(): Promise<void> {
+    if (this.options.taskHydration === 'lean') return this.syncLeanHistory();
     const taskFetchToken = this.beginTaskFetch();
     const sessionFetchSequence = this.sessionMutationSequence;
     let messageFetchToken: number | null = null;
@@ -783,6 +1042,7 @@ export class ReactiveSessionHandle {
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;
+      if (this.options.taskHydration === 'lean') this.leanConnectionGeneration += 1;
       this.updateState((prev) => ({ ...prev, connected: false }));
     };
     this.client.io.on('connect', onSocketConnect);
@@ -806,6 +1066,15 @@ export class ReactiveSessionHandle {
       this.updateState((prev) => ({
         ...prev,
         session: null,
+        ...(this.options.taskHydration === 'lean'
+          ? {
+              tasks: [],
+              messagesByTask: new Map(),
+              loadedTaskIds: new Set(),
+              streamingMessages: new Map(),
+              toolsByTask: new Map(),
+            }
+          : {}),
         error: 'Session was removed',
         terminal: true,
         lastSyncedAt: new Date().toISOString(),
@@ -820,6 +1089,7 @@ export class ReactiveSessionHandle {
 
     const onTaskCreated = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
@@ -841,6 +1111,7 @@ export class ReactiveSessionHandle {
     };
     const onTaskPatched = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
@@ -973,7 +1244,9 @@ export class ReactiveSessionHandle {
         }
 
         const shouldTrackMessages =
-          this.options.taskHydration === 'eager' || prev.loadedTaskIds.has(message.task_id);
+          this.options.taskHydration === 'lean' ||
+          this.options.taskHydration === 'eager' ||
+          prev.loadedTaskIds.has(message.task_id);
 
         if (!shouldTrackMessages) {
           return {
@@ -1000,7 +1273,9 @@ export class ReactiveSessionHandle {
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const shouldTrackMessages =
-          this.options.taskHydration === 'eager' || prev.loadedTaskIds.has(taskId);
+          this.options.taskHydration === 'lean' ||
+          this.options.taskHydration === 'eager' ||
+          prev.loadedTaskIds.has(taskId);
         if (!shouldTrackMessages) return prev;
         const nextByTask = upsertMessageInTaskMap(prev.messagesByTask, message);
         return {
@@ -1302,6 +1577,7 @@ export class ReactiveSessionHandle {
   }
 
   private async doResync(): Promise<void> {
+    if (this.options.taskHydration === 'lean') return this.syncLeanHistory();
     const taskFetchToken = this.beginTaskFetch();
     const sessionFetchSequence = this.sessionMutationSequence;
     let messageFetchToken: number | null = null;

@@ -40,7 +40,7 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Popover, Space, Typography, theme } from 'antd';
+import { Button, Popover, Space, Typography, theme } from 'antd';
 import React, { useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -90,6 +90,7 @@ interface AgentChainProps {
   isLatest?: boolean;
   /** Remove desktop transcript indentation at phone widths. */
   compact?: boolean;
+  leanTranscript?: boolean;
 }
 
 interface ChainItem {
@@ -145,9 +146,9 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest, compact = false }) => {
+  ({ messages, isTaskRunning = false, isLatest, compact = false, leanTranscript = false }) => {
     const { token } = theme.useToken();
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(!leanTranscript);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -512,7 +513,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           description={description ?? undefined}
           descriptionNode={descriptionNode}
           status={status}
-          expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+          expandedByDefault={!leanTranscript && shouldExpandToolByDefault(toolUse.name)}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>
@@ -601,6 +602,11 @@ export const AgentChain = React.memo<AgentChainProps>(
 
     const _totalCount = stats.thoughtCount + stats.toolCount;
     const hasErrors = stats.errorCount > 0;
+    const latestToolItem = [...chainItems].reverse().find((item) => item.type === 'tool');
+    const latestToolName =
+      latestToolItem && typeof latestToolItem.content !== 'string'
+        ? latestToolItem.content.toolUse.name
+        : undefined;
 
     // Early return if no items (prevents empty bordered boxes)
     if (chainItems.length === 0) {
@@ -610,9 +616,16 @@ export const AgentChain = React.memo<AgentChainProps>(
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
         {/* Collapsed summary - clickable */}
-        <div
+        <Button
+          type="text"
+          aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
           style={{
+            width: '100%',
+            height: 'auto',
+            whiteSpace: 'normal',
+            textAlign: 'left',
+            display: 'block',
             padding: token.sizeUnit * 1.5,
             borderRadius: token.borderRadius,
             background: token.colorBgContainer,
@@ -652,9 +665,16 @@ export const AgentChain = React.memo<AgentChainProps>(
             </Typography.Text>
 
             {/* Only show details when collapsed */}
-            {!expanded && summaryDescription}
+            {!expanded &&
+              (leanTranscript ? (
+                <Typography.Text type="secondary">
+                  {latestToolName ? `Latest: ${latestToolName}` : 'Thinking'}
+                </Typography.Text>
+              ) : (
+                summaryDescription
+              ))}
           </div>
-        </div>
+        </Button>
 
         {/* Expanded chain */}
         {expanded && (

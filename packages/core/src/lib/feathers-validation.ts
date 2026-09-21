@@ -234,6 +234,7 @@ const messageSelectableFieldSchema = Type.Union(
  */
 export const messageQuerySchema = Type.Object(
   {
+    transcript: Type.Optional(Type.Literal('lean')),
     message_id: Type.Optional(
       Type.Union([
         CommonSchemas.uuid,

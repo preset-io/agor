@@ -130,6 +130,12 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
           provider_payload: { 'bad�key': 'value�' },
         },
       ]);
+      const lean = await repository.findPage({ sessionId: session.session_id, lean: true });
+      expect(lean.data.find((item) => item.message_id === first.message_id)?.content).toEqual([]);
+      expect(JSON.stringify(lean)).not.toContain('read-binary');
+      expect(lean.data.find((item) => item.message_id === second.message_id)?.content).toBe(
+        'second�'
+      );
       expect(finalized.content_preview).toBe('updated�');
       expect(finalized.tool_uses).toEqual([
         { id: 'read-binary', name: 'read', input: { 'path�': 'file�' } },
@@ -227,7 +233,12 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
       await messages.create(createMessage(visibleSession.session_id, 0));
       await messages.create(createMessage(hiddenSession.session_id, 1));
 
-      const page = await messages.findPage({ visibleToUserId: viewerId, limit: 10, skip: 0 });
+      const page = await messages.findPage({
+        visibleToUserId: viewerId,
+        limit: 10,
+        skip: 0,
+        lean: true,
+      });
       expect(page.total).toBe(1);
       expect(page.data.map((message) => message.session_id)).toEqual([visibleSession.session_id]);
       visibleSessionId = visibleSession.session_id;
@@ -235,6 +246,7 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
       const page = await new MessagesRepository(scoped).findPage({
+        lean: true,
         sessionId: visibleSessionId!,
         limit: 10,
         skip: 0,

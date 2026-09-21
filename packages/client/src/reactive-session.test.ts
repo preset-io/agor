@@ -55,7 +55,17 @@ function createMockClient(opts: MockClientOptions) {
       if (opts.deferTaskMessageFetch === query.task_id) {
         await new Promise<void>((resolve) => messageFetchResolvers.push(resolve));
       }
-      return snapshot;
+      return query.transcript === 'lean'
+        ? snapshot.map((message) => ({
+            ...message,
+            tool_uses: undefined,
+            content: Array.isArray(message.content)
+              ? message.content.filter(
+                  (block) => !['tool_use', 'tool_result', 'thinking'].includes(block.type)
+                )
+              : message.content,
+          }))
+        : snapshot;
     }
     // Eager path: every message for the session.
     return Object.values(opts.messagesByTask).flat();
@@ -117,7 +127,24 @@ function createMockClient(opts: MockClientOptions) {
       }),
       ...listener('sessions'),
     },
-    tasks: { findAll: taskFindAll, ...listener('tasks') },
+    tasks: {
+      findAll: taskFindAll,
+      find: vi.fn(async ({ query }: { query: Record<string, unknown> }) => {
+        let rows = [...opts.tasks].sort((a, b) => b.task_id.localeCompare(a.task_id));
+        if (query.status) rows = rows.filter((task) => task.status === query.status);
+        const cursor = query.task_id as { $lte?: string; $gt?: string } | undefined;
+        if (cursor?.$gt) rows = rows.filter((task) => task.task_id > cursor.$gt!);
+        if ((query.$sort as { task_id?: number })?.task_id === 1) rows.reverse();
+        if (cursor?.$lte) rows = rows.filter((task) => task.task_id <= cursor.$lte!);
+        return { data: rows.slice(0, Number(query.$limit)), total: rows.length };
+      }),
+      get: vi.fn(async (id: string) => {
+        const task = opts.tasks.find((task) => task.task_id === id);
+        if (!task) throw Object.assign(new Error('Not found'), { code: 404 });
+        return task;
+      }),
+      ...listener('tasks'),
+    },
     messages: { findAll: messageFindAll, ...listener('messages') },
     'session-streams': sessionStreams,
   };
@@ -1448,5 +1475,195 @@ describe('stream reconciliation authority and lazy cache boundaries', () => {
     await handle.loadTaskMessages('task-1');
     expect(handle.state.streamingMessages.size).toBe(0);
     handle.dispose();
+  });
+});
+
+describe('lean transcript POC hydration', () => {
+  const history = () => {
+    const tasks = Array.from({ length: 24 }, (_, index) =>
+      makeTask(`task-${String(index).padStart(3, '0')}`, TaskStatus.COMPLETED)
+    );
+    const messagesByTask = Object.fromEntries(
+      tasks.map((task) => [
+        task.task_id,
+        [
+          { ...makeMessage(task.task_id, 0), content: 'Prompt' },
+          {
+            ...makeMessage(task.task_id, 1),
+            content: [
+              { type: 'text', text: 'Answer before' },
+              { type: 'tool_use', id: 'tool', name: 'Read', input: { canary: 'TOOL_CANARY' } },
+            ],
+          },
+          { ...makeMessage(task.task_id, 2), content: 'Answer after' },
+        ] as Message[],
+      ])
+    );
+    return { tasks, messagesByTask };
+  };
+
+  it('starts with ten lean tasks, loads older pages once, and coalesces explicit details', async () => {
+    const opts = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.error).toBeNull();
+    expect(handle.state.tasks).toHaveLength(10);
+    expect(mock.taskFindAll).not.toHaveBeenCalled();
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(10);
+    expect(
+      mock.messageFindAll.mock.calls.every(([params]) => params.query.transcript === 'lean')
+    ).toBe(true);
+    expect(JSON.stringify([...handle.state.messagesByTask])).not.toContain('TOOL_CANARY');
+    expect(handle.state.loadedTaskIds.size).toBe(0);
+    await Promise.all([handle.loadTaskMessages('task-023'), handle.loadTaskMessages('task-023')]);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(11);
+    expect(handle.state.messagesByTask.get('task-023')?.map((message) => message.index)).toEqual([
+      0, 1, 2,
+    ]);
+    expect(JSON.stringify(handle.state.messagesByTask.get('task-023'))).toContain('TOOL_CANARY');
+    handle.unloadTaskMessages('task-023');
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
+    await Promise.all([handle.loadOlderTasks(), handle.loadOlderTasks()]);
+    expect(handle.state.tasks).toHaveLength(20);
+    await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(24);
+    expect(handle.state.hasOlderTasks).toBe(false);
+    handle.dispose();
+  });
+
+  it('keeps prompts on detail failure, retries, and does not re-fetch unopened details on reconnect', async () => {
+    const opts: MockClientOptions = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    opts.failTaskMessageFetch = true;
+    await expect(handle.loadTaskMessages('task-023')).rejects.toThrow();
+    expect(handle.state.messagesByTask.get('task-023')?.[0].content).toBe('Prompt');
+    opts.failTaskMessageFetch = false;
+    await handle.loadTaskMessages('task-023');
+    mock.messageFindAll.mockClear();
+    await handle.resync();
+    expect(
+      mock.messageFindAll.mock.calls
+        .filter(([params]) => params.query.transcript !== 'lean')
+        .map(([params]) => params.query.task_id)
+    ).toEqual(['task-023']);
+    expect(
+      new Set(handle.state.messagesByTask.get('task-023')?.map((message) => message.message_id))
+        .size
+    ).toBe(3);
+    handle.dispose();
+  });
+
+  it('keeps active tools through completion and merges a live message over a stale detail fetch', async () => {
+    const opts: MockClientOptions = history();
+    opts.tasks[23] = makeTask('task-023', TaskStatus.AWAITING_PERMISSION);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
+    expect(JSON.stringify(handle.state.messagesByTask.get('task-023'))).toContain('TOOL_CANARY');
+    opts.deferTaskMessageFetch = 'task-023';
+    const loading = handle.loadTaskMessages('task-023');
+    const newer = {
+      ...opts.messagesByTask['task-023'][1],
+      content: 'Newer live content',
+    } as Message;
+    mock.emitServiceEvent('messages', 'patched', newer);
+    mock.releaseMessageFetch();
+    await loading;
+    expect(handle.state.messagesByTask.get('task-023')?.[1].content).toBe('Newer live content');
+    opts.tasks[23] = makeTask('task-023', TaskStatus.COMPLETED);
+    mock.emitServiceEvent('tasks', 'patched', opts.tasks[23]);
+    expect(handle.state.messagesByTask.get('task-023')).toHaveLength(3);
+    opts.deferTaskMessageFetch = undefined;
+    mock.messageFindAll.mockClear();
+    await handle.resync();
+    expect(
+      mock.messageFindAll.mock.calls.find(([params]) => params.query.task_id === 'task-023')?.[0]
+        .query.transcript
+    ).toBeUndefined();
+    handle.dispose();
+  });
+
+  it('fills the reached history window after more than a page of offline turns', async () => {
+    const opts = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    for (let index = 24; index < 49; index++) {
+      const task = makeTask(`task-${String(index).padStart(3, '0')}`, TaskStatus.COMPLETED);
+      opts.tasks.push(task);
+      opts.messagesByTask[task.task_id] = [makeMessage(task.task_id, 0)];
+    }
+    await handle.resync();
+    expect(handle.state.error).toBeNull();
+    expect(handle.state.tasks).toHaveLength(35);
+    expect(handle.state.tasks.some((task) => task.task_id === 'task-032')).toBe(true);
+    expect(handle.state.loadedTaskIds.size).toBe(0);
+    await handle.loadOlderTasks();
+    await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(49);
+    handle.dispose();
+  });
+
+  it('keeps live stream and tool events during lean hydration and clears revoked history', async () => {
+    const opts: MockClientOptions = history();
+    opts.deferTaskMessageFetch = 'task-023';
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(
+        mock.messageFindAll.mock.calls.some(([params]) => params.query.task_id === 'task-023')
+      ).toBe(true)
+    );
+    const streamed = { ...makeMessage('task-023', 3), content: 'Live answer' } as Message;
+    mock.emitServiceEvent('messages', 'streaming:start', { ...streamed, role: 'assistant' });
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: streamed.message_id,
+      session_id: SESSION_ID,
+      chunk: 'Live answer',
+    });
+    mock.emitServiceEvent('tasks', 'tool:start', {
+      session_id: SESSION_ID,
+      task_id: 'task-023',
+      tool_use_id: 'live-tool',
+      tool_name: 'Read',
+    });
+    mock.emitServiceEvent('messages', 'created', streamed);
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(
+      handle.state.messagesByTask
+        .get('task-023')
+        ?.filter((message) => message.message_id === streamed.message_id)
+    ).toHaveLength(1);
+    expect(handle.state.streamingMessages.has(streamed.message_id)).toBe(false);
+    expect(handle.state.toolsByTask.get('task-023')?.at(-1)?.toolName).toBe('Read');
+    mock.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(handle.state.messagesByTask.size).toBe(0);
+    expect(handle.state.terminal).toBe(true);
+    mock.emitServiceEvent('messages', 'created', streamed);
+    expect(handle.state.messagesByTask.size).toBe(0);
+    handle.dispose();
+  });
+
+  it('fences disposed and disconnected detail results', async () => {
+    const opts: MockClientOptions = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    opts.deferTaskMessageFetch = 'task-023';
+    const loading = handle.loadTaskMessages('task-023');
+    mock.fireIo('disconnect');
+    mock.releaseMessageFetch();
+    await loading;
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(false);
+    const again = handle.loadTaskMessages('task-023');
+    handle.dispose();
+    mock.releaseMessageFetch();
+    await again;
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(false);
   });
 });

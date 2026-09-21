@@ -107,6 +107,7 @@ interface MessageBlockProps {
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   compact?: boolean;
+  leanTranscript?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -340,6 +341,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   client = null,
   onOpenAgenticToolSettings,
   compact = false,
+  leanTranscript = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -750,7 +752,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                                defaultExpanded={leanTranscript || isLatestMessage}
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -842,7 +844,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+                  expandedByDefault={!leanTranscript && shouldExpandToolByDefault(toolUse.name)}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>
@@ -889,7 +891,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
                             maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                            defaultExpanded={leanTranscript || isLatestMessage}
                             isStreaming={isStreaming}
                           >
                             {combinedText}

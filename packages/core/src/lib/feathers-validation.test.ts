@@ -173,6 +173,14 @@ describe('sessionQueryValidator', () => {
 });
 
 describe('messageQueryValidator', () => {
+  it('preserves the explicit lean transcript projection', async () => {
+    const context = { params: { query: { session_id: '019e8e1c', transcript: 'lean' } } };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.transcript).toBe('lean');
+    await expect(
+      typedValidateQuery(messageQueryValidator)({ params: { query: { transcript: 'anything' } } })
+    ).rejects.toThrow();
+  });
   it('coerces supported pagination and preserves a bounded session set', async () => {
     const context = {
       params: {

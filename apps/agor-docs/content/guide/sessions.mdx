@@ -352,6 +352,25 @@ without creating a session, avoiding repeated retries while their configuration 
 
 ---
 
+## Lean transcript experiment (development only)
+
+This branch includes an opt-in prototype, not a saved display preference. Run this
+branch’s daemon and set `VITE_LEAN_TRANSCRIPT_POC=true` for its UI process to try it;
+unset the flag to restore the existing transcript. No database migration is needed.
+The flag is read when Vite starts; it does not start a managed preview environment.
+
+The prototype opens the latest ten tasks with user and assistant text visible. Scroll
+up (or use **Load older history**) to fetch earlier tasks. **Load tool activity** fetches
+one task’s full messages and restores tool blocks in their original positions. Tool
+groups start collapsed; active tasks continue receiving full live activity and approvals.
+Turn metadata is available through the prompt’s metadata button, hover, or keyboard focus.
+Search covers only loaded content, including tool details only after expansion.
+
+Historical tool data is projected out in SQL before transfer, but the database still
+reads/parses the stored message JSON. Ten tasks is not a byte cap, and loading more
+history retains it in memory. Reconnecting refreshes reached history and missed new
+turns; it does not reset the reader to ten tasks.
+
 ## Related
 
 - [Branches](/guide/branches): The container for sessions

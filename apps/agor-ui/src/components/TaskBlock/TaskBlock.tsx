@@ -9,7 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, isTaskExecuting } from '@agor/core/types';
 import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   hasMinimumRole,
@@ -56,6 +56,7 @@ import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
+import { LeanTurnMetadata } from './LeanTurnMetadata';
 
 const { Paragraph } = Typography;
 
@@ -108,6 +109,8 @@ interface TaskBlockProps {
   isLatestTask?: boolean;
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
+  leanTranscript?: boolean;
+  latestActivity?: string;
 }
 
 /**
@@ -661,6 +664,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     isLatestTask = false,
     client = null,
     compact = false,
+    leanTranscript = false,
+    latestActivity,
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
@@ -671,6 +676,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
     React.useEffect(() => {
+      if (leanTranscript) return;
       if (isExpanded) {
         if (!taskMessagesLoaded) {
           setReactiveMessagesLoading(true);
@@ -685,7 +691,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       } else if (onUnloadTaskMessages && taskMessagesLoaded) {
         onUnloadTaskMessages(task.task_id);
       }
-    }, [isExpanded, onLoadTaskMessages, onUnloadTaskMessages, task.task_id, taskMessagesLoaded]);
+    }, [
+      leanTranscript,
+      isExpanded,
+      onLoadTaskMessages,
+      onUnloadTaskMessages,
+      task.task_id,
+      taskMessagesLoaded,
+    ]);
     const messagesLoading = reactiveMessagesLoading && !taskMessagesLoaded;
 
     // Convert streaming messages map to array once the reference changes
@@ -715,7 +728,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // untouched (often large) tool-chain subtrees bail out of re-rendering.
     const prevBlocksRef = useRef<Block[]>([]);
     const blocks = useMemo(() => {
-      const next = groupMessagesIntoBlocks(messages);
+      const next = groupMessagesIntoBlocks(
+        leanTranscript
+          ? messages.filter(
+              (message) => !Array.isArray(message.content) || message.content.length > 0
+            )
+          : messages
+      );
       const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
       const reconciled = next.map((block) => {
         const prev = prevByKey.get(getBlockKey(block));
@@ -723,7 +742,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       });
       prevBlocksRef.current = reconciled;
       return reconciled;
-    }, [messages]);
+    }, [messages, leanTranscript]);
 
     // Index of the last agent-chain block — used for isLatest so that a streaming
     // text bubble appearing after the chain doesn't prematurely collapse it
@@ -881,6 +900,296 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       </Flex>
     );
 
+    const [detailsError, setDetailsError] = useState<string | null>(null);
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const firstPromptId = messages.find(
+      (message) =>
+        message.role === MessageRole.USER &&
+        (typeof message.content === 'string'
+          ? !!message.content
+          : Array.isArray(message.content) &&
+            message.content.some((block) => block.type === 'text' || block.type === 'image'))
+    )?.message_id;
+    const hasTools = messages.some(
+      (message) =>
+        message.tool_uses?.length ||
+        (Array.isArray(message.content) &&
+          message.content.some(
+            (block) => block.type === 'tool_use' || block.type === 'tool_result'
+          ))
+    );
+    const toolDisclosure = leanTranscript && (
+      <div style={{ marginBottom: token.marginSM }}>
+        {!taskMessagesLoaded && !isTaskExecuting(task) ? (
+          <Button
+            size="small"
+            loading={detailsLoading}
+            onClick={async () => {
+              setDetailsLoading(true);
+              setDetailsError(null);
+              try {
+                await onLoadTaskMessages(task.task_id);
+              } catch {
+                setDetailsError('Could not load tool activity. Try again.');
+              } finally {
+                setDetailsLoading(false);
+              }
+            }}
+          >
+            Load tool activity
+          </Button>
+        ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
+          <Typography.Text type="secondary">No tool activity</Typography.Text>
+        ) : null}
+        {latestActivity && (
+          <Typography.Text type="secondary"> Latest activity: {latestActivity}</Typography.Text>
+        )}
+        {detailsError && <Alert type="error" title={detailsError} />}
+      </div>
+    );
+    const taskContent = (
+      <div style={{ paddingTop: token.sizeUnit }}>
+        {isVerifiedRuntimeInterruption(task, isLatestTask) && (
+          <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+        )}
+        {isAuthorizationRevokedFailure(task) && <AuthorizationRevokedNotice task={task} />}
+        {isLatestTask &&
+          (task.status === TaskStatus.RUNNING ||
+            task.status === TaskStatus.AWAITING_PERMISSION ||
+            task.status === TaskStatus.AWAITING_INPUT) &&
+          task.metadata?.mcp_recovery && (
+            <MCPRecoveryNotice
+              task={task}
+              recovery={task.metadata.mcp_recovery}
+              client={client}
+              canRequestReconnect={canRequestMcpReconnect}
+            />
+          )}
+        {/* Show loading spinner while fetching messages */}
+        {messagesLoading && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              padding: `${token.sizeUnit * 2}px 0`,
+            }}
+          >
+            <Spin size="small" />
+          </div>
+        )}
+
+        {/* Render all blocks (messages and agent chains). Each block
+                      gets a `data-conversation-block` wrapper: in-session
+                      search's MutationObserver keys off these boundaries to
+                      tell structural transcript changes (new message/chain,
+                      task hydration, a block settling after streaming) apart
+                      from per-frame streaming churn inside a block. */}
+        {!messagesLoading &&
+          blocks.map((block, blockIndex) => {
+            if (block.type === 'message') {
+              // Find if this is a permission request and if it's the first pending one
+              const isPermissionRequest = block.message.type === 'permission_request';
+              let isFirstPending = false;
+
+              if (isPermissionRequest) {
+                const content = block.message.content as PermissionRequestContent;
+                if (content.status === PermissionStatus.PENDING) {
+                  // Check if this is the first pending permission request
+                  isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
+                    if (b.type === 'message' && b.message.type === 'permission_request') {
+                      const c = b.message.content as PermissionRequestContent;
+                      return c.status === PermissionStatus.PENDING;
+                    }
+                    return false;
+                  });
+                }
+              }
+
+              // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
+              if (isSdkStatusMessage(block.message)) {
+                return (
+                  <div
+                    key={block.message.message_id}
+                    data-conversation-block={getBlockMarker(block)}
+                  >
+                    <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
+                  </div>
+                );
+              }
+
+              // Check if this is the latest agent message (last message block)
+              const isLatestMessage =
+                block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
+
+              return (
+                <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+                  {leanTranscript && block.message.message_id === firstPromptId ? (
+                    <>
+                      <LeanTurnMetadata task={task} userById={userById}>
+                        <MessageBlock
+                          message={block.message}
+                          agentic_tool={agentic_tool}
+                          userById={userById}
+                          currentUserId={task.created_by}
+                          isTaskRunning={runtimeLive}
+                          sessionId={sessionId}
+                          onPermissionDecision={onPermissionDecision}
+                          isFirstPendingPermission={isFirstPending}
+                          isLatestMessage={isLatestMessage}
+                          taskId={task.task_id}
+                          teammateEmoji={teammateEmoji}
+                          client={client}
+                          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                          compact={compact}
+                          leanTranscript={leanTranscript}
+                        />
+                      </LeanTurnMetadata>
+                      {toolDisclosure}
+                    </>
+                  ) : (
+                    <MessageBlock
+                      message={block.message}
+                      agentic_tool={agentic_tool}
+                      userById={userById}
+                      currentUserId={task.created_by}
+                      isTaskRunning={runtimeLive}
+                      sessionId={sessionId}
+                      onPermissionDecision={onPermissionDecision}
+                      isFirstPendingPermission={isFirstPending}
+                      isLatestMessage={isLatestMessage}
+                      taskId={task.task_id}
+                      teammateEmoji={teammateEmoji}
+                      client={client}
+                      onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                      compact={compact}
+                      leanTranscript={leanTranscript}
+                    />
+                  )}
+                </div>
+              );
+            }
+            if (block.type === 'agent-chain') {
+              // Use first message ID as key for agent chain
+              const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
+              return (
+                <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                  <AgentChain
+                    messages={block.messages}
+                    leanTranscript={leanTranscript}
+                    isTaskRunning={runtimeLive}
+                    isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                    compact={compact}
+                  />
+                </div>
+              );
+            }
+            if (block.type === 'compaction') {
+              // Render compaction block with aggregated messages
+              const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+              return (
+                <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                  <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
+                </div>
+              );
+            }
+            return null;
+          })}
+
+        {/* Keep latest TODO visible even after completion (Claude parity). */}
+        <StickyTodoRenderer messages={messages} taskStatus={task.status} />
+
+        {/* Show typing indicator whenever the executor may still be live.
+                      Marked as a conversation block so its unmount at stream
+                      end gives search one final structural re-scan that picks
+                      up the finished message text. */}
+        {runtimeLive && (
+          <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
+            <Bubble
+              placement="start"
+              avatar={
+                teammateEmoji ? (
+                  <AgorAvatar>{teammateEmoji}</AgorAvatar>
+                ) : agentic_tool ? (
+                  <ToolIcon tool={agentic_tool} size={32} />
+                ) : (
+                  <AgorAvatar
+                    icon={<RobotOutlined />}
+                    style={{ backgroundColor: token.colorSuccess }}
+                  />
+                )
+              }
+              loading={true}
+              content=""
+              variant="outlined"
+            />
+          </div>
+        )}
+
+        {/* Show commit message if available */}
+        {task.git_state.commit_message && (
+          <div
+            style={{
+              marginTop: token.sizeUnit * 1.5,
+              padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.25}px`,
+              background: token.colorFillAlter,
+              borderRadius: token.borderRadius,
+            }}
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <GithubOutlined /> Commit:{' '}
+            </Typography.Text>
+            <Typography.Text code style={{ fontSize: 11 }}>
+              {typeof task.git_state.commit_message === 'string'
+                ? task.git_state.commit_message
+                : JSON.stringify(task.git_state.commit_message)}
+            </Typography.Text>
+          </div>
+        )}
+
+        {/* Show report if available */}
+        {task.report && (
+          <div style={{ marginTop: token.sizeUnit * 1.5 }}>
+            <Tag icon={<FileTextOutlined />} color="green">
+              Task Report
+            </Tag>
+            <Paragraph
+              style={{
+                marginTop: token.sizeUnit,
+                padding: token.sizeUnit * 1.5,
+                background: token.colorSuccessBg,
+                border: `1px solid ${token.colorSuccessBorder}`,
+                borderRadius: token.borderRadius,
+                fontSize: 13,
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {typeof task.report === 'string' ? task.report : JSON.stringify(task.report, null, 2)}
+            </Paragraph>
+          </div>
+        )}
+      </div>
+    );
+    if (leanTranscript)
+      return (
+        <div data-task-block={task.task_id}>
+          <TaskStatusIcon status={task.status} size={16} />
+          {task.error_message && <Alert type="error" title={task.error_message} />}
+          {!firstPromptId && (
+            <>
+              {task.full_prompt && (
+                <LeanTurnMetadata task={task} userById={userById}>
+                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                    {task.full_prompt}
+                  </Typography.Paragraph>
+                </LeanTurnMetadata>
+              )}
+              {toolDisclosure}
+            </>
+          )}
+          {taskContent}
+        </div>
+      );
+
     return (
       <div data-task-block={task.task_id}>
         <Collapse
@@ -911,212 +1220,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   padding: compact ? '8px' : `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
                 },
               },
-              children: (
-                <div style={{ paddingTop: token.sizeUnit }}>
-                  {isVerifiedRuntimeInterruption(task, isLatestTask) && (
-                    <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
-                  )}
-                  {isAuthorizationRevokedFailure(task) && (
-                    <AuthorizationRevokedNotice task={task} />
-                  )}
-                  {isLatestTask &&
-                    (task.status === TaskStatus.RUNNING ||
-                      task.status === TaskStatus.AWAITING_PERMISSION ||
-                      task.status === TaskStatus.AWAITING_INPUT) &&
-                    task.metadata?.mcp_recovery && (
-                      <MCPRecoveryNotice
-                        task={task}
-                        recovery={task.metadata.mcp_recovery}
-                        client={client}
-                        canRequestReconnect={canRequestMcpReconnect}
-                      />
-                    )}
-                  {/* Show loading spinner while fetching messages */}
-                  {messagesLoading && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'center',
-                        padding: `${token.sizeUnit * 2}px 0`,
-                      }}
-                    >
-                      <Spin size="small" />
-                    </div>
-                  )}
-
-                  {/* Render all blocks (messages and agent chains). Each block
-                      gets a `data-conversation-block` wrapper: in-session
-                      search's MutationObserver keys off these boundaries to
-                      tell structural transcript changes (new message/chain,
-                      task hydration, a block settling after streaming) apart
-                      from per-frame streaming churn inside a block. */}
-                  {!messagesLoading &&
-                    blocks.map((block, blockIndex) => {
-                      if (block.type === 'message') {
-                        // Find if this is a permission request and if it's the first pending one
-                        const isPermissionRequest = block.message.type === 'permission_request';
-                        let isFirstPending = false;
-
-                        if (isPermissionRequest) {
-                          const content = block.message.content as PermissionRequestContent;
-                          if (content.status === PermissionStatus.PENDING) {
-                            // Check if this is the first pending permission request
-                            isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
-                              if (b.type === 'message' && b.message.type === 'permission_request') {
-                                const c = b.message.content as PermissionRequestContent;
-                                return c.status === PermissionStatus.PENDING;
-                              }
-                              return false;
-                            });
-                          }
-                        }
-
-                        // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
-                        if (isSdkStatusMessage(block.message)) {
-                          return (
-                            <div
-                              key={block.message.message_id}
-                              data-conversation-block={getBlockMarker(block)}
-                            >
-                              <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
-                            </div>
-                          );
-                        }
-
-                        // Check if this is the latest agent message (last message block)
-                        const isLatestMessage =
-                          block.message.role === MessageRole.ASSISTANT &&
-                          blockIndex === blocks.length - 1;
-
-                        return (
-                          <div
-                            key={block.message.message_id}
-                            data-conversation-block={getBlockMarker(block)}
-                          >
-                            <MessageBlock
-                              message={block.message}
-                              agentic_tool={agentic_tool}
-                              userById={userById}
-                              currentUserId={task.created_by}
-                              isTaskRunning={runtimeLive}
-                              sessionId={sessionId}
-                              onPermissionDecision={onPermissionDecision}
-                              isFirstPendingPermission={isFirstPending}
-                              isLatestMessage={isLatestMessage}
-                              taskId={task.task_id}
-                              teammateEmoji={teammateEmoji}
-                              client={client}
-                              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                              compact={compact}
-                            />
-                          </div>
-                        );
-                      }
-                      if (block.type === 'agent-chain') {
-                        // Use first message ID as key for agent chain
-                        const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
-                        return (
-                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                            <AgentChain
-                              messages={block.messages}
-                              isTaskRunning={runtimeLive}
-                              isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
-                              compact={compact}
-                            />
-                          </div>
-                        );
-                      }
-                      if (block.type === 'compaction') {
-                        // Render compaction block with aggregated messages
-                        const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
-                        return (
-                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                            <CompactionBlock
-                              messages={block.messages}
-                              agentic_tool={agentic_tool}
-                            />
-                          </div>
-                        );
-                      }
-                      return null;
-                    })}
-
-                  {/* Keep latest TODO visible even after completion (Claude parity). */}
-                  <StickyTodoRenderer messages={messages} taskStatus={task.status} />
-
-                  {/* Show typing indicator whenever the executor may still be live.
-                      Marked as a conversation block so its unmount at stream
-                      end gives search one final structural re-scan that picks
-                      up the finished message text. */}
-                  {runtimeLive && (
-                    <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
-                      <Bubble
-                        placement="start"
-                        avatar={
-                          teammateEmoji ? (
-                            <AgorAvatar>{teammateEmoji}</AgorAvatar>
-                          ) : agentic_tool ? (
-                            <ToolIcon tool={agentic_tool} size={32} />
-                          ) : (
-                            <AgorAvatar
-                              icon={<RobotOutlined />}
-                              style={{ backgroundColor: token.colorSuccess }}
-                            />
-                          )
-                        }
-                        loading={true}
-                        content=""
-                        variant="outlined"
-                      />
-                    </div>
-                  )}
-
-                  {/* Show commit message if available */}
-                  {task.git_state.commit_message && (
-                    <div
-                      style={{
-                        marginTop: token.sizeUnit * 1.5,
-                        padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.25}px`,
-                        background: token.colorFillAlter,
-                        borderRadius: token.borderRadius,
-                      }}
-                    >
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        <GithubOutlined /> Commit:{' '}
-                      </Typography.Text>
-                      <Typography.Text code style={{ fontSize: 11 }}>
-                        {typeof task.git_state.commit_message === 'string'
-                          ? task.git_state.commit_message
-                          : JSON.stringify(task.git_state.commit_message)}
-                      </Typography.Text>
-                    </div>
-                  )}
-
-                  {/* Show report if available */}
-                  {task.report && (
-                    <div style={{ marginTop: token.sizeUnit * 1.5 }}>
-                      <Tag icon={<FileTextOutlined />} color="green">
-                        Task Report
-                      </Tag>
-                      <Paragraph
-                        style={{
-                          marginTop: token.sizeUnit,
-                          padding: token.sizeUnit * 1.5,
-                          background: token.colorSuccessBg,
-                          border: `1px solid ${token.colorSuccessBorder}`,
-                          borderRadius: token.borderRadius,
-                          fontSize: 13,
-                          whiteSpace: 'pre-wrap',
-                        }}
-                      >
-                        {typeof task.report === 'string'
-                          ? task.report
-                          : JSON.stringify(task.report, null, 2)}
-                      </Paragraph>
-                    </div>
-                  )}
-                </div>
-              ),
+              children: taskContent,
             },
           ]}
         />

@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, PermissionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -386,6 +386,12 @@ describe('MessagesRepository.findAll', () => {
     expect(visible.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
 
     const visiblePage = await messages.findPage({ visibleToUserId: viewerId, limit: 1, skip: 0 });
+    const hiddenLean = await messages.findPage({
+      sessionId: hiddenSession.session_id,
+      visibleToUserId: viewerId,
+      lean: true,
+    });
+    expect(hiddenLean).toEqual({ data: [], total: 0 });
     expect(visiblePage.total).toBe(1);
     expect(visiblePage.data.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
   });
@@ -880,5 +886,190 @@ describe('MessagesRepository.mutateMetadataLocked', () => {
     expect(attempts.filter((attempt) => attempt.changed)).toHaveLength(1);
     const stored = await new MessagesRepository(db).findById(message.message_id);
     expect(stored?.metadata?.widget?.status).toBe('resolving');
+    const lean = await new MessagesRepository(db).findPage({ sessionId, lean: true });
+    expect(lean.data[0].metadata?.widget).toEqual(stored?.metadata?.widget);
   });
+});
+
+describe('lean transcript POC', () => {
+  dbTest(
+    'projects in SQL, preserves text/order and never transfers tool canaries from DB',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      const canary = `TOOL_PAYLOAD_CANARY_${'x'.repeat(100_000)}`;
+      const input = { command: canary };
+      const source = [
+        createMessageData({ session_id: sessionId, task_id: taskId, index: 0, content: 'Prompt' }),
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 1,
+          role: MessageRole.ASSISTANT,
+          type: 'assistant',
+          content_preview: canary,
+          metadata: { is_btw_result: true, btw_prompt: 'Side question', arbitrary: canary },
+          content: [
+            { type: 'text', text: 'Before' },
+            { type: 'tool_use', id: 'call', name: 'Bash', input },
+            { type: 'text', text: 'After' },
+          ],
+          tool_uses: [{ id: 'call', name: 'Bash', input }],
+        }),
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 2,
+          content: [{ type: 'tool_result', tool_use_id: 'call', content: canary }],
+        }),
+      ];
+      await createMessages(repository, source);
+      const client = (
+        db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+      ).$client;
+      const execute = vi.spyOn(client, 'execute');
+      const lean = await repository.findPage({ sessionId, taskId, lean: true });
+      expect(lean.data.map((item) => item.message_id)).toEqual(
+        source.map((item) => item.message_id)
+      );
+      expect(lean.data.map((item) => item.content)).toEqual([
+        'Prompt',
+        [
+          { type: 'text', text: 'Before' },
+          { type: 'text', text: 'After' },
+        ],
+        [],
+      ]);
+      expect(lean.data[1].metadata).toMatchObject({
+        is_btw_result: true,
+        btw_prompt: 'Side question',
+      });
+      expect(JSON.stringify(lean)).not.toContain('TOOL_PAYLOAD_CANARY');
+      for (const result of execute.mock.results) {
+        expect(JSON.stringify(await result.value)).not.toContain('TOOL_PAYLOAD_CANARY');
+      }
+      execute.mockRestore();
+      const full = await repository.findPage({ taskId });
+      expect(JSON.stringify(full)).toContain('TOOL_PAYLOAD_CANARY');
+      expect(full.data.map((item) => item.message_id)).toEqual(
+        lean.data.map((item) => item.message_id)
+      );
+      expect(
+        await repository.findPage({ sessionId: await createTestSession(db), taskId, lean: true })
+      ).toEqual({ data: [], total: 0 });
+      expect(
+        (await repository.findPage({ sessionId, lean: true, select: ['message_id'] })).data
+      ).toEqual(source.map((item) => ({ message_id: item.message_id })));
+    }
+  );
+
+  dbTest(
+    'retains actionable approval inputs but excludes resolved approval inputs',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      for (const [index, status] of [
+        PermissionStatus.APPROVED,
+        PermissionStatus.PENDING,
+      ].entries()) {
+        await repository.create(
+          createMessageData({
+            session_id: sessionId,
+            task_id: taskId,
+            type: 'permission_request',
+            index,
+            content: {
+              request_id: `request-${index}`,
+              tool_name: 'Bash',
+              tool_input: { command: 'APPROVAL_CANARY' },
+              status,
+            },
+          })
+        );
+      }
+      const lean = await repository.findPage({ sessionId, lean: true });
+      expect(lean.data[0].content).toMatchObject({
+        tool_input: {},
+        status: PermissionStatus.APPROVED,
+      });
+      expect(lean.data[1].content).toMatchObject({
+        tool_input: { command: 'APPROVAL_CANARY' },
+        status: PermissionStatus.PENDING,
+      });
+    }
+  );
+
+  dbTest(
+    'measures synthetic same-page, latest-task and expansion response bytes',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      for (const dataset of ['tool-heavy', 'message-heavy']) {
+        const sessionId = await createTestSession(db);
+        const textBytes = dataset === 'tool-heavy' ? 256 : 16_384;
+        const toolBytes = dataset === 'tool-heavy' ? 100_000 : 128;
+        let latestTaskId: TaskID | undefined;
+        for (let taskIndex = 0; taskIndex < 100; taskIndex++) {
+          const taskId = await createTestTask(db, sessionId);
+          latestTaskId = taskId;
+          const input = { value: `CANARY${'x'.repeat(toolBytes)}` };
+          await createMessages(repository, [
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3,
+              content: 'u'.repeat(textBytes),
+            }),
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3 + 1,
+              role: MessageRole.ASSISTANT,
+              type: 'assistant',
+              content: [
+                { type: 'text', text: 'a'.repeat(textBytes) },
+                { type: 'tool_use', id: 'call', name: 'Bash', input },
+              ],
+              tool_uses: [{ id: 'call', name: 'Bash', input }],
+            }),
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3 + 2,
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'call',
+                  content: `CANARY${'y'.repeat(toolBytes)}`,
+                },
+                { type: 'text', text: 'b'.repeat(textBytes) },
+              ],
+            }),
+          ]);
+        }
+        const full = await repository.findPage({ sessionId, skip: 270, limit: 30 });
+        const lean = await repository.findPage({ sessionId, skip: 270, limit: 30, lean: true });
+        const expanded = await repository.findPage({ taskId: latestTaskId });
+        const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+        expect(JSON.stringify(lean)).not.toContain('CANARY');
+        expect(bytes(lean)).toBeLessThan(bytes(full));
+        console.info(
+          'LEAN_POC_BYTES',
+          JSON.stringify({
+            dataset,
+            tasks: 100,
+            messages: 300,
+            pageTasks: 10,
+            textBytes,
+            toolBytes,
+            samePageFull: bytes(full),
+            initialLean: bytes(lean),
+            latestTaskBaselineAndExpansion: bytes(expanded),
+          })
+        );
+      }
+    },
+    60_000
+  );
 });

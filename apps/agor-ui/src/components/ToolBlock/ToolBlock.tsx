@@ -8,7 +8,7 @@
  */
 
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Typography, theme } from 'antd';
+import { Button, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 
@@ -53,9 +53,16 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
           : token.colorTextSecondary;
 
   const header = (
-    <div
+    <Button
+      type="text"
+      disabled={!hasBody}
+      aria-expanded={hasBody ? expanded : undefined}
       onClick={hasBody ? () => setExpanded(!expanded) : undefined}
       style={{
+        padding: 0,
+        height: 'auto',
+        width: '100%',
+        textAlign: 'left',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
@@ -102,7 +109,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
             </Typography.Text>
           ))}
       </span>
-    </div>
+    </Button>
   );
 
   return (

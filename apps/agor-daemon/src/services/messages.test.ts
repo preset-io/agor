@@ -1,4 +1,6 @@
+import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
+import { type AgorClient, createRestClient } from '@agor/core/api';
 import { MESSAGE_PAGINATION } from '@agor/core/config';
 import {
   AuthenticationService,
@@ -8,10 +10,20 @@ import {
   feathersExpress,
   rest,
 } from '@agor/core/feathers';
+import {
+  messageQueryValidator,
+  taskQueryValidator,
+  typedValidateQuery,
+} from '@agor/core/lib/feathers-validation';
 import type { Message, MessageCreate, SessionID, TaskID, UUID } from '@agor/core/types';
 import { MessageRole, ROLES } from '@agor/core/types';
+import express from 'express';
 import jwt from 'jsonwebtoken';
 import { describe, expect, vi } from 'vitest';
+import {
+  ReactiveSessionHandle,
+  type TaskHydrationMode,
+} from '../../../../packages/client/src/reactive-session';
 import { BranchRepository } from '../../../../packages/core/src/db/repositories/branches';
 import { MessagesRepository } from '../../../../packages/core/src/db/repositories/messages';
 import { RepoRepository } from '../../../../packages/core/src/db/repositories/repos';
@@ -27,6 +39,7 @@ import {
   scopeFindToAccessibleSessionsSql,
 } from '../utils/branch-authorization';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './messages';
+import { createTasksService } from './tasks';
 import { createUsersService } from './users';
 
 const JWT_SECRET = 'messages-rest-test-secret';
@@ -411,12 +424,31 @@ dbTest(
     });
     const repository = new MessagesRepository(db);
 
+    const accessibleTask = await new TaskRepository(db).create({
+      session_id: accessibleSessionId,
+      created_by: ownerId,
+      full_prompt: 'Synthetic',
+      status: 'completed',
+    });
+    const hiddenTask = await new TaskRepository(db).create({
+      session_id: inaccessibleSessionId,
+      created_by: ownerId,
+      full_prompt: 'Synthetic',
+      status: 'completed',
+    });
     await createMessages(repository, [
       message(accessibleSessionId, 0, { role: MessageRole.USER, type: 'user' }),
-      message(accessibleSessionId, 1),
+      {
+        ...message(accessibleSessionId, 1, { task_id: accessibleTask.task_id }),
+        content: [
+          { type: 'text', text: 'Visible answer' },
+          { type: 'tool_use', id: 'call', name: 'Read', input: { value: 'HTTP_TOOL_CANARY' } },
+        ],
+        tool_uses: [{ id: 'call', name: 'Read', input: { value: 'HTTP_TOOL_CANARY' } }],
+      },
       message(accessibleSessionId, 2),
       message(accessibleSessionId, 3, { role: MessageRole.USER, type: 'user' }),
-      message(inaccessibleSessionId, 0),
+      message(inaccessibleSessionId, 0, { task_id: hiddenTask.task_id }),
     ]);
 
     const createdAtSortSessionId = await createTestSession(db, {
@@ -457,7 +489,7 @@ dbTest(
 
     app.service('messages').hooks({
       before: {
-        all: [authenticate({ strategies: ['jwt'] })],
+        all: [typedValidateQuery(messageQueryValidator), authenticate({ strategies: ['jwt'] })],
         find: [scopeFindToAccessibleSessionsSql({ allowSuperadmin: false })],
       },
     });
@@ -474,6 +506,37 @@ dbTest(
     const headers = { authorization: `Bearer ${accessToken}` };
 
     try {
+      const leanUrl = `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&transcript=lean`;
+      expect((await fetch(leanUrl)).status).toBe(401);
+      const leanResponse = await fetch(leanUrl, { headers });
+      expect(leanResponse.status).toBe(200);
+      const leanBody = await leanResponse.text();
+      expect(JSON.parse(leanBody)).toMatchObject({ total: 4 });
+      expect(leanBody).not.toContain('HTTP_TOOL_CANARY');
+      const detail = await fetch(
+        `http://127.0.0.1:${address.port}/messages?task_id=${accessibleTask.task_id}`,
+        { headers }
+      );
+      expect(await detail.text()).toContain('HTTP_TOOL_CANARY');
+      for (const projection of ['', '&transcript=lean']) {
+        const hiddenDetail = await fetch(
+          `http://127.0.0.1:${address.port}/messages?task_id=${hiddenTask.task_id}${projection}`,
+          { headers }
+        );
+        expect(await hiddenDetail.json()).toMatchObject({ data: [], total: 0 });
+      }
+      const mismatched = await fetch(
+        `http://127.0.0.1:${address.port}/messages?task_id=${accessibleTask.task_id}&session_id=${inaccessibleSessionId}&transcript=lean`,
+        { headers }
+      );
+      expect(await mismatched.json()).toMatchObject({ data: [], total: 0 });
+      const hiddenLean = await fetch(
+        `http://127.0.0.1:${address.port}/messages?session_id=${inaccessibleSessionId}&transcript=lean`,
+        { headers }
+      );
+      expect(hiddenLean.status).toBe(200);
+      expect(await hiddenLean.json()).toMatchObject({ total: 0, data: [] });
+
       const accessibleResponse = await fetch(
         `http://127.0.0.1:${address.port}/messages?session_id=${accessibleSessionId}&role=assistant&$limit=1`,
         { headers }
@@ -582,4 +645,165 @@ dbTest(
       });
     }
   }
+);
+
+// Synthetic loopback HTTP measurement. Real task/message services and the real
+// reactive client; Session/queue/subscription fixtures avoid launching an agent.
+// No production database, SDK, provider, compression, or browser heap involved.
+dbTest(
+  'measures lean bootstrap and explicit expansion over synthetic HTTP',
+  async ({ db }) => {
+    const app = feathersExpress(feathers());
+    app.use(express.json());
+    app.configure(rest());
+    const sessions = new SessionRepository(db);
+    const tasks = new TaskRepository(db);
+    const repository = new MessagesRepository(db);
+    app.use('/sessions', { get: (id: string) => sessions.findById(id) });
+    app.use('/tasks', createTasksService(db, app));
+    app.service('tasks').hooks({ before: { all: [typedValidateQuery(taskQueryValidator)] } });
+    app.use('/messages', createMessagesService(db));
+    app.use('/sessions/:sessionId/tasks/queue', { find: async () => ({ data: [] }) });
+    app.use('/session-streams', {
+      create: async (data: { session_id: string }) => ({ ...data, subscribed: true }),
+      remove: async (id: string) => ({ session_id: id, subscribed: false }),
+    });
+    app.service('messages').hooks({ before: { all: [typedValidateQuery(messageQueryValidator)] } });
+    app.use(errorHandler());
+    const server = (await app.listen(0)) as Server;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP address');
+    const base = `http://127.0.0.1:${address.port}`;
+    const nativeFetch = globalThis.fetch;
+    const receipts: { bytes: number; path: string; body: string }[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const result = await nativeFetch(input, init);
+      if (init?.method !== 'DELETE') {
+        const body = await result.clone().text();
+        receipts.push({
+          bytes: Buffer.byteLength(body),
+          path: new URL(String(input)).pathname,
+          body,
+        });
+      }
+      return result;
+    });
+    try {
+      for (const dataset of ['tool-heavy', 'message-heavy']) {
+        const sessionId = await createTestSession(db);
+        const owner = (await sessions.findById(sessionId))!.created_by;
+        const textBytes = dataset === 'tool-heavy' ? 256 : 16_384;
+        const toolBytes = dataset === 'tool-heavy' ? 100_000 : 128;
+        let latestTaskId!: TaskID;
+        for (let index = 0; index < 100; index++) {
+          const task = await tasks.create({
+            session_id: sessionId,
+            created_by: owner,
+            status: 'completed',
+            full_prompt: 'u'.repeat(textBytes),
+            model: 'synthetic',
+            duration_ms: 1000,
+          });
+          latestTaskId = task.task_id;
+          const input = { value: `CANARY${'x'.repeat(toolBytes)}` };
+          await createMessages(repository, [
+            {
+              ...message(sessionId, index * 3, {
+                task_id: task.task_id,
+                role: MessageRole.USER,
+                type: 'user',
+              }),
+              content: task.full_prompt,
+            },
+            {
+              ...message(sessionId, index * 3 + 1, { task_id: task.task_id }),
+              content: [
+                { type: 'text', text: 'a'.repeat(textBytes) },
+                { type: 'tool_use', id: 'call', name: 'Read', input },
+              ],
+              tool_uses: [{ id: 'call', name: 'Read', input }],
+            },
+            {
+              ...message(sessionId, index * 3 + 2, {
+                task_id: task.task_id,
+                role: MessageRole.USER,
+                type: 'user',
+              }),
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'call',
+                  content: `CANARY${'y'.repeat(toolBytes)}`,
+                },
+                { type: 'text', text: 'b'.repeat(textBytes) },
+              ],
+            },
+          ]);
+        }
+        const measure = async (mode: TaskHydrationMode) => {
+          const client = await createRestClient(base);
+          client.io = Object.assign(new EventEmitter(), {
+            connected: true,
+          }) as unknown as AgorClient['io'];
+          const start = receipts.length;
+          const handle = new ReactiveSessionHandle(client, sessionId, { taskHydration: mode });
+          await handle.ready();
+          expect(handle.state.error).toBeNull();
+          const initial = receipts.slice(start);
+          const metadataSummaryBytes = Buffer.byteLength(
+            JSON.stringify(
+              handle.state.tasks.map((task) => ({
+                model: task.model,
+                duration_ms: task.duration_ms,
+                created_at: task.created_at,
+                created_by: task.created_by,
+                normalized_sdk_response: task.normalized_sdk_response,
+              }))
+            )
+          );
+          if (mode === 'lean') {
+            expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
+            expect(handle.state.tasks).toHaveLength(10);
+          }
+          const detailStart = receipts.length;
+          if (mode === 'lean') await handle.loadTaskMessages(latestTaskId);
+          const expanded = receipts.slice(detailStart);
+          if (mode === 'lean')
+            expect(expanded.some((receipt) => receipt.body.includes('CANARY'))).toBe(true);
+          handle.dispose();
+          return {
+            mode,
+            metadataSummaryBytes,
+            requests: initial.length,
+            responseBytes: initial.reduce((n, receipt) => n + receipt.bytes, 0),
+            taskResponseBytes: initial
+              .filter((receipt) => receipt.path === '/tasks')
+              .reduce((n, receipt) => n + receipt.bytes, 0),
+            expansionRequests: expanded.length,
+            expansionBytes: expanded.reduce((n, receipt) => n + receipt.bytes, 0),
+          };
+        };
+        const baseline = await measure('lazy');
+        const lean = await measure('lean');
+        console.info(
+          'LEAN_POC_HTTP',
+          JSON.stringify({
+            dataset,
+            tasks: 100,
+            messages: 300,
+            textBytes,
+            toolBytes,
+            baseline,
+            lean,
+          })
+        );
+      }
+    } finally {
+      fetchSpy.mockRestore();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
+  },
+  120_000
 );
