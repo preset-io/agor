@@ -34,8 +34,8 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Alert, Button, Collapse, Divider, Flex, Spin, Tooltip, Typography, theme } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Collapse, Divider, Flex, Spin, Typography, theme } from 'antd';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { formatCompactDuration } from '../../utils/time';
 import { AgentChain } from '../AgentChain';
@@ -793,7 +793,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       : undefined;
 
     // Compact replaces the pill row with one muted line; the rest moves to its
-    // tooltip so nothing becomes unreachable.
+    // keyboard- and pointer-accessible disclosure so nothing becomes unreachable.
     const taskDuration = formatCompactDuration(task.duration_ms);
     const taskModel = task.model || sessionModel;
     const compactMetaLine =
@@ -812,6 +812,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     ]
       .filter(Boolean)
       .join(' · ');
+    const hasCompactMetaDetails = compactMetaDetail.length > 0;
+    const [compactMetaExpanded, setCompactMetaExpanded] = useState(false);
+    const compactMetaDetailsId = useId();
 
     // Task header shows when collapsed
     const taskHeader = (
@@ -1157,8 +1160,41 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     if (compact) {
       return (
         <div data-task-block={task.task_id}>
-          <Divider plain style={{ margin: `${token.sizeUnit * 5}px 0 0` }}>
-            <Tooltip title={compactMetaDetail || undefined}>
+          <Flex align="center" gap={token.sizeUnit * 2} style={{ marginTop: token.sizeUnit * 5 }}>
+            {/* Separator descendants are presentational: keep the disclosure a sibling. */}
+            <Divider aria-hidden style={{ flex: 1, minWidth: 0, width: 'auto', margin: 0 }} />
+            {hasCompactMetaDetails ? (
+              <Button
+                type="text"
+                size="small"
+                aria-expanded={compactMetaExpanded}
+                aria-controls={compactMetaDetailsId}
+                onClick={() => setCompactMetaExpanded((expanded) => !expanded)}
+                style={{
+                  color: token.colorTextSecondary,
+                  fontSize: token.fontSizeSM,
+                  height: 'auto',
+                  lineHeight: 'inherit',
+                  maxWidth: '100%',
+                  padding: `0 ${token.sizeUnit / 2}px`,
+                  whiteSpace: 'normal',
+                }}
+              >
+                {/* A flat transcript has no task header, so an unfinished task
+                    still needs its status somewhere. */}
+                {task.status !== TaskStatus.COMPLETED && (
+                  <span aria-hidden>
+                    <TaskStatusIcon status={task.status} size={12} />{' '}
+                  </span>
+                )}
+                {compactMetaLine}{' '}
+                <DownOutlined
+                  aria-hidden
+                  rotate={compactMetaExpanded ? 180 : 0}
+                  style={{ fontSize: 10 }}
+                />
+              </Button>
+            ) : (
               <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {/* A flat transcript has no task header, so an unfinished task
                     still needs its status somewhere. */}
@@ -1169,8 +1205,24 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 )}
                 {compactMetaLine}
               </Typography.Text>
-            </Tooltip>
-          </Divider>
+            )}
+            <Divider aria-hidden style={{ flex: 1, minWidth: 0, width: 'auto', margin: 0 }} />
+          </Flex>
+          {hasCompactMetaDetails && compactMetaExpanded && (
+            <section
+              id={compactMetaDetailsId}
+              aria-label={`${compactMetaLine} details`}
+              style={{
+                margin: `${token.sizeUnit / 2}px 0 0`,
+                padding: `0 ${token.sizeUnit}px`,
+                textAlign: 'center',
+              }}
+            >
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {compactMetaDetail}
+              </Typography.Text>
+            </section>
+          )}
           {taskContent}
         </div>
       );

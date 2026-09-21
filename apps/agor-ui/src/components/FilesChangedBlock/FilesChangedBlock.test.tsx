@@ -73,7 +73,9 @@ const renderTask = (compact: boolean, taskMessages = messages) =>
 
 /** Transcript rows are real buttons; the task header is a role-only div. */
 const rowNames = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll('button')).map((button) => button.textContent);
+  Array.from(container.querySelectorAll('[data-conversation-block] button')).map(
+    (button) => button.textContent
+  );
 
 describe('Files changed inside a transcript', () => {
   it('retains chain elapsed time when its last edit moves into the file disclosure', () => {

@@ -84,7 +84,62 @@ const taskView = (messages: Message[]) => (
   />
 );
 
+const metadataTask = {
+  task_id: 'task-1',
+  session_id: 'session-1',
+  created_by: 'user-1',
+  full_prompt: 'Edit both files',
+  status: 'completed',
+  created_at: '2026-09-21T00:00:00.000Z',
+  tool_use_count: 0,
+  duration_ms: 6500,
+  model: 'claude-sonnet-4-5',
+  git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
+} as unknown as Task;
+
 describe('Files changed disclosure', () => {
+  it('reveals compact task metadata with keyboard and pointer controls', async () => {
+    render(
+      <TaskBlock
+        task={metadataTask}
+        compact
+        isExpanded
+        onExpandChange={() => {}}
+        taskMessages={[]}
+        taskMessagesLoaded
+        onLoadTaskMessages={() => {}}
+        onUnloadTaskMessages={() => {}}
+      />
+    );
+
+    const toggle = screen.getByRole('button', { name: /sonnet-4\.5.*7s/i });
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    // A focusable disclosure must not live under presentational separator descendants.
+    expect(toggle.closest('[role="separator"], [aria-hidden="true"]')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/Git main/)).not.toBeInTheDocument();
+
+    await act(async () => userEvent.tab());
+    expect(toggle).toHaveFocus();
+
+    await act(async () => userEvent.click(toggle));
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('region', { name: /details/i })).toHaveTextContent(
+      'Duration 7s · Git main'
+    );
+
+    await act(async () => {
+      toggle.focus();
+      await userEvent.keyboard('{Enter}');
+    });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/Git main/)).not.toBeInTheDocument();
+
+    await act(async () => userEvent.keyboard(' '));
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/Git main/)).toBeVisible();
+  });
+
   it('moves a loose edit into one keyboard-accessible disclosure when its result arrives', async () => {
     const [request, result] = call(
       0,

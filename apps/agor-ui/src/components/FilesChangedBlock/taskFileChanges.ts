@@ -54,6 +54,31 @@ interface ToolResultBlock {
   diff?: DiffEnrichment;
 }
 
+interface DeclaredEditFile {
+  path: string;
+}
+
+function declaredEditFiles(input: Record<string, unknown>): DeclaredEditFile[] | null {
+  if (!input || typeof input !== 'object' || !Array.isArray(input.changes)) return null;
+
+  const changes = input.changes;
+  if (
+    changes.length === 0 ||
+    !changes.every(
+      (change): change is DeclaredEditFile =>
+        typeof change === 'object' &&
+        change !== null &&
+        !Array.isArray(change) &&
+        typeof (change as { path?: unknown }).path === 'string' &&
+        (change as { path: string }).path.trim().length > 0
+    )
+  ) {
+    return null;
+  }
+
+  return changes;
+}
+
 /**
  * Whether a call's edits are represented in the turn's Files changed block.
  *
@@ -66,8 +91,8 @@ export function hasAggregatedFileChanges(
 ): boolean {
   if (!FILE_EDIT_TOOLS.has(toolUse.name) || !diff) return false;
   if (toolUse.name === 'edit_files') {
-    const changes = toolUse.input.changes as { path: string }[] | undefined;
-    if (!changes?.length) return false;
+    const changes = declaredEditFiles(toolUse.input);
+    if (!changes) return false;
     const unmatched = new Set(diff.files ?? []);
     // Match specific paths first and consume each diff once: foo.ts and
     // dir/foo.ts must never be considered covered by the same patch.

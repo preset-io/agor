@@ -50,6 +50,28 @@ describe('file-change aggregation coverage', () => {
     expect(hasAggregatedFileChanges({ name: 'Edit', input: {} }, { structuredPatch })).toBe(false);
   });
 
+  it.each([
+    ['missing changes', {}],
+    ['undefined changes', { changes: undefined }],
+    ['null changes', { changes: null }],
+    ['non-array changes', { changes: {} }],
+    ['empty changes', { changes: [] }],
+    ['null entry', { changes: [null] }],
+    ['missing path', { changes: [{}] }],
+    ['null path', { changes: [{ path: null }] }],
+    ['non-string path', { changes: [{ path: 42 }] }],
+    ['empty path', { changes: [{ path: '' }] }],
+    ['whitespace-only path', { changes: [{ path: '  ' }] }],
+    ['valid and malformed entries', { changes: [{ path: 'small.ts' }, null] }],
+  ])('rejects malformed edit_files declarations without throwing (%s)', (_label, input) => {
+    expect(() =>
+      hasAggregatedFileChanges({ name: 'edit_files', input }, { structuredPatch })
+    ).not.toThrow();
+    expect(hasAggregatedFileChanges({ name: 'edit_files', input }, { structuredPatch })).toBe(
+      false
+    );
+  });
+
   it('requires separate patches for paths sharing a suffix', () => {
     const call = {
       name: 'edit_files',

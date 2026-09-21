@@ -81,13 +81,19 @@ describe('TaskBlock compact view', () => {
     expect(screen.getByText(ANSWER)).toBeVisible();
   });
 
-  it('marks the task boundary with a non-interactive separator', () => {
+  it('makes additional task metadata available through a semantic disclosure', () => {
     const { container } = renderTask(true);
 
     const separator = container.querySelector('.ant-divider');
     expect(separator).not.toBeNull();
-    expect(separator).toHaveTextContent('opus-5 · 2m 14s');
-    expect(separator?.querySelector('button')).toBeNull();
+    const toggle = screen.getByRole('button', { name: /opus-5.*2m 14s/ });
+    expect(toggle.closest('[role="separator"], [aria-hidden="true"]')).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Duration 2m 14s · Git feature-compact')).toBeVisible();
   });
 
   it('collapses only the in-between agent activity', () => {
