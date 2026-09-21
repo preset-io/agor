@@ -23,7 +23,7 @@ import {
 } from './managed-oauth-old-package-proof.mjs';
 
 export const BASELINE_SHA = 'c675abdd306d866860483b6d7289078951f71f37';
-export const SCHEMA_SHA = '34676f927ad09f46ad6f1bd7f392a2589d6bdfed';
+export const SCHEMA_SHA = '385cfffbc8a1037c6ac350c4d693ed4ded7d6df7';
 const EXPECTED_WATERMARK = '1789344000009';
 const REFUSAL =
   'Database schema is newer than this Agor binary. Refusing to start because an older daemon cannot safely interpret newer authorization state. Upgrade this binary to match the database.';
