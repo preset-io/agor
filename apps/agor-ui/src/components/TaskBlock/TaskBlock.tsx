@@ -55,6 +55,7 @@ import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { TaskStatusIcon } from '../TaskStatusIcon';
+import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { LeanTurnMetadata } from './LeanTurnMetadata';
 
@@ -772,6 +773,94 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         })
       : undefined;
 
+    const metadataPills = (
+      <Flex
+        wrap={!leanTranscript}
+        gap={token.sizeUnit}
+        align="center"
+        style={leanTranscript ? { width: 'max-content', flexShrink: 0 } : undefined}
+      >
+        <TimerPill
+          status={task.status}
+          startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+          endedAt={
+            task.completed_at ||
+            (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+              ? task.message_range?.end_timestamp
+              : undefined)
+          }
+          durationMs={task.duration_ms}
+          lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+          latestExecutorPulse={task.latest_executor_pulse}
+        />
+        {scheduledFromBranch && scheduledRunAt && (
+          <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
+        )}
+        {task.created_by && (
+          <CreatedByTag
+            createdBy={task.created_by}
+            currentUserId={currentUserId}
+            userById={userById}
+            prefix="By"
+          />
+        )}
+        {normalized && (
+          <TokenCountPill
+            count={normalized.tokenUsage.totalTokens}
+            inputTokens={normalized.tokenUsage.inputTokens}
+            outputTokens={normalized.tokenUsage.outputTokens}
+            cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
+            cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
+          />
+        )}
+        {hasContextWindowUsage && (
+          <ContextWindowPill
+            used={contextWindowUsed}
+            limit={contextWindowLimit || 0}
+            taskMetadata={{
+              model: task.model,
+              duration_ms: task.duration_ms,
+              agentic_tool,
+              raw_sdk_response: task.raw_sdk_response,
+              normalized_sdk_response: normalized ?? undefined,
+            }}
+          />
+        )}
+        {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
+        {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
+          <Flex gap={token.sizeUnit / 2} align="center">
+            <GitStatePill
+              branch={task.git_state.ref_at_start}
+              sha={task.git_state.sha_at_start}
+              branchName={branchName}
+              style={{ fontSize: 11 }}
+            />
+            {task.git_state.sha_at_end &&
+              task.git_state.sha_at_end !== 'unknown' &&
+              task.git_state.sha_at_end !== task.git_state.sha_at_start && (
+                <>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    →
+                  </Typography.Text>
+                  <GitStatePill
+                    branch={task.git_state.ref_at_end}
+                    sha={task.git_state.sha_at_end}
+                    branchName={branchName}
+                    showDirtyIndicator={true}
+                    style={{ fontSize: 11 }}
+                  />
+                </>
+              )}
+          </Flex>
+        )}
+        {task.report && (
+          <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
+            Report
+          </Tag>
+        )}
+      </Flex>
+    );
+
     // Task header shows when collapsed
     const taskHeader = (
       <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
@@ -815,87 +904,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             </Typography.Text>
           </CopyableContent>
 
-          {/* Task metadata */}
-          <Flex wrap gap={token.sizeUnit}>
-            <TimerPill
-              status={task.status}
-              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
-              endedAt={
-                task.completed_at ||
-                (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-                  ? task.message_range?.end_timestamp
-                  : undefined)
-              }
-              durationMs={task.duration_ms}
-              lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-              latestExecutorPulse={task.latest_executor_pulse}
-            />
-            {scheduledFromBranch && scheduledRunAt && (
-              <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
-            )}
-            {task.created_by && (
-              <CreatedByTag
-                createdBy={task.created_by}
-                currentUserId={currentUserId}
-                userById={userById}
-                prefix="By"
-              />
-            )}
-            {normalized && (
-              <TokenCountPill
-                count={normalized.tokenUsage.totalTokens}
-                inputTokens={normalized.tokenUsage.inputTokens}
-                outputTokens={normalized.tokenUsage.outputTokens}
-                cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
-                cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
-              />
-            )}
-            {hasContextWindowUsage && (
-              <ContextWindowPill
-                used={contextWindowUsed}
-                limit={contextWindowLimit || 0}
-                taskMetadata={{
-                  model: task.model,
-                  duration_ms: task.duration_ms,
-                  agentic_tool,
-                  raw_sdk_response: task.raw_sdk_response,
-                  normalized_sdk_response: normalized ?? undefined,
-                }}
-              />
-            )}
-            {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
-            {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
-              <Flex gap={token.sizeUnit / 2} align="center">
-                <GitStatePill
-                  branch={task.git_state.ref_at_start}
-                  sha={task.git_state.sha_at_start}
-                  branchName={branchName}
-                  style={{ fontSize: 11 }}
-                />
-                {task.git_state.sha_at_end &&
-                  task.git_state.sha_at_end !== 'unknown' &&
-                  task.git_state.sha_at_end !== task.git_state.sha_at_start && (
-                    <>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        →
-                      </Typography.Text>
-                      <GitStatePill
-                        branch={task.git_state.ref_at_end}
-                        sha={task.git_state.sha_at_end}
-                        branchName={branchName}
-                        showDirtyIndicator={true}
-                        style={{ fontSize: 11 }}
-                      />
-                    </>
-                  )}
-              </Flex>
-            )}
-            {task.report && (
-              <Tag icon={<FileTextOutlined />} color="green" style={{ fontSize: 11 }}>
-                Report
-              </Tag>
-            )}
-          </Flex>
+          {metadataPills}
         </Flex>
       </Flex>
     );
@@ -921,8 +930,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const toolDisclosure = leanTranscript && (
       <div style={{ marginBottom: token.marginSM }}>
         {!taskMessagesLoaded && !isTaskExecuting(task) ? (
-          <Button
-            size="small"
+          <ToolDisclosureHeader
+            label={
+              detailsLoading
+                ? 'Loading tool activity…'
+                : detailsError
+                  ? 'Couldn’t load tool activity · Retry'
+                  : 'Tool calls · Show details'
+            }
+            expanded={false}
             loading={detailsLoading}
             onClick={async () => {
               setDetailsLoading(true);
@@ -935,16 +951,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 setDetailsLoading(false);
               }
             }}
-          >
-            Load tool activity
-          </Button>
+          />
         ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-          <Typography.Text type="secondary">No tool activity</Typography.Text>
+          <Typography.Text type="secondary">No tool calls</Typography.Text>
         ) : null}
-        {latestActivity && (
-          <Typography.Text type="secondary"> Latest activity: {latestActivity}</Typography.Text>
+        {latestActivity && !hasTools && isTaskExecuting(task) && (
+          <Typography.Text type="secondary">Latest: {latestActivity}</Typography.Text>
         )}
-        {detailsError && <Alert type="error" title={detailsError} />}
       </div>
     );
     const taskContent = (
@@ -1025,7 +1038,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
                   {leanTranscript && block.message.message_id === firstPromptId ? (
                     <>
-                      <LeanTurnMetadata task={task} userById={userById}>
+                      <LeanTurnMetadata metadata={metadataPills} background={taskHeaderGradient}>
                         <MessageBlock
                           message={block.message}
                           agentic_tool={agentic_tool}
@@ -1177,7 +1190,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           {!firstPromptId && (
             <>
               {task.full_prompt && (
-                <LeanTurnMetadata task={task} userById={userById}>
+                <LeanTurnMetadata metadata={metadataPills} background={taskHeaderGradient}>
                   <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
                     {task.full_prompt}
                   </Typography.Paragraph>

@@ -359,10 +359,12 @@ is the default experience, not a display preference or environment feature flag.
 No database migration is needed.
 
 The conversation opens the latest ten tasks with user and assistant text visible. Scroll
-up (or use **Load older history**) to fetch earlier tasks. **Load tool activity** fetches
+up (or use **Load older history**) to fetch earlier tasks. **Tool calls · Show details** fetches
 one task’s full messages and restores tool blocks in their original positions. Tool
 groups start collapsed; active tasks continue receiving full live activity and approvals.
-Turn metadata is available through the prompt’s metadata button, hover, or keyboard focus.
+Turn metadata reuses the existing pills in a reserved-height row below the prompt.
+Hover or keyboard focus reveals it; the metadata button pins it open for touch. The row
+scrolls horizontally on narrow screens and retains the context-window usage backdrop.
 Search covers only loaded content, including tool details only after expansion.
 
 Historical tool data is projected out in SQL before transfer, but the database still

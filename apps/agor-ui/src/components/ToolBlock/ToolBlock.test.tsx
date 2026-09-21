@@ -26,7 +26,8 @@ describe('ToolBlock', () => {
 
     const statusIconWrapper = screen.getByTestId('tool-failure-icon').parentElement as HTMLElement;
 
-    expect(statusIconWrapper).toHaveStyle({ color: 'rgb(255, 170, 0)' });
-    expect(statusIconWrapper).not.toHaveStyle({ color: 'rgb(255, 0, 0)' });
+    // Inspect the owned inline tone: jsdom cannot resolve AntD's CSS-variable border shorthand.
+    expect(statusIconWrapper.style.color).toBe('rgb(255, 170, 0)');
+    expect(statusIconWrapper.style.color).not.toBe('rgb(255, 0, 0)');
   });
 });

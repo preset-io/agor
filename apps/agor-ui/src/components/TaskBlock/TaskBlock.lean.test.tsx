@@ -61,13 +61,15 @@ describe('lean task presentation', () => {
     expect(screen.getByText('Retained prompt')).toBeVisible();
     expect(screen.getByText('Visible answer')).toBeVisible();
     expect(load).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Load tool activity' }));
-    expect(await screen.findByText('Could not load tool activity. Try again.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool calls · Show details' }));
+    expect(
+      await screen.findByRole('button', { name: 'Couldn’t load tool activity · Retry' })
+    ).toBeVisible();
     expect(screen.getByText('Retained prompt')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Load tool activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Couldn’t load tool activity · Retry' }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     rerender(view({ taskMessagesLoaded: true, onLoadTaskMessages: load }));
-    expect(screen.getByText('No tool activity')).toBeVisible();
+    expect(screen.getByText('No tool calls')).toBeVisible();
     expect(screen.getByText('Visible answer')).toBeVisible();
   });
 
@@ -101,7 +103,7 @@ describe('lean task presentation', () => {
     expect(screen.getByText('Synthetic failure')).toBeVisible();
     result.rerender(view({ task: { ...task, full_prompt: '' }, taskMessages: [messages[1]] }));
     expect(screen.getByText('Visible answer')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Load tool activity' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Tool calls · Show details' })).toBeVisible();
     result.rerender(
       view({
         task: { ...task, status: TaskStatus.AWAITING_PERMISSION },

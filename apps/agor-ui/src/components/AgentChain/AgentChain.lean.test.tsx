@@ -1,0 +1,54 @@
+import { generateId } from '@agor/core/ids/browser';
+import { type Message, MessageRole } from '@agor-live/client';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
+import { AgentChain } from './AgentChain';
+
+afterEach(cleanup);
+const sessionId = generateId();
+function activity(name: string, index: number, complete = false): Message {
+  return {
+    message_id: generateId(),
+    session_id: sessionId,
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    index,
+    timestamp: '2026-09-01T00:00:00.000Z',
+    content_preview: '',
+    content: [
+      { type: 'tool_use', id: `call-${index}`, name, input: {} },
+      ...(complete
+        ? [{ type: 'tool_result' as const, tool_use_id: `call-${index}`, content: 'Result' }]
+        : []),
+    ],
+  };
+}
+it('updates a quiet collapsed header from live activity to a known count without forcing it open', () => {
+  const first = activity('Read', 0, true);
+  const { container, rerender } = render(
+    <AgentChain messages={[first]} isTaskRunning isLatest leanTranscript />
+  );
+  expect(screen.getByRole('button', { name: 'Latest: Read · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  rerender(
+    <AgentChain messages={[first, activity('Bash', 1)]} isTaskRunning isLatest leanTranscript />
+  );
+  expect(screen.getByRole('button', { name: 'Running: Bash · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  rerender(<AgentChain messages={[first, activity('Bash', 1, true)]} isLatest leanTranscript />);
+  const header = screen.getByRole('button', { name: '2 tool calls · Show details' });
+  expect(header).toHaveAttribute('aria-expanded', 'false');
+  expect(container.querySelector('.ant-tag')).toBeNull();
+  expect(screen.queryByText('Result')).not.toBeInTheDocument();
+  fireEvent.click(header);
+  expect(screen.getByRole('button', { name: /Read/ })).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(screen.getByRole('button', { name: '2 tool calls · Hide details' }));
+  expect(screen.getByRole('button', { name: '2 tool calls · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+});

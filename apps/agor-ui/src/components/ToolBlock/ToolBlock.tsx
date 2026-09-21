@@ -7,10 +7,62 @@
  * Used by AgentChain for every tool call and thinking block.
  */
 
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
+import {
+  DownOutlined,
+  LoadingOutlined,
+  RightOutlined,
+  ToolOutlined,
+  UpOutlined,
+} from '@ant-design/icons';
 import { Button, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+
+/** Shared quiet disclosure for unloaded history and outer tool groups. */
+export function ToolDisclosureHeader({
+  label,
+  expanded,
+  onClick,
+  loading = false,
+}: {
+  label: string;
+  expanded: boolean;
+  onClick: () => void;
+  loading?: boolean;
+}) {
+  const { token } = theme.useToken();
+  return (
+    <Button
+      type="text"
+      block
+      disabled={loading}
+      aria-busy={loading}
+      icon={loading ? <LoadingOutlined spin /> : <ToolOutlined />}
+      aria-expanded={expanded}
+      aria-label={label}
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        gap: token.marginXS,
+        paddingInline: 0,
+        color: token.colorTextSecondary,
+      }}
+    >
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          textAlign: 'left',
+        }}
+      >
+        {label}
+      </span>
+      {expanded ? <UpOutlined /> : <DownOutlined />}
+    </Button>
+  );
+}
 
 export interface ToolBlockProps {
   /** Tool/block icon (Ant Design icon element) */

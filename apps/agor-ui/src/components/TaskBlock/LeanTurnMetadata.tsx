@@ -1,39 +1,70 @@
-import type { Task, User } from '@agor-live/client';
-import { Button, Flex, Popover, Tag } from 'antd';
-import type { ReactNode } from 'react';
+import { MoreOutlined } from '@ant-design/icons';
+import { Button, Flex, theme } from 'antd';
+import { type ReactNode, useId, useState } from 'react';
 
-/** Small display-only disclosure. No extra requests and no raw SDK payload. */
+/** Reserve one row outside the bubble: revealing metadata never moves the transcript. */
 export function LeanTurnMetadata({
-  task,
-  userById,
+  metadata,
+  background,
   children,
 }: {
-  task: Task;
-  userById: Map<string, User>;
+  metadata: ReactNode;
+  background?: string;
   children: ReactNode;
 }) {
-  const normalized = task.normalized_sdk_response;
-  const author = task.created_by ? userById.get(task.created_by) : undefined;
+  const { token } = theme.useToken();
+  const id = useId();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const visible = hovered || focused || pinned;
   return (
-    <Popover
-      trigger={['hover', 'focus', 'click']}
-      placement="bottomLeft"
-      content={
-        <Flex wrap gap="small" aria-label="Turn metadata">
-          {task.model && <Tag>{task.model}</Tag>}
-          {task.duration_ms !== undefined && <Tag>{(task.duration_ms / 1000).toFixed(1)}s</Tag>}
-          {normalized && <Tag>{normalized.tokenUsage.totalTokens.toLocaleString()} tokens</Tag>}
-          {author && <Tag>{author.name || author.email}</Tag>}
-          <Tag>{new Date(task.created_at).toLocaleString()}</Tag>
-        </Flex>
-      }
+    <div
+      style={{ minWidth: 0 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+      }}
     >
-      <div style={{ minWidth: 0 }}>
-        {children}
-        <Button type="text" size="small" aria-label="Show turn metadata">
-          Turn details
-        </Button>
-      </div>
-    </Popover>
+      {children}
+      <Flex
+        align="center"
+        gap={token.marginXS}
+        style={{ height: token.controlHeight, minWidth: 0 }}
+      >
+        <Button
+          type="text"
+          size="small"
+          icon={<MoreOutlined />}
+          aria-label="Show turn metadata"
+          aria-expanded={visible}
+          aria-controls={id}
+          aria-pressed={pinned}
+          onClick={() => setPinned(!pinned)}
+        />
+        <section
+          id={id}
+          aria-label="Turn metadata"
+          aria-hidden={!visible}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: token.controlHeight,
+            display: 'flex',
+            alignItems: 'center',
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            scrollbarWidth: 'thin',
+            visibility: visible ? 'visible' : 'hidden',
+            background,
+            borderRadius: token.borderRadiusSM,
+          }}
+        >
+          {metadata}
+        </section>
+      </Flex>
+    </div>
   );
 }

@@ -15,10 +15,12 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import { App, ConfigProvider, theme } from 'antd';
+import { App, ConfigProvider, Flex, theme } from 'antd';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { AgentChain } from '../AgentChain';
+import { ContextWindowPill, ModelPill } from '../Pill';
 import { LeanTurnMetadata } from '../TaskBlock/LeanTurnMetadata';
 import { ConversationView } from './ConversationView';
 
@@ -168,29 +170,76 @@ it('renders continuous history without detail fetching and anchors an upward pag
   await page.screenshot({ path: `./.vitest/lean-transcript-${window.innerWidth}.png` });
 });
 
-it('reveals metadata through keyboard focus, hover and touch-equivalent click', async () => {
+it('reveals existing metadata pills without layout shift through focus, hover and touch-equivalent click', async () => {
+  const metadata = (
+    <Flex gap="small" style={{ width: 'max-content', flexShrink: 0 }}>
+      <ModelPill model="synthetic-model" />
+      <ContextWindowPill used={60000} limit={100000} />
+      <ModelPill model="another-long-synthetic-model-name" />
+    </Flex>
+  );
   render(
-    <LeanTurnMetadata task={tasks[0]} userById={new Map()}>
+    <LeanTurnMetadata metadata={metadata}>
       <p>Prompt for metadata</p>
     </LeanTurnMetadata>
   );
-  expect(screen.queryByText('synthetic-model')).not.toBeInTheDocument();
+  expect(screen.getByText('synthetic-model')).not.toBeVisible();
+  const prompt = screen.getByText('Prompt for metadata');
+  const before = prompt.parentElement!.getBoundingClientRect();
   await userEvent.tab();
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+  expect(prompt.parentElement!.getBoundingClientRect().height).toBe(before.height);
+  expect(prompt.parentElement!.getBoundingClientRect().top).toBe(before.top);
+  const row = screen.getByRole('region', { name: 'Turn metadata' });
+  expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
+  if (window.innerWidth === 320) expect(row.scrollWidth).toBeGreaterThan(row.clientWidth);
+  await page.screenshot({ path: `./.vitest/lean-metadata-${window.innerWidth}.png` });
   cleanup();
   render(
-    <LeanTurnMetadata task={tasks[0]} userById={new Map()}>
+    <LeanTurnMetadata metadata={metadata}>
       <p>Prompt for metadata</p>
     </LeanTurnMetadata>
   );
   await userEvent.click(screen.getByRole('button', { name: 'Show turn metadata' }));
+  expect(screen.getByRole('button', { name: 'Show turn metadata' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
   cleanup();
   render(
-    <LeanTurnMetadata task={tasks[0]} userById={new Map()}>
+    <LeanTurnMetadata metadata={metadata}>
       <p>Prompt for metadata</p>
     </LeanTurnMetadata>
   );
   await userEvent.hover(screen.getByText('Prompt for metadata'));
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+});
+
+it('keeps familiar icon-led tool rows and results inside the quiet outer disclosure', async () => {
+  const activity: Message = {
+    message_id: generateId(),
+    session_id: sessionId,
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    index: 0,
+    timestamp: '2026-09-01T00:00:00.000Z',
+    content_preview: '',
+    content: [
+      { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: 'synthetic.txt' } },
+      { type: 'tool_result', tool_use_id: 'read', content: 'SYNTHETIC_TOOL_RESULT' },
+    ],
+  };
+  render(<AgentChain messages={[activity]} leanTranscript />);
+  const header = screen.getByRole('button', { name: '1 tool call · Show details' });
+  expect(header).toHaveAttribute('aria-expanded', 'false');
+  await userEvent.tab();
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
+  const tool = screen.getByRole('button', { name: /Read/ });
+  expect(tool.querySelector('.anticon')).not.toBeNull();
+  expect(tool).toHaveAttribute('aria-expanded', 'false');
+  await userEvent.click(tool);
+  await waitFor(() => expect(screen.getByText('SYNTHETIC_TOOL_RESULT')).toBeVisible());
+  await page.screenshot({ path: `./.vitest/lean-tool-content-${window.innerWidth}.png` });
 });

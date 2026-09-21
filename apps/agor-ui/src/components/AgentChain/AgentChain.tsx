@@ -55,6 +55,7 @@ import {
   shouldExpandToolByDefault,
   ToolBlock,
 } from '../ToolBlock';
+import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 
@@ -616,65 +617,77 @@ export const AgentChain = React.memo<AgentChainProps>(
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
         {/* Collapsed summary - clickable */}
-        <Button
-          type="text"
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            width: '100%',
-            height: 'auto',
-            whiteSpace: 'normal',
-            textAlign: 'left',
-            display: 'block',
-            padding: token.sizeUnit * 1.5,
-            borderRadius: token.borderRadius,
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorder}`,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = token.colorPrimaryBorder;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = token.colorBorder;
-          }}
-        >
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, flexWrap: 'wrap' }}
+        {leanTranscript ? (
+          <ToolDisclosureHeader
+            label={`${
+              isTaskRunning && isLatest && latestToolName
+                ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
+                : stats.toolCount
+                  ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
+                  : 'Reasoning'
+            }${hasErrors ? ' · Errors' : ''} · ${expanded ? 'Hide details' : 'Show details'}`}
+            expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+          />
+        ) : (
+          <Button
+            type="text"
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+            style={{
+              width: '100%',
+              height: 'auto',
+              whiteSpace: 'normal',
+              textAlign: 'left',
+              display: 'block',
+              padding: token.sizeUnit * 1.5,
+              borderRadius: token.borderRadius,
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorder}`,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = token.colorPrimaryBorder;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = token.colorBorder;
+            }}
           >
-            {/* Expand/collapse icon */}
-            {expanded ? (
-              <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            )}
-
-            {/* Status icon */}
-            {hasErrors ? (
-              <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-            ) : (
-              <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
-            )}
-
-            {/* Summary text */}
-            <Typography.Text strong>
-              <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
-              {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
-              {stats.toolCount > 0 && `${stats.toolCount} tools`}
-            </Typography.Text>
-
-            {/* Only show details when collapsed */}
-            {!expanded &&
-              (leanTranscript ? (
-                <Typography.Text type="secondary">
-                  {latestToolName ? `Latest: ${latestToolName}` : 'Thinking'}
-                </Typography.Text>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: token.sizeUnit,
+                flexWrap: 'wrap',
+              }}
+            >
+              {/* Expand/collapse icon */}
+              {expanded ? (
+                <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
               ) : (
-                summaryDescription
-              ))}
-          </div>
-        </Button>
+                <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
+              )}
+
+              {/* Status icon */}
+              {hasErrors ? (
+                <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
+              ) : (
+                <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
+              )}
+
+              {/* Summary text */}
+              <Typography.Text strong>
+                <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
+                {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
+                {stats.toolCount > 0 && `${stats.toolCount} tools`}
+              </Typography.Text>
+
+              {/* Only show details when collapsed */}
+              {!expanded && summaryDescription}
+            </div>
+          </Button>
+        )}
 
         {/* Expanded chain */}
         {expanded && (
