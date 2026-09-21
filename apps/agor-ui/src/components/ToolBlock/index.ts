@@ -1,6 +1,9 @@
 export { shouldExpandToolByDefault } from './defaultExpansion';
 export { ToolBlock, type ToolBlockProps } from './ToolBlock';
-export { buildBashDescriptionNode } from './toolDescriptions';
+export {
+  buildBashDescriptionNode,
+  buildDiffStatDescriptionNode,
+} from './toolDescriptions';
 export {
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,

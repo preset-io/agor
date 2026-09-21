@@ -51,6 +51,7 @@ import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
 import { Tag } from '../Tag';
 import {
   buildBashDescriptionNode,
+  buildDiffStatDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -527,6 +528,18 @@ export const AgentChain = React.memo<AgentChainProps>(
           </Typography.Text>
         );
         description = null;
+      } else if (compact) {
+        // Compact hides the diff behind the row, so carry its size on the row.
+        const diffStatNode = buildDiffStatDescriptionNode(
+          toolUse.name,
+          description,
+          toolResult?.diff,
+          token
+        );
+        if (diffStatNode) {
+          descriptionNode = diffStatNode;
+          description = null;
+        }
       }
 
       return (

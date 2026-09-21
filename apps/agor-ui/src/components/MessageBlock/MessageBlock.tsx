@@ -47,6 +47,7 @@ import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
   buildBashDescriptionNode,
+  buildDiffStatDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -757,6 +758,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   <CopyableContent
                     textContent={textBeforeTools.join('\n\n')}
                     copyTooltip="Copy message"
+                    // The compact user bubble is a bounded box: keep the copy
+                    // control inside its padding instead of over the top edge.
+                    copyButtonOffset={
+                      compact && isUser
+                        ? { top: -token.sizeUnit, right: -token.sizeUnit }
+                        : undefined
+                    }
                   >
                     <div
                       style={{
@@ -800,7 +808,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   root: { maxWidth: '100%', gap: compact ? COMPACT_GUTTER_GAP : undefined },
                   body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
-                    padding: compact && isUser ? '4px 10px' : undefined,
+                    padding:
+                      compact && isUser ? `${token.paddingXS}px ${token.paddingSM}px` : undefined,
                     minHeight: compact && isUser ? 32 : undefined,
                     display: compact && isUser ? 'flex' : undefined,
                     alignItems: compact && isUser ? 'center' : undefined,
@@ -860,14 +869,24 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 toolUse.name === 'Bash'
                   ? buildBashDescriptionNode(toolUse.input, token)
                   : undefined;
+              // Compact hides the diff behind the row, so carry its size on the row.
+              const diffStatNode = compact
+                ? buildDiffStatDescriptionNode(
+                    toolUse.name,
+                    getToolDescription(toolUse),
+                    toolResult?.diff,
+                    token
+                  )
+                : undefined;
+              const headerNode = bashNode ?? diffStatNode;
 
               return (
                 <ToolBlock
                   key={toolUse.id}
                   icon={icon}
                   name={displayName}
-                  description={bashNode ? undefined : getToolDescription(toolUse)}
-                  descriptionNode={bashNode}
+                  description={headerNode ? undefined : getToolDescription(toolUse)}
+                  descriptionNode={headerNode}
                   status={status}
                   expandedByDefault={!compact && shouldExpandToolByDefault(toolUse.name)}
                   compact={compact}
