@@ -14,6 +14,9 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { resolveVerificationKey } from '../auth/launch-auth.js';
 
+// Ordinary bounded clock skew, not a longer assertion lifetime or a retry permit.
+const CLOCK_SKEW_SECONDS = 30;
+
 const id = z.string().min(1).max(200);
 const callbackSchema = z
   .object({
@@ -146,7 +149,7 @@ export class MCPOAuthRelay {
         result.redirect_uri !== input.redirect_uri ||
         !Number.isFinite(expires) ||
         expires <= Date.now() ||
-        expires > Date.now() + 600_000
+        expires > Date.now() + 600_000 + CLOCK_SKEW_SECONDS * 1000
       )
         throw new Error();
       return result.start_url;
@@ -176,6 +179,7 @@ export class MCPOAuthRelay {
         algorithms: ['RS256'],
         issuer: this.launch.issuer,
         audience: `agor-cell:${this.cellId}:mcp-oauth-relay`,
+        clockTolerance: CLOCK_SKEW_SECONDS,
       }) as jwt.JwtPayload;
       const data = callbackSchema.parse(JSON.parse(body.toString('utf8')));
       const now = Math.floor(Date.now() / 1000);
@@ -190,7 +194,7 @@ export class MCPOAuthRelay {
         !claims.jti ||
         typeof claims.iat !== 'number' ||
         typeof claims.exp !== 'number' ||
-        claims.iat > now ||
+        claims.iat > now + CLOCK_SKEW_SECONDS ||
         claims.exp - claims.iat > 30 ||
         claims.exp <= claims.iat ||
         data.redirect_uri !== this.redirectUri(data.issuer) ||

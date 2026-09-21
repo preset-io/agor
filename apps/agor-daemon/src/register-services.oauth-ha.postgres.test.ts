@@ -1174,6 +1174,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           const owner = await new UsersRepository(scoped).create({
             email: `${crypto.randomUUID()}@test.example`,
             name: 'Relay user',
+            role: 'admin',
           });
           await new UserExternalIdentitiesRepository(scoped).bind(owner.user_id, {
             key: createHash('sha256')
@@ -1217,6 +1218,24 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           a.app
             .service('mcp-servers/oauth-start')
             .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant));
+        const beforeShared = {
+          starts: oauthFixture.starts,
+          registrations: oauthFixture.registrations,
+          exchanges: oauthFixture.exchanges,
+        };
+        await a.app
+          .service('mcp-servers')
+          .patch(server.mcp_server_id, { auth: { oauth_mode: 'shared' } }, params(owner, tenant));
+        await expect(start()).resolves.toMatchObject({ success: false });
+        expect({
+          starts: oauthFixture.starts,
+          registrations: oauthFixture.registrations,
+          exchanges: oauthFixture.exchanges,
+        }).toEqual(beforeShared);
+        expect(preparations).toHaveLength(0);
+        await a.app
+          .service('mcp-servers')
+          .patch(server.mcp_server_id, { auth: { oauth_mode: 'per_user' } }, params(owner, tenant));
         expect(await start()).toMatchObject({
           success: true,
           authorizationUrl: 'https://cloud.test/start/opaque',
