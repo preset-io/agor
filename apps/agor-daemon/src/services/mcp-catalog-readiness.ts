@@ -15,6 +15,7 @@ import {
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
+  redirectUri?(entry: MCPCatalogEntry): string | undefined;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   isGrantAuthorized(
     candidate: MCPCatalogServerCandidate,
@@ -69,6 +70,8 @@ export class MCPCatalogReadinessService {
     const candidates = inventory.filter(({ server }) =>
       sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
     );
+    const redirectUri = entry.oauth?.configured_client ? this.deps.redirectUri?.(entry) : undefined;
+    const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const knownOAuthInstall = candidates.some(
       ({ server }) =>
         server.source === 'catalog' &&
@@ -97,12 +100,14 @@ export class MCPCatalogReadinessService {
         return {
           catalog_key: catalogKey,
           ...sharedAvailability,
+          ...setup,
           state: selection.liveKind === 'catalog_install' ? 'installed_ready' : 'reusable_oauth',
         };
       }
       return {
         catalog_key: catalogKey,
         ...sharedAvailability,
+          ...setup,
         state: 'oauth_required',
         ...(selection.currentCatalog ? { reusable_configuration: true } : {}),
       };
