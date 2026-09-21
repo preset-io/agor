@@ -11,6 +11,7 @@ import { selectCatalogCandidate } from './mcp-catalog-credential-match.js';
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
+  redirectUri?(entry: MCPCatalogEntry): string | undefined;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   isGrantAuthorized(
     candidate: MCPCatalogServerCandidate,
@@ -43,6 +44,8 @@ export class MCPCatalogReadinessService {
       throw new BadRequest('This catalog entry has no Marketplace-connectable remote endpoint');
     }
     const remoteEntry = entry as MCPCatalogEntry & { remote_url: string };
+    const redirectUri = entry.oauth?.configured_client ? this.deps.redirectUri?.(entry) : undefined;
+    const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const candidates = await this.deps.listCandidates(userId, params);
     const knownOAuthInstall = candidates.some(
       ({ server }) =>
@@ -70,10 +73,11 @@ export class MCPCatalogReadinessService {
       if (selection.live) {
         return {
           catalog_key: catalogKey,
+          ...setup,
           state: selection.liveKind === 'catalog_install' ? 'installed_ready' : 'reusable_oauth',
         };
       }
-      return { catalog_key: catalogKey, state: 'oauth_required' };
+      return { catalog_key: catalogKey, state: 'oauth_required', ...setup };
     }
 
     if (entry.auth_type === 'credentials') {

@@ -516,10 +516,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     async ({
       acknowledgedDisclosure,
       bearerToken,
+      oauthClient,
       oauthPopup,
     }: {
       acknowledgedDisclosure: string;
       bearerToken?: string;
+      oauthClient?: { client_id: string; client_secret?: string };
       oauthPopup?: MarketplaceOAuthPopup;
     }) => {
       const authority = operationGuard.begin();
@@ -539,6 +541,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           catalog_key: selected.name,
           acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
+          ...(oauthClient ? { oauth_client: oauthClient } : {}),
         });
         if (!operation.isCurrent()) {
           oauthPopup?.close();

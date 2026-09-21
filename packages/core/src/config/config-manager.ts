@@ -542,6 +542,7 @@ function validateConfig(config: AgorConfig): void {
     'ui',
     'database',
     'external_launch',
+    'mcp_oauth_relay',
     'identity',
     'execution',
     'security',
@@ -739,6 +740,13 @@ function validateConfig(config: AgorConfig): void {
     'return_host_param',
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
+  only(config.mcp_oauth_relay, 'mcp_oauth_relay', [
+    'callback_origin',
+    'cell_id',
+    'credential_id',
+    'private_key_env',
+    'key_id',
+  ]);
   only(config.identity, 'identity', [
     'user_lifecycle',
     'role_authority',
@@ -1599,6 +1607,7 @@ export function resolveEffectiveConfig(
     },
     identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
+    ...(config.mcp_oauth_relay ? { mcp_oauth_relay: { ...config.mcp_oauth_relay } } : {}),
     execution: {
       ...defaults.execution,
       ...config.execution,

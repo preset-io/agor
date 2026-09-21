@@ -1515,6 +1515,8 @@ export function getAuthCodeTokenCacheStats(): {
  * This is returned by startMCPOAuthFlow and consumed by completeMCPOAuthFlow
  */
 export interface OAuthFlowContext {
+  /** Hosted relay authority sealed alongside PKCE; absent for direct flows. */
+  relay?: import('../../types/mcp-oauth-relay').MCPOAuthRelayBinding;
   metadataUrl: string;
   resourceUri: string;
   issuer: string;
@@ -1994,6 +1996,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   cacheKey: string;
   clientId?: string;
   redirectUri?: string;
+  resolveRedirectUri?: (issuer: string) => string;
   authorizationUrlOverride?: string;
   tokenUrlOverride?: string;
   clientSecret?: string;
@@ -2037,7 +2040,9 @@ async function startMCPOAuthFlowWithAS(opts: {
   const pkce = generatePKCE();
 
   // Redirect URI default — preserved for legacy CLI callers
-  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+  const actualRedirectUri = opts.resolveRedirectUri
+    ? opts.resolveRedirectUri(authServerMetadata?.issuer ?? issuer)
+    : redirectUri || 'http://127.0.0.1:0/oauth/callback';
   // Validate before registration: DCR sends this value to an external service
   // and must not turn an unsafe configured callback into durable provider-side
   // client metadata.
@@ -2088,7 +2093,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   });
 
   // CSRF state
-  const state = crypto.randomUUID();
+  const state = crypto.randomBytes(32).toString('base64url');
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
@@ -2133,6 +2138,8 @@ export async function startMCPOAuthFlow(
   clientId?: string,
   redirectUri?: string,
   options?: {
+    /** Deployment-owned issuer-distinct callback selection, never a browser return URL. */
+    resolveRedirectUri?: (issuer: string) => string;
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     clientSecret?: string;
@@ -2223,6 +2230,7 @@ export async function startMCPOAuthFlow(
       cacheKey: options.cacheKey,
       clientId,
       redirectUri,
+      resolveRedirectUri: options.resolveRedirectUri,
       authorizationUrlOverride: options.authorizationUrlOverride,
       tokenUrlOverride: options.tokenUrlOverride,
       clientSecret: options.clientSecret,
@@ -2323,6 +2331,7 @@ export async function startMCPOAuthFlow(
     cacheKey: metadataUrl,
     clientId,
     redirectUri,
+    resolveRedirectUri: options?.resolveRedirectUri,
     authorizationUrlOverride: options?.authorizationUrlOverride,
     tokenUrlOverride: options?.tokenUrlOverride,
     clientSecret: options?.clientSecret,

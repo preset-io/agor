@@ -190,3 +190,98 @@ The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
 
 The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret. Unit tests inject the network and OAuth discovery seams and never depend on public endpoints.
+
+## Customer-owned OAuth apps and the optional Cloud callback relay
+
+Catalog entries with a reviewed **Use your own OAuth app** recipe ask for your
+app's client ID and, for confidential apps, its client secret in the secure
+Catalog form. These are not PATs or Agor service credentials. The recipe includes
+the provider's setup documentation; register the exact callback shown in the
+form before connecting. Agor saves the configured app, then each user separately
+consents to their own provider grant. An administrator can also configure one
+shared server definition with **Per User** OAuth; sharing an app is not sharing
+its users' access tokens.
+
+App secrets entered through Catalog or Settings are encrypted with the existing
+deployment `AGOR_MASTER_SECRET`, bound to the tenant and saved server, and redacted
+on reads. Legacy plaintext configurations remain readable and are encrypted on
+their next save; this is not a retroactive database re-encryption migration.
+Raw app secrets are refused by MCP configuration tools: use the form, or a secure
+user-environment reference. Never paste a secret into agent chat. Rotating an app
+credential invalidates the server's pending attempts and stored user grants;
+reconnect affected users after saving the change.
+
+### Asana V2 recipe
+
+Create an **MCP app**, not a standard API app, in Asana's developer console. Set
+its redirect URL to the value Agor shows, then select the permitted workspaces
+under distribution. Catalog uses `https://mcp.asana.com/v2/mcp`, configured-client
+OAuth, and no DCR. Asana's app-distribution restrictions still apply; an empty
+workspace allowlist is not fixed by a stable callback. MCP tokens do not authorize
+Asana's ordinary API. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+
+The recipe is conditional on the provider continuing to advertise a compatible
+issuer, S256 PKCE and confidential-client authentication. Agor does not fall back
+to weaker discovery or a PAT after a refusal. Fake-provider tests do not establish
+live Asana consent, approved distribution, or acceptance of every scope/resource
+combination. Existing V1 installs are not silently migrated: configure V2 and
+reconnect explicitly.
+
+### Operator setup: stable hosted callback
+
+Direct self-hosted OAuth remains the default. Relay mode requires PostgreSQL,
+the existing asymmetric Cloud launch trust, and an existing Cell-scoped RS256
+service credential authorized by Cloud for `mcp_oauth:relay`. It does not create
+an Agor-owned provider app, provider-secret broker, or token-exchange proxy.
+
+```yaml
+mcp_oauth_relay:
+  callback_origin: https://<trusted-cloud-console-origin>
+  cell_id: <existing-cell-id>
+  credential_id: <existing-cell-service-credential-id>
+  private_key_env: AGOR_CELL_SERVICE_PRIVATE_KEY
+  key_id: <existing-cell-service-key-id> # optional when Cloud permits no kid
+```
+
+Use the deployment's existing secret provisioning for the named PEM variable;
+never put its value in the file, chat, or a tool call. The existing
+`external_launch` configuration supplies Cloud's issuer/JWKS (or pinned public
+key). No browser or MCP-server setting can override these trust anchors.
+
+For issuer `https://provider.example`, the callback is exactly:
+
+```text
+https://<trusted-cloud-console-origin>/api/mcp-oauth/relay/callback/<SHA256-hex-of-exact-issuer-UTF8>
+```
+
+The hash includes the exact issuer spelling, including any trailing slash.
+Registration, authorization and code exchange use the same URI. The runtime
+prepares a short-lived route using a body-bound Cell service assertion; the
+browser opens Cloud's authenticated Continue page, not a user-supplied return
+URL. Cloud checks the initiating identity, membership and current placement,
+then sends a single body-bound, purpose/audience-separated assertion and callback
+to the trusted workspace route. Only the cell exchanges the code, persists the
+grant, or refreshes it. Cloud never receives app secrets or access/refresh tokens.
+
+### Trust and failure boundaries
+
+Tenant/user/server ownership, sealed state/PKCE, issuer/resource binding,
+configuration generation and the durable exchange claim remain runtime
+responsibilities. Callback signatures are not login assertions. Direct/manual
+completion cannot bypass the Cloud binding of a relay attempt. Duplicate or
+ambiguous delivery does not authorize a second exchange; reconnect after an
+uncertain outcome. Reset, disconnect, cancellation, expiry and configuration
+changes retain the existing pending/grant invalidation rules. Rehoming is not
+credential transfer: Cloud must reject a route whose stored placement is no
+longer current. Work already admitted before a lifecycle change is governed by
+the existing runtime write/configuration fences, not a new global revocation
+protocol.
+
+This trusts the cell that already holds the customer's app credential, and the
+Cloud launch signing authority. It does not contain either authority's compromise.
+Issuer-distinct callbacks plus RFC 9207 checks where advertised defend mix-up;
+see [OAuth Security BCP §4.4](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.4).
+Stable routing alone does not confer provider approval. Callback HTTP responses
+use no-store/no-referrer; configure ingress and observability to omit callback
+queries, Authorization headers and request bodies. A provider's initial browser
+GET can still enter upstream/browser history: response headers cannot erase it.

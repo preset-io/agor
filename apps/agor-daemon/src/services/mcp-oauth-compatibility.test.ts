@@ -1,6 +1,7 @@
 import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
+  configuredCatalogIssuer,
   presentMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -172,4 +173,36 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
       /must be either strict or legacy/
     );
   });
+});
+
+it('pins reviewed configured-client issuer and refuses recipe drift', async () => {
+  const configured = {
+    ...entry,
+    oauth: {
+      dcr_mode: 'disabled' as const,
+      configured_client: {
+        issuer: 'https://issuer.example',
+        setup_url: 'https://issuer.example/apps',
+        secret_required: true,
+      },
+    },
+  };
+  const server = catalogServer({
+    auth: {
+      type: 'oauth',
+      oauth_mode: 'per_user',
+      oauth_dcr_mode: 'disabled',
+      oauth_client_id: 'customer-app',
+      oauth_client_secret: 'test-secret',
+    },
+  });
+  await expect(configuredCatalogIssuer(server, [configured])).resolves.toBe(
+    'https://issuer.example'
+  );
+  await expect(
+    configuredCatalogIssuer({ ...server, url: 'https://other.example/mcp' }, [configured])
+  ).rejects.toThrow('reviewed recipe');
+  await expect(
+    configuredCatalogIssuer({ ...server, source: 'user' }, [configured])
+  ).resolves.toBeUndefined();
 });

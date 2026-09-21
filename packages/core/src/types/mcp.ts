@@ -223,6 +223,7 @@ export function isMCPOAuthGrantBindingVersion(
  * attempts, users, tenants, or MCP servers.
  */
 export interface MCPOAuthPendingFlowSealedMaterial {
+  relay?: import('./mcp-oauth-relay').MCPOAuthRelayBinding;
   version: 2;
   attemptId: MCPOAuthAttemptID;
   tenantId: string;

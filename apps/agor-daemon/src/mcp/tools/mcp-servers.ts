@@ -1,4 +1,5 @@
 import { NotFound } from '@agor/core/feathers';
+import { isUserEnvPlaceholder } from '@agor/core/mcp';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import {
@@ -355,7 +356,10 @@ const mcpAuthInputSchema = z
     ),
     oauth_client_secret: mcpOptionalString(
       'auth.oauth_client_secret',
-      'Optional OAuth client secret. Prefer {{ user.env.OAUTH_CLIENT_SECRET }} templates; raw secrets are not returned by this tool.'
+      'Only an environment-variable reference, never a raw app secret. Enter customer app secrets in the secure Catalog or MCP Settings form, not chat.'
+    ).refine(
+      (value) => value === undefined || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app secrets; tools accept only an environment reference'
     ),
     oauth_scope: mcpOptionalString('auth.oauth_scope', 'Optional OAuth scopes, space-separated.'),
     oauth_grant_type: z
@@ -447,7 +451,13 @@ const mcpAuthPatchSchema = z
     oauth_authorization_url: nullableString('OAuth authorization endpoint override.'),
     oauth_token_url: nullableString('OAuth token endpoint override.'),
     oauth_client_id: nullableString('OAuth client ID.'),
-    oauth_client_secret: nullableString('OAuth client secret.'),
+    oauth_client_secret: nullableString(
+      'OAuth app secret environment reference; use secure UI for raw values.'
+    ).refine(
+      (value) =>
+        value == null || value === MCP_HEADER_REDACTED_SENTINEL || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app secrets; tools accept only an environment reference'
+    ),
     oauth_scope: nullableString('OAuth scopes, space-separated.'),
     oauth_grant_type: z.enum(['client_credentials', 'authorization_code']).nullable().optional(),
     oauth_mode: z.enum(['per_user', 'shared']).nullable().optional(),
