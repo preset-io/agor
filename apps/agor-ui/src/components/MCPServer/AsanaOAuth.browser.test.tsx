@@ -1,6 +1,6 @@
 import type { MCPMarketplaceOverview, MCPOAuthAttemptResult } from '@agor/core/types';
 import type { AgorClient, MCPServer, UpdateMCPServerInput } from '@agor-live/client';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, message } from 'antd';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -275,9 +275,16 @@ describe('Asana V2 saved OAuth in real Chromium', () => {
       screen.queryByText('Synthetic client rejected. Check the configured app.')
     ).not.toBeInTheDocument();
     await observeCompletion(h, { status: 'expired' });
-    await screen.findByText('OAuth sign-in expired. Start a new sign-in.');
+    // Terminal failure renders both persistent inline recovery and a separate
+    // error notification. Settle the portal, then assert the editor surface;
+    // a document-wide singular query races the second React root's render.
+    await screen.findByRole('button', { name: 'Dismiss error message' });
+    const settings = within(screen.getByRole('dialog', { name: 'Edit MCP Server' }));
+    const expired = 'OAuth sign-in expired. Start a new sign-in.';
+    expect(await settings.findByText(expired)).toBeVisible();
+    expect(screen.getAllByText(expired)).toHaveLength(2);
     expect(h.status).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Retry OAuth Flow' })).toBeEnabled();
+    expect(settings.getByRole('button', { name: 'Retry OAuth Flow' })).toBeEnabled();
   });
 
   it('discards private draft credentials and a pending completion when the authenticated identity changes', async () => {
