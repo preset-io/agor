@@ -1,8 +1,11 @@
 import type {
   AgenticToolName,
   AgorClient,
+  Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
   Repo,
   Session,
   SpawnConfig,
@@ -12,6 +15,7 @@ import { getTeammateConfig } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
@@ -32,14 +36,21 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import type { AgenticToolOption } from '../../types';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { createTeammateBranch } from '../../utils/teammateCreation';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
-import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { CreateDialog } from '../CreateDialog';
+import { branchTabConfigToCreateArgs } from '../CreateDialog/createBranchArgs';
+import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
+import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
+import { NewSessionModal } from '../NewSessionModal';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
@@ -93,6 +104,33 @@ interface MobileAppProps {
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
+  // Board-level "New branch" reuses the shared CreateDialog; these mirror the
+  // desktop create handlers threaded from App.tsx.
+  availableAgents: AgenticToolOption[];
+  branchStorageConfig?: BranchStorageConfig;
+  onCreateBranch: (
+    repoId: string,
+    data: {
+      name: string;
+      ref: string;
+      refType?: 'branch' | 'tag';
+      createBranch: boolean;
+      sourceBranch: string;
+      sourceRemoteUrl?: string;
+      pullLatest: boolean;
+      issue_url?: string;
+      pull_request_url?: string;
+      boardId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
+      position?: { x: number; y: number };
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
+    }
+  ) => Promise<Branch | null>;
+  onCreateBoard: (board: Partial<Board>) => Promise<Board | null>;
+  onCreateRepo: (data: CreateRepoRequest) => unknown;
+  onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -123,6 +161,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateRepo,
   onArchiveOrDeleteBranch,
   onExecuteScheduleNow,
+  availableAgents,
+  branchStorageConfig,
+  onCreateBranch,
+  onCreateBoard,
+  onCreateRepo,
+  onCreateLocalRepo,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -146,6 +190,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
+  const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
@@ -270,6 +315,38 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     ]
   );
 
+  // Create from the mobile new-session modal (agent + model/MCP/env + prompt),
+  // reusing the shared NewSessionModal's fully-built config, then land in the
+  // new session. Same one-at-a-time guard and identity scoping as the Ask flow.
+  const createSessionFromModal = useCallback(
+    async (config: NewSessionConfig): Promise<SessionCreationResult | null> => {
+      if (creatingSessionRef.current) return null;
+      markCreating(true);
+      const operationGeneration = authGeneration;
+      try {
+        const boardId = branchById.get(config.branch_id)?.board_id ?? '';
+        const result = await sessionCreationGuard.run(() => onCreateSession(config, boardId));
+        if (isAuthenticationGenerationCurrent?.(operationGeneration) === false) return null;
+        if (result?.sessionId) {
+          setNewSessionBranchId(null);
+          navigate(`/m/session/${result.sessionId}`);
+        }
+        return result ?? null;
+      } finally {
+        markCreating(false);
+      }
+    },
+    [
+      branchById,
+      navigate,
+      onCreateSession,
+      sessionCreationGuard,
+      markCreating,
+      authGeneration,
+      isAuthenticationGenerationCurrent,
+    ]
+  );
+
   // Every Ask tap creates a new session on the primary branch (never continues one).
   const startPrimarySession = useCallback(
     (branch: Branch) =>
@@ -323,6 +400,49 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
     else setMoreOpen(true);
   }, [effectiveBoardId, navigate]);
+
+  // New-branch (and the CreateDialog's board/repo/teammate tabs), reusing the
+  // shared modal and shared create logic. After a create, land on the relevant
+  // board so the result is visible; the socket `created` event fills the list.
+  const handleCreateBranchFromDialog = useCallback(
+    async (config: BranchTabConfig) => {
+      const branch = await onCreateBranch(config.repoId, branchTabConfigToCreateArgs(config));
+      setNewBranchOpen(false);
+      if (branch?.board_id) navigate(`/m/board/${branch.board_id}`);
+      else if (branch) setBranchEditor({ branchId: branch.branch_id, tab: 'general' });
+    },
+    [onCreateBranch, navigate]
+  );
+
+  const handleCreateBoardFromDialog = useCallback(
+    async (board: Partial<Board>) => {
+      const created = await onCreateBoard(board);
+      setNewBranchOpen(false);
+      if (created?.board_id) navigate(`/m/board/${created.board_id}`);
+    },
+    [onCreateBoard, navigate]
+  );
+
+  const handleCreateTeammateFromDialog = useCallback(
+    async (result: TeammateTabResult) => {
+      if (!result.repoId || !onUpdateBranch) return;
+      const branch = await createTeammateBranch(
+        {
+          displayName: result.displayName,
+          description: result.description,
+          emoji: result.emoji,
+          repoId: result.repoId,
+          branchName: result.branchName,
+          sourceBranch: result.sourceBranch,
+          sourceRemoteUrl: result.sourceRemoteUrl,
+        },
+        { client, repoById, onCreateBranch, onUpdateBranch }
+      );
+      setNewBranchOpen(false);
+      if (branch?.board_id) navigate(`/m/board/${branch.board_id}`);
+    },
+    [client, repoById, onCreateBranch, onUpdateBranch, navigate]
+  );
 
   return (
     // The shell root is pinned to exactly the viewport and clips horizontally,
@@ -457,6 +577,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 artifactById={artifactById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
+                onNewBranch={() => setNewBranchOpen(true)}
                 onGiveFirstTask={() => void askPrimaryAssistant()}
                 firstTaskAssistantName={primaryTeammateName}
                 commentsBadge={commentsBadge}
@@ -553,29 +674,32 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         </Button>
       </Drawer>
 
-      <Drawer
+      <NewSessionModal
         open={newSessionBranchId !== null}
         onClose={() => setNewSessionBranchId(null)}
-        placement="bottom"
-        height="auto"
-        title="Choose a coding agent"
-        {...reducedMotionSurface(reducedMotion)}
-        styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
-      >
-        <AgentSelectionGrid
-          agents={AVAILABLE_AGENTS}
-          selectedAgentId={null}
-          onSelect={(agent) => {
-            if (!newSessionBranchId) return;
-            const branch = branchById.get(newSessionBranchId) ?? { branch_id: newSessionBranchId };
-            setNewSessionBranchId(null);
-            void createAndOpenSession(branch, agent as AgenticToolName);
-          }}
-          columns={2}
-          size="small"
-          showComparisonLink={false}
-        />
-      </Drawer>
+        onCreate={createSessionFromModal}
+        availableAgents={AVAILABLE_AGENTS}
+        branchId={newSessionBranchId ?? ''}
+        branch={newSessionBranchId ? branchById.get(newSessionBranchId) : undefined}
+        currentUser={user}
+        client={client}
+      />
+
+      <CreateDialog
+        open={newBranchOpen}
+        onClose={() => setNewBranchOpen(false)}
+        defaultTab="branch"
+        currentBoardId={effectiveBoardId}
+        availableAgents={availableAgents}
+        currentUser={user}
+        client={client}
+        onCreateBranch={handleCreateBranchFromDialog}
+        onCreateBoard={handleCreateBoardFromDialog}
+        onCreateTeammate={handleCreateTeammateFromDialog}
+        onCreateRepo={onCreateRepo}
+        onCreateLocalRepo={onCreateLocalRepo}
+        branchStorageConfig={branchStorageConfig}
+      />
 
       <MobileMoreSheet
         open={moreOpen}

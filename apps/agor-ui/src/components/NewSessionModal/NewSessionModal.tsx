@@ -206,6 +206,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       open={open}
       onCancel={handleCancel}
       width={700}
+      // Cap the fixed width to the viewport so the shared modal stays clean on
+      // narrow (mobile) screens; desktop is unaffected (700 < viewport).
+      style={{ maxWidth: 'calc(100vw - 16px)' }}
       maskClosable={false}
       footer={
         <Flex justify="flex-end" gap={token.marginXS}>

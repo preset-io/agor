@@ -6,7 +6,15 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 const { darkAlgorithm, defaultAlgorithm } = theme;
 
-export type ThemeMode = 'light' | 'dark' | 'custom';
+export type ThemeMode = 'light' | 'dark' | 'system' | 'custom';
+
+const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
+
+function systemPrefersDark(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(DARK_SCHEME_QUERY).matches
+    : true;
+}
 
 export interface ThemeContextValue {
   themeMode: ThemeMode;
@@ -48,6 +56,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     return null;
   });
+
+  // Track the OS colour scheme so `system` mode can follow it and live-update
+  // when the user flips their OS theme (no reload). Subscribed unconditionally
+  // (cheap); only consulted while `themeMode === 'system'`.
+  const [osPrefersDark, setOsPrefersDark] = useState<boolean>(systemPrefersDark);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia(DARK_SCHEME_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setOsPrefersDark(event.matches);
+    setOsPrefersDark(mql.matches);
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
 
   // Persist theme mode to localStorage
   const setThemeMode = (mode: ThemeMode) => {
@@ -106,20 +127,21 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
     }
 
+    const resolvedDark = themeMode === 'system' ? osPrefersDark : themeMode === 'dark';
     return {
       ...baseTheme,
-      algorithm: themeMode === 'dark' ? darkAlgorithm : defaultAlgorithm,
+      algorithm: resolvedDark ? darkAlgorithm : defaultAlgorithm,
     };
-  }, [themeMode, customTheme]);
+  }, [themeMode, customTheme, osPrefersDark]);
 
   const getCurrentThemeConfig = useCallback(
     (): ThemeConfig => currentThemeConfig,
     [currentThemeConfig]
   );
 
-  // Custom themes always render with darkAlgorithm (see `getCurrentThemeConfig`),
-  // so `custom` implies dark. Anything non-`light` is considered dark.
-  const isDark = themeMode !== 'light';
+  // Mirror the rendered algorithm: `custom` always renders dark, `system`
+  // follows the OS, `light` is light, everything else is dark.
+  const isDark = themeMode === 'light' ? false : themeMode === 'system' ? osPrefersDark : true;
 
   // Update document background color and theme class when theme changes
   useEffect(() => {

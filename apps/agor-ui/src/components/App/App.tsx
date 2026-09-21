@@ -84,6 +84,7 @@ import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
+import { branchTabConfigToCreateArgs } from '../CreateDialog/createBranchArgs';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
@@ -987,21 +988,8 @@ export const App: React.FC<AppProps> = ({
     // PATCH for board_id and dropped position entirely — the API already
     // accepts both at create time, so the patch is redundant and the
     // dropped position made the BranchTab `defaultPosition` plumbing a
-    // no-op.
-    const branch = await onCreateBranch?.(config.repoId, {
-      name: config.name,
-      ref: config.ref,
-      refType: config.refType,
-      createBranch: config.createBranch,
-      sourceBranch: config.sourceBranch,
-      pullLatest: config.pullLatest,
-      issue_url: config.issue_url,
-      pull_request_url: config.pull_request_url,
-      ...(config.board_id ? { boardId: config.board_id } : {}),
-      ...(config.position ? { position: config.position } : {}),
-      ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
-      ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
-    });
+    // no-op. Mapping is shared with the mobile shell via branchTabConfigToCreateArgs.
+    const branch = await onCreateBranch?.(config.repoId, branchTabConfigToCreateArgs(config));
 
     setCreateDialogOpen(false);
 
