@@ -1,6 +1,6 @@
 import { resolveMultiTenancyConfig } from '@agor/core/config';
-import { TaskRepository } from '@agor/core/db';
-import { expect } from 'vitest';
+import { createTenantScopedDatabaseProxy, shortId, TaskRepository } from '@agor/core/db';
+import { expect, vi } from 'vitest';
 import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
 import { queueTestServer, seedQueue } from '../../test/task-queue-fixture.js';
 import { generateSessionToken, initMcpTokens, shutdownMcpTokens } from './tokens.js';
@@ -10,10 +10,14 @@ import { generateSessionToken, initMcpTokens, shutdownMcpTokens } from './tokens
 dbTest(
   'queued-task tools are discoverable, typed, and preserve delegated actor authority',
   async ({ db }) => {
+    const guardedDb = createTenantScopedDatabaseProxy(db);
     const seed = await seedQueue(db);
     await setTestBranchUserRole(db, seed.branch.branch_id, seed.stranger.user_id, 'collaborator');
-    const server = await queueTestServer(db);
-    initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig(server.app.get('config')) });
+    const server = await queueTestServer(guardedDb);
+    initMcpTokens({
+      db: guardedDb,
+      multiTenancy: resolveMultiTenancyConfig(server.app.get('config')),
+    });
     const token = await generateSessionToken(
       server.app,
       seed.session.session_id,
@@ -70,6 +74,10 @@ dbTest(
         }
         expect(description).toContain('mode=continue');
         expect(description).toContain('expectedTaskIds');
+        expect(description).toContain('original active task ID');
+        expect(description).toContain('expectedTaskId');
+        expect(description).toContain('condition_changed');
+        expect(description).toContain('never fall back to an unconditional stop');
         expect(description).toMatch(/ONLY THEN.*stop/);
         expect(description).toMatch(/stop preserves\/drains/i);
         expect(description).toContain('stopping first risks dispatching stale work');
@@ -133,6 +141,36 @@ dbTest(
       expect(stale.result.isError).toBe(true);
       expect(JSON.stringify(stale)).toContain('Reread');
       expect(await new TaskRepository(db).findById(seed.active.task_id)).toEqual(seed.active);
+
+      // Real MCP schema and service-layer ID resolution. The route is a spy:
+      // backend generation races are covered separately by session-stop.queue.test.
+      const stop = vi.fn().mockResolvedValue({ success: false, outcome: 'condition_changed' });
+      server.app.use('/sessions/:id/stop', { create: stop });
+      const stopDetails = await call('agor_get_tool_details', { tool_name: 'agor_sessions_stop' });
+      const schema = JSON.parse(stopDetails.result.content[0].text).tool.inputSchema;
+      expect(schema.properties.expectedTaskId.type).toBe('string');
+      expect(schema.required).not.toContain('expectedTaskId');
+      const guarded = await call('agor_sessions_stop', {
+        sessionId: seed.session.session_id,
+        expectedTaskId: shortId(seed.active.task_id),
+      });
+      expect(JSON.parse(guarded.result.content[0].text).outcome).toBe('condition_changed');
+      expect(stop).toHaveBeenCalledExactlyOnceWith(
+        { expected_task_id: seed.active.task_id },
+        expect.objectContaining({
+          provider: 'mcp',
+          tenant: { source: 'explicit', tenant_id: 'default' },
+          user: expect.objectContaining({ user_id: seed.owner.user_id }),
+          route: { id: seed.session.session_id },
+        })
+      );
+      const foreign = await seedQueue(db);
+      const deniedStop = await call('agor_sessions_stop', {
+        sessionId: seed.session.session_id,
+        expectedTaskId: shortId(foreign.active.task_id),
+      });
+      expect(deniedStop.result?.isError || deniedStop.error).toBeTruthy();
+      expect(stop).toHaveBeenCalledTimes(1);
     } finally {
       shutdownMcpTokens();
       await server.close();

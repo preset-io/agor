@@ -229,6 +229,96 @@ it('supports keyboard and pointer resizing without sacrificing the conversation 
 
 const queueHeight = () => screen.getByRole('region', { name: 'Queued tasks' }).clientHeight;
 
+it.each(['running', 'failed'] as const)(
+  'updates the actual SessionPanel %s queue on reordered patches without releasing it',
+  async (status) => {
+    const [a, b, c] = tasks(3).map((task, i) => ({
+      ...task,
+      full_prompt: `Queue ${String.fromCharCode(65 + i)}`,
+    }));
+    const listeners = new Map<string, Set<(task: Task) => void>>();
+    const queueClient = {
+      service: (path: string) => ({
+        find: async () => ({ data: path.endsWith('/tasks/queue') ? [a, b] : [] }),
+        on: (event: string, listener: (task: Task) => void) => {
+          if (!listeners.has(event)) listeners.set(event, new Set());
+          listeners.get(event)!.add(listener);
+        },
+        off: (event: string, listener: (task: Task) => void) => {
+          listeners.get(event)?.delete(listener);
+        },
+        remove,
+        patch,
+      }),
+    } as unknown as AgorClient;
+    const emit = (event: string, task: Task) =>
+      act(() => {
+        listeners.get(event)?.forEach((listener) => {
+          listener(task);
+        });
+      });
+    const { unmount } = render(
+      <App>
+        <AppActionsProvider value={{}}>
+          <div style={{ height: 700 }}>
+            <SessionPanel
+              client={queueClient}
+              session={{ ...session, status }}
+              open
+              onClose={noop}
+            />
+          </div>
+        </AppActionsProvider>
+      </App>
+    );
+    const order = () =>
+      Array.from(queueList().querySelectorAll('.ant-typography')).map((label) => label.textContent);
+    await screen.findByText('Queued Tasks (2)');
+    expect(order()).toEqual([
+      expect.stringContaining('Queue A'),
+      expect.stringContaining('Queue B'),
+    ]);
+    const reorderedB = { ...b, queue_position: 0 };
+    const reorderedA = { ...a, queue_position: 1 };
+    emit('patched', reorderedB);
+    emit('patched', reorderedA);
+    await waitFor(() =>
+      expect(order()).toEqual([
+        expect.stringContaining('Queue B'),
+        expect.stringContaining('Queue A'),
+      ])
+    );
+    // Duplicate/no-op delivery and another Session's event must not corrupt this queue.
+    emit('patched', reorderedB);
+    emit('queued', reorderedB);
+    emit('patched', { ...a, session_id: 'foreign-session' as Task['session_id'] });
+    emit('removed', { ...b, session_id: 'foreign-session' as Task['session_id'] });
+    expect(order()).toHaveLength(2);
+    expect(patch).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Copy queued task 1' }));
+    expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B');
+    if (status === 'failed') {
+      const runNext = screen.getByRole('button', { name: 'Run next' });
+      expect(runNext.parentElement?.parentElement?.parentElement).toHaveTextContent('Queue B');
+      expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
+      await userEvent.click(runNext);
+      expect(patch).toHaveBeenCalledExactlyOnceWith(session.session_id, { ready_for_prompt: true });
+    } else {
+      expect(screen.queryByRole('button', { name: 'Run next' })).toBeNull();
+    }
+    emit('queued', c);
+    emit('queued', c);
+    emit('updated', { ...c, queue_position: -1 });
+    expect(order()[0]).toContain('Queue C');
+    emit('patched', { ...b, status: 'dispatching', queue_position: undefined });
+    emit('removed', a);
+    emit('removed', a);
+    expect(order()).toEqual([expect.stringContaining('Queue C')]);
+    unmount();
+    expect([...listeners.values()].every((handlers) => handlers.size === 0)).toBe(true);
+  }
+);
+
 // A restored percentage can produce the expected height before ResizeObserver
 // has committed the new pixel-derived constraints. Do not send the next resize
 // key until the separator exposes bounds for the current viewport.

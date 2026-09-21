@@ -660,11 +660,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       }
     };
 
-    // A queued task drops out of the drawer when its status flips off 'queued'
-    // (drained by spawnTaskExecutor → RUNNING, or admin-cancelled to STOPPED).
+    // Reorders patch still-queued tasks. Replace/upsert their snapshot and
+    // re-sort, while dispatch/terminal patches remove them from the drawer.
     const handleTaskPatched = (task: Task) => {
       if (task.session_id !== session.session_id) return;
-      if (task.status !== TaskStatus.QUEUED) {
+      if (task.status === TaskStatus.QUEUED) {
+        setQueuedTasks((prev) =>
+          [...prev.filter((t) => t.task_id !== task.task_id), task].sort(
+            (a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)
+          )
+        );
+      } else {
         setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
       }
     };

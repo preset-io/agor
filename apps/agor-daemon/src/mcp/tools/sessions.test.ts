@@ -23,6 +23,7 @@ vi.mock('../resolve-ids.js', () => ({
   resolveSessionId: async (_ctx: unknown, id: string) => id,
   resolveBranchId: async (_ctx: unknown, id: string) => id,
   resolveMcpServerId: async (_ctx: unknown, id: string) => `full-${id}`,
+  resolveTaskId: async (_ctx: unknown, id: string) => `full-${id}`,
 }));
 
 vi.mock('../../utils/branch-authorization.js', () => ({
@@ -147,6 +148,57 @@ async function registerAndCaptureHandlers(
   const tools = await registerAndCaptureTools(ctx, toolNames);
   return Object.fromEntries(Object.entries(tools).map(([name, { cb }]) => [name, cb]));
 }
+
+describe('conditional MCP Stop', () => {
+  it('validates the optional guard, forwards it with delegated params, and never retries a mismatch', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Execution changed before Stop could be claimed.',
+    });
+    const baseServiceParams = {
+      provider: 'mcp',
+      user: { user_id: 'acting-user', role: 'member' },
+      tenant: { source: 'explicit', tenant_id: 'acting-tenant' },
+    };
+    const tools = await registerAndCaptureTools(
+      {
+        app: makeFakeApp({ '/sessions/:id/stop': { create } }),
+        userId: 'acting-user',
+        baseServiceParams,
+      },
+      ['agor_sessions_stop']
+    );
+    const { cfg, cb } = tools.agor_sessions_stop;
+    for (const expectedTaskId of ['', 42, null]) {
+      expect(cfg.inputSchema!.safeParse({ sessionId: 'session-1', expectedTaskId }).success).toBe(
+        false
+      );
+    }
+    const args = {
+      sessionId: 'session-1',
+      expectedTaskId: 'original-task',
+      reason: 'Update queued',
+    };
+    expect(cfg.inputSchema!.safeParse(args).success).toBe(true);
+    const response = await cb(args);
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      success: false,
+      outcome: 'condition_changed',
+    });
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      { expected_task_id: 'full-original-task', reason: 'Update queued' },
+      { ...baseServiceParams, route: { id: 'session-1' } }
+    );
+    // Omitting the guard retains the existing emergency-stop contract.
+    expect(cfg.inputSchema!.safeParse({ sessionId: 'session-1' }).success).toBe(true);
+    await cb({ sessionId: 'session-1' });
+    expect(create).toHaveBeenLastCalledWith(
+      {},
+      { ...baseServiceParams, route: { id: 'session-1' } }
+    );
+  });
+});
 
 describe('sessionless MCP context', () => {
   afterEach(() => {

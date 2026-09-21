@@ -356,7 +356,7 @@ without creating a session, avoiding repeated retries while their configuration 
 
 - [Branches](/guide/branches): The container for sessions
 - [Agor MCP Server](/guide/internal-mcp): How agents introspect and spawn each other programmatically
-- [Interrupt obsolete work with urgent information](/guide/internal-mcp#interrupt-obsolete-work-and-supply-urgent-information): Enqueue, arrange the pending queue, then stop; termination and concurrency caveats
+- [Interrupt obsolete work with urgent information](/guide/internal-mcp#interrupt-obsolete-work-and-supply-urgent-information): Capture the active Task ID, enqueue and arrange the update, then conditionally stop only the original Task; termination and concurrency caveats
 - [Rich Chat UX](/guide/rich-chat-ux): Token accounting, context window viz, tool blocks, queueing
 - [In-Conversation Widgets](/guide/in-conversation-widgets): Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context
 - [SDK Comparison](/guide/sdk-comparison): What each agent SDK supports
