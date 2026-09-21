@@ -728,7 +728,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       const setData: Record<string, unknown> = {
         name: insertData.name,
         slug: insertData.slug,
-        primary_teammate_id: insertData.primary_teammate_id,
         updated_at: new Date(),
         data: insertData.data,
       };

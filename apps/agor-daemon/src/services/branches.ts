@@ -1875,10 +1875,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return this.requestWorkspaceOperation(input.branchId, { action: 'clean' }, params);
   }
 
+  /** Explicit retirement always preserves files; it never grants deletion authority. */
+  async retireTeammate(id: BranchID, params?: BranchParams): Promise<BranchCleanAccepted> {
+    return this.requestWorkspaceOperation(
+      id,
+      { action: 'archive', filesystemAction: 'preserved' },
+      params,
+      true
+    );
+  }
+
   private async requestWorkspaceOperation(
     id: BranchID,
     request: BranchWorkspaceRequest,
-    params?: BranchParams
+    params?: BranchParams,
+    retireTeammate = false
   ): Promise<BranchCleanAccepted> {
     const { action } = request;
     const filesystemAction = request.action === 'clean' ? 'cleaned' : request.filesystemAction;
@@ -1957,12 +1968,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       if (reason) throw new Conflict(reason);
     }
     const admission = await this.withTenantDatabase(params, () =>
-      new BranchMaintenanceRepository(this.db).claim(
-        id,
-        'cleanup',
-        user.user_id as UserID,
-        validate
-      )
+      retireTeammate
+        ? new BranchMaintenanceRepository(this.db).claimForTeammateRetirement(
+            id,
+            user.user_id as UserID,
+            validate
+          )
+        : new BranchMaintenanceRepository(this.db).claim(
+            id,
+            'cleanup',
+            user.user_id as UserID,
+            validate
+          )
     );
     if (!admission.acquired)
       throw new Conflict('Branch maintenance is already active or requires reconciliation');

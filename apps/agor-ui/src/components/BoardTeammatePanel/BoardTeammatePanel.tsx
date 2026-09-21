@@ -35,6 +35,7 @@ import {
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
+import { BranchFilesystemRecovery } from '../BranchFilesystemRecovery';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
@@ -318,6 +319,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
+            <BranchFilesystemRecovery branch={primaryTeammateBranch} client={client} />
             <BranchMetadataRow
               branch={primaryTeammateBranch}
               repo={primaryTeammateRepo}

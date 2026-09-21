@@ -1735,12 +1735,17 @@ export class UsersService {
    * that would immediately resolve back to null.
    */
   async setPrimaryTeammate(
-    data: { branchId: string; expectedUserId: UserID },
+    data: { branchId: string | null; expectedUserId: UserID },
     params?: Params
   ): Promise<Branch | null> {
     const userId = this.requirePrimaryTeammateMember(params);
     if (data?.expectedUserId !== userId) {
       throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    if (data.branchId === null) {
+      await new UserPrimaryTeammateRepository(this.db).clearPrimaryTeammate(userId);
+      await this.emitUserPreferencePatched(userId, params);
+      return null;
     }
     const branchId = data?.branchId as BranchID | undefined;
     if (!branchId) {

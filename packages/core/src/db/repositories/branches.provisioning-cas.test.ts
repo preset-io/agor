@@ -453,7 +453,7 @@ dbTest(
 dbTest(
   'recovery excludes unfinished tasks and fences new producer admission while creating',
   async ({ db }) => {
-    const { branchRepo, branchId } = await seedFailedBranch(db, { filesystem_status: 'cleaned' });
+    const { branchRepo, branchId } = await seedFailedBranch(db, { filesystem_status: 'ready' });
     const owner = (await branchRepo.findById(branchId))!.created_by;
     const sessions = new SessionRepository(db);
     const session = await sessions.create({
@@ -467,6 +467,7 @@ dbTest(
       created_by: owner,
       status: 'queued',
     });
+    await branchRepo.update(branchId, { filesystem_status: 'cleaned' });
     await expect(
       branchRepo.claimForProvisioning(branchId, 'busy', { restore: true })
     ).rejects.toThrow('unfinished tasks');

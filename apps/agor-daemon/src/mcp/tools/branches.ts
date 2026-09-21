@@ -1709,7 +1709,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         branch: result,
-        message: 'Branch unarchived successfully.',
+        message:
+          'Unarchive accepted. Wait for filesystem_status ready before starting work; acceptance is not readiness.',
       });
     }
   );

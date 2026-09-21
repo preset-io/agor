@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BranchMaintenanceRepository,
@@ -26,6 +27,7 @@ import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-c
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy';
 import { initMcpTokens } from '../mcp/tokens';
 import type { RegisterHooksContext } from '../register-hooks';
+import { configureResolvedConfigSlice } from '../utils/build-resolved-config-slice';
 import type { BranchesService } from './branches';
 import { ExecutorGitEnvironmentService } from './executor-git-environment';
 import { ReposService } from './repos';
@@ -51,6 +53,7 @@ const tenant = { tenant_id: tenantId, source: 'explicit' as const };
 
 for (const scenario of [
   'archived',
+  'spawned',
   'active-cleaned',
   'active-concurrent',
   'active-caller',
@@ -215,10 +218,47 @@ for (const scenario of [
     vi.mocked(dispatch.requestExecutor).mockImplementation((payload) =>
       handleBranchFilesystemStatus({ ...payload, daemonUrl: server.url } as never, {})
     );
+    configureResolvedConfigSlice(config);
+    const realDispatch =
+      await vi.importActual<typeof import('../utils/spawn-executor')>('../utils/spawn-executor');
     let interruptedExit: ((code: number | null) => void) | undefined;
     let interruptOnce = scenario === 'interrupted';
     for (const fn of [dispatch.spawnExecutor, dispatch.spawnExecutorFireAndForget]) {
       vi.mocked(fn).mockImplementation((payload, options) => {
+        if (scenario === 'spawned') {
+          // Real child + CLI + authenticated socket acknowledgement, not an
+          // in-process handler. No claim of sandbox containment: this production
+          // provisioning payload has no cwd and is currently unwrapped.
+          executions.push(
+            new Promise<void>((resolve, reject) => {
+              const originalPath = process.env.AGOR_EXECUTOR_PATH;
+              process.env.AGOR_EXECUTOR_PATH = fileURLToPath(
+                new URL('../../../../packages/executor/src/cli.ts', import.meta.url)
+              );
+              try {
+                realDispatch.spawnExecutorFireAndForget(
+                  { ...payload, daemonUrl: server.url },
+                  {
+                    ...options,
+                    preparedEnv: {
+                      ...process.env,
+                      NODE_OPTIONS: '--import tsx --conditions=source',
+                    },
+                    onExit: (code, context) => {
+                      void options?.onExit?.(code, context);
+                      if (code === 0) resolve();
+                      else reject(new Error(`Real executor exited ${code}`));
+                    },
+                  }
+                );
+              } finally {
+                if (originalPath === undefined) delete process.env.AGOR_EXECUTOR_PATH;
+                else process.env.AGOR_EXECUTOR_PATH = originalPath;
+              }
+            })
+          );
+          return undefined as never;
+        }
         if (interruptOnce) {
           interruptOnce = false;
           interruptedExit = (code) => {

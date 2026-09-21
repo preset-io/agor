@@ -24,7 +24,9 @@ export async function validateExistingRestore(branch: Branch, repo: Repo): Promi
     return true;
   }
   try {
-    await lstat(join(branch.path, '.git'));
+    const metadata = await lstat(join(branch.path, '.git'));
+    if (branch.storage_mode === 'clone' && (!metadata.isDirectory() || metadata.isSymbolicLink()))
+      throw new Error('Clone requires a local .git directory');
     const { git } = createGit(branch.path);
     const root = await realpath(branch.path);
     if ((await realpath((await git.revparse(['--show-toplevel'])).trim())) !== root)
@@ -62,7 +64,7 @@ export async function validateExistingRestore(branch: Branch, repo: Repo): Promi
       )
         throw new Error('Git worktree registration is missing or inconsistent');
     } else {
-      if (gitDir !== (await realpath(join(root, '.git'))) || common !== gitDir)
+      if (gitDir !== join(root, '.git') || common !== gitDir)
         throw new Error('Clone Git metadata is not local to the workspace');
       const origin = stripGitUrlCredentials(
         (await git.remote(['get-url', 'origin']))?.trim() ?? ''

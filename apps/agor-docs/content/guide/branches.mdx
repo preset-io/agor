@@ -322,7 +322,8 @@ atomically. Wait for `filesystem_status: ready` before starting a session; accep
 alone is not completion. A failure remains visible with a retryable error.
 
 An already-active branch left with `preserved`, `cleaned`, or `deleted` status can
-use **Recover** on its card, `agor_branches_retry_provisioning`, or
+use **Recover** on its card or in the board primary teammate panel,
+`agor_branches_retry_provisioning`, or
 `POST /branches/:id/retry-provisioning` with `{}`. Recovery requires branch Manager
 and filesystem write access and runs as the requesting user. It does not require
 archiving the branch again. An in-flight `creating` attempt or unsettled maintenance
@@ -330,7 +331,15 @@ blocks recovery; elapsed time alone never authorizes a replacement executor.
 Stop or cancel unfinished tasks, stop the environment, and reconcile pending uploads
 before requesting recovery.
 
+Failed recovery continues to block new tasks, uploads, terminals, and environment
+commands until a subsequent attempt validates readiness. Metadata/bootstrap records
+are not proof that the workspace is usable.
+
 The executor validates existing Git refs and repository linkage before readiness.
+For a missing worktree, a retained local branch is reattached at its exact SHA,
+including local-only and unpushed commits. Remote/base reconstruction is used only
+when no local branch is retained. Clone recovery requires an actual local `.git`
+directory; symlinks and separate Git directories are not adopted.
 Broken or foreign linkage fails without overwriting files. Local teammate homes
 are personal directories and need not have Git metadata; missing or empty homes
 must be restored from your own backup, never recreated from the public template.
@@ -340,8 +349,20 @@ which action caused a later missing Git target.
 
 User and board **primary teammate** designations independently block cleanup,
 archive, and permanent deletion, regardless of repository cleanup policy. To retire
-a teammate intentionally, first reassign or clear all primary designations through
-the existing user and board controls, then use the normal archive/delete flow.
+a teammate intentionally, a branch Manager can choose **Retire teammate** in its
+Teammate settings, or `POST /branches/:id/retire-teammate` with `{}`. This atomically
+archives the teammate and clears personal primary preferences, preserving all files.
+Outstanding tasks, pending uploads, active environments, and maintenance still block
+retirement. A board primary must first be cleared or reassigned by that board's
+Manager; branch management alone does not grant board-management authority.
+
+Personal routing preferences are not a permanent veto over branch management, even
+when a former collaborator can no longer access the teammate. Users can also choose
+**Clear primary assistant** in their own settings, or call
+`users.setPrimaryTeammate({ branchId: null, expectedUserId })`, without choosing a
+replacement. Ordinary cleanup/archive/delete retains primary protection; retirement
+is a separate, explicit, file-preserving action. Permanent deletion, if wanted,
+remains a later authorized operation.
 
 ### Deletion and retained data
 

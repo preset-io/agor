@@ -4234,6 +4234,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'clean branches')] },
   });
 
+  // Explicit, metadata-only retirement: same tenant/write boundary as cleanup.
+  app.use('/branches/:id/retire-teammate', {
+    async create(data: unknown, params: RouteParams) {
+      if (
+        !params.route?.id ||
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        Object.keys(data).length
+      )
+        throw new BadRequest('Retirement accepts an empty body and branch route ID only');
+      return branchesService.retireTeammate(
+        params.route.id as import('@agor/core/types').BranchID,
+        params
+      );
+    },
+  });
+  app.service('/branches/:id/retire-teammate').hooks({
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
+    before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'retire teammates')] },
+  });
+
   // Archive/delete branch
   app.use('/branches/:id/archive-or-delete', {
     async create(data: unknown, params: RouteParams) {

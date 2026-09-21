@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { classifyBranchFilesystemReadiness } from '../types/branch';
 import type { Database } from './client';
 import { lockRowForUpdate, select } from './database-wrapper';
 import { EntityNotFoundError, RepositoryError } from './repositories/base';
@@ -6,13 +7,15 @@ import { branches, sessions } from './schema';
 
 /**
  * Shared Branch-first admission boundary. Call inside a short write transaction
- * before locking a Session/Task or committing new branch work. Holding this lock
- * is not a process-containment proof; lifecycle owners must settle admitted work.
+ * before locking a Session/Task or committing new branch work. Filesystem
+ * producers must set requireFilesystemReady (historical-session work does so).
+ * Metadata references and initial Session bootstrap deliberately omit it.
+ * Holding this lock is not a process-containment proof; lifecycle owners must settle admitted work.
  */
 export async function lockBranchForAdmission(
   db: Database,
   branchId: string,
-  options: { primaryDesignationOnly?: boolean } = {}
+  options: { primaryDesignationOnly?: boolean; requireFilesystemReady?: boolean } = {}
 ) {
   await lockRowForUpdate(db, db, branches, eq(branches.branch_id, branchId));
   const branch = await select(db).from(branches).where(eq(branches.branch_id, branchId)).one();
@@ -24,7 +27,7 @@ export async function lockBranchForAdmission(
 /** Inspect only while holding the Branch row lock at the write boundary. */
 export function assertBranchActivityAllowed(
   branch: typeof branches.$inferSelect,
-  options: { primaryDesignationOnly?: boolean } = {}
+  options: { primaryDesignationOnly?: boolean; requireFilesystemReady?: boolean } = {}
 ): void {
   // Restore excludes producers on historical sessions until executor validation.
   // Initial creation retains its existing metadata/bootstrap admission behavior.
@@ -46,6 +49,18 @@ export function assertBranchActivityAllowed(
   if (branch.data.maintenance) {
     throw new RepositoryError('Branch maintenance is in progress; new activity is disabled');
   }
+  if (
+    options.requireFilesystemReady &&
+    classifyBranchFilesystemReadiness({
+      archived: branch.archived,
+      filesystem_status: branch.filesystem_status ?? undefined,
+      deletion_status: branch.deletion_status ?? undefined,
+    }) !== 'ready'
+  ) {
+    throw new RepositoryError(
+      'Branch filesystem is not ready; recover it before starting new activity'
+    );
+  }
 }
 
 /** Resolve membership before taking the Branch lock; never lock Session first. */
@@ -55,7 +70,9 @@ export async function lockSessionBranchForAdmission(db: Database, sessionId: str
     .where(eq(sessions.session_id, sessionId))
     .one();
   if (!session) throw new EntityNotFoundError('Session', sessionId);
-  const branch = await lockBranchForAdmission(db, session.branch_id);
+  const branch = await lockBranchForAdmission(db, session.branch_id, {
+    requireFilesystemReady: true,
+  });
   await lockRowForUpdate(db, db, sessions, eq(sessions.session_id, sessionId));
   const current = await select(db, { branch_id: sessions.branch_id })
     .from(sessions)

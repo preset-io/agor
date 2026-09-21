@@ -1271,7 +1271,9 @@ export async function createBranch(
   /** Remote that owns sourceBranch when it differs from repoPath's origin. */
   sourceRemoteUrl?: string,
   /** Canonical tenant-owned destination remote from the database. */
-  destinationRemoteUrl?: string
+  destinationRemoteUrl?: string,
+  /** Recovery must never reset or delete a ref retained during remote I/O. */
+  preserveExistingBranch = false
 ): Promise<void> {
   console.log('🔍 createBranch called with:', {
     repoPath,
@@ -1402,7 +1404,7 @@ export async function createBranch(
 
       // If not creating a new branch and this is a branch (not a tag), update local branch to match remote
       // Tags don't need this update - they're immutable and don't have origin/ prefix
-      if (!createBranch && refType !== 'tag') {
+      if (!preserveExistingBranch && !createBranch && refType !== 'tag') {
         try {
           // Check if local branch exists
           const branches = await git.branch();
@@ -1472,14 +1474,18 @@ export async function createBranch(
           );
         }
 
-        // Branch exists but is orphaned — delete it and retry.
-        // `git branch -D` doesn't support `--`; ref was validated above.
-        console.log(`🧹 Deleting orphaned branch '${ref}' and retrying branch creation...`);
-        await git.raw(['branch', '-D', ref]);
+        if (preserveExistingBranch) {
+          await git.raw(['worktree', 'add', '--', branchPath, ref]);
+        } else {
+          // Branch exists but is orphaned — delete it and retry.
+          // `git branch -D` doesn't support `--`; ref was validated above.
+          console.log(`🧹 Deleting orphaned branch '${ref}' and retrying branch creation...`);
+          await git.raw(['branch', '-D', ref]);
 
-        // Retry the branch creation
-        await git.raw(worktreeAddArgs);
-        console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
+          // Retry the branch creation
+          await git.raw(worktreeAddArgs);
+          console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
+        }
       } else {
         throw error;
       }
@@ -1899,14 +1905,12 @@ export interface RestoreBranchResult {
  * - `unarchive()` daemon method (via executor's git.branch.add command)
  *
  * Strategy:
- * 1. Fetch from remote to ensure we have latest refs
- * 2. Check if the branch exists on the remote via `ls-remote`
+ * 1. Reattach a retained local branch unchanged, without contacting the remote.
+ * 2. Only if none is retained, fetch and check the remote via `ls-remote`
  * 3. If YES: `createBranch(repoPath, path, ref, false)` — checkout existing branch
  * 4. If NO: `createBranch(repoPath, path, ref, true, true, baseRef)` — create new branch from base
  *
- * This is safe because we only create a new branch when `ls-remote` confirms it
- * doesn't exist on the remote, avoiding the orphan cleanup force-delete risk
- * in `createBranch()`.
+ * Remote/base reconstruction is only for branches with no retained local ref.
  *
  * @param repoPath - Absolute path to the base repository
  * @param branchPath - Absolute path where the branch should be created
@@ -1946,6 +1950,21 @@ export async function restoreBranchFilesystem(
     throw new Error('Credential-bearing branch restore requires destinationRemoteUrl');
   }
   const { git } = createGit(repoPath);
+
+  // Retained local history is authoritative, including local-only and ahead
+  // branches. Never fetch/reset/delete it as part of filesystem recovery.
+  if ((await git.branch()).all.includes(ref)) {
+    try {
+      await createBranch(repoPath, branchPath, ref, false, false);
+      return { success: true, strategy: 'checkout' };
+    } catch (error) {
+      return {
+        success: false,
+        strategy: 'checkout',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 
   // Step 1: Fetch from remote
   try {
@@ -2013,7 +2032,8 @@ export async function restoreBranchFilesystem(
         env,
         undefined,
         undefined,
-        safeDestinationRemoteUrl
+        safeDestinationRemoteUrl,
+        true
       );
       return { success: true, strategy: 'checkout' };
     }
@@ -2030,7 +2050,8 @@ export async function restoreBranchFilesystem(
       env,
       baseRefType,
       baseRemoteUrl,
-      safeDestinationRemoteUrl
+      safeDestinationRemoteUrl,
+      true
     );
     return { success: true, strategy: 'create' };
   } catch (error) {
