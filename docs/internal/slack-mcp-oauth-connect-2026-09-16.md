@@ -2,11 +2,11 @@
 
 Status, as of this branch:
 
-| Section               | State                                                                                                                                                                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                                                                                                                                                            |
-| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                                                                                                                                                                  |
-| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.4). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1 and again in §7.1.2; three defects found by the gating review and fixed (§7.1.1), one more found by the pre-merge drive (§7.1.3). The two lanes' delivery machinery is one engine as of §7.1.10. |
+| Section               | State                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §3 — the widget lane  | **Implemented.**                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| §6 — canvas polish    | **Not built**, except item 3 (expiry), which is now an explicit accepted gap — see **D7**.                                                                                                                                                                                                                                                                                                                                                                  |
+| §7 — Slack projection | **Implemented**, behind an operator kill switch (§7.1.4). Token, redemption authority, landing page, and the Block Kit post/update projection are all in. Verified in §7.1 and again in §7.1.2; three defects found by the gating review and fixed (§7.1.1), one more found by the pre-merge drive (§7.1.3). The two lanes' delivery machinery is one engine as of §7.1.10. The live hosted failure — a bare `getBaseUrl()` at two call sites — is §7.1.14. |
 
 Numbering warning for anyone reading commit messages against this file: the
 branch's `stage2` commits built §7's token + landing page, not §6; `stage3`
@@ -1877,6 +1877,90 @@ integration.test.ts` registers services and not routes, so
   arrivals at this state. A separate rendered state would say it better and
   would mean a new persisted `rendered_state` value for a copy difference, so
   that is still not done.
+
+### 7.1.14 The seventh instance, and why `getBaseUrl` now demands a handle
+
+The live Slack failure was not in the Slack lane's logic. It was one argument.
+
+`GatewayService.mcpSlackConnectDeps` called a **bare** `await getBaseUrl()`.
+Under `multi_tenancy.mode: required_from_auth` — which the cloud stack runs —
+`getBaseUrl` ignores `AGOR_BASE_URL` entirely and resolves the tenant's own
+origin from durable routing, which needs an explicit database handle or an
+ambient tenant database scope. Every entry into `deliverMcpSlackConnectCard`
+carries tenant CONTEXT and neither of those: `deferWithTenantContext` has left
+the request's scope by the time it runs, the repair sweep and the expiry timers
+use `runWithTenantContext`, and both `register-services.ts` callers sit on
+`identity-only` routes. So it threw
+`Tenant public links require a tenant database` on the **first line** of
+delivery — above the refusal classifier, above the marker retirement, above the
+claim. The lane reported `reason=unexpected`, classified nothing, posted
+nothing, and retried on the unbounded clock until it stranded.
+
+`gatewaySessionConnectUrl` (`mcp/tools/widgets.ts`) made the identical bare
+call inside a `try/catch` returning `null`, which is why the same deployment's
+`agor_widgets_request_oauth` came back with no `session_url` and no
+`relay_to_user`, and the agent promised a button instead of handing over a
+link. That is the fallback §7.1.4's runbook promises on every platform when the
+card is off or refused, so both halves of the lane's degradation story were out
+at once.
+
+Three things changed.
+
+**The two call sites pass `this.db` / the MCP tenant scope.** The connect lane
+also gained the `if (!baseUrl) throw` guard the recovery lane
+(`mcpSlackRecoveryUrl`) has always had and this one lacked. A handle is not
+routing: an uninitialised tenant answers `''`, `getMcpOAuthConnectUrl('')`
+answers `''` too, and the button URL degrades to a bare `#token=<jwt>`. Slack
+rejects those blocks — and since the one-use token is minted before the post,
+each of the six attempts burned a fresh link before stranding. Refusing is one
+classified failure with nothing consumed.
+
+**`getBaseUrl(db)` no longer accepts a caller with no handle.** This is the
+seventh instance of the tenant-scope class on this branch, and §7.1.12's
+`createTenantBoundDataAccess` facade could not catch it precisely because the
+parameter was optional: "forgot to pass it" compiled. Making it required was
+mechanical — all ~40 existing call sites already complied, and the only edits
+were the two defects plus six assertions in tests that pin the static/local
+path, which now hand it a proxy that throws if the handle is touched. **No
+caller legitimately needs the old shape.** A caller already inside an open
+scope writes `getCurrentTenantDatabase()` rather than nothing, so the reliance
+is visible at the call site; there is deliberately no named no-handle variant,
+because adding one would reopen the hole for the next caller.
+
+**The suites stopped hiding the argument.** `gateway.test.ts` and
+`gateway.github.test.ts` replaced `getBaseUrl` with a constant, which answers
+the same string with or without a handle; both now drive the real resolver from
+`AGOR_BASE_URL`. `gateway.postgres.test.ts` — the lane closest to the hosted
+deployment — keeps a spy, but one that DELEGATES to the real function and
+records its argument, so "was it called with a handle" is assertable. The
+hosted branch itself is now driven against a real routing row by
+`test/hosted-tenant-routing-fixture.ts` in
+`gateway-mcp-slack-connect.test.ts` (the card's button URL is on the tenant
+origin; an uninitialised tenant gets no card and no burned token) and in
+`widgets.oauth.test.ts` (the relayed `session_url` is on the tenant origin, and
+is omitted rather than invented when routing has not landed). Both pin the
+defective shape by cast, so they fail if the required parameter is ever relaxed
+rather than only if the fix is reverted.
+
+**What the HA harness could and could not take.** `scripts/test-ha-tenant-links.mjs`
+asserted tenant-origin correctness for BOARD urls only — built inside a
+repository that holds `this.db`, and therefore incapable of the defect. It now
+also covers the session deep link over REST, read back through the _other_
+replica, and through the real `/mcp` endpoint, which is the boundary that arms
+tenant context only; plus the ingress shells for the session link and
+`/ui/connect/mcp`, the two places this lane sends a person.
+
+It does **not** assert the two fixed call sites end to end, and that is a
+property of the stack rather than a shortcut. `session_url` is returned only
+for a gateway Session, and `custom_context.gateway_source` is server-managed —
+`protectGatewaySourceMetadata` refuses it for every provider-carrying create,
+so the only way to make one is a real inbound platform message, which starts an
+agent. The card's URL exists only inside a Block Kit post to a real Slack
+workspace; the delivery record it leaves behind is stripped from every API read
+by `stripWidgetSlackConnectDelivery`, and the URL was never in it. The
+hosted-mode unit coverage above is their fence; the harness adds the half no
+unit test can have, which is two live tenants on two live origins resolved by a
+real daemon.
 
 ### 7.2 Deliberately not built
 

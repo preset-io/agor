@@ -15,6 +15,8 @@
  *   - widget params carry names and identities only — no credential
  */
 
+import { getBaseUrl } from '@agor/core/config';
+import { runWithTenantContext } from '@agor/core/db';
 import type { MessageID, SessionID } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -61,6 +63,7 @@ vi.mock('@agor/core/db', async (importOriginal) => ({
   },
 }));
 
+import { hostedTenantRouting } from '../../../test/hosted-tenant-routing-fixture.js';
 import type { MCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import {
   mcpOAuthGrantIsConnected,
@@ -209,6 +212,10 @@ function registerAndCapture(ctx: {
   userId?: string;
   sessionId?: string;
   role?: string;
+  /** `this.db` for the tool. A real guarded handle for the hosted-mode tests. */
+  db?: unknown;
+  /** Authenticated tenant, which is what arms the MCP tenant database scope. */
+  tenantId?: string;
 }): Record<string, { cfg: { description?: string }; cb: ToolHandler }> {
   const captured: Record<string, { cfg: { description?: string }; cb: ToolHandler }> = {};
   const fakeServer = {
@@ -220,7 +227,7 @@ function registerAndCapture(ctx: {
   const userId = ctx.userId ?? 'user-actor';
   registerWidgetTools(fakeServer, {
     app: ctx.app as never,
-    db: {} as never,
+    db: (ctx.db ?? {}) as never,
     userId: userId as never,
     sessionId: (ctx.sessionId ?? 'sess-1') as never,
     authenticatedUser: { user_id: userId, role: ctx.role ?? 'member' } as never,
@@ -228,6 +235,7 @@ function registerAndCapture(ctx: {
       user: { user_id: userId, role: ctx.role ?? 'member' },
       authenticated: true,
       provider: 'mcp',
+      ...(ctx.tenantId ? { tenant: { tenant_id: ctx.tenantId } } : {}),
     } as never,
   });
   return captured;
@@ -909,6 +917,90 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     );
     expect(result.status).toBe('requested');
     expect(result.session_url).toBeUndefined();
+  });
+});
+
+/**
+ * Hosted mode, where the deep link is the only thing the agent can hand over.
+ *
+ * `getBaseUrl` resolves a hosted tenant's origin from durable routing, not
+ * from `AGOR_BASE_URL`, and needs a database handle to do it. This call site
+ * passed none — so on the cloud stack the resolution threw into
+ * `gatewaySessionConnectUrl`'s own catch, every gateway mint came back with no
+ * `session_url` and no `relay_to_user`, and the agent promised a Connect
+ * button that the Slack user had no way to reach. It is also the fallback the
+ * kill-switch runbook promises still works when the Slack card is off, and on
+ * every platform that has no card at all.
+ *
+ * The suites above could not see it: they run single-tenant, where the hosted
+ * branch is never taken and the missing argument is inert.
+ */
+describe('agor_widgets_request_oauth — the deep link on a hosted tenant', () => {
+  const TENANT = 'tenant-a';
+  const TENANT_ORIGIN = 'https://tenant-a.example.test';
+  const gatewayDiscord = {
+    customContext: {
+      gateway_source: {
+        channel_id: 'chan-1',
+        channel_name: 'eng-help',
+        channel_type: 'discord',
+        thread_id: 't1',
+      },
+    },
+    gatewayChannel: { channel_type: 'discord', config: { align_discord_users: true } },
+  };
+
+  let hosted: Awaited<ReturnType<typeof hostedTenantRouting>> | undefined;
+  afterEach(async () => {
+    await hosted?.cleanup();
+    hosted = undefined;
+  });
+
+  it('relays the tenant origin, never the deployment cell origin', async () => {
+    hosted = await hostedTenantRouting({ tenantId: TENANT, origin: TENANT_ORIGIN });
+
+    // The shape that shipped: tenant identity, no handle, no scope. Pinned by
+    // cast because `getBaseUrl` no longer lets a caller express it — this is
+    // what the required parameter buys, and the assertion says so rather than
+    // leaving it to a commit message.
+    await expect(
+      runWithTenantContext(TENANT, () => (getBaseUrl as unknown as () => Promise<string>)())
+    ).rejects.toThrow(/tenant database/i);
+
+    const { app } = makeApp(gatewayDiscord);
+    const tools = registerAndCapture({ app, sessionId: 'sess-1', db: hosted.db, tenantId: TENANT });
+    const result = payload(
+      await runWithTenantContext(TENANT, () =>
+        tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+      )
+    );
+
+    expect(result.status).toBe('requested');
+    expect(result.session_url).toBe(getSessionUrl('sess-1' as SessionID, TENANT_ORIGIN));
+    expect(new URL(result.session_url).origin).toBe(TENANT_ORIGIN);
+    // `AGOR_BASE_URL` is the cell every tenant shares. A link carrying it
+    // would send the user to an origin their workspace does not answer on.
+    expect(result.session_url).not.toContain(new URL(hosted.cellBaseUrl).host);
+    expect(result.relay_to_user).toContain(result.session_url);
+  });
+
+  it('says nothing rather than relaying a link for a tenant with no routing yet', async () => {
+    hosted = await hostedTenantRouting({ tenantId: TENANT });
+
+    const { app } = makeApp(gatewayDiscord);
+    const tools = registerAndCapture({ app, sessionId: 'sess-1', db: hosted.db, tenantId: TENANT });
+    const result = payload(
+      await runWithTenantContext(TENANT, () =>
+        tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+      )
+    );
+
+    // The widget is still minted — the canvas card is real — but an
+    // uninitialised tenant resolves to `''`, which is not a URL and must not
+    // become the cell origin, a relative path, or a sentence with a hole in it.
+    expect(result.status).toBe('requested');
+    expect(result.session_url).toBeUndefined();
+    expect(result.relay_to_user).toBeUndefined();
   });
 });
 

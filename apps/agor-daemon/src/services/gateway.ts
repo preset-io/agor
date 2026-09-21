@@ -2197,8 +2197,32 @@ export class GatewayService {
    * to arm its scope, and a fail-closed catch then turns the resulting
    * `MissingTenantDatabaseScopeError` into a generic refusal that no unit test
    * against an unarmed `:memory:` database can see.
+   *
+   * `baseUrl` was the one field that was NOT a bound repository, and it shipped
+   * the same defect a seventh time — see the call below. It is the reason
+   * `getBaseUrl` no longer accepts a caller with no handle.
    */
   private async mcpSlackConnectDeps(): Promise<MCPOAuthConnectLinkDeps> {
+    // `this.db`, not a bare call. In hosted mode `getBaseUrl` resolves durable
+    // tenant routing, and the only sources are this handle or an ambient
+    // tenant database SCOPE. Every entry into `deliverMcpSlackConnectCard`
+    // carries tenant CONTEXT and nothing else — `deferWithTenantContext` has
+    // exited the request's scope by the time it runs, the repair sweep and the
+    // expiry timers use `runWithTenantContext`, and both `register-services.ts`
+    // callers sit on `identity-only` routes. Omitting it threw
+    // "Tenant public links require a tenant database" on this line, above the
+    // refusal classifier and the claim, so the lane reported `unexpected` and
+    // retried for thirty seconds without ever reaching Slack.
+    const baseUrl = await getBaseUrl(this.db);
+    // The same guard the recovery lane has carried since it shipped
+    // (`mcpSlackRecoveryUrl`). A handle is not routing: an uninitialised
+    // tenant routing row answers `''`, `getMcpOAuthConnectUrl('')` then
+    // returns `''`, and the card's button URL degrades to a bare
+    // `#token=<jwt>`. Slack rejects those blocks, and because the token is
+    // minted before the post, every one of the six attempts burns a fresh
+    // one-use link before the card strands. Refusing here instead makes it one
+    // classified failure with nothing consumed.
+    if (!baseUrl) throw new Error('Tenant public URL is not initialized');
     return {
       repositories: {
         sessions: this.sessionRepo,
@@ -2210,7 +2234,7 @@ export class GatewayService {
       messages: this.messagesRepo,
       tasks: { findById: (id: string) => this.taskRepo.findById(id) },
       masterSecret: this.recoveryEnvelopeSecret() ?? '',
-      baseUrl: await getBaseUrl(),
+      baseUrl,
     };
   }
 

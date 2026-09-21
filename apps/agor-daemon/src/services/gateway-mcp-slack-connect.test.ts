@@ -8,6 +8,7 @@
  * asked to be visible rather than silent, so each is pinned here directly.
  */
 
+import { getBaseUrl } from '@agor/core/config';
 import {
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
@@ -98,6 +99,7 @@ vi.mock('@agor/core/gateway', async () => {
   };
 });
 
+import { hostedTenantRouting } from '../../test/hosted-tenant-routing-fixture.js';
 import { WIDGET_RECLAIM_ABANDONED_AFTER_MS } from '../widgets/submissions.js';
 import { GatewayService } from './gateway.js';
 import {
@@ -870,6 +872,76 @@ describe('Slack MCP connect durable delivery', () => {
     expect(harness.sendMessage).toHaveBeenCalled();
     expect(harness.current()?.rendered_state).toBe('connect_required');
     await harness.service.stopListeners();
+  });
+
+  /**
+   * Hosted mode: the button URL comes from the tenant's own routing, and a
+   * tenant that has none gets no card at all.
+   *
+   * The seventh instance of the tenant-scope class on this branch, and the
+   * first one the delivery lane could not survive: `mcpSlackConnectDeps` made
+   * a BARE `getBaseUrl()` call, which under `required_from_auth` needs a
+   * handle or an ambient database scope and had neither. It threw on the first
+   * line of delivery — above the refusal classifier, above the marker
+   * retirement, above the claim — so the lane reported `unexpected`, classified
+   * nothing, posted nothing, and retried on an unbounded thirty-second clock.
+   * Every test above this one runs single-tenant, where the hosted branch is
+   * never taken and the missing argument is inert.
+   *
+   * The second half is the guard the recovery lane has always had and this
+   * lane did not. A handle is not routing: a tenant whose verified launch has
+   * not landed answers `''`, `getMcpOAuthConnectUrl('')` answers `''` too, and
+   * the button URL degrades to a bare `#token=<jwt>`. Slack rejects those
+   * blocks — and because the one-use token is minted before the post, each of
+   * the six attempts burned a fresh link before the card stranded.
+   */
+  it('builds the card link from tenant routing, holding only tenant context', async () => {
+    const hosted = await hostedTenantRouting({
+      tenantId: 'tenant-a',
+      origin: 'https://tenant-a.example.test',
+    });
+    try {
+      // The shape that shipped. Pinned by cast because `getBaseUrl` no longer
+      // lets a caller express it — which is the point of the required handle.
+      await expect(
+        runWithTenantContext('tenant-a', () => (getBaseUrl as unknown as () => Promise<string>)())
+      ).rejects.toThrow(/tenant database/i);
+
+      killSwitch.stub = null;
+      const harness = deliveryHarness({ delivery: null, db: hosted.db });
+      await withSecret(() => harness.deliver());
+
+      const request = harness.sendMessage.mock.calls[0]![0] as {
+        blocks: { type: string; elements?: { url?: string }[] }[];
+      };
+      const url = request.blocks.find((block) => block.type === 'actions')?.elements?.[0]?.url;
+      expect(url).toMatch(/#token=/);
+      expect(new URL(url as string).origin).toBe('https://tenant-a.example.test');
+      // `AGOR_BASE_URL` is the deployment cell, shared by every tenant. A
+      // hosted link must never fall back to it.
+      expect(url).not.toContain(new URL(hosted.cellBaseUrl).host);
+      expect(harness.current()).toMatchObject({ rendered_state: 'connect_required' });
+      await harness.service.stopListeners();
+    } finally {
+      await hosted.cleanup();
+    }
+  });
+
+  it('refuses to post a card for a tenant whose public routing is not initialized', async () => {
+    const hosted = await hostedTenantRouting({ tenantId: 'tenant-a' });
+    try {
+      killSwitch.stub = null;
+      const harness = deliveryHarness({ delivery: null, db: hosted.db });
+
+      await expect(withSecret(() => harness.deliver())).rejects.toThrow(/public URL/i);
+
+      // Nothing posted, and — crucially — no one-use token minted and burned.
+      expect(harness.sendMessage).not.toHaveBeenCalled();
+      expect(harness.current()).toBeUndefined();
+      await harness.service.stopListeners();
+    } finally {
+      await hosted.cleanup();
+    }
   });
 
   it('renders once and then leaves a steady card alone', async () => {

@@ -478,20 +478,31 @@ async function installCatalogOAuthServer(
  * So EVERY gateway-sourced mint carries the session URL back to the agent, to
  * relay into the thread — including Slack's, where it is the fallback the card
  * degrades to rather than a duplicate of it. Returns null for a canvas session
- * (the user is already looking at the transcript) and for a deployment whose
- * configured base URL is
+ * (the user is already looking at the transcript), for a hosted tenant whose
+ * routing metadata has not landed yet (`fullUrl` answers `''`, which is not a
+ * URL and is dropped here), and for a deployment whose configured base URL is
  * a bind address rather than somewhere a browser can reach — the same
  * `0.0.0.0` guard `fetchExistingSessionUrlForGatewayUser` applies, for the
  * same reason: a link nobody can open is worse than none, because the agent
  * will relay it.
  */
 async function gatewaySessionConnectUrl(
+  ctx: McpContext,
   session: Pick<Session, 'custom_context'>,
   sessionId: SessionID
 ): Promise<string | null> {
   if (!isGatewaySession(session)) return null;
   try {
-    const url = getSessionUrl(sessionId, await getBaseUrl());
+    // Hosted deployments resolve this from durable tenant routing, which needs
+    // a tenant database scope — and an MCP tool boundary enters tenant CONTEXT
+    // only. A bare `getBaseUrl()` here threw
+    // "Tenant public links require a tenant database" straight into the catch
+    // below, so every gateway mint on the cloud stack returned no
+    // `session_url` and no `relay_to_user`: the agent was left promising a
+    // button the Slack user could not see, and the kill-switch runbook's
+    // "the deep link always still works" promise was not true on any platform.
+    const baseUrl = await runWithMcpTenantDatabaseScope(ctx, (db) => getBaseUrl(db));
+    const url = getSessionUrl(sessionId, baseUrl);
     return new URL(url).hostname === '0.0.0.0' ? null : url;
   } catch {
     console.warn('[widgets] could not build a session URL for a gateway oauth widget');
@@ -851,7 +862,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
 
       // The card renders in the Agor transcript, which a gateway user is not
       // looking at. Hand the agent something it can say.
-      const sessionUrl = await gatewaySessionConnectUrl(session, targetSessionId);
+      const sessionUrl = await gatewaySessionConnectUrl(ctx, session, targetSessionId);
       return textResult({
         widget_id: widgetId,
         status: 'requested',

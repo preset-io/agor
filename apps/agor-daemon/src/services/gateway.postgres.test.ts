@@ -36,11 +36,26 @@ vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
   };
 });
 
+/**
+ * Every handle the gateway lane hands `getBaseUrl`, in call order.
+ *
+ * This suite used to replace `getBaseUrl` with a constant, which answered the
+ * same string whether or not it was given a database — and that is precisely
+ * what let a bare `getBaseUrl()` reach production on the one lane closest to
+ * the hosted deployment. The spy now DELEGATES to the real resolver and
+ * records its argument, so "was it called" and "was it called with a handle"
+ * are both assertable. The hosted branch itself is driven in
+ * `gateway-mcp-slack-connect.test.ts` and `widgets.oauth.test.ts`.
+ */
+const baseUrlHandles: unknown[] = [];
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
   return {
     ...actual,
-    getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
+    getBaseUrl: vi.fn(async (db: unknown) => {
+      baseUrlHandles.push(db);
+      return actual.getBaseUrl(db as Parameters<typeof actual.getBaseUrl>[0]);
+    }),
   };
 });
 
@@ -313,6 +328,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway reply admission (P
 
     expect(vi.mocked(materializeAgenticToolConfiguration)).toHaveBeenCalled();
     expect(vi.mocked(getBaseUrl)).toHaveBeenCalled();
+    // The argument the constant-valued stub made invisible.
+    expect(baseUrlHandles.length).toBeGreaterThan(0);
+    expect(baseUrlHandles.every((handle) => handle !== undefined)).toBe(true);
     expect(vi.mocked(getConnector)).toHaveBeenCalled();
   }, 30_000);
 

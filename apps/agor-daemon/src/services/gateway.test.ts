@@ -1,5 +1,4 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { getBaseUrl } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
@@ -58,12 +57,18 @@ vi.mock('@agor/core/gateway', async (importOriginal) => {
   };
 });
 
+// `getBaseUrl` is deliberately NOT mocked. Mocking it to a constant is what
+// hid the argument: the hosted branch is chosen by config, resolves the
+// tenant's origin from the handle it is given, and a stub answers the same
+// string with or without one. These tests drive the real resolver from
+// `AGOR_BASE_URL` instead, which costs nothing here and keeps the call site
+// honest. The hosted branch itself is driven in
+// `gateway-mcp-slack-connect.test.ts`.
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
   return {
     ...actual,
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
-    getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
     resolveExecutionSecurityMode: vi.fn(() => ({
       unixUserMode: 'simple',
       requiresExecutionHomeKey: false,
@@ -417,21 +422,20 @@ beforeEach(() => {
   // repository construction as production and therefore need the deployment
   // master-secret invariant to be explicit.
   vi.stubEnv('AGOR_MASTER_SECRET', 'gateway-test-master-secret');
+  vi.stubEnv('AGOR_BASE_URL', 'https://agor.example.com');
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.mocked(materializeAgenticToolConfiguration).mockClear();
-  vi.mocked(getBaseUrl).mockReset();
-  vi.mocked(getBaseUrl).mockResolvedValue('https://agor.example.com');
   vi.mocked(getConnector).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
 });
 
 describe('GatewayService session links', () => {
   it('builds browser-facing links from the configured UI origin', async () => {
-    vi.mocked(getBaseUrl).mockResolvedValueOnce('http://localhost:5173');
+    vi.stubEnv('AGOR_BASE_URL', 'http://localhost:5173');
     const { service } = makeGatewayHarness({});
     const sessionId = '01927f9d-0000-7000-8000-000000000001' as SessionID;
 
@@ -448,7 +452,7 @@ describe('GatewayService session links', () => {
   });
 
   it('does not expose a 0.0.0.0 gateway link', async () => {
-    vi.mocked(getBaseUrl).mockResolvedValueOnce('http://0.0.0.0:5173');
+    vi.stubEnv('AGOR_BASE_URL', 'http://0.0.0.0:5173');
     const { service } = makeGatewayHarness({});
 
     const sessionUrl = await (
