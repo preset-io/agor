@@ -42,12 +42,16 @@ it('snoozes for 24 hours across mobile-style unmount/remount and still honors in
   fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   expect(JSON.parse(localStorage.getItem(key)!)).toBe(Date.now() + DAY);
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(20)); // Time spent before a mobile remount is not renewed.
   first.unmount();
   const second = render(<OnboardingBanners {...props} />);
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  await act(() => vi.advanceTimersByTimeAsync(DAY - 1));
+  // Remounting can advance the auto-running fake clock. Measure from the saved
+  // deadline and do not yield at the exact one-millisecond-before boundary.
+  const deadline = JSON.parse(localStorage.getItem(key)!) as number;
+  act(() => vi.advanceTimersByTime(deadline - Date.now() - 1));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  await act(() => vi.advanceTimersByTimeAsync(1));
+  act(() => vi.advanceTimersByTime(1));
   expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
   fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
   second.rerender(<OnboardingBanners {...props} gatewayChannelCount={1} />);
