@@ -89,6 +89,11 @@ describe('fresh pilot trusted startup capture', () => {
     expect(captureManagedOAuthPilotStartup(changedPin, environment)?.runtimeConfigDigest).toBe(
       captured.runtimeConfigDigest
     );
+    const staticSource = structuredClone(config);
+    staticSource.managed_mcp_oauth!.admission_mode = 'static_generation';
+    expect(
+      captureManagedOAuthPilotStartup(staticSource, environment)?.runtimeConfigDigest
+    ).not.toBe(captured.runtimeConfigDigest);
     const changedSource = structuredClone(config);
     changedSource.daemon!.port = 3032;
     expect(

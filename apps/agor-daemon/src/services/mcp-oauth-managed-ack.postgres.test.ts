@@ -1,5 +1,6 @@
 /** ACK HTTP is a fixture; the receipt-selection/CAS boundary uses actual non-owner PostgreSQL. */
 import {
+  createTenantScopedDatabaseProxy,
   executeRaw,
   runWithTenantDatabaseScope,
   sql,
@@ -27,7 +28,7 @@ describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
           return input.schema.parse({ protocol_version: 1, acknowledged: true });
         });
         const acknowledge = createManagedOAuthAcknowledger({
-          db: owned.db,
+          db: createTenantScopedDatabaseProxy(owned.db),
           sender: { request } as unknown as ManagedMCPOAuthClient,
           assertOwner: () => {},
         });

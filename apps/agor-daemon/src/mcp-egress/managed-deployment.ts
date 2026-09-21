@@ -9,7 +9,7 @@ import {
 import { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
 import {
   MCP_OAUTH_LIMITS,
-  McpOAuthCellEvidenceSchema,
+  McpOAuthCellAdmissionSchema,
   McpOAuthIdSchema,
   mcpOAuthFreshPilotEnrollmentDigest,
   mcpOAuthParseJson,
@@ -38,7 +38,7 @@ const KeyringSchema = z.strictObject({
     .max(8),
 });
 const monotonicNow = () => Number(process.hrtime.bigint()) / 1_000_000;
-type CellEvidence = ReturnType<typeof McpOAuthCellEvidenceSchema.parse>;
+type CellEvidence = ReturnType<typeof McpOAuthCellAdmissionSchema.parse>;
 
 export interface ManagedOAuthDeployment {
   readonly clock: ManagedAuthorityClock;
@@ -46,7 +46,7 @@ export interface ManagedOAuthDeployment {
   readonly sender: ManagedMCPOAuthClient;
   readonly issuer: string;
   readonly identity: Readonly<{ provider: string; issuer: string }>;
-  /** Reads fresh external cohort attestation; expired/mixed/changed authority denies. */
+  /** Reads protected admission: legacy freshness or immutable enrolled generation, never caller eligibility. */
   getEvidence(): CellEvidence;
 }
 
@@ -269,6 +269,7 @@ export async function loadManagedOAuthDeployment(
       parsedKeys.set(item.kid, key);
     }
     const expected = Object.freeze({
+      admissionMode: settings.admission_mode ?? 'observed_cohort',
       cellId: settings.cell_id,
       releaseSha: options.releaseSha,
       schemaDigest: options.schemaDigest,
@@ -283,14 +284,16 @@ export async function loadManagedOAuthDeployment(
     const getEvidence = (): CellEvidence => {
       try {
         if (cohortChanged) throw new Error();
-        const evidence = McpOAuthCellEvidenceSchema.parse(
+        const evidence = McpOAuthCellAdmissionSchema.parse(
           mcpOAuthParseJson(
             readManagedDeploymentFile(settings.cell_evidence_path!, 65_536).toString('utf8'),
             65_536
           )
         );
         const now = clock.latestUtcMs();
+        const staticAdmission = 'artifact_version' in evidence;
         if (
+          staticAdmission !== (expected.admissionMode === 'static_generation') ||
           evidence.cell_id !== expected.cellId ||
           evidence.release_sha !== expected.releaseSha ||
           evidence.schema_digest !== expected.schemaDigest ||
@@ -309,16 +312,28 @@ export async function loadManagedOAuthDeployment(
           cohortChanged = true;
           throw new Error();
         }
-        if (evidence.observed_at > now || evidence.valid_until <= now) throw new Error();
-        const identity = JSON.stringify([
-          evidence.cell_id,
-          evidence.cell_authority_epoch,
-          evidence.recovery_incarnation,
-          evidence.release_sha,
-          evidence.schema_digest,
-          evidence.replicas.map((replica) => replica.replica_id).sort(),
-          evidence.fresh_pilot ? mcpOAuthFreshPilotEnrollmentDigest(evidence.fresh_pilot) : null,
-        ]);
+        if (
+          staticAdmission
+            ? evidence.admitted_at > now
+            : evidence.observed_at > now || evidence.valid_until <= now
+        )
+          throw new Error();
+        // Static enrollment is an immutable authority artifact, not a renewable health
+        // lease. Any generation/epoch/identity replacement requires a fenced restart.
+        // Clock and ORIGINAL token/use deadlines still gate every physical hop.
+        const identity = staticAdmission
+          ? JSON.stringify(evidence)
+          : JSON.stringify([
+              evidence.cell_id,
+              evidence.cell_authority_epoch,
+              evidence.recovery_incarnation,
+              evidence.release_sha,
+              evidence.schema_digest,
+              evidence.replicas.map((replica) => replica.replica_id).sort(),
+              evidence.fresh_pilot
+                ? mcpOAuthFreshPilotEnrollmentDigest(evidence.fresh_pilot)
+                : null,
+            ]);
         if (cohortIdentity !== undefined && cohortIdentity !== identity) {
           cohortChanged = true;
           throw new Error();

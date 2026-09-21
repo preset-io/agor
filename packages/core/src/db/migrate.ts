@@ -533,7 +533,9 @@ function getMigrationsFolder(db: Database): string {
  *
  * This matches Drizzle's actual check (drizzle-orm/migrator.js), which compares
  * folderMillis against the last applied migration's created_at, NOT hashes.
- * Hash-based checking breaks when migration files are modified after being applied.
+ * Historical prefixes retain that interpretation. The collided managed feature
+ * tail additionally requires exact ledger hashes before any status/upgrade claim;
+ * an earlier applied branch layout is refused, never silently relabeled.
  *
  * `dbAheadOfBinary` is true when the database's max applied migration timestamp
  * is NEWER than the newest entry in this binary's local journal — i.e. the

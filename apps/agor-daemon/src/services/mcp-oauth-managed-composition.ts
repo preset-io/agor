@@ -73,7 +73,8 @@ export async function createManagedOAuthServices(input: {
   );
   const deployment = await loadManagedOAuthDeployment(input.config, {
     // This composition installs the enforced gateway implementation. The loader also
-    // proves EVERY live replica from external evidence; each operation checks actual tenant mode.
+    // verifies the configured observed cohort or initial static enrollment; every
+    // operation still checks actual tenant mode and unchanged deployment authority.
     enforcedGateway: true,
     releaseSha: input.releaseSha,
     schemaDigest,

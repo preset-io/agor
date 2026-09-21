@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { type AgorConfig, MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256 } from '@agor/core/config';
 import { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-client';
-import { mcpOAuthFreshPilotEnrollmentDigest } from '@agor/core/types';
+import { McpOAuthCellEvidenceSchema, mcpOAuthFreshPilotEnrollmentDigest } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -63,8 +63,15 @@ let keyring: Record<string, unknown>;
 let baseMono: number;
 const nowMono = () => Number(process.hrtime.bigint()) / 1_000_000;
 
-function freshPilotFixture() {
-  const enrollment = syntheticFreshPilotEnrollment(config);
+function freshPilotFixture(admission_mode?: 'static_generation') {
+  const raw = {
+    ...config,
+    managed_mcp_oauth: {
+      ...config.managed_mcp_oauth,
+      ...(admission_mode ? { admission_mode } : {}),
+    },
+  };
+  const enrollment = syntheticFreshPilotEnrollment(raw);
   const podUid = SYNTHETIC_PILOT_POD_UID;
   evidence = {
     ...evidence,
@@ -87,9 +94,9 @@ function freshPilotFixture() {
   return {
     enrollment,
     config: {
-      ...config,
+      ...raw,
       managed_mcp_oauth: {
-        ...config.managed_mcp_oauth,
+        ...raw.managed_mcp_oauth,
         fresh_pilot_enrollment_sha256: mcpOAuthFreshPilotEnrollmentDigest(enrollment),
       },
     },
@@ -158,7 +165,105 @@ beforeEach(async () => {
     throw new Error('No fixture');
   });
 });
+function staticFixture() {
+  const pilot = freshPilotFixture('static_generation');
+  const { observed_at: _observed, valid_until: _valid, ...admission } = evidence;
+  evidence = {
+    ...admission,
+    artifact_version: 2,
+    mode: 'static_generation',
+    deployment_generation: '9007199254740993',
+    admitted_at: utc - 365 * 86400000,
+  };
+  return pilot;
+}
+
 describe('managed production deployment loader', () => {
+  it('accepts immutable static admission without a renewable lease, preserving exact large generation', async () => {
+    const pilot = staticFixture();
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    expect(loaded.getEvidence()).toMatchObject({
+      mode: 'static_generation',
+      deployment_generation: '9007199254740993',
+    });
+    expect(loaded.getEvidence()).not.toHaveProperty('valid_until');
+    expect(loaded.getEvidence()).not.toHaveProperty('observed_at');
+    expect(Object.isFrozen(loaded.getEvidence())).toBe(true);
+    expect((await loadManagedOAuthDeployment(pilot.config, pilot.options))!.getEvidence()).toEqual(
+      loaded.getEvidence()
+    );
+    // An ordinary new Pod cannot replay the old Pod's protected enrollment.
+    await expect(
+      loadManagedOAuthDeployment(pilot.config, {
+        ...pilot.options,
+        replicaId: '77777777-7777-4777-8777-777777777777',
+        podUid: '77777777-7777-4777-8777-777777777777',
+      })
+    ).rejects.toThrow();
+  });
+  it.each([
+    { deployment_generation: '9007199254740992' },
+    { deployment_generation: '9007199254740994' },
+    { cell_authority_epoch: '2' },
+    { recovery_incarnation: 'S'.repeat(43) },
+    { admitted_at: utc - 1 },
+    { attestation_digest: '9'.repeat(64) },
+    { approval_reference: 'substituted' },
+  ])('latches static authority changes including rollback/replay: %j', async (change) => {
+    const pilot = staticFixture();
+    const original = structuredClone(evidence);
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    evidence = { ...evidence, ...change };
+    expect(() => loaded.getEvidence()).toThrow();
+    evidence = original;
+    expect(() => loaded.getEvidence()).toThrow();
+  });
+  it.each([
+    { protocol_version: 2 },
+    { binding_version: 2 },
+    { enforcement_version: 2 },
+    { release_sha: '9'.repeat(40) },
+    { schema_digest: '9'.repeat(64) },
+    { deployment_generation: '0' },
+    { admitted_at: utc + 60000 },
+  ])(
+    'refuses unsupported or future static admission before service startup: %j',
+    async (change) => {
+      const pilot = staticFixture();
+      evidence = { ...evidence, ...change };
+      await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow();
+    }
+  );
+  it('does not reinterpret legacy evidence as static or allow a static mode downgrade', async () => {
+    const pilot = staticFixture();
+    await expect(
+      loadManagedOAuthDeployment(
+        {
+          ...pilot.config,
+          managed_mcp_oauth: {
+            ...pilot.config.managed_mcp_oauth,
+            admission_mode: 'observed_cohort',
+          },
+        },
+        pilot.options
+      )
+    ).rejects.toThrow();
+    const loaded = (await loadManagedOAuthDeployment(pilot.config, pilot.options))!;
+    const original = evidence;
+    const {
+      artifact_version: _version,
+      mode: _mode,
+      deployment_generation: _generation,
+      admitted_at: _at,
+      ...legacy
+    } = evidence;
+    evidence = { ...legacy, observed_at: utc - 1, valid_until: utc + 60000 };
+    expect(() => loaded.getEvidence()).toThrow();
+    await expect(loadManagedOAuthDeployment(pilot.config, pilot.options)).rejects.toThrow();
+    evidence = original;
+    expect(() => loaded.getEvidence()).toThrow();
+  });
+
   it('requires the original suspend-inclusive capture for pilot startup before reading keys', async () => {
     const pilot = freshPilotFixture();
     delete health.boottime_ms;
@@ -211,7 +316,7 @@ describe('managed production deployment loader', () => {
     expect(Object.isFrozen(loaded.getEvidence().fresh_pilot)).toBe(true);
     expect(loaded.clock.latestUtcMs()).toBeGreaterThanOrEqual(utc + 2600);
     evidence = { ...evidence, valid_until: utc + 90_000 };
-    expect(loaded.getEvidence().valid_until).toBe(utc + 90_000);
+    expect(McpOAuthCellEvidenceSchema.parse(loaded.getEvidence()).valid_until).toBe(utc + 90_000);
   });
 
   it.each([
@@ -309,7 +414,7 @@ describe('managed production deployment loader', () => {
     expect(loaded.clock.latestUtcMs()).toBeGreaterThanOrEqual(utc + 200);
     expect(loaded.getEvidence().cell_id).toBe('cell-a');
     evidence = { ...evidence, valid_until: utc + 90_000 };
-    expect(loaded.getEvidence().valid_until).toBe(utc + 90_000);
+    expect(McpOAuthCellEvidenceSchema.parse(loaded.getEvidence()).valid_until).toBe(utc + 90_000);
     expect(Object.isFrozen(loaded.getEvidence().replicas)).toBe(true);
     keyring.keys = [];
     expect(loaded.keys.size).toBe(1); // startup keyring is immutable, not an online discovery feed

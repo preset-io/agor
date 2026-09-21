@@ -118,6 +118,7 @@ test('publication policy admits only the isolated immutable compatibility consum
     'scripts/check-image-publication-policy.mjs',
     'scripts/managed-oauth-old-image-proof.mjs',
     'scripts/managed-oauth-old-package-proof.mjs',
+    'docker/Dockerfile',
   ];
   const run = () =>
     promisify(execFile)(process.execPath, [join(directory, files[3])], { timeout: 10000 });
@@ -130,6 +131,14 @@ test('publication policy admits only the isolated immutable compatibility consum
       );
     }
     await run();
+    const dockerPath = join(directory, 'docker/Dockerfile');
+    const dockerfile = await readFile(dockerPath, 'utf8');
+    await writeFile(
+      dockerPath,
+      dockerfile.replace('COPY patches/ ./patches/', '# missing patches')
+    );
+    await assert.rejects(run);
+    await writeFile(dockerPath, dockerfile);
     const workflowPath = join(directory, files[2]);
     const workflow = await readFile(workflowPath, 'utf8');
     await writeFile(workflowPath, workflow.replace('--old-package 0.26.3', '--old-package latest'));

@@ -1,0 +1,7 @@
+{
+  "protocol_version": 1,
+  "description": "Additive static enrollment shape only; not a trusted deployment receipt.",
+  "sha256": {
+    "static-enrollment.json": "469d619b4621d9b73e43d317e534c81b1b955b42435ae1c437ee6c788e516d5e"
+  }
+}

@@ -1021,6 +1021,58 @@ export const McpOAuthCellEvidenceSchema = z
     'Incomplete or mixed managed cohort'
   );
 
+/** Cloud-authoritative first enrollment / successfully deployed generation, not a
+ * periodically renewed observation. Parsing does not authorize installation.
+ * The original work finalizer must commit this with its observed deployment and
+ * public credentials; supported changes fence the old process/material authority
+ * and advance cell_authority_epoch before mutation. deployment_generation is the
+ * completed generation, NEVER an unobserved desired-release record.
+ *
+ * Deliberate guarantee change: this artifact does not detect out-of-band drift.
+ * Protected custody, initial native proof, lifecycle fences, per-use owner checks
+ * and the independent clock/original fixed authorization deadline still apply.
+ * No observed_at/valid_until: the legacy 120s schema remains distinct and strict.
+ */
+export const McpOAuthStaticCellEnrollmentSchema = z
+  .strictObject({
+    artifact_version: z.literal(2),
+    mode: z.literal('static_generation'),
+    deployment_generation: McpOAuthPositiveEpochSchema,
+    admitted_at: McpOAuthTimeSchema,
+    cell_id: McpOAuthCellEvidenceSchema.shape.cell_id,
+    cell_authority_epoch: McpOAuthCellEvidenceSchema.shape.cell_authority_epoch,
+    recovery_incarnation: McpOAuthCellEvidenceSchema.shape.recovery_incarnation,
+    release_sha: McpOAuthCellEvidenceSchema.shape.release_sha,
+    protocol_version: z.literal(1),
+    binding_version: z.literal(1),
+    enforcement_version: z.literal(1),
+    schema_digest: McpOAuthCellEvidenceSchema.shape.schema_digest,
+    replicas: McpOAuthCellEvidenceSchema.shape.replicas,
+    expected_replica_count: McpOAuthCellEvidenceSchema.shape.expected_replica_count,
+    pre_gateway_executors_terminated: z.literal(false),
+    fresh_pilot: McpOAuthFreshPilotEnrollmentSchema,
+    attestation_digest: McpOAuthCellEvidenceSchema.shape.attestation_digest,
+    approval_reference: McpOAuthCellEvidenceSchema.shape.approval_reference,
+  })
+  .refine(
+    (value) =>
+      value.replicas.length === value.expected_replica_count &&
+      new Set(value.replicas.map((replica) => replica.replica_id)).size === value.replicas.length &&
+      value.replicas.every(
+        (replica) =>
+          z.string().uuid().safeParse(replica.replica_id).success &&
+          replica.release_sha === value.release_sha &&
+          replica.schema_digest === value.schema_digest
+      ),
+    'Incomplete or mixed managed static enrollment'
+  );
+export const McpOAuthCellAdmissionSchema = z.union([
+  McpOAuthCellEvidenceSchema,
+  McpOAuthStaticCellEnrollmentSchema,
+]);
+export type McpOAuthStaticCellEnrollment = z.infer<typeof McpOAuthStaticCellEnrollmentSchema>;
+export type McpOAuthCellAdmission = z.infer<typeof McpOAuthCellAdmissionSchema>;
+
 /** Fixed runtime landing route; fragments are cleared before local completion POST. */
 export const MCP_OAUTH_RUNTIME_RETURN_PATH = '/mcp-oauth/complete' as const;
 export const McpOAuthBrowserFinalizedSchema = z

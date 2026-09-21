@@ -1,0 +1,49 @@
+{
+  "artifact_version": 2,
+  "mode": "static_generation",
+  "deployment_generation": "9007199254740993",
+  "admitted_at": 1000,
+  "cell_id": "new-cell",
+  "cell_authority_epoch": "1",
+  "recovery_incarnation": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "protocol_version": 1,
+  "binding_version": 1,
+  "enforcement_version": 1,
+  "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "replicas": [
+    {
+      "replica_id": "00000000-0000-4000-8000-000000000001",
+      "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "protocol_version": 1,
+      "binding_version": 1,
+      "enforcement_version": 1,
+      "schema_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "gateway_mode": "enforced"
+    }
+  ],
+  "expected_replica_count": 1,
+  "pre_gateway_executors_terminated": false,
+  "attestation_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "approval_reference": "synthetic-not-an-approval",
+  "fresh_pilot": {
+    "version": 1,
+    "environment": "staging",
+    "region": "us-west-2",
+    "enrollment_id": "00000000-0000-4000-8000-000000000001",
+    "cell_birth_id": "00000000-0000-4000-8000-000000000001",
+    "database_birth_id": "00000000-0000-4000-8000-000000000001",
+    "namespace": "mcp-pilot-new",
+    "namespace_uid": "00000000-0000-4000-8000-000000000001",
+    "admission_policy_uid": "00000000-0000-4000-8000-000000000001",
+    "admission_policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_image": "repo/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "worker_image": "repo/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "executor_image": "repo/executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "worker_config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "database_binding_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issuer_uncertainty_ms": 2500
+  }
+}

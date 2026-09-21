@@ -26,6 +26,29 @@ const configured: AgorManagedMCPOAuthSettings = {
 };
 
 describe('managed OAuth deployment configuration', () => {
+  it('requires explicit static mode and a real enrollment pin; omission keeps legacy semantics', () => {
+    expect(() => validateManagedMCPOAuthConfig(configured)).not.toThrow();
+    expect(() =>
+      validateManagedMCPOAuthConfig({ ...configured, admission_mode: 'observed_cohort' })
+    ).not.toThrow();
+    expect(() =>
+      validateManagedMCPOAuthConfig({ ...configured, admission_mode: 'static_generation' })
+    ).toThrow('enrollment pin');
+    expect(() =>
+      validateManagedMCPOAuthConfig({
+        ...configured,
+        admission_mode: 'static_generation',
+        fresh_pilot_enrollment_sha256: 'b'.repeat(64),
+      })
+    ).not.toThrow();
+    for (const mode of ['static', true, null, ''])
+      expect(() =>
+        validateManagedMCPOAuthConfig({
+          ...configured,
+          admission_mode: mode,
+        } as AgorManagedMCPOAuthSettings)
+      ).toThrow('mode');
+  });
   it('accepts only a staging us-west-2 immutable pilot pin, never an enrollment flag', () => {
     expect(() =>
       validateManagedMCPOAuthConfig({

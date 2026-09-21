@@ -104,7 +104,7 @@ const issuer = 'https://worker.example/';
 
 describe
   .skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')
-  .each(['legacy', 'fresh-pilot'] as const)(
+  .each(['legacy', 'fresh-pilot', 'static-generation'] as const)(
   'registered managed production composition on owned nonowner PostgreSQL: %s',
   (admissionKind) => {
     let owned: OwnedPostgres;
@@ -142,6 +142,8 @@ describe
         renameSync(resolve(directory, `${name}.next`), resolve(directory, name));
       };
       const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      let enrollmentPublished = false;
+      const admittedAt = Date.now() - 1;
       publish = () => {
         const now = Date.now(); // TEST monitor only: not a production clock assurance.
         write(
@@ -157,6 +159,7 @@ describe
             synchronized: true,
           })
         );
+        if (admissionKind === 'static-generation' && enrollmentPublished) return;
         write(
           'cell.json',
           JSON.stringify({
@@ -184,10 +187,17 @@ describe
             ...(freshPilot ? { fresh_pilot: freshPilot } : {}),
             attestation_digest: 'c'.repeat(64),
             approval_reference: 'synthetic-only',
-            observed_at: now - 1,
-            valid_until: now + 60000,
+            ...(admissionKind === 'static-generation'
+              ? {
+                  artifact_version: 2,
+                  mode: 'static_generation',
+                  deployment_generation: '9007199254740993',
+                  admitted_at: admittedAt,
+                }
+              : { observed_at: now - 1, valid_until: now + 60000 }),
           })
         );
+        enrollmentPublished = true;
       };
       write('sender.pem', pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString());
       write(
@@ -206,6 +216,9 @@ describe
         database: { dialect: 'postgresql' },
         managed_mcp_oauth: {
           enabled: true,
+          ...(admissionKind === 'static-generation'
+            ? { admission_mode: 'static_generation' as const }
+            : {}),
           new_starts: true,
           exchange: true,
           refresh: true,
@@ -225,7 +238,7 @@ describe
           contract_sha256: MANAGED_MCP_OAUTH_CONTRACT_SOURCE_SHA256,
         },
       };
-      if (admissionKind === 'fresh-pilot') {
+      if (admissionKind !== 'legacy') {
         // Declared TEST operator provenance only; real loader/files, actual
         // schema/role, composition, repositories and signed-use checks remain.
         freshPilot = syntheticFreshPilotEnrollment(config);
@@ -657,6 +670,7 @@ describe
           elapsed = offset;
           publish();
           await expect(services.registry.refresh()).rejects.toThrow();
+
           for (const grant of committed) {
             await assertUse(grant);
             // Actual gateway acquisition, including the proactive refresh
@@ -674,6 +688,15 @@ describe
           }
           expect(() => services.registry.resolve(committed[0]!.server, 'refresh')).toThrow();
           expect(() => services.registry.resolveEntry(catalog[0])).toThrow();
+        }
+        if (admissionKind === 'static-generation') {
+          // No policy snapshot survives process restart during outage. Recovery
+          // at minute 59 retains only the ORIGINAL remaining authorization.
+          services = (await makeServices())!;
+          await expect(assertUse(committed[0]!)).rejects.toThrow();
+          workerUnavailable = false;
+          await services.registry.refresh();
+          await assertUse(committed[0]!);
         }
         workerUnavailable = false;
         capabilities.available = false;

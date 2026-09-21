@@ -29,7 +29,9 @@ export interface AgorManagedMCPOAuthSettings {
   sender_private_key_path?: string;
   /** Immutable operator-installed public worker keyring JSON. */
   worker_public_keyring_path?: string;
-  /** Immutable externally attested whole-cell cohort evidence JSON. */
+  /** Legacy rolling observation by default; static admission requires independently enrolled fresh custody. */
+  admission_mode?: 'observed_cohort' | 'static_generation';
+  /** Protected whole-cell admission artifact; never request-selected. */
   cell_evidence_path?: string;
   /** Live independent clock-monitor evidence; never inferred from local wall time. */
   clock_health_path?: string;

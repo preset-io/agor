@@ -11,6 +11,7 @@ import {
   McpOAuthCancelReservationResponseSchema,
   McpOAuthCancelResponseSchema,
   McpOAuthCapabilitiesSchema,
+  McpOAuthCellAdmissionSchema,
   McpOAuthCellEvidenceSchema,
   McpOAuthClaimSchema,
   McpOAuthCleanupAuthoritySchema,
@@ -28,6 +29,7 @@ import {
   McpOAuthRefreshRequestSchema,
   McpOAuthReturnTicketResponseSchema,
   McpOAuthSenderClaimsSchema,
+  McpOAuthStaticCellEnrollmentSchema,
   McpOAuthTokensSchema,
   McpOAuthUseClaimsSchema,
   mcpOAuthClaimIsLive,
@@ -50,6 +52,8 @@ import projectionFixtures from './__fixtures__/managed-v1/projection-results.jso
 import projectionManifest from './__fixtures__/managed-v1/projection-results.manifest.json';
 import signatures from './__fixtures__/managed-v1/signature-vectors.json';
 import sourcePin from './__fixtures__/managed-v1/source-pin.json';
+import staticEnrollment from './__fixtures__/managed-v1/static-enrollment.json';
+import staticManifest from './__fixtures__/managed-v1/static-enrollment.manifest.json';
 import valid from './__fixtures__/managed-v1/valid.json';
 
 const schemas: Record<string, ZodType> = {
@@ -310,4 +314,39 @@ describe('paired immutable provider projection and responses', () => {
   for (const [index, fixture] of projectionFixtures.invalid.entries())
     it(`rejects producer negative ${index}`, () =>
       expect(parsers[fixture.schema]!.safeParse(fixture.value).success).toBe(false));
+});
+
+describe('static generation producer artifact, distinct from legacy evidence', () => {
+  it('pins every additive producer byte and accepts the original unrounded decimal generation', () => {
+    expect(
+      mcpOAuthSha256(
+        readFileSync(
+          new URL('./__fixtures__/managed-v1/static-enrollment.manifest.json', import.meta.url)
+        )
+      )
+    ).toBe(sourcePin.static_enrollment_manifest_sha256);
+    for (const [name, hash] of Object.entries(staticManifest.sha256))
+      expect(
+        mcpOAuthSha256(readFileSync(new URL(`./__fixtures__/managed-v1/${name}`, import.meta.url)))
+      ).toBe(hash);
+    expect(McpOAuthStaticCellEnrollmentSchema.parse(staticEnrollment)).toEqual(staticEnrollment);
+    expect(McpOAuthCellAdmissionSchema.parse(staticEnrollment)).toEqual(staticEnrollment);
+    expect(McpOAuthCellEvidenceSchema.safeParse(staticEnrollment).success).toBe(false);
+    expect(McpOAuthStaticCellEnrollmentSchema.safeParse(pilotFixtures.cohort).success).toBe(false);
+    expect(McpOAuthCellAdmissionSchema.parse(pilotFixtures.cohort)).toEqual(pilotFixtures.cohort);
+  });
+  it.each([
+    { observed_at: 1000 },
+    { valid_until: 2000 },
+    { fresh_pilot: undefined },
+    { deployment_generation: 1 },
+    { deployment_generation: '0' },
+    { deployment_generation: '01' },
+    { pre_gateway_executors_terminated: true },
+    { protocol_version: 2 },
+  ])('refuses mixed, unbound or unsupported static evidence: %j', (change) => {
+    expect(McpOAuthCellAdmissionSchema.safeParse({ ...staticEnrollment, ...change }).success).toBe(
+      false
+    );
+  });
 });

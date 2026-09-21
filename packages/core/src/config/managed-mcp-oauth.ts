@@ -27,6 +27,7 @@ export const MANAGED_MCP_OAUTH_CONFIG_KEYS = [
   'clock_health_path',
   'contract_sha256',
   'fresh_pilot_enrollment_sha256',
+  'admission_mode',
 ] as const satisfies readonly (keyof AgorManagedMCPOAuthSettings)[];
 
 /** Syntax only. Valid configuration does not attest a compatible admitted cell cohort. */
@@ -121,10 +122,18 @@ export function validateManagedMCPOAuthConfig(
   ) {
     throw new Error('Managed MCP OAuth fresh pilot requires an exact staging us-west-2 enrollment');
   }
+  if (
+    value.admission_mode !== undefined &&
+    !['observed_cohort', 'static_generation'].includes(value.admission_mode)
+  )
+    throw new Error('Managed MCP OAuth admission mode is unsupported');
+  if (value.admission_mode === 'static_generation' && !value.fresh_pilot_enrollment_sha256)
+    throw new Error('Managed MCP OAuth static admission requires a fresh enrollment pin');
   if (value.enabled || value.revocation) {
     for (const key of MANAGED_MCP_OAUTH_CONFIG_KEYS.filter(
       (key) =>
         key !== 'fresh_pilot_enrollment_sha256' &&
+        key !== 'admission_mode' &&
         !(MANAGED_MCP_OAUTH_FLAGS as readonly string[]).includes(key)
     )) {
       if (!value[key]) throw new Error(`Managed MCP OAuth vending or cleanup requires ${key}`);

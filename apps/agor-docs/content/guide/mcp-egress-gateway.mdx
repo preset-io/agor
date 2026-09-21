@@ -296,6 +296,7 @@ managed_mcp_oauth:
   sender_key_id: your-workload-key-id
   sender_private_key_path: /run/agor-managed/sender.pem
   worker_public_keyring_path: /run/agor-managed/worker-public.json
+  admission_mode: observed_cohort # default; static_generation requires fresh enrollment
   cell_evidence_path: /run/agor-evidence/cell.json
   clock_health_path: /run/agor-clock/health.json
   # contract_sha256: exact source_sha256 from the reviewed source-pin.json
@@ -314,7 +315,8 @@ public inventory is rejected. The configured worker issuer must match exactly
 and share the configured broker origin. The keyring is fixed for the daemon's
 lifetime; keyring rotation requires a coordinated restart.
 
-The cohort file must match canonical `McpOAuthCellEvidenceSchema`, including
+In `observed_cohort` mode (also the default when omitted), the cohort file must
+match canonical `McpOAuthCellEvidenceSchema`, including
 all expected replicas, the local release/schema/replica identity, enforced
 mediation, approval reference and attestation digest. The legacy admission path
 requires independent pre-gateway-executor termination evidence. A reviewed deployment attestor must refresh
@@ -322,6 +324,36 @@ it before its at-most-120-second validity expires. The getter reads fresh
 attestation, but does not silently accept a different cell authority epoch,
 recovery incarnation or replica cohort after startup. Reinitialization requires
 a new coordinated admission. An expired/missing/mixed cohort fails closed.
+
+### Static enrollment and supported deployment changes
+
+Explicit `admission_mode: static_generation` instead consumes the separate
+canonical `McpOAuthStaticCellEnrollmentSchema` (artifact version 2). It requires
+verified fresh enrollment and its deployment-installed pin. It is **not** an
+old observation with its expiry removed, nor a sender's claim of eligibility.
+Cloud commits only the independently verified, successfully deployed generation,
+not a desired release. The protected artifact pins the approved release, schema,
+Pod UIDs, complete configuration and original enrollment. Startup still measures
+the actual schema and database-role safety.
+
+There is no recurring cohort lease or Cloud health requirement for existing
+use. The runtime rechecks the unchanged local artifact on every managed hop;
+a generation, epoch, identity or mode change latches that process closed.
+New sign-in and refresh still require authenticated current Cloud authority.
+Supported upgrade, rollback, configuration, restart and retirement paths must
+fence old processes/materials and advance Cloud's cell authority epoch **before**
+mutation, then install the newly admitted generation. A new Pod cannot replay
+an artifact listing its predecessor. The runtime config service is read-only;
+configuration is not a remotely writable eligibility flag.
+
+This mode deliberately does **not** continuously detect out-of-band deployment,
+role or Kubernetes drift that bypasses those supported controls. It does not
+replace tenant, grant, revocation, immutable-image or custody checks. Independent
+clock evidence—including suspend/reboot checks—remains mandatory. Existing use
+ends at the earlier of token expiry and its **original** signed authorization
+deadline (at most 60 minutes), without outage extension. Restart without an
+authenticated policy snapshot denies use; later bootstrap can recover only that
+original remaining window, never renew an old token's authorization.
 
 ### Dedicated fresh-cell sandbox pilot
 
