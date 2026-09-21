@@ -233,6 +233,9 @@ Direct self-hosted OAuth remains the default. Relay mode requires PostgreSQL,
 the existing asymmetric Cloud launch trust, and an existing Cell-scoped RS256
 service credential authorized by Cloud for `mcp_oauth:relay`. It does not create
 an Agor-owned provider app, provider-secret broker, or token-exchange proxy.
+Relay mode requires **Per User** OAuth even for administrators; shared app
+configuration is allowed, but shared user grants are not. Direct self-hosted
+shared-grant behavior is unchanged.
 
 ```yaml
 mcp_oauth_relay:
@@ -262,6 +265,9 @@ URL. Cloud checks the initiating identity, membership and current placement,
 then sends a single body-bound, purpose/audience-separated assertion and callback
 to the trusted workspace route. Only the cell exchanges the code, persists the
 grant, or refreshes it. Cloud never receives app secrets or access/refresh tokens.
+Runtime verification allows at most 30 seconds of ordinary clock skew while
+retaining the callback assertion's maximum 30-second signed lifetime. This does
+not extend durable attempt expiry or permit delivery/exchange retries.
 
 ### Trust and failure boundaries
 

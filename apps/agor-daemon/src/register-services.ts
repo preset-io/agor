@@ -2505,6 +2505,9 @@ export async function registerMCPServices(
       }
     }
 
+    if (oauthRelay && effectiveOAuthMode === 'shared')
+      throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
+
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
     // the pending-flow authority below instead.
@@ -3349,6 +3352,9 @@ export async function registerMCPServices(
   ): Promise<void> => {
     const record = pendingFlow.durableRecord;
     try {
+      // Also fence shared attempts admitted before relay mode was enabled.
+      if (oauthRelay && (record?.oauthMode ?? pendingFlow.oauthMode) === 'shared')
+        throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
       if (pendingFlow.context.relay && !pendingFlow.relayDelivered)
         throw new Forbidden('Hosted OAuth requires the authenticated Cloud callback');
       await assertFlowInitiatorStillEntitled(

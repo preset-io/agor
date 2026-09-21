@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
 import { MCP_OAUTH_RELAY, type MCPOAuthRelayCallback } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPOAuthRelay, relayBodyHash } from './mcp-oauth-relay';
 
 const fetch = vi.hoisted(() => vi.fn());
@@ -51,13 +51,70 @@ function fixture() {
     body_sha256: relayBodyHash(body),
     sub: 'user:cloud-alice',
   };
-  const sign = (overrides: Record<string, unknown> = {}) =>
-    `Bearer ${jwt.sign({ ...claims, ...overrides }, cloud.privateKey, { algorithm: 'RS256', issuer: 'https://cloud.test', audience: 'agor-cell:cell-a:mcp-oauth-relay', expiresIn: 30, jwtid: 'delivery-id' })}`;
+  const sign = (overrides: Record<string, unknown> = {}, lifetime = 30) =>
+    `Bearer ${jwt.sign({ ...claims, ...overrides }, cloud.privateKey, { algorithm: 'RS256', issuer: 'https://cloud.test', audience: 'agor-cell:cell-a:mcp-oauth-relay', expiresIn: lifetime, jwtid: 'delivery-id' })}`;
   return { client, input, body, sign };
 }
 describe('Cloud relay v1 trust boundary', () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     fetch.mockReset();
+  });
+
+  it.each([1, 29, 30, -1, -30, -59])(
+    'accepts a short-lived assertion issued %ss relative to the runtime clock',
+    async (offset) => {
+      const now = 1_800_000_000;
+      vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
+      const { client, body, input, sign } = fixture();
+      await expect(client.verifyDelivery(body, sign({ iat: now + offset }))).resolves.toEqual(
+        input
+      );
+      // Skew never relaxes body binding or the <=30-second signed lifetime.
+      await expect(
+        client.verifyDelivery(Buffer.from(`${body} `), sign({ iat: now + offset }))
+      ).rejects.toThrow();
+      await expect(client.verifyDelivery(body, sign({ iat: now + offset }, 31))).rejects.toThrow();
+    }
+  );
+  it.each([31, 60, -60, -120])(
+    'rejects issuance outside the bounded future/expiry allowance (%ss)',
+    async (offset) => {
+      const now = 1_800_000_000;
+      vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
+      const { client, body, sign } = fixture();
+      await expect(client.verifyDelivery(body, sign({ iat: now + offset }))).rejects.toThrow(
+        'Invalid MCP callback delivery'
+      );
+    }
+  );
+  it.each([
+    [-30_000, true],
+    [1000, true],
+    [30_000, true],
+    [30_001, false],
+    [-600_000, false],
+  ])('bounds the prepared route expiry with Cloud clock offset %sms', async (offset, accepted) => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const { client, input } = fixture();
+    fetch.mockResolvedValue(
+      Response.json(
+        {
+          start_url: 'https://cloud.test/start/opaque',
+          redirect_uri: input.redirect_uri,
+          expires_at: new Date(now + 600_000 + offset).toISOString(),
+        },
+        { status: 201 }
+      )
+    );
+    const { code: _code, iss: _iss, ...prepare } = input;
+    const result = client.prepare({
+      ...prepare,
+      authorization_url: 'https://provider.test/authorize',
+    });
+    if (accepted) await expect(result).resolves.toBe('https://cloud.test/start/opaque');
+    else await expect(result).rejects.toThrow('no direct fallback');
   });
   it('uses existing Cell service claims and binds exact prepare bytes', async () => {
     const { client, input } = fixture();
