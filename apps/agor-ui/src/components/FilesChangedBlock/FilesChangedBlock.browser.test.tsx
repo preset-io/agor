@@ -1,8 +1,11 @@
-import type { Message } from '@agor-live/client';
+import type { Message, Task } from '@agor-live/client';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
+import { MessageBlock } from '../MessageBlock/MessageBlock';
+import { TaskBlock } from '../TaskBlock/TaskBlock';
 import { FilesChangedBlock } from './FilesChangedBlock';
+import { collectFileChanges } from './taskFileChanges';
 
 afterEach(cleanup);
 
@@ -58,9 +61,120 @@ const subagentEdit = call(
   'task-1'
 );
 
+const taskView = (messages: Message[]) => (
+  <TaskBlock
+    task={
+      {
+        task_id: 'task-1',
+        session_id: 'session-1',
+        created_by: 'user-1',
+        full_prompt: 'Edit both files',
+        status: 'completed',
+        created_at: '2026-09-21T00:00:00.000Z',
+        git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
+      } as unknown as Task
+    }
+    compact
+    isExpanded
+    onExpandChange={() => {}}
+    taskMessages={messages}
+    taskMessagesLoaded
+    onLoadTaskMessages={() => {}}
+    onUnloadTaskMessages={() => {}}
+  />
+);
+
 describe('Files changed disclosure', () => {
+  it('moves a loose edit into one keyboard-accessible disclosure when its result arrives', async () => {
+    const [request, result] = call(
+      0,
+      'streamed',
+      'Edit',
+      { file_path: '/repo/Streamed.tsx' },
+      { structuredPatch: patch(['-before', '+after']) }
+    );
+    const message = {
+      ...request,
+      content: [
+        { type: 'text', text: 'Updating the example' },
+        ...(Array.isArray(request.content) ? request.content : []),
+      ],
+    } as Message;
+    const { rerender } = render(taskView([message]));
+    expect(screen.getByRole('button', { name: /Edit/ })).toBeVisible();
+
+    rerender(taskView([message, result]));
+    expect(screen.queryByRole('button', { name: /^Edit/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Worked for/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Updating the example')).toBeVisible();
+    const disclosure = screen.getByRole('button', { name: /Streamed\.tsx/ });
+    await act(async () => {
+      disclosure.focus();
+      await userEvent.keyboard('{Enter}');
+    });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('after')).toBeVisible();
+  });
+
+  it.each(['chain', 'loose'] as const)(
+    'keeps every partially enriched file reachable in a %s',
+    async (surface) => {
+      const messages = call(
+        0,
+        'mixed',
+        'edit_files',
+        {
+          changes: [
+            { path: 'small.ts', kind: 'update' },
+            { path: 'large.txt', kind: 'update' },
+          ],
+        },
+        {
+          files: [
+            { path: 'small.ts', kind: 'update', structuredPatch: patch(['-before', '+after']) },
+          ],
+        }
+      );
+      if (surface === 'chain') {
+        render(taskView(messages));
+        const chain = screen.getByRole('button', { name: /Worked for/ });
+        await act(async () => {
+          chain.focus();
+          await userEvent.keyboard('{Enter}');
+        });
+      } else {
+        render(
+          <>
+            <MessageBlock
+              message={{
+                ...messages[0],
+                content: messages.flatMap((message) =>
+                  Array.isArray(message.content) ? message.content : []
+                ),
+              }}
+              compact
+            />
+            <FilesChangedBlock summary={collectFileChanges(messages)} />
+          </>
+        );
+      }
+
+      // No partial grouped disclosure duplicates the original call.
+      expect(screen.queryByRole('button', { name: /^small\.ts/ })).not.toBeInTheDocument();
+      const edit = screen.getByRole('button', { name: /edit_files/ });
+      await act(async () => {
+        edit.focus();
+        await userEvent.keyboard('{Enter}');
+      });
+      expect(edit).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('small.ts')).toBeVisible();
+      expect(screen.getByText('large.txt')).toBeVisible();
+      expect(screen.getByText('after')).toBeVisible();
+    }
+  );
+
   it('groups a turn into one line and expands to the diffs', async () => {
-    render(<FilesChangedBlock messages={[...readCall, ...editCall]} />);
+    render(<FilesChangedBlock summary={collectFileChanges([...readCall, ...editCall])} />);
 
     const toggle = screen.getByRole('button', { name: /CatalogTab\.tsx/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -78,7 +192,7 @@ describe('Files changed disclosure', () => {
   });
 
   it('aggregates edits made inside the turn subagent chain', () => {
-    render(<FilesChangedBlock messages={[...editCall, ...subagentEdit]} />);
+    render(<FilesChangedBlock summary={collectFileChanges([...editCall, ...subagentEdit])} />);
 
     expect(screen.getByRole('button', { name: /2 files changed/ })).toBeVisible();
     expect(screen.getByText('+3')).toBeVisible();
@@ -86,7 +200,7 @@ describe('Files changed disclosure', () => {
   });
 
   it('renders nothing when the turn changed no files', () => {
-    const { container } = render(<FilesChangedBlock messages={readCall} />);
+    const { container } = render(<FilesChangedBlock summary={collectFileChanges(readCall)} />);
 
     expect(container).toBeEmptyDOMElement();
   });

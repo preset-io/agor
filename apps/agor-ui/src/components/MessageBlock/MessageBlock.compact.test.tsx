@@ -88,10 +88,10 @@ describe('compact user bubble', () => {
 });
 
 describe('compact edit rows', () => {
-  it('leaves an enriched edit to the turn Files changed block', () => {
-    const { container } = render(<MessageBlock message={editMessage(true)} compact />);
+  it('keeps enriched edits when rendered without task-level aggregation', () => {
+    render(<MessageBlock message={editMessage(true)} compact />);
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByText('Edit')).toBeVisible();
   });
 
   it('keeps an edit with no diff to aggregate as an ordinary row', () => {

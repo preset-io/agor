@@ -47,7 +47,7 @@ import {
   COMPACT_GUTTER_SIZE,
 } from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
-import { FilesChangedBlock } from '../FilesChangedBlock';
+import { collectFileChanges, FilesChangedBlock } from '../FilesChangedBlock';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -724,6 +724,27 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       );
     }, [taskMessages, streamingForTask, streamingMessages]);
 
+    const fileChanges = useMemo(
+      () => (compact ? collectFileChanges(messages) : null),
+      [compact, messages]
+    );
+    // Streaming changes the summary object every frame, but unchanged membership
+    // must not invalidate every memoized message and chain in the transcript.
+    const previousAggregatedIds = useRef<ReadonlySet<string> | undefined>(undefined);
+    const aggregatedToolUseIds = useMemo(() => {
+      const next = fileChanges?.toolUseIds;
+      const previous = previousAggregatedIds.current;
+      if (
+        next &&
+        previous &&
+        next.size === previous.size &&
+        [...next].every((id) => previous.has(id))
+      ) {
+        return previous;
+      }
+      previousAggregatedIds.current = next;
+      return next;
+    }, [fileChanges]);
     // Group messages into blocks, then reconcile against the previous render:
     // a streaming chunk rebuilds `messages` (new array identity) every frame,
     // but only the streamed message's block actually changed. Reusing the
@@ -1011,6 +1032,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     client={client}
                     onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                     compact={compact}
+                    aggregatedToolUseIds={aggregatedToolUseIds}
                   />
                 </div>
               );
@@ -1025,6 +1047,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     isTaskRunning={runtimeLive}
                     isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                     compact={compact}
+                    aggregatedToolUseIds={aggregatedToolUseIds}
                   />
                 </div>
               );
@@ -1043,7 +1066,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
         {/* What the turn actually changed, lifted out of the activity rows so it
             is readable without opening a subagent chain. */}
-        {compact && <FilesChangedBlock messages={messages} />}
+        {compact && <FilesChangedBlock summary={fileChanges} />}
 
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />

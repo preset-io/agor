@@ -9,6 +9,7 @@
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { DiffBlock, kindToOperationType } from './DiffBlock';
+import { pathsMatch } from './DiffBlock/pathsMatch';
 import { extractErrorMessage, type ToolRendererProps } from './index';
 
 interface FileChange {
@@ -25,14 +26,6 @@ const kindLabel = (kind: string): string => {
     default:
       return 'Update';
   }
-};
-
-const normalizePathForMatch = (filePath: string): string => filePath.replace(/\\/g, '/');
-
-const pathsMatch = (left: string, right: string): boolean => {
-  const a = normalizePathForMatch(left);
-  const b = normalizePathForMatch(right);
-  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
 };
 
 export const EditFilesRenderer: React.FC<ToolRendererProps> = ({ input, result }) => {

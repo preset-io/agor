@@ -10,6 +10,7 @@
 
 import type { DiffEnrichment, Message, StructuredPatchHunk } from '@agor-live/client';
 import { countPatchStats, kindToOperationType } from '../ToolUseRenderer/renderers/DiffBlock';
+import { pathsMatch } from '../ToolUseRenderer/renderers/DiffBlock/pathsMatch';
 
 /** Tools whose calls change files on disk, across providers. */
 export const FILE_EDIT_TOOLS = new Set([
@@ -32,6 +33,8 @@ export interface FileChange {
 
 export interface TaskFileChanges {
   changes: FileChange[];
+  /** Calls fully represented here; remove their calls/results at task scope. */
+  toolUseIds: ReadonlySet<string>;
   /** Distinct paths touched, which is what "N files changed" counts. */
   fileCount: number;
   additions: number;
@@ -54,17 +57,38 @@ interface ToolResultBlock {
 /**
  * Whether a call's edits are represented in the turn's Files changed block.
  *
- * Enrichment is best-effort, so an edit without a patch has nothing to show
- * there and stays an ordinary activity row instead of vanishing.
+ * Enrichment is best-effort. Keep the original row (including its filename
+ * fallbacks) unless every declared file can be represented here.
  */
 export function hasAggregatedFileChanges(
-  toolName: string,
+  toolUse: Pick<ToolUseBlock, 'name' | 'input'>,
   diff: DiffEnrichment | undefined
 ): boolean {
-  if (!FILE_EDIT_TOOLS.has(toolName) || !diff) return false;
-  return diff.files?.length
-    ? diff.files.some((file) => file.structuredPatch?.length)
-    : !!diff.structuredPatch?.length;
+  if (!FILE_EDIT_TOOLS.has(toolUse.name) || !diff) return false;
+  if (toolUse.name === 'edit_files') {
+    const changes = toolUse.input.changes as { path: string }[] | undefined;
+    if (!changes?.length) return false;
+    const unmatched = new Set(diff.files ?? []);
+    // Match specific paths first and consume each diff once: foo.ts and
+    // dir/foo.ts must never be considered covered by the same patch.
+    return [...changes]
+      .sort((a, b) => b.path.length - a.path.length)
+      .every((change) => {
+        const candidates = [...unmatched];
+        const path = change.path.replace(/\\/g, '/');
+        const file =
+          candidates.find((file) => file.path.replace(/\\/g, '/') === path) ??
+          candidates.find((file) => pathsMatch(file.path, change.path));
+        if (!file?.structuredPatch?.length) return false;
+        unmatched.delete(file);
+        return true;
+      });
+  }
+  return (
+    typeof toolUse.input.file_path === 'string' &&
+    toolUse.input.file_path.length > 0 &&
+    !!diff.structuredPatch?.length
+  );
 }
 
 function changesForToolUse(toolUse: ToolUseBlock, diff: DiffEnrichment): FileChange[] {
@@ -108,14 +132,16 @@ export function collectFileChanges(messages: Message[]): TaskFileChanges | null 
   }
 
   const changes: FileChange[] = [];
+  const toolUseIds = new Set<string>();
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
     for (const block of message.content) {
       if (block.type !== 'tool_use') continue;
       const toolUse = block as unknown as ToolUseBlock;
       const diff = resultsById.get(toolUse.id)?.diff;
-      if (!hasAggregatedFileChanges(toolUse.name, diff)) continue;
+      if (!hasAggregatedFileChanges(toolUse, diff)) continue;
       changes.push(...changesForToolUse(toolUse, diff as DiffEnrichment));
+      toolUseIds.add(toolUse.id);
     }
   }
 
@@ -123,6 +149,7 @@ export function collectFileChanges(messages: Message[]): TaskFileChanges | null 
 
   return {
     changes,
+    toolUseIds,
     fileCount: new Set(changes.map((change) => change.path)).size,
     additions: changes.reduce((total, change) => total + change.additions, 0),
     deletions: changes.reduce((total, change) => total + change.deletions, 0),

@@ -1,5 +1,5 @@
 import type { Message, Task } from '@agor-live/client';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { TaskBlock } from '../TaskBlock/TaskBlock';
 
@@ -57,14 +57,14 @@ const task = {
   git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
 } as unknown as Task;
 
-const renderTask = (compact: boolean) =>
+const renderTask = (compact: boolean, taskMessages = messages) =>
   render(
     <TaskBlock
       task={task}
       compact={compact}
       isExpanded
       onExpandChange={() => {}}
-      taskMessages={messages}
+      taskMessages={taskMessages}
       taskMessagesLoaded
       onLoadTaskMessages={() => {}}
       onUnloadTaskMessages={() => {}}
@@ -76,6 +76,57 @@ const rowNames = (container: HTMLElement) =>
   Array.from(container.querySelectorAll('button')).map((button) => button.textContent);
 
 describe('Files changed inside a transcript', () => {
+  it('retains chain elapsed time when its last edit moves into the file disclosure', () => {
+    const timed = messages.map((message, index) => ({
+      ...message,
+      timestamp: `2026-09-21T00:00:${['00', '01', '10', '20'][index]}.000Z`,
+    }));
+    const { container } = renderTask(true, timed);
+    expect(rowNames(container)).toEqual([
+      'Worked for 20s · 2 steps · 1 file',
+      'CatalogTab.tsx+2-1',
+    ]);
+  });
+
+  it('aggregates a loose call and its separately arriving result exactly once', () => {
+    const [callMessage, resultMessage] = call(
+      0,
+      'loose-edit',
+      'Edit',
+      { file_path: '/repo/Example.tsx' },
+      { structuredPatch: patch(['-old', '+new']) }
+    );
+    const promptAndCall = {
+      ...callMessage,
+      content: [
+        { type: 'text', text: 'Updating the example' },
+        ...(Array.isArray(callMessage.content) ? callMessage.content : []),
+      ],
+    } as Message;
+    const view = (taskMessages: Message[], compact = true) => (
+      <TaskBlock
+        task={task}
+        compact={compact}
+        isExpanded
+        onExpandChange={() => {}}
+        taskMessages={taskMessages}
+        taskMessagesLoaded
+        onLoadTaskMessages={() => {}}
+        onUnloadTaskMessages={() => {}}
+      />
+    );
+    const { container, rerender } = render(view([promptAndCall]));
+    expect(rowNames(container).some((name) => name?.startsWith('Edit'))).toBe(true);
+
+    rerender(view([promptAndCall, resultMessage]));
+    expect(screen.getByText('Updating the example')).toBeVisible();
+    expect(rowNames(container)).toEqual(['Example.tsx+1-1']);
+
+    rerender(view([promptAndCall, resultMessage], false));
+    expect(rowNames(container).some((name) => name?.startsWith('Edit'))).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Example.tsx+1-1' })).not.toBeInTheDocument();
+  });
+
   it('shows an edit once, in the grouped line rather than the activity rows', () => {
     const { container } = renderTask(true);
 

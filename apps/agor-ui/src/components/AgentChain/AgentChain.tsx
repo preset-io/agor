@@ -48,7 +48,6 @@ import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
 import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
-import { hasAggregatedFileChanges } from '../FilesChangedBlock/taskFileChanges';
 import { Tag } from '../Tag';
 import {
   buildBashDescriptionNode,
@@ -93,6 +92,8 @@ interface AgentChainProps {
   isLatest?: boolean;
   /** Compact transcript view: collapse the whole chain to one summary line. */
   compact?: boolean;
+  /** Calls represented by the parent task's Files changed disclosure. */
+  aggregatedToolUseIds?: ReadonlySet<string>;
 }
 
 interface ChainItem {
@@ -100,7 +101,6 @@ interface ChainItem {
   content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
   transcript_truncation?: TranscriptTruncation;
-  /** For a thought read out of a tool result, the call it reports on. */
   toolUseId?: string;
 }
 
@@ -150,7 +150,7 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest, compact = false }) => {
+  ({ messages, isTaskRunning = false, isLatest, compact = false, aggregatedToolUseIds }) => {
     const { token } = theme.useToken();
     const [expanded, setExpanded] = useState(true);
 
@@ -285,29 +285,18 @@ export const AgentChain = React.memo<AgentChainProps>(
       return items;
     }, [messages]);
 
-    // Compact lifts enriched edits into the turn's Files changed block, so the
-    // chain neither lists nor counts them.
+    // Keep original messages for elapsed time, filtering only the rendered
+    // activity with the parent task's cross-message aggregation decision.
     const visibleItems = useMemo(() => {
-      if (!compact) return chainItems;
-
-      const aggregated = new Set<string>();
-      for (const item of chainItems) {
-        if (item.type !== 'tool') continue;
-        const { toolUse, toolResult } = item.content as {
-          toolUse: ToolUseBlock;
-          toolResult?: ToolResultBlock;
-        };
-        if (hasAggregatedFileChanges(toolUse.name, toolResult?.diff)) aggregated.add(toolUse.id);
-      }
-
-      // Drop the call and the thought that reports its result, so an edit
-      // leaves the chain entirely rather than half of it lingering.
-      return chainItems.filter((item) =>
-        item.type === 'tool'
-          ? !aggregated.has((item.content as { toolUse: ToolUseBlock }).toolUse.id)
-          : !item.toolUseId || !aggregated.has(item.toolUseId)
-      );
-    }, [chainItems, compact]);
+      if (!compact || !aggregatedToolUseIds) return chainItems;
+      return chainItems.filter((item) => {
+        const id =
+          item.type === 'tool'
+            ? (item.content as { toolUse: ToolUseBlock }).toolUse.id
+            : item.toolUseId;
+        return !id || !aggregatedToolUseIds.has(id);
+      });
+    }, [chainItems, compact, aggregatedToolUseIds]);
 
     // Calculate stats
     const stats = useMemo(() => {

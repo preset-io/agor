@@ -7,20 +7,18 @@
  * diffs. Edits it covers are hidden from the activity rows so they read once.
  */
 
-import type { Message } from '@agor-live/client';
 import { FileTextOutlined } from '@ant-design/icons';
 import { theme } from 'antd';
-import React, { useMemo } from 'react';
+import React from 'react';
 import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
 import { buildDiffStatNode, ToolBlock } from '../ToolBlock';
 import { DiffBlock } from '../ToolUseRenderer/renderers/DiffBlock';
-import { collectFileChanges } from './taskFileChanges';
+import type { TaskFileChanges } from './taskFileChanges';
 
 const basename = (path: string): string => path.split('/').filter(Boolean).pop() || path;
 
-export const FilesChangedBlock = React.memo<{ messages: Message[] }>(({ messages }) => {
+export const FilesChangedBlock = React.memo<{ summary: TaskFileChanges | null }>(({ summary }) => {
   const { token } = theme.useToken();
-  const summary = useMemo(() => collectFileChanges(messages), [messages]);
 
   if (!summary) return null;
 

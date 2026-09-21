@@ -39,7 +39,6 @@ import {
   COMPACT_GUTTER_SIZE,
 } from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
-import { hasAggregatedFileChanges } from '../FilesChangedBlock/taskFileChanges';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
@@ -114,6 +113,8 @@ interface MessageBlockProps {
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Compact transcript view: plain answers, quiet collapsed tools. */
   compact?: boolean;
+  /** Calls represented by the parent task's Files changed disclosure. */
+  aggregatedToolUseIds?: ReadonlySet<string>;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -357,6 +358,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   client = null,
   onOpenAgenticToolSettings,
   compact = false,
+  aggregatedToolUseIds,
 }) => {
   const { token } = theme.useToken();
 
@@ -692,16 +694,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
-  // Compact lifts enriched edits into the turn's Files changed block, so they
-  // must not also appear here as loose rows.
-  const isAggregatedEdit = ({
-    toolUse,
-    toolResult,
-  }: {
-    toolUse: ToolUseBlock;
-    toolResult?: ToolResultBlock;
-  }) => compact && hasAggregatedFileChanges(toolUse.name, toolResult?.diff);
-  const hasTools = toolBlocks.some((block) => !isAggregatedEdit(block));
+  const isAggregatedEdit = (id: string) => compact && aggregatedToolUseIds?.has(id);
+  const hasTools = toolBlocks.some(({ toolUse }) => !isAggregatedEdit(toolUse.id));
 
   const hasTaskTruncation = taskTruncations.some((value) => Object.keys(value ?? {}).length > 0);
   if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasTaskTruncation) {
@@ -860,7 +854,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
               }
             }
             return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
-              if (isAggregatedEdit({ toolUse, toolResult })) return null;
+              if (isAggregatedEdit(toolUse.id)) return null;
               const displayName = getToolDisplayName(toolUse.name, toolUse.input);
               const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
 
