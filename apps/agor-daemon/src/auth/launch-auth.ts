@@ -39,7 +39,7 @@ import type {
   UserID,
   UserRole,
 } from '@agor/core/types';
-import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types';
+import { isValidExecutionHomeKey, MCP_OAUTH_RELAY, normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
@@ -532,7 +532,7 @@ async function exchangeLaunchCode(
   return json as LaunchExchangeResponse;
 }
 
-async function resolveVerificationKey(
+export async function resolveVerificationKey(
   header: JwtHeader,
   settings: ResolvedExternalLaunchProvider
 ): Promise<string | KeyObject> {
@@ -591,6 +591,10 @@ function validateLaunchClaims(
   claims: LaunchClaims,
   settings: ResolvedExternalLaunchProvider
 ): void {
+  // Callback delivery assertions use the launch signing key but are never login assertions.
+  if (claims.purpose === MCP_OAUTH_RELAY.callbackPurpose) {
+    throw new NotAuthenticated('Invalid one-time launch assertion purpose');
+  }
   if (!claims.iss || claims.iss !== settings.issuer) {
     throw new NotAuthenticated('Invalid one-time launch assertion issuer');
   }

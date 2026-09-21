@@ -114,6 +114,10 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
     (material.authorizationResponseIssuerParameterSupported === undefined ||
       typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
     typeof material.allowLocalhostHttp === 'boolean' &&
+    (material.relay === undefined ||
+      (!!material.relay &&
+        typeof material.relay.cellId === 'string' &&
+        typeof material.relay.cloudUserId === 'string')) &&
     (material.slackRecovery === undefined ||
       (!!material.slackRecovery &&
         typeof material.slackRecovery.notice_id === 'string' &&
@@ -215,6 +219,7 @@ export class MCPOAuthPendingFlowAuthority {
         authorizationResponseIssuerParameterSupported:
           input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
+        ...(input.context.relay ? { relay: input.context.relay } : {}),
         ...(input.slackRecovery ? { slackRecovery: input.slackRecovery } : {}),
         ...(input.slackConnect ? { slackConnect: input.slackConnect } : {}),
       };
@@ -341,6 +346,7 @@ export class MCPOAuthPendingFlowAuthority {
       ...(material.slackRecovery ? { slackRecovery: material.slackRecovery } : {}),
       ...(material.slackConnect ? { slackConnect: material.slackConnect } : {}),
       context: {
+        ...(material.relay ? { relay: material.relay } : {}),
         metadataUrl: material.metadataUrl,
         resourceUri: material.resourceUri,
         issuer: material.issuer,

@@ -233,6 +233,7 @@ jobs:
             pnpm --filter agor-ui test:transcript-retention
           fi
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
+      - run: NODE_OPTIONS=--conditions=source pnpm exec tsx scripts/test-mcp-oauth-browser.mts
 
   # Do not rename this job: branch protection currently requires the generated
   # context `CI / Lint, typecheck, build, test (pull_request)`. `always()` makes

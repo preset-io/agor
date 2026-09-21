@@ -147,6 +147,7 @@ export interface CatalogDetailDrawerProps {
   onConnect: (input: {
     acknowledgedDisclosure: string;
     bearerToken?: string;
+    oauthClient?: { client_id: string; client_secret?: string };
     oauthPopup?: MarketplaceOAuthPopup;
   }) => void;
 }
@@ -326,6 +327,18 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // empty for any entry it was not.
   const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
   const [popupBlocked, setPopupBlocked] = useState(false);
+  const [appCredentials, setAppCredentials] = useState<{
+    entryId: string;
+    client_id: string;
+    client_secret: string;
+  } | null>(null);
+  const configuredApp = entry?.oauth?.configured_client;
+  const appFields = appCredentials?.entryId === entryId ? appCredentials : null;
+  useEffect(() => {
+    setAppCredentials((held) =>
+      open && !success && configuredApp && held?.entryId === entryId ? held : null
+    );
+  }, [open, success, configuredApp, entryId]);
 
   // The endpoint's answer beats the catalog file's claim. `auth_type` decides
   // what the card promises before anything is dialled, which is all it can do;
@@ -395,12 +408,17 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           ? 'Choose Use existing shared to connect without adding a private server.'
           : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !(sharing === 'shared' && needsApiKey) &&
-      !blockedReason &&
+    !(sharing === 'shared' && (needsApiKey || configuredApp)) &&
+    !blockedReason &&
       !policyRefusal &&
       acknowledged &&
       !connecting &&
-      (!needsApiKey || bearerToken)
+      (!needsApiKey || bearerToken) &&
+      (!configuredApp ||
+        (readiness?.catalog_key === entryId &&
+          readiness.redirect_uri &&
+          appFields?.client_id.trim() &&
+          (!configuredApp.secret_required || appFields?.client_secret)))
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
@@ -738,7 +756,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             <Alert type="info" showIcon title={blockedReason} />
           ) : (
             <Flex vertical gap={token.marginXS}>
-              {needsApiKey && (
+              {(needsApiKey || configuredApp) && (
                 <Form layout="vertical" size="middle" component="div">
                   <Form.Item
                     label={entry.credentials?.label ?? 'Bearer access token'}
@@ -807,21 +825,89 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     {(canShare || canUseShared || sharing === 'shared') && (
                       <Radio
                         value="shared"
-                        disabled={needsApiKey || policyPending || (!canShare && !canUseShared)}
+                        disabled={needsApiKey || Boolean(configuredApp) || policyPending || (!canShare && !canUseShared)}
                       >
                         {canShare ? 'Shared' : 'Use existing shared'}
                       </Radio>
                     )}
                   </Radio.Group>
                 </Form.Item>
-                {needsApiKey && (
+                {(needsApiKey || configuredApp) && (
                   <Text type="secondary">
-                    Bearer/API-key installations stay private because the credential is stored with
+                    Bearer/API-key and configured OAuth app installations stay private because the credential is stored with
                     the configuration.
                   </Text>
                 )}
               </Form>
 
+              {configuredApp && (
+                <Form layout="vertical">
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Use your own OAuth app"
+                    description={
+                      <>
+                        <Link
+                          href={configuredApp.setup_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Create an app in the provider console
+                        </Link>{' '}
+                        and configure the callback shown by Agor. Provider distribution and approval
+                        rules still apply. These are app credentials, not a personal access token.
+                        Each user signs in separately. Enter the secret only here, never in agent
+                        chat.
+                      </>
+                    }
+                  />
+                  <Form.Item label="Register this exact callback URL">
+                    {readiness?.redirect_uri ? (
+                      <Text code copyable>
+                        {readiness.redirect_uri}
+                      </Text>
+                    ) : (
+                      <Text type="secondary">
+                        Callback unavailable. Ask the deployment operator to configure the public
+                        callback before connecting.
+                      </Text>
+                    )}
+                  </Form.Item>
+                  <Form.Item label="OAuth app Client ID" required>
+                    <Input
+                      aria-label="OAuth app Client ID"
+                      value={appFields?.client_id ?? ''}
+                      autoComplete="off"
+                      onChange={(event) =>
+                        setAppCredentials({
+                          entryId: entryId!,
+                          client_id: event.target.value,
+                          client_secret: appFields?.client_secret ?? '',
+                        })
+                      }
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="OAuth app Client secret"
+                    required={configuredApp.secret_required}
+                  >
+                    <Input.Password
+                      aria-label="OAuth app Client secret"
+                      value={appFields?.client_secret ?? ''}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        setAppCredentials({
+                          entryId: entryId!,
+                          client_id: appFields?.client_id ?? '',
+                          client_secret: event.target.value,
+                        })
+                      }
+                    />
+                  </Form.Item>
+                </Form>
+              )}
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
@@ -859,6 +945,16 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
+                    ...(configuredApp && appFields
+                      ? {
+                          oauthClient: {
+                            client_id: appFields.client_id.trim(),
+                            ...(appFields.client_secret
+                              ? { client_secret: appFields.client_secret }
+                              : {}),
+                          },
+                        }
+                      : {}),
                     ...(oauthPopup ? { oauthPopup } : {}),
                   });
                 }}
