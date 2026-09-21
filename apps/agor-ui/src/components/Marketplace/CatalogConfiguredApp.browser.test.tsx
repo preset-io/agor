@@ -25,7 +25,7 @@ const entry: MCPCatalogEntry = {
   },
 };
 afterEach(cleanup);
-it('keeps configured app secrets in the secure form, requires consent, and clears them on close', async () => {
+it('keeps configured app IDs and secrets in the secure form, requires consent, and clears them on close', async () => {
   const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
     input.oauthPopup?.close()
   );
@@ -72,6 +72,9 @@ it('keeps configured app secrets in the secure form, requires consent, and clear
   await expect
     .element(page.getByLabelText('OAuth app Client secret', { exact: true }))
     .toHaveAttribute('type', 'password');
+  await expect
+    .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
+    .toHaveValue('customer-app');
   await expect.element(button).toBeDisabled();
   await page.getByRole('checkbox').click();
   await button.click();
@@ -95,6 +98,7 @@ it('keeps configured app secrets in the secure form, requires consent, and clear
       </App>
     </ConfigProvider>
   );
+  await expect.element(page.getByLabelText('OAuth app Client ID', { exact: true })).toHaveValue('');
   await expect
     .element(page.getByLabelText('OAuth app Client secret', { exact: true }))
     .toHaveValue('');

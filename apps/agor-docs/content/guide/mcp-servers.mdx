@@ -206,8 +206,10 @@ App secrets entered through Catalog or Settings are encrypted with the existing
 deployment `AGOR_MASTER_SECRET`, bound to the tenant and saved server, and redacted
 on reads. Legacy plaintext configurations remain readable and are encrypted on
 their next save; this is not a retroactive database re-encryption migration.
-Raw app secrets are refused by MCP configuration tools: use the form, or a secure
-user-environment reference. Never paste a secret into agent chat. Rotating an app
+Literal app client IDs and secrets are refused by MCP configuration tools: use
+the form, or a secure user-environment reference. Model-visible readback omits
+literal client IDs and reports only whether one is configured; authorized browser
+Settings can still display and edit the ID. Never paste either into agent chat. Rotating an app
 credential invalidates the server's pending attempts and stored user grants;
 reconnect affected users after saving the change.
 

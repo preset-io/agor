@@ -352,7 +352,10 @@ const mcpAuthInputSchema = z
     ),
     oauth_client_id: mcpOptionalString(
       'auth.oauth_client_id',
-      'Optional OAuth client ID for providers that require a pre-registered app. Leave blank for Dynamic Client Registration where supported.'
+      'Only a user-environment reference for a configured app ID. Enter literal client IDs in secure Catalog or MCP Settings, not chat; omit for Dynamic Client Registration.'
+    ).refine(
+      (value) => value === undefined || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app client IDs; tools accept only an environment reference'
     ),
     oauth_client_secret: mcpOptionalString(
       'auth.oauth_client_secret',
@@ -450,7 +453,12 @@ const mcpAuthPatchSchema = z
     api_secret: nullableString('JWT API secret.'),
     oauth_authorization_url: nullableString('OAuth authorization endpoint override.'),
     oauth_token_url: nullableString('OAuth token endpoint override.'),
-    oauth_client_id: nullableString('OAuth client ID.'),
+    oauth_client_id: nullableString(
+      'OAuth app client ID environment reference; use secure UI for literal IDs. Omit to preserve the configured ID.'
+    ).refine(
+      (value) => value == null || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app client IDs; tools accept only an environment reference'
+    ),
     oauth_client_secret: nullableString(
       'OAuth app secret environment reference; use secure UI for raw values.'
     ).refine(
@@ -769,6 +777,13 @@ export function safeMcpServerConfigReadback(server: MCPServer) {
   // the built-in MCP transport may use trusted internal service params, while
   // its tool result is still an external agent-visible response.
   const auth = redactMCPAuthSecrets(server.auth);
+  // BYO client IDs are normally public, but this model-facing surface follows
+  // the stricter secure-setup policy. Omit literal IDs rather than issuing a
+  // sentinel that a nested auth patch could accidentally save as the real ID.
+  // Clone even when secret redaction returned the original service auth object.
+  const agentAuth = auth ? { ...auth } : undefined;
+  if (agentAuth?.oauth_client_id && !isUserEnvPlaceholder(agentAuth.oauth_client_id))
+    delete agentAuth.oauth_client_id;
   const configuredSecretFields = auth
     ? MCP_AUTH_SECRET_FIELDS.filter((field) => auth[field] === MCP_HEADER_REDACTED_SENTINEL)
     : [];
@@ -783,7 +798,8 @@ export function safeMcpServerConfigReadback(server: MCPServer) {
     url: server.url,
     headers: redactMCPCustomHeaders(server.headers),
     env: redactMCPEnvSecrets(server.env),
-    auth,
+    auth: agentAuth,
+    oauth_client_id_configured: Boolean(auth?.oauth_client_id),
     auth_secret_fields_configured: configuredSecretFields,
     scope: server.scope,
     owner_user_id: server.owner_user_id,
@@ -932,7 +948,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_get',
     {
       description:
-        'Read one MCP server configuration before patching it. Secrets are never returned: configured secret fields contain a redaction sentinel and are also named in auth_secret_fields_configured. Pass config_version back as expectedConfigVersion to prevent a stale editor from overwriting a concurrent change.',
+        'Read one MCP server configuration before patching it. Literal OAuth client IDs are omitted; oauth_client_id_configured indicates presence. Omit the ID when patching to preserve it. Secrets are never returned: configured secret fields contain a redaction sentinel and are also named in auth_secret_fields_configured. Pass config_version back as expectedConfigVersion to prevent a stale editor from overwriting a concurrent change.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId('mcpServerId', 'MCP server', 'MCP server ID to read'),
@@ -953,7 +969,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_create',
     {
       description:
-        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
+        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Use secure Catalog or MCP Settings for literal OAuth app client IDs and secrets, never chat; these fields accept only `{{ user.env.NAME }}` references. Prefer environment references for other credentials too.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerCreateSchema,
     },
