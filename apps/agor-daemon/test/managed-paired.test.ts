@@ -575,14 +575,19 @@ describe('actual paired provider browser and registered runtime', () => {
                 // Local terminal status is NOT remote cancellation delivery. The
                 // real worker still owns its subject-concurrency slot and refuses
                 // a premature new prepare (no provider dispatch and no replay).
+                // Scope the witness to THIS awaited probe, not an earlier cycle
+                // or provider's refusal in the shared transport history.
+                const probeObservationOffset = runtime.observations.length;
                 const blocked = await runtime.call('mcp-servers/oauth-start', {
                   ...request,
                   client_nonce: randomUUID(),
                 });
                 expect(blocked.success).toBe(false);
                 expect(
-                  runtime.observations.filter((item) => item.path === 'prepare-http').at(-1)
-                ).toEqual({ path: 'prepare-http', outcome: '429' });
+                  runtime.observations
+                    .slice(probeObservationOffset)
+                    .filter((item) => item.path === 'prepare-http')
+                ).toEqual([{ path: 'prepare-http', outcome: '429' }]);
                 await drainCleanup(server.mcp_server_id);
                 const afterCancel = (await cloud.call('counters')) as typeof afterRefresh;
                 expect(afterCancel[provider].token).toBe(beforeDeniedUse[provider].token);
