@@ -10,7 +10,7 @@
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import type React from 'react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import {
   COMPACT_CONTENT_OFFSET,
   COMPACT_GUTTER_GAP,
@@ -56,8 +56,10 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   nestedRows = false,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
+  const bodyId = useId();
   const { token } = theme.useToken();
   const hasBody = !!children;
+  const Header = hasBody ? 'button' : 'div';
 
   const statusColor =
     status === 'error'
@@ -77,9 +79,21 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   ) : null;
 
   const header = (
-    <div
-      onClick={hasBody ? () => setExpanded(!expanded) : undefined}
+    <Header
+      type={hasBody ? 'button' : undefined}
+      aria-expanded={hasBody ? expanded : undefined}
+      aria-controls={hasBody ? bodyId : undefined}
+      onClick={hasBody ? () => setExpanded((value) => !value) : undefined}
       style={{
+        // Keep the transcript row's appearance and the native button's
+        // keyboard activation and focus outline.
+        border: 0,
+        padding: 0,
+        background: 'transparent',
+        color: 'inherit',
+        font: 'inherit',
+        textAlign: 'left',
+        width: '100%',
         display: 'flex',
         alignItems: 'center',
         gap: compact ? COMPACT_GUTTER_GAP : 6,
@@ -141,7 +155,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
       </span>
 
       {compact && chevron}
-    </div>
+    </Header>
   );
 
   return (
@@ -154,6 +168,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
           than forcing the whole conversation pane to scroll horizontally. */}
       {expanded && children && (
         <div
+          id={bodyId}
           style={{
             marginTop: 2,
             paddingLeft: compact
