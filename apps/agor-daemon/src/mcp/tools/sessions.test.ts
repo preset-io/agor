@@ -150,6 +150,55 @@ async function registerAndCaptureHandlers(
 }
 
 describe('conditional MCP Stop', () => {
+  it('preserves the successful already_idle outcome', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: true,
+      outcome: 'already_idle',
+      status: 'idle',
+    });
+    const { agor_sessions_stop } = await registerAndCaptureHandlers(
+      { app: makeFakeApp({ '/sessions/:id/stop': { create } }), userId: 'user-1' },
+      ['agor_sessions_stop']
+    );
+
+    const response = await agor_sessions_stop({ sessionId: 'session-1' });
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      success: true,
+      sessionId: 'session-1',
+      outcome: 'already_idle',
+      status: 'idle',
+      note: 'Session stopped successfully.',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves ordinary success compatibility when the backend omits outcome', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: true,
+      status: 'idle',
+      reason: 'Executor termination verified.',
+    });
+    const { agor_sessions_stop } = await registerAndCaptureHandlers(
+      { app: makeFakeApp({ '/sessions/:id/stop': { create } }), userId: 'user-1' },
+      ['agor_sessions_stop']
+    );
+
+    const response = await agor_sessions_stop({
+      sessionId: 'session-1',
+      reason: 'User requested',
+    });
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      success: true,
+      sessionId: 'session-1',
+      status: 'idle',
+      reason: 'User requested',
+      note: 'Executor termination verified.',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it('validates the optional guard, forwards it with delegated params, and never retries a mismatch', async () => {
     const create = vi.fn().mockResolvedValue({
       success: false,

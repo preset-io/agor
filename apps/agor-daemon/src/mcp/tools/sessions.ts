@@ -1769,6 +1769,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         sessionId,
+        ...(stopResult.outcome ? { outcome: stopResult.outcome } : {}),
         status: stopResult.status,
         ...(args.reason ? { reason: args.reason } : {}),
         note: stopResult.reason || 'Session stopped successfully.',
