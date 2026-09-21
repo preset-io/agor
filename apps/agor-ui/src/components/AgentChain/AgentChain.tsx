@@ -48,10 +48,10 @@ import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
 import { COMPACT_BLOCK_GAP_UNITS } from '../ConversationView/compactLayout';
+import { hasAggregatedFileChanges } from '../FilesChangedBlock/taskFileChanges';
 import { Tag } from '../Tag';
 import {
   buildBashDescriptionNode,
-  buildDiffStatDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -100,6 +100,8 @@ interface ChainItem {
   content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
   transcript_truncation?: TranscriptTruncation;
+  /** For a thought read out of a tool result, the call it reports on. */
+  toolUseId?: string;
 }
 
 /**
@@ -216,6 +218,7 @@ export const AgentChain = React.memo<AgentChainProps>(
                   content: resultText,
                   message,
                   transcript_truncation: truncation,
+                  toolUseId: toolResult.tool_use_id,
                 });
               }
             }
@@ -282,6 +285,30 @@ export const AgentChain = React.memo<AgentChainProps>(
       return items;
     }, [messages]);
 
+    // Compact lifts enriched edits into the turn's Files changed block, so the
+    // chain neither lists nor counts them.
+    const visibleItems = useMemo(() => {
+      if (!compact) return chainItems;
+
+      const aggregated = new Set<string>();
+      for (const item of chainItems) {
+        if (item.type !== 'tool') continue;
+        const { toolUse, toolResult } = item.content as {
+          toolUse: ToolUseBlock;
+          toolResult?: ToolResultBlock;
+        };
+        if (hasAggregatedFileChanges(toolUse.name, toolResult?.diff)) aggregated.add(toolUse.id);
+      }
+
+      // Drop the call and the thought that reports its result, so an edit
+      // leaves the chain entirely rather than half of it lingering.
+      return chainItems.filter((item) =>
+        item.type === 'tool'
+          ? !aggregated.has((item.content as { toolUse: ToolUseBlock }).toolUse.id)
+          : !item.toolUseId || !aggregated.has(item.toolUseId)
+      );
+    }, [chainItems, compact]);
+
     // Calculate stats
     const stats = useMemo(() => {
       let thoughtCount = 0;
@@ -291,7 +318,7 @@ export const AgentChain = React.memo<AgentChainProps>(
       const toolNames = new Map<string, number>();
       const filesAffected = new Set<string>();
 
-      for (const item of chainItems) {
+      for (const item of visibleItems) {
         if (item.type === 'thought') {
           thoughtCount++;
         } else {
@@ -329,7 +356,7 @@ export const AgentChain = React.memo<AgentChainProps>(
         toolNames,
         filesAffected: Array.from(filesAffected).sort(),
       };
-    }, [chainItems]);
+    }, [visibleItems]);
 
     // One-line chain summary for compact view: "Worked for 1m 2s · 21 steps · 3 files".
     const compactSummary = useMemo(() => {
@@ -444,16 +471,16 @@ export const AgentChain = React.memo<AgentChainProps>(
     // Tools after this index have no subsequent completed tool, so they
     // are potentially still running (handles concurrent tool calls).
     const lastResultToolIndex = useMemo(() => {
-      for (let i = chainItems.length - 1; i >= 0; i--) {
-        if (chainItems[i].type === 'tool') {
-          const { toolResult } = chainItems[i].content as {
+      for (let i = visibleItems.length - 1; i >= 0; i--) {
+        if (visibleItems[i].type === 'tool') {
+          const { toolResult } = visibleItems[i].content as {
             toolResult?: ToolResultBlock;
           };
           if (toolResult) return i;
         }
       }
       return -1;
-    }, [chainItems]);
+    }, [visibleItems]);
 
     // Build tool block items for rendering
     const renderChainItem = (item: ChainItem, index: number) => {
@@ -528,18 +555,6 @@ export const AgentChain = React.memo<AgentChainProps>(
           </Typography.Text>
         );
         description = null;
-      } else if (compact) {
-        // Compact hides the diff behind the row, so carry its size on the row.
-        const diffStatNode = buildDiffStatDescriptionNode(
-          toolUse.name,
-          description,
-          toolResult?.diff,
-          token
-        );
-        if (diffStatNode) {
-          descriptionNode = diffStatNode;
-          description = null;
-        }
       }
 
       return (
@@ -642,7 +657,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     const hasErrors = stats.errorCount > 0;
 
     // Early return if no items (prevents empty bordered boxes)
-    if (chainItems.length === 0) {
+    if (visibleItems.length === 0) {
       return null;
     }
 
@@ -661,7 +676,7 @@ export const AgentChain = React.memo<AgentChainProps>(
             expandedByDefault={isTaskRunning && isLatest !== false}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {chainItems.map(renderChainItem)}
+              {visibleItems.map(renderChainItem)}
             </div>
           </ToolBlock>
         </div>
@@ -728,7 +743,7 @@ export const AgentChain = React.memo<AgentChainProps>(
               gap: 2,
             }}
           >
-            {chainItems.map(renderChainItem)}
+            {visibleItems.map(renderChainItem)}
           </div>
         )}
       </div>

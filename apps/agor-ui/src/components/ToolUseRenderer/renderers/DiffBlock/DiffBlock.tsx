@@ -59,6 +59,22 @@ const shortenPath = (filePath: string): string => {
   return parts.length > 4 ? parts.slice(-4).join('/') : filePath;
 };
 
+/**
+ * Codex reports a change kind; DiffBlock takes an operation type. Lives here
+ * rather than in a renderer so non-renderer consumers can map without pulling
+ * in the renderer registry.
+ */
+export const kindToOperationType = (kind: string): DiffBlockProps['operationType'] => {
+  switch (kind) {
+    case 'add':
+      return 'create';
+    case 'delete':
+      return 'delete';
+    default:
+      return 'edit';
+  }
+};
+
 const operationLabel = (type: string) => {
   switch (type) {
     case 'create':

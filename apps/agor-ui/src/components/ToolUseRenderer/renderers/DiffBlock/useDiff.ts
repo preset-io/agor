@@ -6,7 +6,7 @@
  * 2. Otherwise, compute a simple diffLines from old/new strings (client-side fallback).
  */
 
-import type { DiffEnrichment, StructuredPatchHunk } from '@agor-live/client';
+import type { StructuredPatchHunk } from '@agor-live/client';
 import { diffLines, diffWords } from 'diff';
 import { useMemo } from 'react';
 
@@ -86,30 +86,6 @@ export function countPatchStats(hunks: StructuredPatchHunk[] | undefined): DiffS
     }
   }
   return { additions, deletions };
-}
-
-/**
- * Totals for a tool result's diff enrichment, across both shapes the executor
- * produces: a single `structuredPatch` (Claude Edit/Write) or per-file patches
- * (Codex `edit_files`). Returns null when there is nothing to report, so
- * callers can render no stat at all rather than "+0 -0".
- */
-export function diffEnrichmentStats(diff: DiffEnrichment | undefined): DiffStats | null {
-  if (!diff) return null;
-
-  const patches = diff.files?.length
-    ? diff.files.map((file) => file.structuredPatch)
-    : [diff.structuredPatch];
-
-  let additions = 0;
-  let deletions = 0;
-  for (const patch of patches) {
-    const stats = countPatchStats(patch);
-    additions += stats.additions;
-    deletions += stats.deletions;
-  }
-
-  return additions === 0 && deletions === 0 ? null : { additions, deletions };
 }
 
 function fromStructuredPatch(hunks: StructuredPatchHunk[]): DiffData {

@@ -1,4 +1,4 @@
 export type { DiffBlockProps } from './DiffBlock';
-export { DiffBlock } from './DiffBlock';
+export { DiffBlock, kindToOperationType } from './DiffBlock';
 export type { DiffStats } from './useDiff';
-export { countPatchStats, diffEnrichmentStats } from './useDiff';
+export { countPatchStats } from './useDiff';

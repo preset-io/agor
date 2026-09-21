@@ -56,6 +56,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   nestedRows = false,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
+  const [hovered, setHovered] = useState(false);
   const bodyId = useId();
   const { token } = theme.useToken();
   const hasBody = !!children;
@@ -71,10 +72,24 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
           : token.colorTextSecondary;
 
   // Compact moves the chevron to the end of the row so the label can start at
-  // the shared content edge.
+  // the shared content edge, and rotates one caret rather than swapping icons —
+  // the rotation is what reads as "expands in place" rather than "navigates".
   const chevron = hasBody ? (
-    <span style={{ flexShrink: 0, fontSize: 9, color: token.colorTextQuaternary }}>
-      {expanded ? <DownOutlined /> : <RightOutlined />}
+    <span
+      style={{
+        flexShrink: 0,
+        fontSize: 9,
+        color: token.colorTextQuaternary,
+        ...(compact
+          ? {
+              display: 'inline-flex',
+              transform: expanded ? 'rotate(90deg)' : 'none',
+              transition: `transform ${token.motionDurationMid} ${token.motionEaseInOut}`,
+            }
+          : null),
+      }}
+    >
+      {compact ? <RightOutlined /> : expanded ? <DownOutlined /> : <RightOutlined />}
     </span>
   ) : null;
 
@@ -84,12 +99,15 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
       aria-expanded={hasBody ? expanded : undefined}
       aria-controls={hasBody ? bodyId : undefined}
       onClick={hasBody ? () => setExpanded((value) => !value) : undefined}
+      onMouseEnter={compact && hasBody ? () => setHovered(true) : undefined}
+      onMouseLeave={compact && hasBody ? () => setHovered(false) : undefined}
       style={{
         // Keep the transcript row's appearance and the native button's
         // keyboard activation and focus outline.
         border: 0,
         padding: 0,
-        background: 'transparent',
+        background: compact && hovered ? token.colorFillQuaternary : 'transparent',
+        borderRadius: compact ? token.borderRadiusSM : undefined,
         color: 'inherit',
         font: 'inherit',
         textAlign: 'left',

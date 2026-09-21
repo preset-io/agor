@@ -39,6 +39,7 @@ import {
   COMPACT_GUTTER_SIZE,
 } from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
+import { hasAggregatedFileChanges } from '../FilesChangedBlock/taskFileChanges';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
@@ -47,7 +48,6 @@ import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
 import {
   buildBashDescriptionNode,
-  buildDiffStatDescriptionNode,
   deriveToolStatus,
   IMPLICIT_RESULT_TOOLS,
   renderToolStatusIcon,
@@ -692,7 +692,16 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
-  const hasTools = toolBlocks.length > 0;
+  // Compact lifts enriched edits into the turn's Files changed block, so they
+  // must not also appear here as loose rows.
+  const isAggregatedEdit = ({
+    toolUse,
+    toolResult,
+  }: {
+    toolUse: ToolUseBlock;
+    toolResult?: ToolResultBlock;
+  }) => compact && hasAggregatedFileChanges(toolUse.name, toolResult?.diff);
+  const hasTools = toolBlocks.some((block) => !isAggregatedEdit(block));
 
   const hasTaskTruncation = taskTruncations.some((value) => Object.keys(value ?? {}).length > 0);
   if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasTaskTruncation) {
@@ -848,6 +857,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
               }
             }
             return toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
+              if (isAggregatedEdit({ toolUse, toolResult })) return null;
               const displayName = getToolDisplayName(toolUse.name, toolUse.input);
               const hasImplicitResult = IMPLICIT_RESULT_TOOLS.has(toolUse.name);
 
@@ -869,24 +879,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 toolUse.name === 'Bash'
                   ? buildBashDescriptionNode(toolUse.input, token)
                   : undefined;
-              // Compact hides the diff behind the row, so carry its size on the row.
-              const diffStatNode = compact
-                ? buildDiffStatDescriptionNode(
-                    toolUse.name,
-                    getToolDescription(toolUse),
-                    toolResult?.diff,
-                    token
-                  )
-                : undefined;
-              const headerNode = bashNode ?? diffStatNode;
-
               return (
                 <ToolBlock
                   key={toolUse.id}
                   icon={icon}
                   name={displayName}
-                  description={headerNode ? undefined : getToolDescription(toolUse)}
-                  descriptionNode={headerNode}
+                  description={bashNode ? undefined : getToolDescription(toolUse)}
+                  descriptionNode={bashNode}
                   status={status}
                   expandedByDefault={!compact && shouldExpandToolByDefault(toolUse.name)}
                   compact={compact}

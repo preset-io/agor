@@ -8,24 +8,13 @@
 
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { DiffBlock } from './DiffBlock';
+import { DiffBlock, kindToOperationType } from './DiffBlock';
 import { extractErrorMessage, type ToolRendererProps } from './index';
 
 interface FileChange {
   path: string;
   kind: 'add' | 'update' | 'delete';
 }
-
-const kindToOperationType = (kind: string): 'edit' | 'create' | 'delete' => {
-  switch (kind) {
-    case 'add':
-      return 'create';
-    case 'delete':
-      return 'delete';
-    default:
-      return 'edit';
-  }
-};
 
 const kindLabel = (kind: string): string => {
   switch (kind) {

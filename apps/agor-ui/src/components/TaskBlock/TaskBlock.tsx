@@ -47,6 +47,7 @@ import {
   COMPACT_GUTTER_SIZE,
 } from '../ConversationView/compactLayout';
 import { CopyableContent } from '../CopyableContent';
+import { FilesChangedBlock } from '../FilesChangedBlock';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -1039,6 +1040,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             }
             return null;
           })}
+
+        {/* What the turn actually changed, lifted out of the activity rows so it
+            is readable without opening a subagent chain. */}
+        {compact && <FilesChangedBlock messages={messages} />}
 
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />

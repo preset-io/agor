@@ -88,27 +88,22 @@ describe('compact user bubble', () => {
 });
 
 describe('compact edit rows', () => {
-  it('shows the change size without having to expand the row', () => {
-    render(<MessageBlock message={editMessage(true)} compact />);
+  it('leaves an enriched edit to the turn Files changed block', () => {
+    const { container } = render(<MessageBlock message={editMessage(true)} compact />);
 
-    expect(screen.getByText('+2')).toBeVisible();
-    expect(screen.getByText('−1')).toBeVisible();
-    // The diff itself is still one click away.
-    expect(screen.queryByText('extra')).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows nothing when the result carries no diff', () => {
+  it('keeps an edit with no diff to aggregate as an ordinary row', () => {
     render(<MessageBlock message={editMessage(false)} compact />);
 
-    expect(screen.queryByText('+2')).not.toBeInTheDocument();
     expect(screen.getByText('Edit')).toBeVisible();
   });
 
-  it('adds no row stat in detailed, which already opens onto the diff', () => {
+  it('leaves detailed rendering the edit and its diff inline', () => {
     render(<MessageBlock message={editMessage(true)} />);
 
+    expect(screen.getByText('Edit')).toBeVisible();
     expect(screen.getByText('extra')).toBeVisible();
-    // The only stat is the expanded diff's own header.
-    expect(screen.getAllByText('+2')).toHaveLength(1);
   });
 });
