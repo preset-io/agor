@@ -142,7 +142,7 @@ describe('OpenCode hosted provider projection', () => {
     });
     expect(zen).toMatchObject({
       credentialPresence: 'absent',
-      runtimeAvailable: true,
+      runtimeAvailable: false,
       authMethods: [],
     });
     expect(
@@ -151,6 +151,24 @@ describe('OpenCode hosted provider projection', () => {
     expect(discovery.suggestedSelection).toEqual({
       providerId: 'openai',
       modelId: 'gpt-5.6-terra-pro',
+    });
+  });
+
+  it('never offers or suggests the credential-less provider in hosted mode', async () => {
+    const { createOpenCodeHostedProviderDiscovery, createOpenCodeKnownModelCatalog } = await import(
+      './known-models.js'
+    );
+    const empty = createOpenCodeHostedProviderDiscovery(new Set());
+    expect(empty.suggestedSelection).toBeUndefined();
+    expect(empty.providers.every((provider) => provider.runtimeAvailable === false)).toBe(true);
+    const catalog = createOpenCodeKnownModelCatalog(new Set(), { allowCredentialless: false });
+    expect(catalog.suggestedSelection).toBeUndefined();
+    expect(catalog.providers.find((provider) => provider.id === 'opencode')).toMatchObject({
+      availableForSelection: false,
+    });
+    // Local native-file mode keeps the credential-less default.
+    expect(createOpenCodeKnownModelCatalog(new Set()).suggestedSelection).toMatchObject({
+      providerId: 'opencode',
     });
   });
 });

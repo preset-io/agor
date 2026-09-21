@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  assertOpenCodeCheckpointRuntime,
   prepareOpenCodeScratch,
   pruneOpenCodeAttempts,
   publishOpenCodeCheckpoint,
@@ -154,36 +155,65 @@ describe('OpenCode hosted native state', () => {
     await expect(stat(join(layout.attemptsDir, TASK_A, 'manifest.json'))).rejects.toThrow();
   });
 
-  it('prunes every attempt except the accepted one', async () => {
-    const layout = layoutFor(TASK_A);
-    await prepareOpenCodeScratch(layout);
-    await writeSqliteDatabase(layout.liveDbPath, ['ses_1']);
-    const accepted = await publishOpenCodeCheckpoint(layout, {
-      taskId: TASK_A,
-      openCodeSessionId: 'ses_1',
-    });
-    const orphan = layoutFor(TASK_B);
-    await prepareOpenCodeScratch(orphan);
-    await writeSqliteDatabase(orphan.liveDbPath, ['ses_1', 'orphan']);
-    await publishOpenCodeCheckpoint(orphan, { taskId: TASK_B, openCodeSessionId: 'ses_1' });
+  it('prunes only attempts provably older than the launch pointer', async () => {
+    // P0 < B < C in UUIDv7 order. A stale Job for C launched with pointer P0
+    // must never delete B, which a later Job may have published and the daemon
+    // accepted while C was still starting.
+    const P0 = '01a08d5f-7773-77fa-a7dc-2575cfe67270';
+    const OLD = '01a08d5f-7773-77fa-a7dc-2575cfe67260';
+    const B = '01a08d5f-7773-77fa-a7dc-2575cfe67280';
+    const C = '01a08d5f-7773-77fa-a7dc-2575cfe67290';
+    const publish = async (taskId: string, rows: string[]) => {
+      const layout = layoutFor(taskId);
+      await prepareOpenCodeScratch(layout);
+      await writeSqliteDatabase(layout.liveDbPath, rows);
+      return publishOpenCodeCheckpoint(layout, { taskId, openCodeSessionId: 'ses_1' });
+    };
+    await publish(OLD, ['ses_1']);
+    const accepted = await publish(P0, ['ses_1']);
+    await publish(B, ['ses_1', 'newer']);
+    await writeFile(join(layoutFor(C).attemptsDir, 'not-an-attempt'), 'keep');
 
-    expect(await pruneOpenCodeAttempts(layout, accepted)).toEqual([TASK_B]);
-    expect(await readdir(layout.attemptsDir)).toEqual([TASK_A]);
-    expect(await pruneOpenCodeAttempts(layout, null)).toEqual([TASK_A]);
+    expect(await pruneOpenCodeAttempts(layoutFor(C), accepted)).toEqual([OLD]);
+    expect((await readdir(layoutFor(C).attemptsDir)).sort()).toEqual([P0, B, 'not-an-attempt']);
+
+    // Without an accepted pointer only entries older than this Job are removed.
+    expect(await pruneOpenCodeAttempts(layoutFor(B), null)).toEqual([P0]);
+    expect((await readdir(layoutFor(C).attemptsDir)).sort()).toEqual([B, 'not-an-attempt']);
+    expect(await pruneOpenCodeAttempts(layoutFor(P0), null)).toEqual([]);
     expect(
-      await pruneOpenCodeAttempts(layoutFor('01a08d5f-7773-77fa-a7dc-2575cfe67280'), null)
-    ).toEqual([]);
+      await pruneOpenCodeAttempts(layoutFor('01a08d5f-7773-77fa-a7dc-2575cfe672a0'), null)
+    ).toEqual([B]);
+  });
+
+  it('refuses to run the durability barrier on a runtime without node:sqlite', async () => {
+    await expect(
+      assertOpenCodeCheckpointRuntime(async () => {
+        throw new Error('No such built-in module: node:sqlite');
+      })
+    ).rejects.toThrow(/lacks node:sqlite/);
+    await expect(assertOpenCodeCheckpointRuntime()).resolves.toBeUndefined();
   });
 });
 
 describe('OpenCode scratch root selection', () => {
-  it('honors an absolute launcher-provided scratch root and ignores anything else', () => {
+  it('honors only an absolute launcher-provided scratch root and never TMPDIR', () => {
     expect(resolveOpenCodeScratchRoot({ AGOR_OPENCODE_SCRATCH_ROOT: '/tmp/agor-opencode' })).toBe(
       '/tmp/agor-opencode'
     );
-    expect(resolveOpenCodeScratchRoot({ AGOR_OPENCODE_SCRATCH_ROOT: 'relative/path' })).toBe(
-      join(tmpdir(), 'agor-opencode')
+    expect(() =>
+      resolveOpenCodeScratchRoot({ AGOR_OPENCODE_SCRATCH_ROOT: 'relative/path', TMPDIR: '/x' })
+    ).toThrow(/not pinned/);
+    expect(() => resolveOpenCodeScratchRoot({ TMPDIR: '/persistent/home/tmp' })).toThrow(
+      /not pinned/
     );
-    expect(resolveOpenCodeScratchRoot({})).toBe(join(tmpdir(), 'agor-opencode'));
+    expect(() =>
+      resolveOpenCodeNativeStateLayout({
+        namespaceKey: NAMESPACE,
+        agorSessionId: SESSION,
+        taskId: TASK_A,
+        homeDir: join(root, 'home'),
+      })
+    ).toThrow(/AGOR_OPENCODE_SCRATCH_ROOT/);
   });
 });

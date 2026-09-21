@@ -12,6 +12,7 @@ import {
   parseOpenCodeExecutorContext,
 } from '@agor/agentic-tool-opencode';
 import {
+  assertOpenCodeCheckpointRuntime,
   discardOpenCodeScratch,
   isOpenCodeCleanupUnverifiedError,
   OpenCodeTool,
@@ -112,6 +113,9 @@ export async function executeOpenCodeTask(params: {
     // checkpoint. Credentials stay in memory; nothing enters process.env.
     let managed: NonNullable<Parameters<OpenCodeTool['runTurn']>[0]['managed']> | undefined;
     if (managedContext) {
+      // Fail early on an executor image that cannot run the durability barrier
+      // instead of spending a full provider turn first.
+      await assertOpenCodeCheckpointRuntime();
       const resolution = await resolveApiKeyForTask(
         'OPENCODE_API_KEY_ANTHROPIC',
         client,

@@ -21,6 +21,7 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
 }));
 
 const nativeState = vi.hoisted(() => ({
+  assertRuntime: vi.fn(async () => undefined),
   prepare: vi.fn(async () => undefined),
   prune: vi.fn(async () => []),
   restore: vi.fn(async () => undefined),
@@ -46,7 +47,9 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
     },
     liveDbPath: `/scratch/${input.taskId}/opencode.db`,
     attemptsDir: '/home/user/attempts',
+    attemptTaskId: input.taskId,
   }),
+  assertOpenCodeCheckpointRuntime: nativeState.assertRuntime,
   prepareOpenCodeScratch: nativeState.prepare,
   pruneOpenCodeAttempts: nativeState.prune,
   restoreOpenCodeAcceptedState: nativeState.restore,
@@ -383,6 +386,16 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       expect.objectContaining({ status: 'completed', native_state_attempt: published })
     );
     expect(nativeState.discard).toHaveBeenCalledOnce();
+  });
+
+  it('fails before the provider turn when the executor runtime lacks node:sqlite', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    nativeState.assertRuntime.mockRejectedValueOnce(new Error('runtime lacks node:sqlite'));
+    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
+      /lacks node:sqlite/
+    );
+    expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
   });
 
   it('fails the turn as a missing credential when no reviewed key is saved', async () => {

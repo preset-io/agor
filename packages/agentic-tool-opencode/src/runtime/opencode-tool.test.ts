@@ -416,6 +416,7 @@ async function managedTurn(behavior: 'prompt-fails' | 'completes') {
     },
     liveDbPath: '/scratch/task-1/opencode.db',
     attemptsDir: '/home/user/attempts',
+    attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
   };
   const run = tool.runTurn({
     agorSessionId: 'session-1' as SessionID,

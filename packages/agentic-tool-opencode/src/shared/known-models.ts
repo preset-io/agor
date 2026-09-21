@@ -170,23 +170,36 @@ function hasActiveSuggestedModel(provider: KnownProvider): boolean {
  * Configured providers outside the curated list remain visible for exact entry.
  */
 export function createOpenCodeKnownModelCatalog(
-  credentialProviderIds: ReadonlySet<string> | null
+  credentialProviderIds: ReadonlySet<string> | null,
+  options: {
+    /**
+     * Whether credential-less providers (OpenCode Zen) count as available. Hosted
+     * managed projection requires a saved reviewed key for every turn, so it
+     * passes `false` and never lists or suggests a provider the first prompt
+     * would refuse.
+     */
+    allowCredentialless?: boolean;
+  } = {}
 ): Omit<OpenCodeModelCatalog, 'runtimeVersion'> {
+  const allowCredentialless = options.allowCredentialless ?? true;
   const configuredProvider = credentialProviderIds
     ? KNOWN_PROVIDERS.find(
         (provider) => credentialProviderIds.has(provider.id) && hasActiveSuggestedModel(provider)
       )
     : undefined;
-  const fallbackProvider = KNOWN_PROVIDERS.find(
-    (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
-  );
+  const fallbackProvider = allowCredentialless
+    ? KNOWN_PROVIDERS.find(
+        (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
+      )
+    : undefined;
   const suggestedProvider = configuredProvider ?? fallbackProvider;
   const knownIds = new Set<string>(KNOWN_PROVIDERS.map(({ id }) => id));
   const providers: OpenCodeCatalogProvider[] = KNOWN_PROVIDERS.map((provider) => ({
     id: provider.id,
     name: provider.name,
     availableForSelection:
-      provider.availableWithoutCredentials || credentialProviderIds?.has(provider.id) === true,
+      (allowCredentialless && provider.availableWithoutCredentials) ||
+      credentialProviderIds?.has(provider.id) === true,
     suggestedModel: provider.suggestedModel,
     models: provider.models.map((model) => ({ ...model })),
   }));
@@ -225,14 +238,18 @@ export function createOpenCodeHostedProviderDiscovery(
     return {
       id: provider.id,
       name: provider.name,
-      runtimeAvailable: provider.availableWithoutCredentials || saved,
+      // Managed projection requires a saved reviewed key for every turn; a
+      // credential-less provider is therefore not available in hosted mode.
+      runtimeAvailable: saved,
       credentialPresence: saved ? 'present' : 'absent',
       authMethods: hostedField ? [{ index: 0, type: 'api', label: 'API key' }] : [],
       suggestedModel: provider.suggestedModel,
       models: provider.models.map((model) => ({ ...model })),
     };
   });
-  const catalog = createOpenCodeKnownModelCatalog(savedProviderIds);
+  const catalog = createOpenCodeKnownModelCatalog(savedProviderIds, {
+    allowCredentialless: false,
+  });
   return {
     runtime: 'available',
     runtimeVersion: OPENCODE_VERSION,

@@ -112,7 +112,9 @@ export class OpenCodeModelsService {
       const subject = await resolveManagedOpenCodeSubject(this.db, params);
       return {
         runtimeVersion: OPENCODE_VERSION,
-        ...createOpenCodeKnownModelCatalog(subject.savedProviderIds),
+        ...createOpenCodeKnownModelCatalog(subject.savedProviderIds, {
+          allowCredentialless: false,
+        }),
       };
     }
     return readModelCatalog(this.db, this.config, params);

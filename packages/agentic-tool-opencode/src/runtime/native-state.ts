@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { OpenCodeNativeStateAttempt } from '@agor/core/types';
 
@@ -26,7 +26,13 @@ export const OPENCODE_SCRATCH_ROOT_ENV = 'AGOR_OPENCODE_SCRATCH_ROOT';
 export function resolveOpenCodeScratchRoot(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env[OPENCODE_SCRATCH_ROOT_ENV]?.trim();
   if (configured && isAbsolute(configured)) return configured;
-  return join(tmpdir(), 'agor-opencode');
+  // Managed turns never fall back to the process temp directory: `os.tmpdir()`
+  // honors TMPDIR, which a substrate may point at the persistent home, and the
+  // live WAL must never land on the network filesystem. Fail before any
+  // provider call instead of trusting an unpinned image.
+  throw new OpenCodeNativeStateError(
+    `OpenCode managed scratch root is not pinned: ${OPENCODE_SCRATCH_ROOT_ENV} must be an absolute path on Job-local storage`
+  );
 }
 const DB_FILE = 'opencode.db';
 const MANIFEST_FILE = 'manifest.json';
@@ -36,6 +42,8 @@ export class OpenCodeNativeStateError extends Error {
 }
 
 export interface OpenCodeNativeStateLayout {
+  /** The task this Job runs; attempts newer than it are never this Job's to remove. */
+  attemptTaskId: string;
   /** Job-private root for every XDG home plus the live database. */
   scratchRoot: string;
   /** XDG_DATA_HOME etc. — all under scratch. */
@@ -57,6 +65,7 @@ export function resolveOpenCodeNativeStateLayout(input: {
   if (!home) throw new OpenCodeNativeStateError('OpenCode managed state requires a home directory');
   const scratchRoot = resolve(input.scratchRoot ?? resolveOpenCodeScratchRoot(), input.taskId);
   return {
+    attemptTaskId: input.taskId,
     scratchRoot,
     xdg: {
       data: join(scratchRoot, 'xdg-data'),
@@ -135,11 +144,16 @@ export async function prepareOpenCodeScratch(layout: OpenCodeNativeStateLayout):
   }
 }
 
+const ATTEMPT_ENTRY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /**
- * Remove every attempt directory except the accepted one. Live Jobs for one
- * session are serialized by the Session admission row, so orphans from lost
- * completions are safe to delete here and a stale Job re-creating its own
- * directory cannot be referenced.
+ * Remove orphaned attempt directories that are provably older than this Job's
+ * launch pointer. Task ids are UUIDv7, so lexical order is publication order:
+ * only entries that sort strictly below the accepted attempt (or, without an
+ * accepted checkpoint, below this Job's own task) are removed. Anything newer
+ * may have been published and accepted by a later Job while this one was
+ * still starting (force-fail does not prove process termination), so a stale
+ * Job can never delete a checkpoint the daemon has since accepted.
  */
 export async function pruneOpenCodeAttempts(
   layout: OpenCodeNativeStateLayout,
@@ -152,9 +166,16 @@ export async function pruneOpenCodeAttempts(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
+  const bound = accepted
+    ? accepted.attemptTaskId < layout.attemptTaskId
+      ? accepted.attemptTaskId
+      : layout.attemptTaskId
+    : layout.attemptTaskId;
   const removed: string[] = [];
   for (const entry of entries) {
+    if (!ATTEMPT_ENTRY.test(entry)) continue;
     if (accepted && entry === accepted.attemptTaskId) continue;
+    if (!(entry < bound)) continue;
     await rm(join(layout.attemptsDir, entry), { recursive: true, force: true });
     removed.push(entry);
   }
@@ -207,6 +228,24 @@ export interface OpenCodeCheckpointDependencies {
   /** Seam for tests; production runs the real checkpoint through `node:sqlite`. */
   checkpoint?: (dbPath: string) => Promise<void>;
   now?: () => Date;
+}
+
+/**
+ * The durability barrier needs `node:sqlite`, unflagged only from Node 22.13.
+ * Probe it before the provider turn so an older executor image fails with an
+ * actionable message instead of wasting a full turn on "checkpoint not durable".
+ */
+export async function assertOpenCodeCheckpointRuntime(
+  importSqlite: () => Promise<unknown> = () => import('node:sqlite')
+): Promise<void> {
+  try {
+    await importSqlite();
+  } catch (error) {
+    throw new OpenCodeNativeStateError(
+      'This executor runtime lacks node:sqlite; Node 22.13 or newer is required for hosted OpenCode checkpoints',
+      { cause: error }
+    );
+  }
 }
 
 async function checkpointWithNodeSqlite(dbPath: string): Promise<void> {

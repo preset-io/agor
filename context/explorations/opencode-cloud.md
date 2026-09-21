@@ -164,8 +164,9 @@ Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
 
 1. Create a Job-private scratch root `<scratch>/<taskId>/` and point
    **all four** `XDG_*` roots and `OPENCODE_DB` at it. `<scratch>` is
-   `AGOR_OPENCODE_SCRATCH_ROOT` when set (Cloud pins it to the `emptyDir`
-   mount `/tmp/agor-opencode`), otherwise the process temp directory;
+   `AGOR_OPENCODE_SCRATCH_ROOT`, which Cloud pins to the `emptyDir` mount
+   `/tmp/agor-opencode`; a managed turn fails before any provider call when the
+   variable is absent or relative (there is no temp-directory fallback);
    `TMPDIR` is never consulted, and the executor's payload-environment boundary
    refuses a user-defined `AGOR_OPENCODE_SCRATCH_ROOT`, so neither can redirect
    live native state onto the network filesystem. Nothing OpenCode writes
@@ -209,17 +210,27 @@ Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
    authorized publication decision.
 6. On failure, Stop, or abort: no publication. The scratch root is discarded
    with the Job. The session resumes from the previously accepted checkpoint.
-7. Before step 2 the executor deletes every attempt directory of this session
-   except the accepted one. Live Jobs for one session are serialized by the
-   Session admission row, so an orphan from a lost completion (checkpoint
-   written, completion patch never accepted) is removed by the next launch and
-   a stale Job re-creating its own directory is harmless.
+7. Before step 2 the executor deletes attempt directories of this session that
+   are provably older than its launch pointer: task ids are UUIDv7, so only
+   entries that sort strictly below the accepted attempt (or, with no accepted
+   checkpoint, below the Job's own task id) are removed. Anything newer is left
+   alone because a force-failed Job does not prove process termination: a
+   stale Job that reaches this step late could otherwise delete a checkpoint a
+   later Job published and the daemon has since accepted, leaving the pointer
+   dangling. Orphans from lost completions (checkpoint written, completion
+   patch never accepted) are removed by the next launch once they are older
+   than the accepted pointer. Before the turn starts, the executor also probes
+   `node:sqlite` and fails early on an image older than Node 22.13.
 
 Cloud-side realization (agor-cloud): no new endpoint, table, or storage class.
 The Job template already provides the immutable per-user home; an `emptyDir`
-with a `sizeLimit` is added at `/tmp/agor-opencode` so ENOSPC during checkpoint
-fails the turn instead of publishing a partial file (the workspace runtime
-config's ephemeral-storage limit is not guaranteed on legacy rows). Network
+with a `sizeLimit` is added at `/tmp/agor-opencode` on agent-task Jobs (not
+shell pods). The kubelet enforces that limit by evicting the pod rather than
+returning ENOSPC to the writer, so a turn that fills scratch ends as an evicted
+pod and a failed run with no pointer published; a half-written attempt has no
+manifest and is pruned later. The workspace runtime config's ephemeral-storage
+limit is not guaranteed on legacy rows, which is why the volume carries its own
+bound. Network
 posture is unchanged (OpenCode binds `127.0.0.1` only; the pod has no
 service-account token). Cell enablement is an operator config value rendered
 into the daemon config (section 8).
@@ -410,8 +421,11 @@ revision attestation.
    existing supervision invariant. Implementation proceeds on this default;
    choosing A instead changes slices 3–4 materially.
 2. **Reviewed provider set for the beta** — recommended: `anthropic` and
-   `openai` (API key) from the pinned list; `opencode` (Zen, credential-less)
-   and `kimi-for-coding` stay listed but can be disabled per Cell.
+   `openai` (API key) from the pinned list, plus `kimi-for-coding`. The
+   credential-less `opencode` (Zen) provider is not offered in managed
+   projection: every hosted turn requires a saved reviewed key, so hosted
+   discovery reports it unavailable and never suggests it. There is no per-Cell
+   provider allowlist in this release.
 3. **Saved-unverified credential state** — recommended: accept, verify on
    first prompt.
 4. **Egress disclosure** — recommended: note the inherited agent-pod egress
