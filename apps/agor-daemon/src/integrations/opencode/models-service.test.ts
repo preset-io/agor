@@ -1,3 +1,4 @@
+import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -121,7 +122,7 @@ describe('OpenCode model catalog service', () => {
       code: 'hosted_native_state_disabled',
       message: expect.stringMatching(/not been enabled/),
     });
-    expect(result.runtimeVersion).toBe('1.14.33');
+    expect(result.runtimeVersion).toBe(OPENCODE_VERSION);
     expect(result.providers.length).toBeGreaterThan(0);
     expect(result.providers.every((provider) => provider.availableForSelection === false)).toBe(
       true

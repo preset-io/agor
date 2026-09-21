@@ -97,7 +97,8 @@ resolver (section 8), never both:
 | `native-file`        | Local `simple`/`sandbox` without executor command template                                                    | Existing: `auth.json` in the daemon-owned namespace, mutated by contained local executor operations, OAuth supported                                                                                         | Unchanged |
 | `managed-projection` | Hosted + delegated + templated executor + `executor_storage.user_home: persistent-per-user` + operator opt-in | Keys stored encrypted in `users.data.agentic_tools.opencode`; the executor pulls them through `config/resolve-api-key` and projects `OPENCODE_AUTH_CONTENT`; no `auth.json`, no daemon-side OpenCode process | New       |
 
-`managed-projection` facts established from the pinned OpenCode 1.14.33 source:
+`managed-projection` facts established from the pinned OpenCode 1.14.33 source and
+re-verified by spike replay against the 1.18.31 executable now pinned by main:
 `Auth.all()` returns the parsed `OPENCODE_AUTH_CONTENT` map when set, so
 readiness and `provider.list().connected` see the key; API keys never refresh,
 so the "stale snapshot after refresh" hazard applies only to OAuth, which is
@@ -225,7 +226,7 @@ into the daemon config (section 8).
 
 ## 6. Storage decision: checkpointed local DB versus block-backed live DB
 
-Measured with the pinned `opencode` 1.14.33 executable (local, credential-free,
+Measured with the pinned `opencode` 1.14.33 executable and replayed on 1.18.31 (local, credential-free,
 `serve` + session API; see `qa/specs/opencode-cloud/proof-log.md`):
 
 | Question                                                                | Result                                                                                                                                                                                                                                                        |

@@ -67,8 +67,8 @@ verification and are re-run by QA only where noted.
 
 ## Compatibility
 
-| ID    | Boundary    | Scenario                                                                         | Passing observation                                                                                                 |
-| ----- | ----------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| OC-60 | cloud       | Exact deployed revision                                                          | Daemon and executor image carry the same Agor release; OpenCode binary reports 1.14.33; recorded in the QA evidence |
-| OC-61 | unit        | Mixed daemon/executor versions                                                   | Fail closed (OC-28); no partial feature                                                                             |
-| OC-62 | unit, cloud | Scheduled, forked, or spawned session with OpenCode on an unsupported deployment | Creation fails at occurrence/fork/spawn time with the structured reason; no session row is created                  |
+| ID    | Boundary    | Scenario                                                                         | Passing observation                                                                                                                                                  |
+| ----- | ----------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OC-60 | cloud       | Exact deployed revision                                                          | Daemon and executor image carry the same Agor release; OpenCode binary reports the pinned `OPENCODE_VERSION` (1.18.31 at this revision); recorded in the QA evidence |
+| OC-61 | unit        | Mixed daemon/executor versions                                                   | Fail closed (OC-28); no partial feature                                                                                                                              |
+| OC-62 | unit, cloud | Scheduled, forked, or spawned session with OpenCode on an unsupported deployment | Creation fails at occurrence/fork/spawn time with the structured reason; no session row is created                                                                   |

@@ -42,3 +42,19 @@ consistent, resumable file; SQLite is not a writer fence.
 Not established (Cloud QA): fsync behavior on FSx ONTAP / EFS, cross-node
 resume, full-disk behavior during checkpoint, Job cancellation timing, and any
 behavior involving a real provider.
+
+## Run 3 — replay of both spikes against the 1.18.31 executable (2026-09-21)
+
+After the branch was rebased onto a main that pins `opencode-darwin-arm64@1.18.31`,
+both spikes were replayed unchanged against that executable. Every observation
+above held: `OPENCODE_DB` places only the database; `auth.json` stays under the
+XDG data home; the main-file-only copy before checkpoint still has no session
+rows (the main file now carries the schema, but not the committed rows); the
+`db + wal` copy has the row; `session.get` matches after a SIGKILL restart;
+`wal_checkpoint(TRUNCATE)` on the closed files yields a consistent main-file
+copy (`integrity_check` ok) that a third server resumes; two writers on one
+`OPENCODE_DB` are still not fenced. Differences: the log file is now
+`log/opencode.log`, and the generated `opencode.jsonc` appears under the XDG
+config root. A separate loopback probe with `OPENCODE_AUTH_CONTENT` set and no
+`auth.json` confirmed that the projected provider is reported as connected and
+no credential file is written.

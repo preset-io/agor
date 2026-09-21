@@ -1,3 +1,4 @@
+import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import {
   BranchRepository,
@@ -277,7 +278,7 @@ describe('OpenCode provider auth service', () => {
     await runWithTenantContext('tenant-a', async () => {
       await expect(service().find(params)).resolves.toEqual({
         runtime: 'unsupported',
-        runtimeVersion: '1.14.33',
+        runtimeVersion: OPENCODE_VERSION,
         unsupported: {
           code: 'hosted_native_state_disabled',
           message: expect.stringMatching(/not been enabled/),
