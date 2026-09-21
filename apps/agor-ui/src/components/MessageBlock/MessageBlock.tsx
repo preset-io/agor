@@ -776,6 +776,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     }
                   >
                     <div
+                      // The compact user bubble centers its content, so the
+                      // markdown must not add block margins inside its padding.
+                      className={compact && isUser ? 'markdown-flush-outer-margins' : undefined}
                       style={{
                         wordWrap: 'break-word',
                         display: 'flex',

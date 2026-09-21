@@ -401,3 +401,19 @@ body > [data-streamdown="table-fullscreen"] {
   background: var(--ant-color-bg-elevated);
   box-shadow: var(--ant-box-shadow-secondary);
 }
+
+/*
+ * Markdown inside a container that supplies its own symmetric padding (the
+ * compact user bubble). Streamdown's own `[&>*:last-child]:mb-0` utility loses
+ * the cascade here, so the trailing block margin survives and the text sits
+ * high in the bubble. Collapse only the leading top and trailing bottom
+ * margins — spacing between blocks is untouched — which needs
+ * :first-child/:last-child and so cannot be an inline style.
+ */
+.markdown-flush-outer-margins :is(.markdown-content, .inline-markdown) > :first-child {
+  margin-top: 0;
+}
+
+.markdown-flush-outer-margins :is(.markdown-content, .inline-markdown) > :last-child {
+  margin-bottom: 0;
+}

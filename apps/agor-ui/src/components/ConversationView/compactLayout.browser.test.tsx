@@ -7,6 +7,8 @@ import { ToolBlock } from '../ToolBlock';
 
 afterEach(cleanup);
 
+const USER_TEXT = 'Fix the mobile loading skeletons';
+
 const message = (role: string, content: unknown) =>
   ({
     message_id: `m-${role}`,
@@ -45,14 +47,55 @@ describe('compact transcript grid', () => {
     }
   });
 
-  it('keeps the compact user bubble balanced with its copy control inside it', () => {
+  const userBubble = (compact: boolean) =>
+    render(<MessageBlock message={message('user', USER_TEXT)} compact={compact} />).container;
+
+  const markdownBlocks = (container: HTMLElement) =>
+    Array.from(
+      (container.querySelector('.inline-markdown') as HTMLElement).children
+    ) as HTMLElement[];
+
+  it('centers the compact user bubble text between its padding', () => {
+    const container = userBubble(true);
+
+    // Symmetric bubble padding is not enough on its own: the markdown's own
+    // trailing block margin used to sit inside it and push the text up.
+    const bubble = (
+      container.querySelector('.ant-bubble-content') as HTMLElement
+    ).getBoundingClientRect();
+    const blocks = markdownBlocks(container);
+    const last = blocks[blocks.length - 1];
+    const top = blocks[0].getBoundingClientRect().top - bubble.top;
+    const bottom = bubble.bottom - last.getBoundingClientRect().bottom;
+
+    expect(Math.abs(top - bottom)).toBeLessThanOrEqual(1);
+    expect(getComputedStyle(last).marginBottom).toBe('0px');
+  });
+
+  it('keeps the space between paragraphs of a multi-block message', () => {
     const { container } = render(
-      <MessageBlock message={message('user', 'Fix the mobile loading skeletons')} compact />
+      <MessageBlock message={message('user', 'First thing.\n\nSecond thing.')} compact />
+    );
+    const blocks = markdownBlocks(container);
+
+    expect(blocks).toHaveLength(2);
+    expect(
+      blocks[1].getBoundingClientRect().top - blocks[0].getBoundingClientRect().bottom
+    ).toBeGreaterThan(0);
+  });
+
+  it('leaves the assistant bubble and detailed markdown on their own margins', () => {
+    const { container: assistant } = render(
+      <MessageBlock message={message('assistant', 'A written answer.')} compact />
     );
 
+    expect(assistant.querySelector('.markdown-flush-outer-margins')).toBeNull();
+    expect(userBubble(false).querySelector('.markdown-flush-outer-margins')).toBeNull();
+  });
+
+  it('keeps the compact user bubble copy control inside the bubble', () => {
+    const container = userBubble(true);
     const bubble = container.querySelector('.ant-bubble-content') as HTMLElement;
-    const style = getComputedStyle(bubble);
-    expect(style.paddingTop).toBe(style.paddingBottom);
 
     fireEvent.mouseEnter(bubble.firstElementChild as HTMLElement);
     const control = container.querySelector('.anticon-copy') as HTMLElement;
