@@ -8,8 +8,8 @@ import type {
   User,
 } from '@agor-live/client';
 import { Alert, Button, Flex, Spin } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useAgorStore } from '../../store/agorStore';
@@ -19,6 +19,7 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { sessionBoardId } from './sessionBoardId';
+import { useMobileBack } from './useMobileBack';
 
 interface SessionPageProps {
   client: AgorClient | null;
@@ -84,14 +85,15 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
     ) ?? EMPTY_MCP_IDS;
 
-  const navigate = useNavigate();
   const loading = useAgorStore((state) => state.loading);
   const boardId = sessionBoardId(session, branchById, boardById);
-  // X is an exit, not browser Back. Replace this detail entry so a cold link
-  // also closes inside Agor. Earlier deliberate navigations remain in history.
-  const closeSession = useCallback(() => {
-    navigate(boardId ? `/m/board/${boardId}` : '/m', { replace: true });
-  }, [navigate, boardId]);
+  // The leading control is a REAL history Back: it returns to the actual
+  // previous surface (previous session, Home, the Sessions list, ...) instead of
+  // always dumping the user on the owning board. A cold deep-link has no in-app
+  // history (location key === 'default'), so it falls back to the owning board
+  // (or Home) — still closing inside Agor. No `replace`, so the back-stack and
+  // Forward stay intact.
+  const closeSession = useMobileBack(boardId ? `/m/board/${boardId}` : '/m');
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -155,7 +157,11 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   return (
     <AppActionsProvider value={appActions}>
-      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Fill the shell's content slot (which already sits ABOVE the docked tab
+          bar), not the whole viewport. Using `100dvh` here would push the
+          composer down behind the persistent tab bar; `flex: 1` reserves exactly
+          the space left over the bar and its safe-area inset. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <SessionPanel
           client={client}
           session={session}
