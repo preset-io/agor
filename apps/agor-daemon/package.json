@@ -51,8 +51,8 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.272",
     "@anthropic-ai/sdk": "^0.125.0",
-    "@aws-sdk/client-s3": "^3.1132.0",
-    "@aws-sdk/lib-storage": "^3.1132.0",
+    "@aws-sdk/client-s3": "^3.1135.0",
+    "@aws-sdk/lib-storage": "^3.1135.0",
     "@cursor/sdk": "1.0.31",
     "@github/copilot-sdk": "^0.2.2",
     "@modelcontextprotocol/client": "2.0.0",
@@ -67,7 +67,7 @@
     "@types/node": "^24.6.0",
     "concurrently": "^9.2.1",
     "glob": "^13.0.6",
-    "hot-shots": "^17.1.0",
+    "hot-shots": "^17.1.1",
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-to-markdown": "^2.1.2",
     "remark-gfm": "^4.0.1",
@@ -80,7 +80,7 @@
     "zod": "^4.6.5"
   },
   "peerDependencies": {
-    "hot-shots": "^17.1.0"
+    "hot-shots": "^17.1.1"
   },
   "peerDependenciesMeta": {
     "hot-shots": {
