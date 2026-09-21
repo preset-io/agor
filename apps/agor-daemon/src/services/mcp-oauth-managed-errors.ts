@@ -11,3 +11,10 @@ export function managedOAuthFailureCode(error: unknown): string {
   }
   return 'managed_authority_unavailable';
 }
+
+export class ManagedOAuthUnavailableError extends Error {
+  constructor() {
+    super('Agor-managed sign-in is unavailable. Direct sign-in remains separate.');
+    this.name = 'ManagedOAuthUnavailableError';
+  }
+}

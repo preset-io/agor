@@ -54,16 +54,18 @@ import {
   createRegisteredMCPCatalogConnectService,
   createRegisteredMCPMemberPolicyService,
 } from '../../register-routes';
-import { type RegisterServicesContext, registerMCPServices } from '../../register-services';
 import { createMcpServerWriteAuthorizationHook } from '../../utils/mcp-server-authorization';
 import {
   AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
   installSocketAuthorityId,
 } from '../../utils/socket-request-authority';
 import { createTenantDatabaseScopeAroundHook } from '../../utils/tenant-db-scope';
-import { createManagedOAuthServices } from '../mcp-oauth-managed-composition';
-import { createManagedOAuthMaintenanceServices } from '../mcp-oauth-managed-maintenance-composition';
+import {
+  createManagedOAuthMaintenanceServices,
+  createManagedOAuthServices,
+} from '../mcp-oauth-managed-composition';
 import type { startPairedCloudProcess } from './paired-cloud-fixture';
+import { registerManagedTestServices } from './registered-managed-services.js';
 
 export interface PairedManifest {
   workerOrigin: string;
@@ -354,22 +356,14 @@ export async function startManagedPairedRuntime(
     (app as unknown as Express).get('/__managed-acceptance/session', (_req, res) =>
       res.json({ accessToken, user: user! })
     );
-    await registerMCPServices({
+    await registerManagedTestServices({
       db,
       app: app as never,
       config,
-      jwtSecret: 'synthetic-paired-jwt',
       daemonUrl: PAIRED_RUNTIME_ORIGIN,
       bundledUiAvailable: true,
-      DAEMON_PORT: 3030,
-      UI_PORT: 5173,
-      allowSuperadmin: false,
       requireAuth,
-      deployment: {} as RegisterServicesContext['deployment'],
       mcpManagedOAuthServices: services,
-      mcpManagedOAuthRuntime: services.runtime,
-      mcpOAuthPendingFlowAuthority: services.flows,
-      mcpOAuthCallbackUrl: `${PAIRED_RUNTIME_ORIGIN}/mcp-servers/oauth-callback`,
     });
     app.service('mcp-servers').hooks({
       around: {

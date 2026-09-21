@@ -9,7 +9,7 @@ import type { ManagedMCPOAuthClient } from '@agor/core/tools/mcp/managed-oauth-c
 import { describe, expect, it, vi } from 'vitest';
 import { seedManagedRefreshGrant } from '../../../../packages/core/src/db/test-support/managed-oauth-fixture';
 import { createOwnedPostgres } from '../../../../packages/core/src/db/test-support/owned-postgres';
-import { createManagedOAuthAcknowledger } from './mcp-oauth-managed-ack';
+import { createManagedOAuthAcknowledger } from './mcp-oauth-managed-authority';
 
 describe.skipIf(process.env.AGOR_DB_DIALECT !== 'postgresql')(
   'managed ACK local delivery proof',

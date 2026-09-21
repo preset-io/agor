@@ -33,7 +33,7 @@ import {
   type OwnedPostgres,
 } from '../../../../packages/core/src/db/test-support/owned-postgres';
 import { managedCatalogOAuthConfig } from './mcp-catalog-install-policy';
-import { createManagedOAuthPersistence } from './mcp-oauth-managed-persistence';
+import { createManagedOAuthPersistence } from './mcp-oauth-managed-authority';
 import { ManagedMCPOAuthRuntime } from './mcp-oauth-managed-runtime';
 import { MCPOAuthPendingFlowAuthority } from './mcp-oauth-pending-flow-authority';
 

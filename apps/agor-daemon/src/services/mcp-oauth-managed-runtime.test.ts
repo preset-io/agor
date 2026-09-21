@@ -52,7 +52,7 @@ vi.mock('./mcp-oauth-grant-binding.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./mcp-oauth-grant-binding.js')>()),
   lockMCPOAuthGrantConfiguration: async () => undefined,
 }));
-vi.mock('./mcp-oauth-managed-identity.js', () => ({
+vi.mock('./mcp-oauth-managed-authority.js', () => ({
   resolveManagedOAuthLocalSubject: async () => 'cloud_alpha',
   assertManagedOAuthLocalOwner: async () => undefined,
 }));

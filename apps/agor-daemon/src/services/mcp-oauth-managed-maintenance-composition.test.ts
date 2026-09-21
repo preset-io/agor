@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import projection from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
 import valid from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/valid.json';
 import { loadManagedOAuthCleanupDeployment } from '../mcp-egress/managed-deployment.js';
-import { managedOAuthReceiptCommitFence } from './mcp-oauth-managed-ack.js';
+import { managedOAuthReceiptCommitFence } from './mcp-oauth-managed-authority.js';
+import { createManagedOAuthMaintenanceServices } from './mcp-oauth-managed-composition.js';
 import type { ManagedOAuthMaintenanceDependencies } from './mcp-oauth-managed-maintenance.js';
-import { createManagedOAuthMaintenanceServices } from './mcp-oauth-managed-maintenance-composition.js';
 
 const state = vi.hoisted(() => ({
   deps: undefined as ManagedOAuthMaintenanceDependencies | undefined,

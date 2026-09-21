@@ -1,5 +1,7 @@
-import { createManagedOAuthServices } from './services/mcp-oauth-managed-composition.js';
-import { createManagedOAuthMaintenanceServices } from './services/mcp-oauth-managed-maintenance-composition.js';
+import {
+  createManagedOAuthMaintenanceServices,
+  createManagedOAuthServices,
+} from './services/mcp-oauth-managed-composition.js';
 /**
  * Agor Daemon
  *

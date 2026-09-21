@@ -49,7 +49,6 @@ import {
 import projection from '../../../../packages/core/src/tools/mcp/__fixtures__/managed-v1/projection-results.json';
 import * as managedBootTime from '../mcp-egress/managed-boot-time';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes';
-import { type RegisterServicesContext, registerMCPServices } from '../register-services';
 import { createMcpServerWriteAuthorizationHook } from '../utils/mcp-server-authorization';
 import {
   createManagedOAuthServices,
@@ -59,6 +58,7 @@ import {
   SYNTHETIC_PILOT_POD_UID,
   syntheticFreshPilotEnrollment,
 } from './test-support/managed-pilot-enrollment';
+import { registerManagedTestServices } from './test-support/registered-managed-services.js';
 
 // This sandbox mounts / as unmapped uid 65534. Normalize ONLY that test mount's
 // owner observation; retain the real deployment reader's path/mode/size/key checks.
@@ -391,22 +391,14 @@ describe
         await setMCPEgressGatewayMode(scoped, 'enforced');
       });
       app = feathers();
-      await registerMCPServices({
+      await registerManagedTestServices({
         db,
         app: app as never,
         config,
-        jwtSecret: 'synthetic',
         daemonUrl: 'https://cell.example',
         bundledUiAvailable: false,
-        DAEMON_PORT: 3030,
-        UI_PORT: 5173,
-        allowSuperadmin: false,
         requireAuth: async (context) => context,
-        deployment: {} as RegisterServicesContext['deployment'],
         mcpManagedOAuthServices: services,
-        mcpManagedOAuthRuntime: services.runtime,
-        mcpOAuthPendingFlowAuthority: services.flows,
-        mcpOAuthCallbackUrl: 'https://cell.example/mcp-servers/oauth-callback',
       });
       app.service('mcp-servers').hooks({
         around: {

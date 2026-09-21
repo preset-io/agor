@@ -20,8 +20,8 @@ import type { HookContext, MCPServer, UserID } from '@agor/core/types';
 import { json } from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
-import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
 import { createManagedOAuthServices } from './mcp-oauth-managed-composition.js';
+import { registerManagedTestServices } from './test-support/registered-managed-services.js';
 
 const userId = '01900000-0000-7000-8000-000000000001' as UserID;
 const auth = 'synthetic-http-test-session';
@@ -59,21 +59,14 @@ describe('registered managed service surfaces with production default-off compos
       context.params.tenant = { tenant_id: 'default', source: 'static' } as never;
       return context;
     };
-    await registerMCPServices({
+    await registerManagedTestServices({
       db: db as unknown as TenantScopeAwareDatabase,
       app: app as never,
       config: {},
-      jwtSecret: 'synthetic-jwt-test',
       daemonUrl: 'http://127.0.0.1:3030',
       bundledUiAvailable: false,
-      DAEMON_PORT: 3030,
-      UI_PORT: 5173,
-      allowSuperadmin: false,
       requireAuth,
-      deployment: {} as RegisterServicesContext['deployment'],
-      mcpOAuthCallbackUrl: 'http://127.0.0.1:3030/mcp-servers/oauth-callback',
       mcpManagedOAuthServices: services ?? undefined,
-      mcpManagedOAuthRuntime: services?.runtime,
     });
     app.use(
       '/mcp-catalog/connect',

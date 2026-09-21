@@ -47,15 +47,11 @@ import {
   assertManagedOAuthLocalOwner,
   type ManagedOAuthLocalIdentityPolicy,
   resolveManagedOAuthLocalSubject,
-} from './mcp-oauth-managed-identity.js';
+} from './mcp-oauth-managed-authority.js';
+import { ManagedOAuthUnavailableError } from './mcp-oauth-managed-errors.js';
 import type { MCPOAuthPendingFlowAuthority } from './mcp-oauth-pending-flow-authority.js';
 
-export class ManagedOAuthUnavailableError extends Error {
-  constructor() {
-    super('Agor-managed sign-in is unavailable. Direct sign-in remains separate.');
-    this.name = 'ManagedOAuthUnavailableError';
-  }
-}
+export { ManagedOAuthUnavailableError } from './mcp-oauth-managed-errors.js';
 
 export interface ManagedOAuthRuntimeDependencies {
   db: TenantScopeAwareDatabase;
