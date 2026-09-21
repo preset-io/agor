@@ -239,6 +239,14 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   const tool = screen.getByRole('button', { name: /Read/ });
   expect(tool.querySelector('.anticon')).not.toBeNull();
   expect(tool).toHaveAttribute('aria-expanded', 'false');
+  const label = screen.getByText('1 tool call · Hide details');
+  const caret = header.querySelector('.anticon-up')!;
+  expect(getComputedStyle(label).fontSize).toBe(
+    getComputedStyle(tool.querySelector('strong')!).fontSize
+  );
+  const caretGap = caret.getBoundingClientRect().left - label.getBoundingClientRect().right;
+  expect(caretGap).toBeGreaterThanOrEqual(0);
+  expect(caretGap).toBeLessThanOrEqual(12);
   await userEvent.click(tool);
   await waitFor(() => expect(screen.getByText('SYNTHETIC_TOOL_RESULT')).toBeVisible());
   await page.screenshot({ path: `./.vitest/lean-tool-content-${window.innerWidth}.png` });

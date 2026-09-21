@@ -43,6 +43,8 @@ export function ToolDisclosureHeader({
       onClick={onClick}
       style={{
         display: 'flex',
+        justifyContent: 'flex-start',
+        fontSize: token.fontSizeSM,
         gap: token.marginXS,
         paddingInline: 0,
         color: token.colorTextSecondary,
@@ -50,7 +52,7 @@ export function ToolDisclosureHeader({
     >
       <span
         style={{
-          flex: 1,
+          flex: '0 1 auto',
           minWidth: 0,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -59,7 +61,11 @@ export function ToolDisclosureHeader({
       >
         {label}
       </span>
-      {expanded ? <UpOutlined /> : <DownOutlined />}
+      {expanded ? (
+        <UpOutlined style={{ flexShrink: 0 }} />
+      ) : (
+        <DownOutlined style={{ flexShrink: 0 }} />
+      )}
     </Button>
   );
 }
