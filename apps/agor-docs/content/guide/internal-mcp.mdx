@@ -102,6 +102,67 @@ and `reorderQueued`, with `session_id`, `task_ids`, and (for reorder)
 `expected_task_ids`. Generic Task patches remain executor-only and
 `queue_position` remains server-owned.
 
+#### Interrupt obsolete work and supply urgent information
+
+Use the existing prompt, queue-management, and stop tools **in that order**.
+This is not an atomic stop-and-clear operation, nor an in-place injection into
+the running Task. Each tool retains its own authorization requirements.
+
+1. **While the child is still active**, call `agor_sessions_prompt` with
+   `mode: "continue"` and updated instructions. Inspect the result: continue
+   queues behind active work, but if the child has already become promptable,
+   the update may dispatch immediately. Do not assume it is still queued.
+2. **Inspect/re-read the pending queue** with
+   `agor_tasks_list({ sessionId: childId, status: "queued" })`, following all
+   pages. Cancel obsolete queued IDs with `agor_tasks_cancel_queued` as
+   appropriate. Use the resulting queue or re-read it after further changes.
+3. **Move the update to the front** with `agor_tasks_reorder_queued`:
+   `expectedTaskIds` is the exact observed order; `taskIds` contains the same
+   IDs with the update first. Handle any conflict by re-reading and reassessing,
+   not by blindly retrying the old snapshot.
+4. **ONLY THEN** call `agor_sessions_stop({ sessionId: childId, reason: "New data
+invalidates the current task; prioritized updated instructions" })`.
+   **Stop preserves and drains the queue. Stopping before rearranging it risks
+   dispatching stale work.**
+
+For example, if the update returned Task ID `U` and a fresh queue read showed
+`[A, B, U]`, where `B` is obsolete (letters stand for full Task UUIDs):
+
+```js
+// First, while the child is active:
+agor_sessions_prompt({
+  sessionId: childId,
+  mode: 'continue',
+  prompt: 'New evidence invalidates the current approach. Preserve existing edits and ...',
+});
+// Confirm the returned update U is queued; read the complete current queue.
+agor_tasks_list({ sessionId: childId, status: 'queued' });
+// Only if that read shows [A, B, U], and B is still obsolete:
+agor_tasks_cancel_queued({ sessionId: childId, taskIds: [B] });
+// Only if the resulting/current queue is [A, U]:
+agor_tasks_reorder_queued({
+  sessionId: childId,
+  expectedTaskIds: [A, U],
+  taskIds: [U, A],
+});
+// Only after successful rearrangement and reassessing the current active work:
+agor_sessions_stop({ sessionId: childId, reason: 'Obsolete approach; update U prioritized' });
+```
+
+After **verified termination**, the prioritized update can run as the next turn,
+provided it is still the queue head. Delivery is **not guaranteed instantaneous**.
+An accepted/pending stop is **not confirmed termination**; inspect the stop
+outcome and re-read Session/Task state rather than treating acceptance as proof
+that the old executor has stopped. Existing edits made by the running Task are
+preserved: stopping does **not** roll them back.
+
+There is **no atomic guarantee across these separate calls**. Active work may
+finish, another task may dispatch, or another caller may change the queue
+between any steps—even between a successful reorder and stop. On unexpected
+dispatch or queue changes, re-read and reconsider which work should be stopped
+before proceeding; do not blindly stop a newly dispatched update. Queue tools
+cannot cancel or reorder a Task that has already left `queued`.
+
 ### Progressive tool discovery
 
 When `mcp_tool_search` is enabled (the default), `tools/list` intentionally

@@ -56,6 +56,35 @@ dbTest(
         tool_name: 'agor_tasks_reorder_queued',
       });
       expect(JSON.stringify(details)).toContain('expectedTaskIds');
+      const workflowTools = [
+        'agor_sessions_prompt',
+        'agor_tasks_cancel_queued',
+        'agor_tasks_reorder_queued',
+        'agor_sessions_stop',
+      ];
+      for (const name of workflowTools) {
+        const metadata = await call('agor_get_tool_details', { tool_name: name });
+        const description: string = JSON.parse(metadata.result.content[0].text).tool.description;
+        for (const related of workflowTools.filter((tool) => tool !== name)) {
+          expect(description).toContain(related);
+        }
+        expect(description).toContain('mode=continue');
+        expect(description).toContain('expectedTaskIds');
+        expect(description).toMatch(/ONLY THEN.*stop/);
+        expect(description).toMatch(/stop preserves\/drains/i);
+        expect(description).toContain('stopping first risks dispatching stale work');
+        expect(description).toContain('separate calls are not atomic');
+        expect(description).toContain('re-read');
+        if (name !== 'agor_tasks_cancel_queued') {
+          expect(description).toContain('next turn after verified termination');
+          expect(description).toContain(
+            'not in-place injection or guaranteed instantaneous delivery'
+          );
+          expect(description).toContain('Accepted/pending stop is not confirmed termination');
+          expect(description).toMatch(/edits.*preserved|preserves existing running-task edits/);
+          expect(description).toMatch(/not rolled back|does not roll back/);
+        }
+      }
       const list = await call('agor_tasks_list', {
         sessionId: seed.session.session_id,
         status: 'queued',
