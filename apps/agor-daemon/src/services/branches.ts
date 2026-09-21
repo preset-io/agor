@@ -1967,20 +1967,28 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reason = getBranchCleanupBlockReason(policy, branch.cleanup_protected ?? false);
       if (reason) throw new Conflict(reason);
     }
-    const admission = await this.withTenantDatabase(params, () =>
-      retireTeammate
-        ? new BranchMaintenanceRepository(this.db).claimForTeammateRetirement(
+    const admission = retireTeammate
+      ? await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
+          // Retirement clears User preferences under reference/Branch locks.
+          // Enter the same authority fence as board designation BEFORE any of
+          // those locks, so its human-actor lock cannot form the reverse edge.
+          // Only this metadata admission belongs in the transaction, not the
+          // subsequent session archival or external workspace work.
+          await lockTenantAuthorizationFence(db, params);
+          return new BranchMaintenanceRepository(db).claimForTeammateRetirement(
             id,
             user.user_id as UserID,
             validate
-          )
-        : new BranchMaintenanceRepository(this.db).claim(
+          );
+        })
+      : await this.withTenantDatabase(params, () =>
+          new BranchMaintenanceRepository(this.db).claim(
             id,
             'cleanup',
             user.user_id as UserID,
             validate
           )
-    );
+        );
     if (!admission.acquired)
       throw new Conflict('Branch maintenance is already active or requires reconciliation');
     let invocationStarted = false;

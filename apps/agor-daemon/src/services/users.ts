@@ -48,6 +48,7 @@ import {
   isNull,
   isPostgresDatabaseHandle,
   jsonExtract,
+  jsonSetString,
   runWithTenantDatabaseTransaction,
   select,
   sessionEnvSelections,
@@ -1849,7 +1850,7 @@ export class UsersService {
     const updatedRow = await update(this.db, users)
       .set({
         updated_at: new Date(),
-        data: { ...currentData, primary_agentic_tool: tool },
+        data: jsonSetString(this.db, users.data, 'primary_agentic_tool', tool),
       })
       .where(
         and(

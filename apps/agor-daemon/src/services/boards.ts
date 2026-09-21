@@ -13,6 +13,7 @@ import {
   BranchRepository,
   CapabilityPolicyRepository,
   getCurrentTenantId,
+  lockBranchReferenceMutation,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -416,6 +417,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       typeof data === 'string' ? _maybeParams : (branchIdOrParams as BoardParams | undefined);
     return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
       await lockTenantAuthorizationFence(db, params);
+      // Match branch relocation: reference writers may also update User rows.
+      // Never hold the human actor row while waiting for their reference lock.
+      await lockBranchReferenceMutation(db);
       const current = await resolveCurrentTenantAuthorityActor(db, params, {
         allowActorlessTrusted: true,
       });
