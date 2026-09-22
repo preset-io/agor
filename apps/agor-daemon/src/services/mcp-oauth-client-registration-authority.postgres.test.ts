@@ -19,7 +19,10 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  mcpOAuthDynamicClientName,
+  OAuthDCRFailure,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -52,7 +55,10 @@ function inputFor(seed: TenantSeed, suffix = 'v1'): DurableMCPOAuthClientRegistr
     authorizationEndpoint: `${issuer}/authorize`,
     tokenEndpoint: `${issuer}/token`,
     redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
-    clientName: 'Agor MCP Client',
+    clientName: mcpOAuthDynamicClientName(
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      '0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d'
+    ),
     applicationType: 'web',
     scope: 'mcp:read mcp:write',
     compatibilityMode: 'strict',

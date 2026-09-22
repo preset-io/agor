@@ -205,6 +205,20 @@ export function classifyMCPAuthRecovery(
               failureCode === 'endpoint_override_mismatch'
             ? failureCode
             : undefined;
+    if (failureCode === 'redirect_uri_mismatch') {
+      // Not a discovery failure: the provider said nothing. Agor refused its
+      // own authorization request because the client is bound to a different
+      // callback URL, which is a redirect-configuration problem.
+      return {
+        ...common,
+        ...policy,
+        failure_reason: 'redirect_uri_mismatch',
+        category: 'redirect_configuration_required',
+        action: 'configure_redirect',
+        message: OAUTH_FAILURE_GUIDANCE.redirect_uri_mismatch,
+        ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
+      };
+    }
     if (failureCode === 'client_registration_required') {
       return {
         ...common,

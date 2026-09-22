@@ -190,6 +190,40 @@ describe('MCP auth recovery contract', () => {
     });
   });
 
+  it('names an unregistered redirect URI first when authorization never came back', () => {
+    const recovery = recoveryForOAuthAttemptFailure('authorization_never_returned', 'server-a');
+    expect(recovery).toMatchObject({
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      mcp_server_id: 'server-a',
+    });
+    // The proxy exists because the provider rejects a mismatched redirect URI
+    // front-channel, so Agor never observes it. The guidance has to lead with
+    // the cause the user cannot fix by trying again.
+    const message = recovery!.message;
+    expect(message).toContain('callback URL');
+    expect(message.indexOf('callback URL')).toBeLessThan(message.indexOf('closed'));
+    expect(message).not.toBe(
+      recoveryForOAuthAttemptFailure('authorization_timed_out', 'server-a')!.message
+    );
+  });
+
+  it('classifies an authorize-time redirect binding refusal as its own reason', () => {
+    expect(
+      classifyMCPAuthRecovery(
+        new OAuthConfigurationError(
+          'redirect_uri_mismatch',
+          'The OAuth client is registered under a different Agor callback URL.',
+          'redirect_uri_mismatch'
+        )
+      )
+    ).toMatchObject({
+      category: 'redirect_configuration_required',
+      action: 'configure_redirect',
+      failure_reason: 'redirect_uri_mismatch',
+    });
+  });
+
   it('fails closed for hostile proxies without invoking name/code accessors', () => {
     const sentinel = 'SENTINEL_HOSTILE_RECOVERY_PROXY';
     const getter = vi.fn(() => {

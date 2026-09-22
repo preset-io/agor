@@ -68,6 +68,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         clientId: string | undefined,
         redirectUri: string,
         options?: {
+          clientRegistrantId?: string;
           resolveDynamicClientRegistration?: (
             request: {
               registrationEndpoint: string;
@@ -100,7 +101,12 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
               authorizationEndpoint: 'https://provider.example.test/authorize',
               tokenEndpoint: 'https://provider.example.test/token',
               redirectUri,
-              clientName: 'Agor MCP Client',
+              // The real transport derives this; a constant here would hide
+              // the registrant from the fingerprint the authority computes.
+              clientName: original.mcpOAuthDynamicClientName(
+                redirectUri,
+                options?.clientRegistrantId
+              ),
               applicationType: 'web',
               compatibilityMode: 'strict',
               dcrMode: 'advertised',
