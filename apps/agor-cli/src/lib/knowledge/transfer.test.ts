@@ -11,9 +11,11 @@ import {
 } from '@agor/core/db';
 import type { User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
+import { Parser } from '@oclif/core';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../../packages/core/src/db/test-helpers';
 import { KnowledgeTransfersService } from '../../../../agor-daemon/src/services/knowledge-transfers';
+import KnowledgeImport from '../../commands/kb/import';
 import { KnowledgeDirectory } from './directory';
 import { KnowledgeProgress } from './progress';
 import { exportKnowledge, importKnowledge, type knowledgeTransferClient } from './transfer';
@@ -101,7 +103,13 @@ describe.skipIf(process.platform !== 'linux')('Knowledge CLI workflow', () => {
         ).toMatchObject({ copied: 0, unchanged: 1 });
         expect(get).not.toHaveBeenCalled();
         const importer = clientFor(service, member);
-        const incoming = { ...options, namespace: 'destination' };
+        // Exercise the real command parser: omitted booleans need explicit defaults
+        // before they cross the strictly validated transfer API boundary.
+        const { flags } = await Parser.parse([options.directory, '--namespace', 'destination'], {
+          args: KnowledgeImport.args,
+          flags: KnowledgeImport.flags,
+        });
+        const incoming = { ...options, namespace: flags.namespace, resume: flags.resume };
         expect(await importKnowledge(importer, incoming, log.reporter)).toMatchObject({
           dryRun: true,
           pending: 1,

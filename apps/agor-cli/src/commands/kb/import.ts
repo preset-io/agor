@@ -15,6 +15,7 @@ export default class KnowledgeImport extends BaseCommand {
     apply: Flags.boolean({ description: 'Execute the validated plan', exclusive: ['dry-run'] }),
     'dry-run': Flags.boolean({ description: 'Validate and plan without writes (default)' }),
     resume: Flags.boolean({
+      default: false,
       description: 'Resume the same bundle into its original caller-owned namespace',
     }),
   };
