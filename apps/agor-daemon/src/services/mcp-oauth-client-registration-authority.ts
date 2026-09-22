@@ -13,6 +13,7 @@ import {
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sealBoundSecret,
+  shortId,
   sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -31,6 +32,15 @@ import type {
 const REGISTRATION_LEASE_MS = 30_000;
 const REGISTRATION_WAIT_MS = 250;
 const REGISTRATION_WAIT_LIMIT_MS = 70_000;
+/**
+ * How often the lease wait says it is still waiting.
+ *
+ * The poll itself is every 250ms; saying so at that rate would bury the
+ * signal it exists to provide. Ten seconds is often enough that a stuck start
+ * is visible well before the 70s limit, and rare enough that a busy fleet
+ * does not drown in it.
+ */
+const REGISTRATION_WAIT_LOG_MS = 10_000;
 
 export interface DurableMCPOAuthClientRegistrationInput
   extends MCPOAuthDynamicClientRegistrationRequest {

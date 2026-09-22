@@ -6033,36 +6033,38 @@ export async function registerMCPServices(
           // logged from inside) plus the authorization-request construction.
           result = await runStartPhase('flow_create', () =>
             startTwoPhaseMCPOAuthFlow({
-            mcpUrl: effectiveMcpUrl,
-            wwwAuthenticate,
-            resourceMetadataUrl:
-              discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
-            prefetchedAuthServerMetadata:
-              discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: savedServerId,
-            userId,
-            oauthMode,
-            clientId: savedServer ? clientIdFromConfig : data.client_id,
-            clientSecret: clientSecretOverride,
-            authorizationUrlOverride,
-            tokenUrlOverride,
-            scope: scopeOverride,
-            tenantId,
-            socketId,
-            compatibilityMode,
-            dcrMode,
-            onPolicyResolved: (policy) => {
-              oauthPolicy = policy;
-            },
-            requestAuthority: assertRequestAuthority,
-            slackRecovery: slackRecoveryBinding?.oauthContext,
-            slackConnect: connectBinding?.oauthContext,
-            attemptId: reservedSlackAttemptId,
-            assertStartAuthority: slackRecoveryBinding
-              ? renewSlackStartLease
-              : connectBinding
-                ? renewConnectStartLease
-                : undefined,
+              mcpUrl: effectiveMcpUrl,
+              wwwAuthenticate,
+              resourceMetadataUrl:
+                discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
+              prefetchedAuthServerMetadata:
+                discovery.kind === 'authorization-server'
+                  ? discovery.authServerMetadata
+                  : undefined,
+              mcpServerId: savedServerId,
+              userId,
+              oauthMode,
+              clientId: savedServer ? clientIdFromConfig : data.client_id,
+              clientSecret: clientSecretOverride,
+              authorizationUrlOverride,
+              tokenUrlOverride,
+              scope: scopeOverride,
+              tenantId,
+              socketId,
+              compatibilityMode,
+              dcrMode,
+              onPolicyResolved: (policy) => {
+                oauthPolicy = policy;
+              },
+              requestAuthority: assertRequestAuthority,
+              slackRecovery: slackRecoveryBinding?.oauthContext,
+              slackConnect: connectBinding?.oauthContext,
+              attemptId: reservedSlackAttemptId,
+              assertStartAuthority: slackRecoveryBinding
+                ? renewSlackStartLease
+                : connectBinding
+                  ? renewConnectStartLease
+                  : undefined,
             })
           );
         } catch (err) {

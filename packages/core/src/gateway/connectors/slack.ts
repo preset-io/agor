@@ -2203,6 +2203,22 @@ export class SlackConnector implements GatewayConnector {
     }
 
     const socketLogger = createSlackSdkLoggerController();
+    // Deliberately WITHOUT `clientOptions`, unlike every WebClient this
+    // connector builds (see SLACK_WEB_CLIENT_OPTIONS).
+    //
+    // Do not "tidy this up" by giving it the bounded policy for consistency.
+    // SocketModeClient defaults its internal client to `{retries: 100,
+    // factor: 1.3}`, and that is a RECONNECT policy for a long-lived
+    // listener, not a per-request deadline: disconnects are regular and
+    // expected in Socket Mode, so those retries are how the listener comes
+    // back. Capping them converts a recoverable disconnect into a permanently
+    // dead listener — the channel simply stops receiving messages, with no
+    // error anyone is watching.
+    //
+    // Its liveness is already bounded, by mechanisms of its own: a 5s
+    // `clientPingTimeout` and a 30s `serverPingTimeout`, either of which
+    // triggers a reconnect. It does not need, and must not be given, the
+    // request deadline the Web API clients take.
     const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
       logger: socketLogger.logger,
