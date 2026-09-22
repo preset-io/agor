@@ -63,10 +63,11 @@ it('preserves normalized and provider thinking, text, tool order, pairing and om
     { session_id: call.session_id, role: MessageRole.USER, type: 'user', index: 1 }
   );
   render(<AgentChain messages={[call, results]} />);
-  await userEvent.click(screen.getByRole('button', { name: '2 tool calls · Errors' }));
+  await userEvent.click(screen.getByRole('button', { name: '2 tool calls' }));
   const before = screen.getByText('Before tools');
   const normalized = screen.getByText('Normalized reasoning');
   const [first, second] = screen.getAllByRole('button', { name: /Read/ });
+  expect(within(second).getByRole('img', { name: 'close-circle' })).toBeVisible();
   const provider = screen.getByText('Provider reasoning');
   const after = screen.getByText('After tools');
   // Preserve AgentChain's existing before-tools / tools / after-tools grouping.

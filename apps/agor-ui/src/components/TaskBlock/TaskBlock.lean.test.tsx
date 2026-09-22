@@ -343,3 +343,57 @@ it('keeps stopped outcomes warning-level even with an explanatory reason', () =>
   expect(screen.getByRole('status')).toHaveClass('ant-alert-warning');
   expect(screen.getByRole('status')).toHaveTextContent('Turn stopped: Stopped by request');
 });
+
+it('keeps tool-result errors inside activity details without masking a failed turn', () => {
+  const failedCall = message(1, MessageRole.ASSISTANT, [
+    { type: 'tool_use', id: 'failed-read', name: 'Read', input: { file_path: 'missing.txt' } },
+    {
+      type: 'tool_result',
+      tool_use_id: 'failed-read',
+      content: 'File does not exist',
+      is_error: true,
+    },
+  ]);
+  const props = {
+    taskMessages: [messages[0], failedCall],
+    taskMessagesLoaded: true,
+    isLatestTask: true,
+  };
+  const { rerender } = render(view(props));
+  const header = screen.getByRole('button', { name: '1 tool call', expanded: false });
+  expect(screen.queryByText('File does not exist')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  const running = { ...task, status: TaskStatus.RUNNING };
+  rerender(view({ ...props, task: running }));
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toBe(header);
+  rerender(
+    view({
+      ...props,
+      task: running,
+      latestActivity: { toolUseId: 'retry', toolName: 'Bash', status: 'executing' },
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Running: Bash' })).toBe(header);
+  rerender(
+    view({
+      ...props,
+      task: running,
+      latestActivity: { toolUseId: 'retry', toolName: 'Bash', status: 'complete' },
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Latest: Bash' })).toBe(header);
+  fireEvent.click(header);
+  expect(screen.getByRole('img', { name: 'close-circle' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: /Read missing.txt/ }));
+  expect(screen.getByText('File does not exist')).toBeVisible();
+  rerender(
+    view({
+      ...props,
+      task: { ...task, status: TaskStatus.FAILED, error_message: 'Unable to finish turn' },
+    })
+  );
+  expect(screen.getByRole('button', { name: '1 tool call' })).toBe(header);
+  expect(header).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed: Unable to finish turn');
+  expect(screen.getByText('File does not exist')).toBeVisible();
+});

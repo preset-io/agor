@@ -231,16 +231,14 @@ export const AgentChain = React.memo<AgentChainProps>(
       return items;
     }, [messages]);
 
-    const stats = useMemo(() => {
+    const toolCount = useMemo(() => {
       let toolCount = 0;
-      let errorCount = 0;
       for (const item of chainItems) {
         if (item.type === 'tool' && typeof item.content !== 'string') {
           toolCount++;
-          if (item.content.toolResult?.is_error) errorCount++;
         }
       }
-      return { toolCount, errorCount };
+      return toolCount;
     }, [chainItems]);
 
     // Generate smart description for tool
@@ -434,7 +432,6 @@ export const AgentChain = React.memo<AgentChainProps>(
       );
     };
 
-    const hasErrors = stats.errorCount > 0;
     const latestToolItem = [...chainItems].reverse().find((item) => item.type === 'tool');
     const latestToolName =
       latestToolItem && typeof latestToolItem.content !== 'string'
@@ -449,17 +446,18 @@ export const AgentChain = React.memo<AgentChainProps>(
 
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        {/* Collapsed summary - clickable */}
+        {/* Tool failures are normal agent iteration, not the turn outcome.
+            Keep error status/details on the inner tools, not this summary. */}
         <ToolDisclosureHeader
-          label={`${
+          label={
             isTaskRunning && isLatest && latestActivity
               ? `${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`
               : isTaskRunning && isLatest && latestToolName
                 ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
-                : stats.toolCount
-                  ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
+                : toolCount
+                  ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
                   : 'Reasoning'
-          }${hasErrors ? ' · Errors' : ''}`}
+          }
           expanded={expanded}
           executing={
             !!(
