@@ -323,17 +323,6 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
     return messages;
   }, [phase, responseText, config]);
 
-  const tokenBreakdown = useMemo(
-    () => ({
-      total: 48_240,
-      input: 31_100,
-      output: 17_140,
-      cacheRead: 0,
-      cacheCreation: 0,
-      cost: 0,
-    }),
-    []
-  );
   const latestContextWindow = useMemo(
     () => ({ used: 38_400, limit: 200_000, taskMetadata: null as unknown }),
     []
@@ -566,7 +555,6 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
         <SessionFooter
           session={session}
           footerTimerTask={null}
-          tokenBreakdown={tokenBreakdown}
           latestContextWindow={latestContextWindow}
           sessionMcpServerIds={[]}
           unauthedMcpServers={EMPTY_MCP_SERVERS}

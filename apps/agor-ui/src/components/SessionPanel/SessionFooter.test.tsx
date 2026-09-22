@@ -42,19 +42,9 @@ const baseSession: Session = {
   model_config: undefined,
 } as unknown as Session;
 
-const baseTokenBreakdown = {
-  total: 0,
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheCreation: 0,
-  cost: 0,
-};
-
 const baseProps = {
   session: baseSession,
   footerTimerTask: null,
-  tokenBreakdown: baseTokenBreakdown,
   latestContextWindow: null,
   footerGradient: undefined,
   sessionMcpServerIds: [] as string[],
@@ -162,12 +152,11 @@ describe('SessionFooter', () => {
             model_config: undefined,
           } as unknown as Session
         }
-        tokenBreakdown={{ ...baseTokenBreakdown, total: 0 }}
       />,
       { wrapper: Wrapper }
     );
     expect(screen.queryByTestId('model-chip')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('tokens-chip')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show session usage' })).toBeInTheDocument();
     expect(screen.queryByTestId('stats-chip')).not.toBeInTheDocument();
   });
 

@@ -1,74 +1,70 @@
-import type { AgorClient, Session, Task } from '@agor-live/client';
+import type { AgorClient, Session } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
-/** Session-wide accounting has a different lifetime/membership than transcript pages. */
+/** A fresh accounting snapshot per disclosure opening, never per task/tool event. */
 export function useSessionUsage(
   client: AgorClient | null,
-  sessionId: string | null,
+  sessionId: string,
   enabled: boolean,
   userId?: string
 ) {
+  const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{
     client: AgorClient;
     id: string;
     userId?: string;
-    usage: Session['usage_summary'];
+    revision: number;
+    usage?: Session['usage_summary'];
+    error?: string;
   } | null>(null);
   useEffect(() => {
-    if (!client || !sessionId || !enabled) return;
-    let disposed = false;
-    let running = false;
-    let dirty = false;
-    const refresh = async () => {
-      dirty = true;
-      if (running) return;
-      running = true;
-      try {
-        do {
-          dirty = false;
-          try {
-            const session = await client
-              .service('sessions')
-              .get(sessionId, { query: { include_usage: true } });
-            if (!disposed && !dirty)
-              setResult({ client, id: sessionId, userId, usage: session.usage_summary });
-          } catch {
-            if (!disposed) setResult(null);
-          }
-        } while (dirty && !disposed);
-      } finally {
-        running = false;
-      }
-    };
-    const onTask = (task: Task) => {
-      if (task.session_id === sessionId) void refresh();
-    };
-    const onReconnect = () => {
-      void refresh();
-    };
-    const onCredentialsChanged = () => {
+    if (!enabled || !client) {
       setResult(null);
-      void refresh();
+      return;
+    }
+    let disposed = false;
+    const credentialsChanged = () => {
+      disposed = true;
+      setResult(null);
+      setRevision((value) => value + 1);
     };
-    const tasks = client.service('tasks');
-    for (const event of ['created', 'patched', 'updated', 'removed'] as const)
-      tasks.on(event, onTask);
-    client.io?.on('connect', onReconnect);
-    window.addEventListener(TOKENS_REFRESHED_EVENT, onCredentialsChanged);
-    void refresh();
+    window.addEventListener(TOKENS_REFRESHED_EVENT, credentialsChanged);
+    void client
+      .service('sessions')
+      .get(sessionId, { query: { include_usage: true } })
+      .then((session) => {
+        if (!disposed)
+          setResult({
+            client,
+            id: sessionId,
+            userId,
+            revision,
+            usage: session.usage_summary,
+            error: session.usage_summary ? undefined : 'Usage is unavailable.',
+          });
+      })
+      .catch(() => {
+        if (!disposed)
+          setResult({ client, id: sessionId, userId, revision, error: 'Could not load usage.' });
+      });
     return () => {
       disposed = true;
-      for (const event of ['created', 'patched', 'updated', 'removed'] as const)
-        tasks.off(event, onTask);
-      client.io?.off('connect', onReconnect);
-      window.removeEventListener(TOKENS_REFRESHED_EVENT, onCredentialsChanged);
+      window.removeEventListener(TOKENS_REFRESHED_EVENT, credentialsChanged);
     };
-  }, [client, sessionId, enabled, userId]);
-  return enabled &&
+  }, [client, sessionId, enabled, userId, revision]);
+  const current =
+    enabled &&
     result?.client === client &&
     result?.id === sessionId &&
-    result?.userId === userId
-    ? result.usage
-    : undefined;
+    result?.userId === userId &&
+    result?.revision === revision
+      ? result
+      : null;
+  return {
+    usage: current?.usage,
+    error: current?.error,
+    loading: enabled && !!client && !current,
+    retry: () => setRevision((value) => value + 1),
+  };
 }

@@ -57,7 +57,6 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
-import { useSessionUsage } from '../../hooks/useSessionUsage';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -338,16 +337,6 @@ PromptInput.displayName = 'PromptInput';
 // a fresh array — the memos deriving footer props from `tasks` (and through
 // them the memoized SessionFooter) key on its identity.
 const EMPTY_TASKS: Task[] = [];
-// Keep the memoized footer stable while session accounting is unavailable.
-const EMPTY_USAGE: NonNullable<Session['usage_summary']> = {
-  total: 0,
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheCreation: 0,
-  cost: 0,
-};
-
 export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
@@ -641,10 +630,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
     null
   );
-
-  // Accounting spans the whole Session, never just the reached transcript pages.
-  const usage = useSessionUsage(client, reactiveSessionId, open, currentUserId);
-  const tokenBreakdown = usage ?? EMPTY_USAGE;
 
   // Get latest context window
   const latestContextWindow = React.useMemo(() => {
@@ -1444,7 +1429,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       session={activeSession}
       currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
-      tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}
       footerGradient={footerGradient}
       sessionMcpServerIds={sessionMcpServerIds}
