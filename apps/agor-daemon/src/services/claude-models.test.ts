@@ -11,6 +11,7 @@ describe('Claude model discovery materialization', () => {
     const options = toModelOptions([
       model('claude-opus-4-8', 'Claude Opus 4.8'),
       model('claude-opus-5', 'Claude Opus 5'),
+      model('claude-opus-5-5', 'Claude Opus 5.5'),
     ]);
 
     expect(options.map((option) => option.id)).toEqual([
@@ -18,12 +19,16 @@ describe('Claude model discovery materialization', () => {
       'claude-opus-4-8[1m]',
       'claude-opus-5',
       'claude-opus-5[1m]',
+      'claude-opus-5-5',
+      'claude-opus-5-5[1m]',
     ]);
     expect(options.map((option) => option.displayName)).toEqual([
       'Claude Opus 4.8 · 200k',
       'Claude Opus 4.8 · 1M',
       'Claude Opus 5 · 200k',
       'Claude Opus 5 · 1M',
+      'Claude Opus 5.5 · 200k',
+      'Claude Opus 5.5 · 1M',
     ]);
   });
 

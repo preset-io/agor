@@ -54,6 +54,7 @@ describe('curateModelOptions (Claude)', () => {
       (m) => m.id
     );
 
+    expect(ids).toContain('claude-opus-5-5');
     expect(ids).toContain('claude-opus-5');
     expect(ids).toContain('claude-sonnet-5');
     expect(ids).toContain('claude-haiku-4-5');

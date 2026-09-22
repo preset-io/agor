@@ -68,6 +68,7 @@ const KNOWN_PROVIDERS = [
     suggestedModel: 'claude-sonnet-5',
     models: activeModels([
       ['claude-fable-5-1', 'Claude Fable 5.1'],
+      ['claude-opus-5-5', 'Claude Opus 5.5'],
       ['claude-opus-5', 'Claude Opus 5'],
       ['claude-sonnet-5', 'Claude Sonnet 5'],
       ['claude-fable-5', 'Claude Fable 5'],
