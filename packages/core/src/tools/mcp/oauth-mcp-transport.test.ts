@@ -1640,6 +1640,136 @@ describe('DCR registration identity end to end', () => {
   });
 });
 
+/**
+ * The one record of what Agor SENT that survives a front-channel refusal.
+ *
+ * `invalid_request — Mismatching redirect URI` is rejected at the provider's
+ * own error page: no callback arrives, so nothing downstream of the
+ * authorization request can ever be evidence. Before this line existed a
+ * production retry taught us nothing, because there was nothing on either
+ * side of the failure to compare.
+ *
+ * Which makes its CONTENT the test's real subject. A line that carried the
+ * authorization URL, or `client_id`, or the query string, would be worse than
+ * no line at all — it would put `state` and `code_challenge` into a log
+ * aggregator. So both halves are pinned: that the fields are there, and that
+ * nothing secret-shaped is.
+ */
+describe('oauth_authorize_built instrumentation', () => {
+  const originalFetch = globalThis.fetch;
+  const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+  const prefetchedOptions = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.example.test',
+      authorization_endpoint: 'https://auth.example.test/oauth/authorize',
+      token_endpoint: 'https://auth.example.test/oauth/token',
+      registration_endpoint: 'https://register.example.test/oauth/register',
+    },
+    cacheKey: 'https://mcp.example.test/mcp',
+    resourceUri: 'https://mcp.example.test/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    reuseDynamicClientRegistration: false,
+  };
+
+  let logged: string[];
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const authorizeBuiltLine = (): string => {
+    const line = logged.find((entry) => entry.includes('event=oauth_authorize_built'));
+    expect(line).toBeDefined();
+    return line!;
+  };
+
+  it('reports origins, client provenance and the redirect comparison for a DCR client', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'built-client',
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      clientRegistrantId: 'server-one',
+    });
+
+    const line = authorizeBuiltLine();
+    expect(line).toContain('redirect_origin=https://agor.example.test');
+    expect(line).toContain('authorize_origin=https://auth.example.test');
+    expect(line).toContain('client_source=dcr');
+    expect(line).toContain('client_name=Agor MCP Client (agor.example.test/server-one)');
+    expect(line).toContain('registration_origin=https://register.example.test');
+    // The comparison a reader wants, rather than the two URLs it came from.
+    expect(line).toContain('registered_redirect_matches=true');
+  });
+
+  it('distinguishes "no observed registration" from "they differ"', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('a configured client must not register');
+    }) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', 'configured-client', redirectUri, prefetchedOptions);
+
+    const line = authorizeBuiltLine();
+    expect(line).toContain('client_source=configured');
+    // A configured client's provider-side redirect URI is something Agor has
+    // never seen. `absent` says that; `false` would be a claim.
+    expect(line).toContain('registered_redirect_matches=absent');
+    expect(line).toContain('client_name=absent');
+    expect(line).toContain('registration_origin=absent');
+  });
+
+  it('puts nothing secret-shaped in the line', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'secret-shaped-client-id',
+          client_secret: 'super-secret-value',
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'client_secret_post',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      clientRegistrantId: 'server-one',
+    });
+
+    const line = authorizeBuiltLine();
+    expect(line).not.toContain('secret-shaped-client-id');
+    expect(line).not.toContain('super-secret-value');
+    expect(line).not.toContain(context.state);
+    expect(line).not.toContain(context.pkceVerifier);
+    expect(line).not.toContain(context.authorizationUrl);
+    // No query string and no path — origins only, on every URL-shaped field.
+    expect(line).not.toContain('?');
+    expect(line).not.toContain('code_challenge');
+    expect(line).not.toContain('/mcp-servers/oauth-callback');
+    expect(line).not.toContain('/oauth/authorize');
+    expect(line).not.toContain('/oauth/register');
+  });
+});
+
 describe('marketplace oauth-start production boundary', () => {
   const originalFetch = globalThis.fetch;
   const redirectUri = 'https://agor.example.com/mcp-servers/oauth-callback';

@@ -1644,15 +1644,104 @@ export interface MCPOAuthResolvedClient {
 }
 
 /**
+ * Origin of a URL, or a fixed marker. Never a path, query or fragment.
+ *
+ * The whole point of the authorize-built line is that it can be read in a log
+ * aggregator by someone debugging a redirect mismatch, which means it must
+ * carry no `state`, no `code_challenge`, no `client_id` and no provider text.
+ * Origins answer "which deployment, which provider" and nothing else.
+ */
+function oauthLogOrigin(value: string | undefined): string {
+  if (!value) return 'absent';
+  try {
+    return new URL(value).origin;
+  } catch {
+    return 'unparseable';
+  }
+}
+
+/** Bounded, control-character-free rendering for one log field. */
+function oauthLogField(value: string | undefined): string {
+  if (!value) return 'absent';
+  const flattened = Array.from(value, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? ' ' : character;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flattened ? flattened.slice(0, 120) : 'absent';
+}
+
+/**
+ * One line, at the moment the authorization URL is built.
+ *
+ * A provider that rejects the authorization request front-channel
+ * (`invalid_request — Mismatching redirect URI`) tells Agor nothing: the
+ * browser is redirected to the provider's own error page and no callback
+ * arrives. So the only evidence that can ever exist about what Agor SENT has
+ * to be written before the URL leaves — and until this line existed, a
+ * production retry taught us nothing at all, because there was nothing on
+ * either side of the failure to compare.
+ *
+ * Deliberately origins and Agor-owned non-secret fields only. Never the
+ * authorization URL, never its query string, never `client_id`, never
+ * anything a provider said. `client_name` is Agor's own construction
+ * (`mcpOAuthDynamicClientName`: a host plus a validated registrant id), and
+ * `registered_redirect_matches` is the comparison a reader actually wants,
+ * reported rather than the two URLs it was drawn from.
+ */
+function logOAuthAuthorizeBuilt(
+  client: Pick<
+    MCPOAuthResolvedClient,
+    'method' | 'clientName' | 'registeredRedirectUri' | 'registrationEndpoint'
+  >,
+  authorizeRedirectUri: string,
+  authorizationEndpoint: string
+): void {
+  const clientSource = client.method === 'configured' ? 'configured' : 'dcr';
+  // Three-valued on purpose: a configured client has no observed registration
+  // to compare against, which is not the same answer as "they differ".
+  const registeredRedirectMatches =
+    client.registeredRedirectUri === undefined
+      ? 'absent'
+      : String(client.registeredRedirectUri === authorizeRedirectUri);
+  console.log(
+    `[MCP OAuth] event=oauth_authorize_built ` +
+      `redirect_origin=${oauthLogOrigin(authorizeRedirectUri)} ` +
+      `authorize_origin=${oauthLogOrigin(authorizationEndpoint)} ` +
+      `client_source=${clientSource} ` +
+      `client_name=${oauthLogField(client.clientName)} ` +
+      `registration_origin=${oauthLogOrigin(client.registrationEndpoint)} ` +
+      `registered_redirect_matches=${registeredRedirectMatches}`
+  );
+}
+
+/**
  * Refuse to authorize with a redirect URI the client is not registered under.
  *
- * Both values are Agor's: the one it sent to Dynamic Client Registration and
- * the one it is about to put in the authorization request. Today they come
- * from a single binding, so this cannot fire — which is the reason to assert
- * it rather than trust it. The provider's version of this disagreement is
- * rejected front-channel (`invalid_request — Mismatching redirect URI`) and
- * never reaches Agor, so a URL known here to be wrong has no second chance to
- * be classified; see the `authorization_never_returned` proxy.
+ * **This assertion cannot fire, and it is not the fence.** `resolveOAuthClient`
+ * returns `registeredRedirectUri: options.actualRedirectUri` — the same value
+ * this compares it against — so the comparison is a tautology over one
+ * binding. It is kept as a structural guard against a future resolution path
+ * that sources the two separately, not because it currently checks anything.
+ *
+ * **The invariant actually lives in
+ * `apps/agor-daemon/src/services/mcp-oauth-client-registration-authority.ts`.**
+ * Its `bindingFingerprint` covers `redirectUri` (and `clientName`), so a
+ * durable registration is only reusable for the exact redirect URI it was
+ * registered under; a changed callback produces a different fingerprint and
+ * therefore a fresh registration rather than a reused mismatched one. On the
+ * way back out, `open()` reconstitutes `redirect_uris: [parsed.redirectUri]`
+ * and feeds `validateDynamicClientRegistration`, which throws unless the
+ * provider echoed that exact URI. Do not read the tautology below as the
+ * thing keeping those two in step.
+ *
+ * The provider's version of this disagreement is rejected front-channel
+ * (`invalid_request — Mismatching redirect URI`) and never reaches Agor, so a
+ * URL known here to be wrong has no second chance to be classified; see the
+ * `authorization_never_returned` proxy, and `oauth_authorize_built` above for
+ * the evidence that does survive.
  *
  * A configured client carries no observed binding and is deliberately not
  * checked: its provider-side redirect URI is not something Agor has ever seen.
@@ -2207,6 +2296,9 @@ async function startMCPOAuthFlowWithAS(opts: {
   // Before the URL exists, not after: a mismatch here is one Agor already
   // knows about, and the provider's rejection of it is front-channel.
   assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
+
+  // The only record of what Agor sent that survives a front-channel refusal.
+  logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
