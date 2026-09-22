@@ -60,7 +60,9 @@ function view(
 const headers = () =>
   screen
     .getAllByRole('button')
-    .filter((button) => /^(Running:|Latest:|\d+ tool|Reasoning)/.test(button.textContent ?? ''));
+    .filter((button) =>
+      /^(Running:|Latest:|\d+ tool|Reasoning)/.test(button.getAttribute('aria-label') ?? '')
+    );
 
 it.each([false, true])(
   'keeps one disclosure through staged consecutive calls and partial persistence (expanded=%s)',
@@ -80,6 +82,7 @@ it.each([false, true])(
     rerender(view([first], activity(2)));
     assertSingle();
     expect(header).toHaveTextContent('Running: Bash');
+    expect(header.querySelector('.ant-tag')).toHaveTextContent(/^2$/);
     // Duplicate notification and completion before persistence.
     rerender(view([first], activity(2)));
     assertSingle();
@@ -111,13 +114,15 @@ it.each([false, true])(
     assertSingle();
     rerender(view([third, second, first], activity(3, 'complete')));
     assertSingle();
+    expect(header.querySelector('.ant-tag')).toHaveTextContent(/^3$/);
     rerender(
       view([third, second, first], activity(3, 'complete'), {
         task: { ...task, status: TaskStatus.COMPLETED },
       })
     );
     assertSingle();
-    expect(header).toHaveTextContent('3 tool calls');
+    expect(header.querySelector('.ant-tag')).toHaveTextContent('3');
+    expect(header).toHaveTextContent('Tool calls');
     if (!expanded) fireEvent.click(header);
     expect(screen.getAllByRole('button', { name: /Read$|Bash$/ })).toHaveLength(3);
   }
@@ -154,9 +159,17 @@ it('preserves real assistant-text boundaries and does not reattach a delayed kno
   const third = call(3, 'Bash');
   const { rerender } = render(view([first, text], activity(3)));
   expect(headers()).toHaveLength(2);
+  expect(headers().map((header) => header.querySelector('.ant-tag')?.textContent)).toEqual([
+    '1',
+    '1',
+  ]);
   expect(screen.getByText('Between groups')).toBeVisible();
   rerender(view([first, text, third], activity(3)));
   expect(headers()).toHaveLength(2);
+  expect(headers().map((header) => header.querySelector('.ant-tag')?.textContent)).toEqual([
+    '1',
+    '1',
+  ]);
   rerender(view([first, text, third], activity(1, 'complete')));
   expect(headers()).toHaveLength(2);
   expect(headers()[1]).toHaveTextContent('Running: Bash');

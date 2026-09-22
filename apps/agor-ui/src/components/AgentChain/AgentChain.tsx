@@ -232,14 +232,17 @@ export const AgentChain = React.memo<AgentChainProps>(
     }, [messages]);
 
     const toolCount = useMemo(() => {
-      let toolCount = 0;
+      const ids = new Set<string>();
       for (const item of chainItems) {
         if (item.type === 'tool' && typeof item.content !== 'string') {
-          toolCount++;
+          ids.add(item.content.toolUse.id);
         }
       }
-      return toolCount;
-    }, [chainItems]);
+      // TaskBlock assigns the event to its owning group. Do not count its
+      // eventual persisted payload twice, or borrow the turn-wide snapshot.
+      if (latestActivity) ids.add(latestActivity.toolUseId);
+      return ids.size;
+    }, [chainItems, latestActivity]);
 
     // Generate smart description for tool
     const getToolDescription = (toolUse: ToolUseBlock): string | null => {
@@ -449,13 +452,14 @@ export const AgentChain = React.memo<AgentChainProps>(
         {/* Tool failures are normal agent iteration, not the turn outcome.
             Keep error status/details on the inner tools, not this summary. */}
         <ToolDisclosureHeader
+          count={toolCount}
           label={
             isTaskRunning && isLatest && latestActivity
               ? `${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`
               : isTaskRunning && isLatest && latestToolName
                 ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
                 : toolCount
-                  ? `${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`
+                  ? 'Tool calls'
                   : 'Reasoning'
           }
           expanded={expanded}

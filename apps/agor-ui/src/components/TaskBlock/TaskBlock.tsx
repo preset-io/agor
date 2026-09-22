@@ -900,13 +900,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       <div style={{ marginBottom: token.marginSM }}>
         {!taskMessagesLoaded && !hasTools && !hasReasoning && !isTaskExecuting(task) ? (
           <ToolDisclosureHeader
+            count={task.recorded_tool_count}
             label={
               detailsLoading
                 ? 'Loading tool activity…'
                 : detailsError
                   ? 'Couldn’t load tool activity · Retry'
                   : task.recorded_tool_count != null && task.recorded_tool_count > 0
-                    ? `${task.recorded_tool_count} tool ${task.recorded_tool_count === 1 ? 'call' : 'calls'}`
+                    ? 'Tool calls'
                     : hasDeferredReasoning
                       ? task.recorded_tool_count === 0
                         ? 'Reasoning'
@@ -921,6 +922,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           <>
             <ToolDisclosureHeader
               label="Tool calls"
+              count={latestActivity ? undefined : 0}
               expanded={emptyActivityExpanded}
               onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
             />
@@ -1093,6 +1095,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           !activityIsRecorded &&
           pendingActivityChainIndex === -1 && (
             <ToolDisclosureHeader
+              count={1}
               label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`}
               expanded={false}
               loading={detailsLoading}

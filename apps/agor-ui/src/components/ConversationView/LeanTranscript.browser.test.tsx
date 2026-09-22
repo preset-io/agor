@@ -23,6 +23,7 @@ import { AgentChain } from '../AgentChain';
 import { MessageBlock } from '../MessageBlock';
 import { ContextWindowPill, ModelPill } from '../Pill';
 import { LeanTurnMetadata } from '../TaskBlock/LeanTurnMetadata';
+import { TaskBlock } from '../TaskBlock/TaskBlock';
 import { ConversationView } from './ConversationView';
 
 function TestSurface({ children }: { children: ReactElement }) {
@@ -385,7 +386,8 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   const tool = screen.getByRole('button', { name: /Read/ });
   expect(tool.querySelector('.anticon')).not.toBeNull();
   expect(tool).toHaveAttribute('aria-expanded', 'false');
-  const label = screen.getByText('1 tool call');
+  const label = screen.getByText('Tool calls');
+  expect(header.querySelector('.ant-tag')).toHaveTextContent(/^1$/);
   const caret = header.querySelector('.anticon-up')!;
   expect(getComputedStyle(label).fontSize).toBe(
     getComputedStyle(tool.querySelector('strong')!).fontSize
@@ -627,4 +629,24 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
   expect(screen.getByRole('alert')).toHaveClass('ant-alert-error');
   expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
+});
+
+it('retains the recorded count through lazy loading and retry without double count text', async () => {
+  const load = vi.fn().mockRejectedValue(new Error('offline'));
+  render(
+    <TaskBlock
+      task={{ ...tasks[0], recorded_tool_count: 42 }}
+      taskMessages={[]}
+      taskMessagesLoaded={false}
+      onLoadTaskMessages={load}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: '42 tool calls' }));
+  const loading = screen.getByRole('button', { name: 'Loading tool activity…' });
+  expect(loading.querySelector('.ant-tag')).toHaveTextContent(/^42$/);
+  expect(loading).toBeDisabled();
+  const retry = await screen.findByRole('button', { name: 'Couldn’t load tool activity · Retry' });
+  expect(retry.querySelector('.ant-tag')).toHaveTextContent(/^42$/);
+  expect(retry.textContent?.match(/42/g)).toHaveLength(1);
+  expect(load).toHaveBeenCalledTimes(1);
 });
