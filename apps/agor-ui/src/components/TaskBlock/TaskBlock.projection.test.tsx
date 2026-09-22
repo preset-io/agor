@@ -29,7 +29,6 @@ function fixture(content: string | ContentBlock[], extra: Partial<ContentBlock> 
     full_prompt: 'Synthetic projection task',
     status: TaskStatus.COMPLETED,
     created_at: timestamp,
-    tool_use_count: 1,
     message_range: { start_index: 0, end_index: 2, start_timestamp: timestamp },
     git_state: { ref_at_start: 'synthetic', sha_at_start: 'unknown' },
   };

@@ -352,7 +352,6 @@ export const tasks = sqliteTable(
 
         /** Filled by the executor after the turn. */
         model?: string;
-        tool_use_count: number;
         recorded_tool_count?: number | null;
 
         duration_ms?: number;

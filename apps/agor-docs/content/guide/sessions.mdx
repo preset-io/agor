@@ -368,6 +368,13 @@ labels it **N tool calls** when positive. Legacy or subsequently modified transc
 retain the generic disclosure because their count is unknown; no backfill is required.
 If expanding an unknown turn returns no tools, **No tool calls** appears in its expanded body.
 Counts describe persisted activity, not calls an agent adapter failed to record.
+
+**API/template compatibility:** The inaccurate `tool_use_count` task field and
+`toolUseCount` callback variable are retired. API and analytics consumers should use
+nullable `recorded_tool_count`; custom callback templates should use `recordedToolCount`.
+Unknown is not zero. To include verified zero while omitting unknown counts, use
+`{{#if recordedToolCount includeZero=true}}{{recordedToolCount}} tool calls{{/if}}`.
+Existing stored legacy keys need no migration and are not returned by the task API.
 Active tasks continue receiving full live activity and approvals; live events update
 the current tool header even before the corresponding message is persisted.
 The latest tool-group label shimmers while the turn remains active, including gaps between

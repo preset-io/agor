@@ -3,7 +3,6 @@
  *
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
-
 import type {
   MCPServerID,
   MessageID,
@@ -44,7 +43,6 @@ function createTaskData(overrides?: Partial<Task>): Partial<Task> {
       end_index: 0,
       start_timestamp: now,
     },
-    tool_use_count: 0,
     git_state: {
       ref_at_start: 'main',
       sha_at_start: 'abc123',
@@ -205,7 +203,6 @@ describe('TaskRepository.create', () => {
       session_id: sessionId,
       status: TaskStatus.COMPLETED,
       completed_at: completedAt,
-      tool_use_count: 15,
       git_state: {
         ref_at_start: 'feature-branch',
         sha_at_start: 'abc123def',
@@ -240,7 +237,6 @@ describe('TaskRepository.create', () => {
 
     expect(created.status).toBe(TaskStatus.COMPLETED);
     expect(created.completed_at).toBe(completedAt);
-    expect(created.tool_use_count).toBe(15);
     expect(created.git_state.ref_at_start).toBe('feature-branch');
     expect(created.git_state.sha_at_end).toBe('def456ghi');
     expect(created.message_range.end_index).toBe(10);
@@ -761,7 +757,6 @@ describe('TaskRepository.findAll', () => {
       session_id: sessionId,
       full_prompt: 'Test prompt',
       status: TaskStatus.RUNNING,
-      tool_use_count: 5,
     });
     await taskRepo.create(data);
 
@@ -772,7 +767,6 @@ describe('TaskRepository.findAll', () => {
     expect(found.task_id).toBe(data.task_id);
     expect(found.full_prompt).toBe(data.full_prompt);
     expect(found.status).toBe(data.status);
-    expect(found.tool_use_count).toBe(data.tool_use_count);
   });
 
   dbTest('should restrict by visibleToUserId through session branch access', async ({ db }) => {
@@ -2852,9 +2846,9 @@ describe('TaskRepository.update', () => {
         createTaskData({ session_id: sessionId, status: TaskStatus.COMPLETED })
       );
 
-      const updated = await taskRepo.update(created.task_id, { tool_use_count: 7 });
+      const updated = await taskRepo.update(created.task_id, { duration_ms: 7 });
 
-      expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, tool_use_count: 7 });
+      expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, duration_ms: 7 });
     }
   );
 
@@ -2977,7 +2971,6 @@ describe('TaskRepository.update', () => {
       session_id: sessionId,
       full_prompt: 'Original prompt',
       status: TaskStatus.CREATED,
-      tool_use_count: 0,
       git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
     });
     const created = await taskRepo.create(data);
@@ -2986,7 +2979,6 @@ describe('TaskRepository.update', () => {
     const updated = await taskRepo.update(data.task_id!, {
       status: TaskStatus.COMPLETED,
       completed_at: completedAt,
-      tool_use_count: 10,
       duration_ms: 45000,
       git_state: {
         ref_at_start: 'main',
@@ -3004,7 +2996,6 @@ describe('TaskRepository.update', () => {
 
     expect(updated.status).toBe(TaskStatus.COMPLETED);
     expect(updated.completed_at).toBe(completedAt);
-    expect(updated.tool_use_count).toBe(10);
     expect(updated.duration_ms).toBe(45000);
     expect(updated.git_state.sha_at_end).toBe('def456');
     expect(updated.message_range.end_index).toBe(5);

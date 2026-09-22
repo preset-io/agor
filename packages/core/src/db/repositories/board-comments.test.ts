@@ -89,7 +89,6 @@ async function createAttachedCommentTarget(
     full_prompt: 'Test prompt',
     status: TaskStatus.CREATED,
     message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
-    tool_use_count: 0,
     git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
     model: 'claude-sonnet-4-6',
   });

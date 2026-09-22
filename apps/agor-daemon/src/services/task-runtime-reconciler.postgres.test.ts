@@ -156,7 +156,6 @@ async function seed(db: Database) {
         start_timestamp: '2000-01-01T00:00:00.000Z',
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'stale' },
-      tool_use_count: 0,
     });
     const tokenFingerprint = createHash('sha256').update(active.task_id).digest('hex');
     const authority = {
@@ -194,7 +193,6 @@ async function seed(db: Database) {
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: '', sha_at_start: '' },
-      tool_use_count: 0,
     });
     return { tenantId, session, active, queued, authority };
   });

@@ -449,7 +449,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               start_timestamp: new Date().toISOString(),
             },
             git_state: { ref_at_start: 'main', sha_at_start: 'synthetic' },
-            tool_use_count: 0,
           });
           await new TaskRepository(db).bindExecutorLaunchAuthority(task.task_id);
           await new TaskRepository(db).connectExecutor(task.task_id, new Date());

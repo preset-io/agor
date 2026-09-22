@@ -71,9 +71,11 @@ const TaskListItem = ({ task, onClick, compact = false }: TaskListItemProps) => 
             <Tag icon={<MessageOutlined />} color="default">
               {messageCount}
             </Tag>
-            <Tag icon={<ToolOutlined />} color="default">
-              {task.tool_use_count}
-            </Tag>
+            {task.recorded_tool_count != null && (
+              <Tag icon={<ToolOutlined />} color="default">
+                {task.recorded_tool_count}
+              </Tag>
+            )}
             {hasReport && (
               <Tag icon={<FileTextOutlined />} color="blue">
                 report

@@ -399,10 +399,8 @@ export interface Task {
   };
 
   // Tool usage
-  tool_use_count: number;
-
   /** Server-derived terminal snapshot of distinct recorded tool IDs. Missing/null
-   * means unknown (including legacy turns); never infer zero from tool_use_count.
+   * means unknown (including legacy turns); never substitute zero.
    * Transcript mutations invalidate it. Not an executor/client-writable field. */
   recorded_tool_count?: number | null;
 

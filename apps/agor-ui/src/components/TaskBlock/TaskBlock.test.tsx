@@ -246,7 +246,6 @@ describe('authorization-revoked failure projection', () => {
               end_index: 0,
               start_timestamp: '2026-08-30T19:26:18.933Z',
             },
-            tool_use_count: 0,
           } as Task
         }
         isExpanded

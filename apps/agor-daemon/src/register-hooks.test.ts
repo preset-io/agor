@@ -425,6 +425,7 @@ describe('protectServerManagedTaskWrites', () => {
     'queue_position',
     'sdk_failure',
     'recorded_tool_count',
+    'tool_use_count',
   ])('rejects executor patch field %s outside the result allowlist', async (field) => {
     await expect(
       protectServerManagedTaskWrites(

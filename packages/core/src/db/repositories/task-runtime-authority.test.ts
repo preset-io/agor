@@ -118,7 +118,6 @@ async function seedRuntime(
       start_timestamp: '2026-08-28T00:00:00.000Z',
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'authority' },
-    tool_use_count: 0,
   });
   const launch = await tasks.bindExecutorLaunchAuthority(task.task_id);
   expect(launch.fs_access).toBe(floor);

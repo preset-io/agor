@@ -67,7 +67,6 @@ const tasks: Task[] = Array.from({ length: 20 }, (_, index) => ({
   status: TaskStatus.COMPLETED,
   created_at: '2026-09-01T00:00:00.000Z',
   model: 'synthetic-model',
-  tool_use_count: 0,
   git_state: { ref_at_start: 'main', sha_at_start: 'test' },
 }));
 const messages = new Map(

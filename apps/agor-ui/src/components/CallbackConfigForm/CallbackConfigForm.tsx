@@ -75,7 +75,8 @@ export const CallbackConfigForm: React.FC<CallbackConfigFormProps> = ({ showHelp
           Advanced: Customize the callback message template using Handlebars syntax. Available
           variables: <Text code>childSessionId</Text>, <Text code>childSessionTitle</Text>,{' '}
           <Text code>spawnPrompt</Text>, <Text code>status</Text>, <Text code>messageCount</Text>,{' '}
-          <Text code>toolUseCount</Text>, <Text code>lastAssistantMessage</Text>
+          <Text code>recordedToolCount</Text> (absent when unknown),{' '}
+          <Text code>lastAssistantMessage</Text>
         </Paragraph>
       )}
     </>

@@ -456,8 +456,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   private rowToTask(row: TaskRow): Task {
     const storedTerminationRequest = row.data.termination_request;
-    const { executor_launch_fs_access_floor: _executorLaunchFsAccessFloor, ...publicData } =
-      row.data;
+    // Strip the retired JSON key without migrating historical blobs.
+    const {
+      executor_launch_fs_access_floor: _executorLaunchFsAccessFloor,
+      tool_use_count: _retiredToolCount,
+      ...publicData
+    } = row.data as TaskRow['data'] & { tool_use_count?: unknown };
     const coordination: TerminationCoordinationClaim | undefined =
       row.termination_coordination_token &&
       row.termination_coordination_claimed_at &&
@@ -565,7 +569,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         git_state,
         // Filled in by the executor after the turn — don't substitute a default.
         ...(task.model ? { model: task.model } : {}),
-        tool_use_count: task.tool_use_count ?? 0,
         recorded_tool_count: task.recorded_tool_count,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
@@ -2495,7 +2498,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ref_at_start: '',
         sha_at_start: '',
       },
-      tool_use_count: 0,
     };
 
     if (input.status === TaskStatus.CREATED && !input.task_id) {

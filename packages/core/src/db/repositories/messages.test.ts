@@ -1139,11 +1139,16 @@ describe('recorded tool count snapshots', () => {
       const legacyId = await createTestTask(db, sessionId);
       const row = await select(db).from(tasksTable).where(eq(tasksTable.task_id, legacyId)).one();
       const { recorded_tool_count: _count, ...legacyData } = row!.data;
+      Object.assign(legacyData, { tool_use_count: 99 });
       await update(db, tasksTable)
         .set({ status: TaskStatus.COMPLETED, data: legacyData })
         .where(eq(tasksTable.task_id, legacyId))
         .run();
       expect((await tasks.findById(legacyId))?.recorded_tool_count).toBeUndefined();
+      expect(await tasks.findById(legacyId)).not.toHaveProperty('tool_use_count');
+      expect((await tasks.findPage({ taskId: legacyId })).data[0]).not.toHaveProperty(
+        'tool_use_count'
+      );
       expect(
         (await tasks.update(legacyId, { duration_ms: 1 })).recorded_tool_count
       ).toBeUndefined();

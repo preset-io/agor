@@ -315,7 +315,7 @@ All open questions have been resolved and moved to "Design Decisions" section:
                      │ - spawnPrompt       │
                      │ - completedAt       │
                      │ - messageCount      │
-                     │ - toolUseCount      │
+                     │ - recordedToolCount      │
                      └─────────────────────┘
                               │
                               │ Creates queued message
@@ -469,7 +469,7 @@ Parent Agent    MCP Server    Sessions Svc    Child Session    TasksService    M
     "start_index": 0,
     "end_index": 11
   },
-  "tool_use_count": 8
+  "recorded_tool_count": 8
 }
 ```
 
@@ -491,7 +491,7 @@ Parent Agent    MCP Server    Sessions Svc    Child Session    TasksService    M
   "status": "completed",
   "completedAt": "2025-01-14T15:32:18Z",
   "messageCount": 12,
-  "toolUseCount": 8
+  "recordedToolCount": 8
 }
 ```
 
@@ -598,13 +598,13 @@ import Handlebars from 'handlebars';
  * - status: Task status (completed, failed, etc.)
  * - completedAt: ISO timestamp of completion
  * - messageCount: Number of messages in completed task
- * - toolUseCount: Number of tools used
+ * - recordedToolCount: Verified recorded tool count; absent/null when unknown
  */
 const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq status "completed")}}completed{{else}}failed{{/if}}.
 
 **Task:** {{spawnPrompt}}
 **Status:** {{status}}
-**Stats:** {{messageCount}} messages, {{toolUseCount}} tool uses
+**Stats:** {{messageCount}} messages{{#if recordedToolCount includeZero=true}}, {{recordedToolCount}} tool calls{{/if}}
 
 {{#if lastAssistantMessage}}**Result:**
 {{lastAssistantMessage}}
@@ -624,7 +624,7 @@ export interface ChildCompletionContext {
   status: string; // Task status (completed, failed, etc.)
   completedAt: string; // ISO timestamp
   messageCount: number;
-  toolUseCount: number;
+  recordedToolCount?: number | null;
   lastAssistantMessage?: string; // Child's final assistant message content
 }
 
@@ -801,7 +801,7 @@ private async queueParentCallback(
       status: task.status, // COMPLETED, FAILED, etc.
       completedAt: task.completed_at || new Date().toISOString(),
       messageCount: task.message_range?.end_index - task.message_range?.start_index + 1 || 0,
-      toolUseCount: task.tool_use_count || 0,
+      recordedToolCount: task.recorded_tool_count,
       lastAssistantMessage,
     };
 

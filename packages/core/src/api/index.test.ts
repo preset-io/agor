@@ -816,7 +816,6 @@ describe('createClient', () => {
           end_index: 0,
           start_timestamp: '2026-08-20T00:00:00.000Z',
         },
-        tool_use_count: 0,
         git_state: { ref_at_start: 'feature', sha_at_start: 'abc123' },
       };
 
