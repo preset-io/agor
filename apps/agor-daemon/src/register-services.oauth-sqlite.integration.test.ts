@@ -612,6 +612,16 @@ async function createHarness(
      * that fixture, not about production.
      */
     requireTenantScope?: boolean;
+    /**
+     * Make the gateway's connect-card repaint never answer.
+     *
+     * Every other stub in this file resolves immediately, which is why no
+     * fixture here could express a HANG — and a hang is what one stalled
+     * `chat.update` inside `syncMcpSlackConnectCard` actually is. The
+     * `oauth-start` handler used to await that repaint inside its own failure
+     * handler, ahead of the only line that logs what went wrong.
+     */
+    stallConnectCardSync?: boolean;
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -684,6 +694,7 @@ async function createHarness(
       async syncMcpSlackRecoveryNoticeAfterCommit() {},
       async syncMcpSlackConnectCard(widgetId: string) {
         syncedConnectCards.push(widgetId);
+        if (options.stallConnectCardSync) await new Promise<void>(() => {});
       },
       async markMcpSlackOAuthResult(input: SQLiteHarness['gatewayOAuthResults'][number]) {
         gatewayOAuthResults.push(input);
@@ -2076,8 +2087,79 @@ describe('Slack MCP connect authenticated route', () => {
     });
     expect((await seeded.delivery())?.oauth_start_claim_expires_at).toBeUndefined();
     // Recording it is not enough — the card in the thread is the only surface
-    // the user has, and nothing else wakes it until the repair sweep.
+    // the user has, and nothing else wakes it until the repair sweep. The
+    // nudge is dispatched but deliberately not awaited (a stalled Slack write
+    // must not hang the start), so this waits for it rather than assuming the
+    // handler's own awaits happened to flush it.
+    await vi.waitFor(() => expect(harness.syncedConnectCards).toContain(seeded.widgetId));
+  });
+
+  /**
+   * A failing start must account for itself even when Slack does not answer.
+   *
+   * `oauth-start`'s outer catch ran the repaint FIRST, and the repaint ends in
+   * a Slack call. One stalled `chat.update` therefore hung the handler ahead
+   * of `externalFailure` — the only line that says what went wrong — so a
+   * start that failed for a perfectly classifiable reason produced no URL, no
+   * error and no category at all, and the request never settled.
+   *
+   * The divergence was ours rather than Slack's: the canvas path returns early
+   * at `if (!binding) return` and can never reach the Slack call, and the
+   * recovery lane has always dispatched its repaint fire-and-forget. Only the
+   * connect lane awaited it.
+   *
+   * Both halves of the fix are asserted here, because either one alone still
+   * leaves a user with a thirty-second-a-card read: the classified line lands
+   * even while the repaint is stalled, AND the request settles anyway.
+   */
+  it('classifies, logs and settles a failing start while the card repaint is stalled', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider, { stallConnectCardSync: true });
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    // Same failure as the test above: the provider is gone, so the start has
+    // something real and classifiable to report.
+    await provider.close();
+
+    const logged: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    });
+    let started: { success: boolean; recovery?: { category?: string } };
+    try {
+      started = (await Promise.race([
+        harness.app
+          .service('mcp-servers/oauth-start')
+          .create({ connect_token: seeded.token }, paramsFor(harness)),
+        // Comfortably under the suite's own 10s timeout, so a regression
+        // fails by this name rather than as an anonymous test timeout.
+        new Promise((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error('oauth-start never settled while the repaint was stalled')),
+            5_000
+          ).unref?.()
+        ),
+      ])) as typeof started;
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(started.success).toBe(false);
+    expect(started.recovery?.category).toBeTruthy();
+    // The classified line is the whole point: it has to be on disk BEFORE
+    // anything durable or outbound is attempted, so the next occurrence is a
+    // one-line read regardless of what Slack is doing.
+    expect(logged.some((line) => line.includes('[OAuth Start] event=mcp_external_failure'))).toBe(
+      true
+    );
+    // The durable record is still written — the repaint is what was dropped
+    // from the request path, not the accounting.
+    expect(await seeded.delivery()).toMatchObject({ oauth_failed_at: expect.any(String) });
+    // And the repaint was still DISPATCHED; it is simply nobody's business to
+    // wait for it. `next_repair_at` hands the card to the sweep either way.
     expect(harness.syncedConnectCards).toContain(seeded.widgetId);
+    expect((await seeded.delivery())?.next_repair_at).toEqual(expect.any(String));
   });
 
   /**

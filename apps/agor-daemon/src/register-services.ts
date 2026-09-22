@@ -3730,6 +3730,13 @@ export async function registerMCPServices(
                 ...current,
                 ...(success ? { oauth_succeeded_at: stampedAt } : { oauth_failed_at: stampedAt }),
                 oauth_start_claim_expires_at: undefined,
+                // The nudge below is no longer awaited, so the sweep — not the
+                // provider's redirect response — has to be what guarantees the
+                // repaint. This is the same `next_repair_at = now` the recovery
+                // lane's `projectMcpSlackRecoveryOAuthResult` has always
+                // written, and what `markConnectStartFailed` writes on the
+                // start path.
+                next_repair_at: stampedAt,
               }
             : null
         )
@@ -3741,12 +3748,18 @@ export async function registerMCPServices(
     // not wake the projection — which is why this is not covered by the
     // widget-store hook.
     if (!stamped.changed) return;
-    await runWithTenantContext(pendingFlow.tenantId, async () => {
+    // Deliberately NOT awaited. This runs on the provider's redirect response:
+    // the user is sitting on a blank callback page waiting for it. The nudge
+    // is a Slack write, and `.catch()` only handles a REJECTION — a Slack call
+    // that never answers held the redirect open for as long as it stalled.
+    // The CAS above sets `next_repair_at = now`, so the card is the sweep's
+    // (≤30s) whether or not this returns.
+    void runWithTenantContext(pendingFlow.tenantId, async () => {
       const gateway = app.service('gateway') as unknown as {
         syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
       };
-      await gateway.syncMcpSlackConnectCard(connect.widget_id).catch(() => undefined);
-    });
+      await gateway.syncMcpSlackConnectCard(connect.widget_id);
+    }).catch(() => undefined);
   };
 
   const pendingFromDurableClaim = (
@@ -5585,16 +5598,31 @@ export async function registerMCPServices(
         });
         if (!failed?.changed) return;
         // `mutateSlackConnectDelivery` deliberately emits no service event, so
-        // the projection has to be told; otherwise the thread keeps its live
-        // button until the repair sweep next looks at the row. The whole call
-        // is guarded, not just its promise: this runs while an earlier failure
-        // is being reported, and a gateway that cannot repaint must not become
-        // the error the caller sees.
+        // the projection is told explicitly; otherwise the thread keeps its
+        // live button until the repair sweep next looks at the row.
+        //
+        // Deliberately NOT awaited. The repaint is a Slack write, and this
+        // runs on a request path that is already reporting an earlier failure
+        // — awaiting it made one stalled `chat.update` hang the whole handler.
+        // The CAS above set `next_repair_at = now`, so the sweep owns the card
+        // regardless: the nudge only buys the thread a repaint sooner than the
+        // next pass (≤30s), and is worth nothing at the price of the request.
+        // This matches the recovery lane below, which has always been
+        // fire-and-forget.
+        // The lookup and the dispatch stay guarded — this helper is documented
+        // as unable to throw, and a gateway that cannot repaint must not
+        // become the error the caller sees.
         try {
           const gateway = app.service('gateway') as unknown as {
             syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
           };
-          await gateway.syncMcpSlackConnectCard(binding.claims.widget_id);
+          void Promise.resolve(gateway.syncMcpSlackConnectCard(binding.claims.widget_id)).catch(
+            () => {
+              console.warn(
+                '[OAuth Start] event=mcp_slack_connect_card_unwoken lane=connect outcome=sync_failed'
+              );
+            }
+          );
         } catch {
           console.warn(
             '[OAuth Start] event=mcp_slack_connect_card_unwoken lane=connect outcome=sync_failed'
@@ -6068,46 +6096,64 @@ export async function registerMCPServices(
             'Browser opened for authentication. After signing in, copy the callback URL and paste it below.',
         };
       } catch (error) {
-        await markSlackRecoveryStartFailed();
-        // A live-authority failure must never be normalized into an ordinary
-        // provider diagnostic; callers may otherwise continue an obsolete
-        // flow under the replacement identity on the same socket.
-        assertRequestAuthority?.();
-        const preliminaryRecovery = classifyMCPAuthRecovery(error, {
-          mcpServerId: data.mcp_server_id,
-          oauthPolicy,
-        });
-        let redirectUri: string | null = null;
-        if (
-          preliminaryRecovery.category === 'client_registration_required' ||
-          preliminaryRecovery.category === 'client_registration_failed'
-        ) {
-          try {
-            redirectUri = await runWithinOAuthAuthority(
-              assertRequestAuthority,
-              resolveMCPOAuthRedirectUri
-            );
-          } catch {
-            assertRequestAuthority?.();
+        // Classify and LOG before touching anything durable. The repaint used
+        // to run first, and `markConnectStartFailed` ends in a Slack call: one
+        // stalled `chat.update` took the only account of what went wrong down
+        // with it, so a hung start produced no URL, no error and no category
+        // at all. The account of a failure must not depend on the provider
+        // that caused it still answering.
+        //
+        // The durable write stays in a `finally` so it is still reached when
+        // the authority assert below throws — that path never logged, and
+        // still does not, but it has always stamped the attempt failed.
+        try {
+          // A live-authority failure must never be normalized into an ordinary
+          // provider diagnostic; callers may otherwise continue an obsolete
+          // flow under the replacement identity on the same socket.
+          assertRequestAuthority?.();
+          const preliminaryRecovery = classifyMCPAuthRecovery(error, {
+            mcpServerId: data.mcp_server_id,
+            oauthPolicy,
+          });
+          let redirectUri: string | null = null;
+          if (
+            preliminaryRecovery.category === 'client_registration_required' ||
+            preliminaryRecovery.category === 'client_registration_failed'
+          ) {
+            try {
+              redirectUri = await runWithinOAuthAuthority(
+                assertRequestAuthority,
+                resolveMCPOAuthRedirectUri
+              );
+            } catch {
+              assertRequestAuthority?.();
+            }
           }
+          assertRequestAuthority?.();
+          const recovery = redirectUri
+            ? classifyMCPAuthRecovery(error, {
+                mcpServerId: data.mcp_server_id,
+                oauthPolicy,
+                redirectUri,
+              })
+            : preliminaryRecovery;
+          // This is deliberately the final consumer of the original unknown.
+          // Response construction below uses only the closed recovery contract.
+          externalFailure(
+            'OAuth Start',
+            'oauth',
+            error,
+            externalFailureOptionsForRecovery(recovery)
+          );
+          return {
+            success: false,
+            error: recovery.message,
+            recovery,
+            ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+          } satisfies MCPOAuthStartFailure;
+        } finally {
+          await markSlackRecoveryStartFailed();
         }
-        assertRequestAuthority?.();
-        const recovery = redirectUri
-          ? classifyMCPAuthRecovery(error, {
-              mcpServerId: data.mcp_server_id,
-              oauthPolicy,
-              redirectUri,
-            })
-          : preliminaryRecovery;
-        // This is deliberately the final consumer of the original unknown.
-        // Response construction below uses only the closed recovery contract.
-        externalFailure('OAuth Start', 'oauth', error, externalFailureOptionsForRecovery(recovery));
-        return {
-          success: false,
-          error: recovery.message,
-          recovery,
-          ...(redirectUri ? { redirect_uri: redirectUri } : {}),
-        } satisfies MCPOAuthStartFailure;
       }
     },
   });
