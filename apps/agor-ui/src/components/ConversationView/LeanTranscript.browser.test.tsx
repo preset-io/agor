@@ -20,6 +20,7 @@ import type { ReactElement } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { AgentChain } from '../AgentChain';
+import { MessageBlock } from '../MessageBlock';
 import { ContextWindowPill, ModelPill } from '../Pill';
 import { LeanTurnMetadata } from '../TaskBlock/LeanTurnMetadata';
 import { ConversationView } from './ConversationView';
@@ -170,6 +171,47 @@ it('renders continuous history without detail fetching and anchors an upward pag
   await page.screenshot({ path: `./.vitest/lean-transcript-${window.innerWidth}.png` });
 });
 
+it('keeps a long user prompt and its full-size avatar within the transcript width', () => {
+  const prompt: Message = {
+    ...messages.get(tasks[19].task_id)![0],
+    content: 'Synthetic long user prompt. '.repeat(80),
+  };
+  const { container } = render(
+    <div style={{ maxWidth: 586 }}>
+      <MessageBlock message={prompt} leanTranscript />
+    </div>
+  );
+  const root = container.querySelector('.ant-bubble')!;
+  const avatar = root.querySelector('.ant-avatar')!;
+  expect(avatar.getBoundingClientRect().width).toBe(40);
+  expect(avatar.getBoundingClientRect().right).toBeLessThanOrEqual(
+    root.getBoundingClientRect().right + 1
+  );
+  expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
+});
+
+it('keeps the tool disclosure after an empty load and reopens without another request', async () => {
+  const task = tasks[19];
+  state = { ...state, tasks: [task], hasOlderTasks: false };
+  loadTaskMessages.mockImplementationOnce(async () => {
+    update({ ...state, loadedTaskIds: new Set([task.task_id]) });
+    return [];
+  });
+  render(<ConversationView client={null} sessionId={sessionId} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Tool calls', expanded: false }));
+  const empty = await screen.findByText('No tool calls');
+  const header = screen.getByRole('button', { name: 'Tool calls', expanded: true });
+  expect(header).toHaveAttribute('aria-expanded', 'true');
+  expect(getComputedStyle(empty).fontSize).toBe(getComputedStyle(header).fontSize);
+  expect(getComputedStyle(empty).color).toBe(getComputedStyle(header).color);
+  await userEvent.click(header);
+  expect(screen.queryByText('No tool calls')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Tool calls', expanded: false }));
+  expect(screen.getByText('No tool calls')).toBeVisible();
+  expect(loadTaskMessages).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Prompt 19')).toBeVisible();
+});
+
 it('reveals existing metadata pills without layout shift through focus, hover and touch', async () => {
   const metadata = (
     <Flex gap="small" style={{ width: 'max-content', flexShrink: 0 }}>
@@ -247,7 +289,7 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
     ],
   };
   render(<AgentChain messages={[activity]} leanTranscript />);
-  const header = screen.getByRole('button', { name: '1 tool call · Show details' });
+  const header = screen.getByRole('button', { name: '1 tool call', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
   await userEvent.tab();
   await userEvent.keyboard('{Enter}');
@@ -255,7 +297,7 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   const tool = screen.getByRole('button', { name: /Read/ });
   expect(tool.querySelector('.anticon')).not.toBeNull();
   expect(tool).toHaveAttribute('aria-expanded', 'false');
-  const label = screen.getByText('1 tool call · Hide details');
+  const label = screen.getByText('1 tool call');
   const caret = header.querySelector('.anticon-up')!;
   expect(getComputedStyle(label).fontSize).toBe(
     getComputedStyle(tool.querySelector('strong')!).fontSize
@@ -277,7 +319,7 @@ it('shows live tool events before persistence and preserves the group through co
     state = { ...state, toolsByTask: new Map([[task.task_id, [latest]]]) };
     for (const listener of listeners) listener();
   });
-  expect(screen.getByRole('button', { name: 'Running: Read · Show details' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Running: Read', expanded: false })).toBeVisible();
   const tool: Message = {
     message_id: generateId(),
     session_id: sessionId,
@@ -297,7 +339,7 @@ it('shows live tool events before persistence and preserves the group through co
     };
     for (const listener of listeners) listener();
   });
-  expect(screen.getAllByRole('button', { name: 'Latest: Read · Show details' })).toHaveLength(1);
+  expect(screen.getAllByRole('button', { name: 'Latest: Read', expanded: false })).toHaveLength(1);
   act(() => {
     state = {
       ...state,
@@ -306,10 +348,10 @@ it('shows live tool events before persistence and preserves the group through co
     };
     for (const listener of listeners) listener();
   });
-  expect(screen.getByRole('button', { name: '1 tool call · Show details' })).toHaveAttribute(
+  expect(screen.getByRole('button', { name: '1 tool call', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
-  expect(screen.queryByText(/No tool calls recorded/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/No tool calls/)).not.toBeInTheDocument();
   expect(loadTaskMessages).not.toHaveBeenCalled();
 });

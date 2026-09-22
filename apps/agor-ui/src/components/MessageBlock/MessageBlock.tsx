@@ -775,6 +775,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
                   root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  // Bubble reserves 32px by default, but desktop user avatars
+                  // are 40px. Reserve their actual width instead of overflowing
+                  // the conversation and introducing a horizontal scrollbar.
+                  avatar: isUser ? { width: compact ? 32 : 40, flexShrink: 0 } : undefined,
                   body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
                     padding: compact && isUser ? '4px 10px' : undefined,

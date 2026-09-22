@@ -913,11 +913,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
+    const [emptyActivityExpanded, setEmptyActivityExpanded] = useState(false);
     const firstAgentChainIndex = blocks.findIndex((block) => block.type === 'agent-chain');
     const loadActivity = async () => {
       setDetailsLoading(true);
       setDetailsError(null);
       setRevealLoadedActivity(true);
+      setEmptyActivityExpanded(true);
       try {
         await onLoadTaskMessages(task.task_id);
       } catch {
@@ -951,18 +953,33 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 ? 'Loading tool activity…'
                 : detailsError
                   ? 'Couldn’t load tool activity · Retry'
-                  : 'Tool calls · Show details'
+                  : 'Tool calls'
             }
             expanded={false}
             loading={detailsLoading}
             onClick={loadActivity}
           />
         ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-          <Typography.Text type="secondary">
-            {latestActivity
-              ? 'Tool activity was observed, but no details are recorded for this turn'
-              : 'No tool calls recorded for this turn'}
-          </Typography.Text>
+          <>
+            <ToolDisclosureHeader
+              label="Tool calls"
+              expanded={emptyActivityExpanded}
+              onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
+            />
+            {emptyActivityExpanded && (
+              <div
+                style={{
+                  fontSize: token.fontSizeSM,
+                  color: token.colorTextSecondary,
+                  paddingInlineStart: token.marginSM,
+                }}
+              >
+                {latestActivity
+                  ? 'Tool activity was observed, but no details are recorded for this turn'
+                  : 'No tool calls'}
+              </div>
+            )}
+          </>
         ) : null}
       </div>
     );
@@ -1144,7 +1161,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 ))
           ) && (
             <ToolDisclosureHeader
-              label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName} · Show details`}
+              label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`}
               expanded={false}
               loading={detailsLoading}
               onClick={loadActivity}

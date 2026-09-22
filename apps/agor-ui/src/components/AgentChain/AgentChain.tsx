@@ -41,7 +41,7 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, Popover, Space, Typography, theme } from 'antd';
+import { Button, ConfigProvider, Popover, Space, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -641,7 +641,7 @@ export const AgentChain = React.memo<AgentChainProps>(
                   : stats.toolCount
                     ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
                     : 'Reasoning'
-            }${hasErrors ? ' · Errors' : ''} · ${expanded ? 'Hide details' : 'Show details'}`}
+            }${hasErrors ? ' · Errors' : ''}`}
             expanded={expanded}
             onClick={() => setExpanded(!expanded)}
           />
@@ -707,17 +707,29 @@ export const AgentChain = React.memo<AgentChainProps>(
 
         {/* Expanded chain */}
         {expanded && (
-          <div
-            style={{
-              paddingLeft: compact ? 0 : token.sizeUnit * 8,
-              marginTop: token.sizeUnit,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
+          <ConfigProvider
+            theme={{
+              token: {
+                fontSize: token.fontSizeSM,
+                fontSizeSM: token.fontSizeSM,
+                colorText: token.colorTextSecondary,
+              },
             }}
           >
-            {chainItems.map(renderChainItem)}
-          </div>
+            <div
+              style={{
+                fontSize: token.fontSizeSM,
+                color: token.colorTextSecondary,
+                paddingLeft: compact ? 0 : token.sizeUnit * 8,
+                marginTop: token.sizeUnit,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              {chainItems.map(renderChainItem)}
+            </div>
+          </ConfigProvider>
         )}
       </div>
     );

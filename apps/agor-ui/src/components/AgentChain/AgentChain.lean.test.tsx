@@ -28,26 +28,26 @@ it('updates a quiet collapsed header from live activity to a known count without
   const { container, rerender } = render(
     <AgentChain messages={[first]} isTaskRunning isLatest leanTranscript />
   );
-  expect(screen.getByRole('button', { name: 'Latest: Read · Show details' })).toHaveAttribute(
+  expect(screen.getByRole('button', { name: 'Latest: Read', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
   rerender(
     <AgentChain messages={[first, activity('Bash', 1)]} isTaskRunning isLatest leanTranscript />
   );
-  expect(screen.getByRole('button', { name: 'Running: Bash · Show details' })).toHaveAttribute(
+  expect(screen.getByRole('button', { name: 'Running: Bash', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
   rerender(<AgentChain messages={[first, activity('Bash', 1, true)]} isLatest leanTranscript />);
-  const header = screen.getByRole('button', { name: '2 tool calls · Show details' });
+  const header = screen.getByRole('button', { name: '2 tool calls', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
   expect(container.querySelector('.ant-tag')).toBeNull();
   expect(screen.queryByText('Result')).not.toBeInTheDocument();
   fireEvent.click(header);
   expect(screen.getByRole('button', { name: /Read/ })).toHaveAttribute('aria-expanded', 'false');
-  fireEvent.click(screen.getByRole('button', { name: '2 tool calls · Hide details' }));
-  expect(screen.getByRole('button', { name: '2 tool calls · Show details' })).toHaveAttribute(
+  fireEvent.click(screen.getByRole('button', { name: '2 tool calls', expanded: true }));
+  expect(screen.getByRole('button', { name: '2 tool calls', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
