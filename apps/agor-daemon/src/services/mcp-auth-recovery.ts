@@ -94,6 +94,8 @@ const OAUTH_FAILURE_GUIDANCE: Record<MCPOAuthFailureReason, string> = {
     'The OAuth metadata does not satisfy the effective compatibility profile. Verify the provider authorization/token endpoints and callback issuer support; no weaker policy is retried automatically.',
   endpoint_override_mismatch:
     'A saved OAuth endpoint override does not match the provider metadata. Review the saved authorization and token endpoints.',
+  redirect_uri_mismatch:
+    'The OAuth client is registered under a different Agor callback URL than this authorization request would use. Reconnect so a client is registered for the current callback URL.',
 };
 
 /**
@@ -339,6 +341,19 @@ export function recoveryForOAuthAttemptFailure(
       action: 'contact_admin',
       message:
         'Your MCP authorization permission changed. Ask an administrator to review access, then reconnect.',
+    };
+  }
+  if (failureCode === 'authorization_never_returned') {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      // Agor cannot observe a redirect-URI mismatch: the provider refuses it
+      // on its own authorize page and never redirects back, so an attempt that
+      // expires still pending is the only proxy there is. It is named first
+      // because it is the one cause the user cannot resolve by trying harder.
+      message:
+        'The provider never sent the authorization back to Agor. The most common cause is that this OAuth client is not registered for Agor’s callback URL — ask an administrator to check the deployment public URL and the provider’s registered redirect URI. Otherwise the sign-in page may simply have been closed or left open too long; reconnect to try again.',
     };
   }
   if (failureCode === 'client_registration_invalidated') {

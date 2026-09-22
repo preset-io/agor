@@ -370,6 +370,7 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import { logOAuthAuthorizeBuilt } from './utils/mcp-oauth-authorize-log.js';
 import {
   mcpOAuthConnectClaimsMatchCaller,
   mcpOAuthConnectClaimsMatchDelivery,
@@ -2202,7 +2203,10 @@ export async function registerMCPServices(
           tenantId: flow.tenantId,
           mcpServerId: flow.mcpServerId,
           oauthMode: flow.oauthMode,
-          failureCode: 'authorization_timed_out',
+          // The flow was still pending: no callback ever reached Agor. See the
+          // durable sweep in `mcp-oauth-pending-flows.ts` for why that is the
+          // only proxy a front-channel rejection leaves behind.
+          failureCode: 'authorization_never_returned',
           updatedAt: now,
         });
         releaseLocalGrantGeneration(flow);
@@ -2570,6 +2574,9 @@ export async function registerMCPServices(
         // flow context. Daemon callers never read or populate its origin-only
         // bearer cache.
         cacheKey: opts.prefetchedAuthServerMetadata ? effectiveMcpUrl : undefined,
+        // The registrant in the RFC 7591 client_name. The authoritative saved
+        // row wins over the request value, which is only a lookup key.
+        clientRegistrantId: savedServerAuthority?.mcp_server_id ?? opts.mcpServerId,
         // Process-global DCR credentials are not a tenant/user/server namespace.
         // Daemon flows never share them, including in SQLite deployments.
         reuseDynamicClientRegistration: false,
@@ -2750,6 +2757,11 @@ export async function registerMCPServices(
         )
       : localAttemptId!;
 
+    // One line per attempt, after the attempt has a durable id to correlate on.
+    // A redirect-URI mismatch is rejected front-channel and never comes back,
+    // so this is the only place Agor can state the binding it used.
+    logOAuthAuthorizeBuilt({ mcpServerId: opts.mcpServerId, attemptId, context });
+
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
     let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;
     let tokenReject: ((err: Error) => void) | undefined;
@@ -2780,7 +2792,9 @@ export async function registerMCPServices(
                 tenantId: opts.tenantId,
                 mcpServerId: opts.mcpServerId,
                 oauthMode: effectiveOAuthMode,
-                failureCode: 'authorization_timed_out',
+                // Still pending when the request gave up, and dropped here, so
+                // no callback reached Agor or ever can for this attempt.
+                failureCode: 'authorization_never_returned',
                 updatedAt: Date.now(),
               });
             }

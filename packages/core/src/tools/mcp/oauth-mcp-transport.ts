@@ -183,12 +183,13 @@ export class OAuthConfigurationError extends Error {
       | 'endpoint_override_mismatch'
       | 'issuer_mismatch'
       | 'pkce_required'
-      | 'client_registration_required',
+      | 'client_registration_required'
+      | 'redirect_uri_mismatch',
     message = `OAuth configuration failed (${failureCode})`,
     /** Specific local predicate, without changing the broad external-error category. */
     readonly failureReason?: Extract<
       MCPOAuthFailureReason,
-      'dcr_disabled' | 'protected_resource_mismatch'
+      'dcr_disabled' | 'protected_resource_mismatch' | 'redirect_uri_mismatch'
     >
   ) {
     super(message);
@@ -691,6 +692,51 @@ export function __seedDynamicClientCacheForTests(
   dynamicClientCache.set(registrationEndpoint, entry);
 }
 
+/**
+ * Legacy name every Agor install used to register under, kept only so the
+ * fingerprint story in `mcp-oauth-client-registration-authority.ts` can be read
+ * against deployed rows. Nothing constructs a registration request from it.
+ */
+export const LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME = 'Agor MCP Client';
+
+/** Registrant identifiers are Agor-owned ids; anything else is not appended. */
+const SAFE_DCR_REGISTRANT_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * RFC 7591 `client_name` for a Dynamic Client Registration request.
+ *
+ * This is the registrant's identity, not a product label. Every Agor install
+ * used to register as the one constant above, which means a provider that
+ * deduplicates registrations by client name answers a second deployment with
+ * the FIRST deployment's client — a `client_id` bound to somebody else's
+ * redirect URI. The provider then rejects authorization front-channel
+ * (`invalid_request — Mismatching redirect URI`), where Agor cannot see it.
+ *
+ * The callback host is the part that has to differ, because it is exactly what
+ * the reused `client_id` would be bound to. `registrantId` (the saved MCP
+ * server) narrows it further, so two servers on one deployment cannot be
+ * collapsed onto one provider client and one server's scope.
+ *
+ * Deliberately derived only from values already sent in the same request —
+ * the host is in `redirect_uris`, and the server id is a random Agor UUID.
+ * No tenant name, user, or configuration value is disclosed to the provider.
+ */
+export function mcpOAuthDynamicClientName(redirectUri: string, registrantId?: string): string {
+  let host: string;
+  try {
+    // `host`, not `hostname`: two local daemons differ only by port, and that
+    // is the pair most likely to register against the same provider.
+    host = new URL(redirectUri).host;
+  } catch {
+    // Unreachable in the flow — `assertSafeOAuthUrl` runs first — but a name
+    // is not the place to introduce a new failure mode.
+    return LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME;
+  }
+  const registrant =
+    registrantId && SAFE_DCR_REGISTRANT_ID.test(registrantId) ? `/${registrantId}` : '';
+  return `Agor MCP Client (${host}${registrant})`;
+}
+
 /** Classify the already-validated callback, never the provider's endpoint. */
 function dcrApplicationType(redirectUri: string): 'native' | 'web' {
   const callback = new URL(redirectUri);
@@ -709,7 +755,7 @@ function dcrApplicationType(redirectUri: string): 'native' | 'web' {
 async function registerDynamicClient(
   registrationEndpoint: string,
   redirectUri: string,
-  clientName: string = 'Agor MCP Client',
+  clientName: string,
   scope?: string,
   reuseLocalCache = true,
   allowLocalhostHttp = false,
@@ -1335,7 +1381,7 @@ export async function performMCPOAuthFlow(
         const registration = await registerDynamicClient(
           authServerMetadata.registration_endpoint,
           callback.url,
-          'Agor MCP Client',
+          mcpOAuthDynamicClientName(callback.url),
           scopeString,
           true,
           true
@@ -1526,6 +1572,17 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   /** Exact durable DCR epoch used by this attempt; absent for configured/local clients. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Non-secret evidence about where this flow's client came from, for the one
+   * operational line the daemon emits when the authorization URL is built.
+   * `registeredRedirectUri` is absent for a configured client, and the whole
+   * group is absent from a context reconstituted at callback time, which is
+   * rebuilt from sealed grant material rather than from a live resolution.
+   */
+  clientSource?: 'configured' | 'dcr';
+  clientName?: string;
+  registeredRedirectUri?: string;
+  registrationEndpoint?: string;
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1572,6 +1629,51 @@ export interface MCPOAuthResolvedClient {
   clientSecret?: string;
   method: 'configured' | 'dynamic_registration';
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * The redirect URI this client was registered under, as Agor sent it.
+   *
+   * Absent for a configured client, whose provider-side binding Agor never
+   * saw. Present for every DCR path so the authorize URL can be checked
+   * against it rather than assumed equal to it.
+   */
+  registeredRedirectUri?: string;
+  /** RFC 7591 `client_name` sent for this registration. Never a secret. */
+  clientName?: string;
+  /** Registration endpoint used, for origin-only operational evidence. */
+  registrationEndpoint?: string;
+}
+
+/**
+ * Refuse to authorize with a redirect URI the client is not registered under.
+ *
+ * Both values are Agor's: the one it sent to Dynamic Client Registration and
+ * the one it is about to put in the authorization request. Today they come
+ * from a single binding, so this cannot fire — which is the reason to assert
+ * it rather than trust it. The provider's version of this disagreement is
+ * rejected front-channel (`invalid_request — Mismatching redirect URI`) and
+ * never reaches Agor, so a URL known here to be wrong has no second chance to
+ * be classified; see the `authorization_never_returned` proxy.
+ *
+ * A configured client carries no observed binding and is deliberately not
+ * checked: its provider-side redirect URI is not something Agor has ever seen.
+ */
+export function assertAuthorizeRedirectUriMatchesClient(
+  client: Pick<MCPOAuthResolvedClient, 'registeredRedirectUri'>,
+  authorizeRedirectUri: string
+): void {
+  if (
+    client.registeredRedirectUri === undefined ||
+    client.registeredRedirectUri === authorizeRedirectUri
+  ) {
+    return;
+  }
+  throw new OAuthConfigurationError(
+    'redirect_uri_mismatch',
+    'The OAuth client is registered under a different Agor callback URL than the one this ' +
+      'authorization request would use. Reconnect this MCP server so a client is registered ' +
+      'for the current callback URL.',
+    'redirect_uri_mismatch'
+  );
 }
 
 /**
@@ -1588,6 +1690,8 @@ async function resolveOAuthClient(options: {
   fallbackRegistrationEndpoint?: string;
   hasFullOverrides: boolean;
   actualRedirectUri: string;
+  /** Saved MCP server id, when one owns this flow. See {@link mcpOAuthDynamicClientName}. */
+  clientRegistrantId?: string;
   scope?: string;
   cacheKey: string;
   resourceUri: string;
@@ -1634,12 +1738,16 @@ async function resolveOAuthClient(options: {
   const registrationEndpointSource = options.authServerMetadata?.registration_endpoint
     ? 'metadata'
     : 'legacy_fallback';
+  const clientName = mcpOAuthDynamicClientName(
+    options.actualRedirectUri,
+    options.clientRegistrantId
+  );
   try {
     const register = () =>
       registerDynamicClient(
         registrationEndpoint,
         options.actualRedirectUri,
-        'Agor MCP Client',
+        clientName,
         options.scope,
         options.reuseDynamicClientRegistration !== false,
         options.allowLocalhostHttp,
@@ -1657,7 +1765,7 @@ async function resolveOAuthClient(options: {
             authorizationEndpoint: options.authorizationEndpoint,
             tokenEndpoint: options.tokenEndpoint,
             redirectUri: options.actualRedirectUri,
-            clientName: 'Agor MCP Client',
+            clientName,
             applicationType: dcrApplicationType(options.actualRedirectUri),
             scope: options.scope,
             compatibilityMode: options.compatibilityMode,
@@ -1678,6 +1786,9 @@ async function resolveOAuthClient(options: {
       ...(registration.client_secret ? { clientSecret: registration.client_secret } : {}),
       method: 'dynamic_registration',
       ...(resolved.registrationId ? { clientRegistrationId: resolved.registrationId } : {}),
+      registeredRedirectUri: options.actualRedirectUri,
+      clientName,
+      registrationEndpoint,
     };
   } catch (error) {
     options.assertCurrent?.();
@@ -2008,6 +2119,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
   resourceUri: string;
   issuer: string;
+  /** Saved MCP server id, when one owns this flow. See {@link mcpOAuthDynamicClientName}. */
+  clientRegistrantId?: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
@@ -2074,6 +2187,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     fallbackRegistrationEndpoint,
     hasFullOverrides,
     actualRedirectUri,
+    clientRegistrantId: opts.clientRegistrantId,
     scope: scopeString,
     cacheKey,
     resourceUri,
@@ -2089,6 +2203,10 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   // CSRF state
   const state = crypto.randomUUID();
+
+  // Before the URL exists, not after: a mismatch here is one Agor already
+  // knows about, and the provider's rejection of it is front-channel.
+  assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
 
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
@@ -2119,6 +2237,14 @@ async function startMCPOAuthFlowWithAS(opts: {
     clientId: resolvedClient.clientId,
     clientSecret: resolvedClient.clientSecret,
     clientRegistrationId: resolvedClient.clientRegistrationId,
+    clientSource: resolvedClient.method === 'configured' ? 'configured' : 'dcr',
+    ...(resolvedClient.clientName ? { clientName: resolvedClient.clientName } : {}),
+    ...(resolvedClient.registeredRedirectUri
+      ? { registeredRedirectUri: resolvedClient.registeredRedirectUri }
+      : {}),
+    ...(resolvedClient.registrationEndpoint
+      ? { registrationEndpoint: resolvedClient.registrationEndpoint }
+      : {}),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
@@ -2164,6 +2290,12 @@ export async function startMCPOAuthFlow(
     resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
+    /**
+     * Saved MCP server id, when one owns this flow. Narrows the RFC 7591
+     * `client_name` so two servers on one deployment cannot be collapsed onto
+     * one provider client. See {@link mcpOAuthDynamicClientName}.
+     */
+    clientRegistrantId?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
@@ -2231,6 +2363,7 @@ export async function startMCPOAuthFlow(
       resolveDynamicClientRegistration: options.resolveDynamicClientRegistration,
       resourceUri,
       issuer: options.prefetchedAuthServerMetadata.issuer,
+      clientRegistrantId: options.clientRegistrantId,
       compatibilityMode,
       dcrMode,
       allowLocalhostHttp,
@@ -2336,6 +2469,7 @@ export async function startMCPOAuthFlow(
     resolveDynamicClientRegistration: options?.resolveDynamicClientRegistration,
     resourceUri,
     issuer: authServerUrl,
+    clientRegistrantId: options?.clientRegistrantId,
     compatibilityMode,
     dcrMode,
     allowLocalhostHttp,

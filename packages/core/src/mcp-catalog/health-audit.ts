@@ -27,6 +27,7 @@ export type CatalogHealthReason =
   | 'issuer_mismatch'
   | 'pkce_required'
   | 'client_registration_required'
+  | 'redirect_uri_mismatch'
   | `external_${MCPExternalErrorCategory}`
   | 'unexpected_error';
 

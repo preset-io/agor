@@ -135,6 +135,14 @@ export const MCP_OAUTH_FAILURE_REASONS = [
   'pkce_required',
   'profile_rejected',
   'endpoint_override_mismatch',
+  /**
+   * The redirect URI Agor was about to authorize with is not the one its OAuth
+   * client is registered under. Both values are Agor's, so this is an internal
+   * invariant, not a provider verdict — it is named because the provider-side
+   * version of the same disagreement is rejected front-channel and can never
+   * reach Agor. See {@link MCP_AUTH_RECOVERY_CATEGORIES}.
+   */
+  'redirect_uri_mismatch',
 ] as const;
 export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 

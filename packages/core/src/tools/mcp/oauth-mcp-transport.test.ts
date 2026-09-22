@@ -38,6 +38,7 @@ import {
   __dynamicClientCacheSizeForTests,
   __seedAuthCodeTokenCacheForTests,
   __seedDynamicClientCacheForTests,
+  assertAuthorizeRedirectUriMatchesClient,
   clearAuthCodeTokenCache,
   completeMCPOAuthFlow,
   discoverAuthorizationServerFromMcpOrigin,
@@ -45,8 +46,11 @@ import {
   getAuthCodeTokenCacheStats,
   isGoogleAuthorizationEndpoint,
   isOAuthRequired,
+  LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
+  mcpOAuthDynamicClientName,
   OAuthCallbackValidationError,
   OAuthCodeExchangeError,
+  OAuthConfigurationError,
   parseOAuthCallback,
   performMCPOAuthFlow,
   resolveMCPOAuthDiscovery,
@@ -1440,6 +1444,199 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     await expect(startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions)).rejects.toThrow(
       'Dynamic Client Registration failed'
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dynamic Client Registration identity.
+//
+// Every Agor install used to register as one shared constant. A provider that
+// deduplicates registrations by client name answers the second install with
+// the FIRST install's client — a client_id bound to somebody else's redirect
+// URI — and then rejects authorization front-channel, where Agor never sees
+// it. The registrant has to be in the name.
+// ---------------------------------------------------------------------------
+
+describe('mcpOAuthDynamicClientName', () => {
+  it('names the callback host, so two deployments cannot be deduplicated together', () => {
+    expect(mcpOAuthDynamicClientName('https://agor.example.test/mcp-servers/oauth-callback')).toBe(
+      'Agor MCP Client (agor.example.test)'
+    );
+    expect(
+      mcpOAuthDynamicClientName('https://agor.example.test/mcp-servers/oauth-callback')
+    ).not.toBe(mcpOAuthDynamicClientName('https://other.example.test/mcp-servers/oauth-callback'));
+  });
+
+  it('keeps the port, which is all two local daemons differ by', () => {
+    expect(mcpOAuthDynamicClientName('http://localhost:3030/mcp-servers/oauth-callback')).not.toBe(
+      mcpOAuthDynamicClientName('http://localhost:5173/mcp-servers/oauth-callback')
+    );
+  });
+
+  it('narrows to the saved server so one deployment gets one client per server', () => {
+    const base = 'https://agor.example.test/mcp-servers/oauth-callback';
+    expect(mcpOAuthDynamicClientName(base, '0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d')).toBe(
+      'Agor MCP Client (agor.example.test/0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d)'
+    );
+    expect(mcpOAuthDynamicClientName(base, 'server-a')).not.toBe(
+      mcpOAuthDynamicClientName(base, 'server-b')
+    );
+  });
+
+  it('never sends anything but an Agor-shaped id to the provider', () => {
+    const base = 'https://agor.example.test/mcp-servers/oauth-callback';
+    for (const unsafe of ['acme corp', 'a/b', 'x'.repeat(65), '', 'tenant\n2']) {
+      expect(mcpOAuthDynamicClientName(base, unsafe)).toBe('Agor MCP Client (agor.example.test)');
+    }
+  });
+
+  it('falls back to the legacy constant rather than failing on an unparseable callback', () => {
+    expect(mcpOAuthDynamicClientName('not-a-url')).toBe(LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME);
+  });
+
+  it('is never the shared constant for a real callback', () => {
+    expect(mcpOAuthDynamicClientName('https://agor.example.test/cb')).not.toBe(
+      LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME
+    );
+  });
+});
+
+describe('assertAuthorizeRedirectUriMatchesClient', () => {
+  const registered = 'https://agor.example.test/mcp-servers/oauth-callback';
+
+  it('accepts the binding the client was registered under', () => {
+    expect(() =>
+      assertAuthorizeRedirectUriMatchesClient({ registeredRedirectUri: registered }, registered)
+    ).not.toThrow();
+  });
+
+  it('refuses to authorize with a redirect URI the client is not registered under', () => {
+    try {
+      assertAuthorizeRedirectUriMatchesClient(
+        { registeredRedirectUri: registered },
+        'https://other.example.test/mcp-servers/oauth-callback'
+      );
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OAuthConfigurationError);
+      expect((error as OAuthConfigurationError).failureCode).toBe('redirect_uri_mismatch');
+      expect((error as OAuthConfigurationError).failureReason).toBe('redirect_uri_mismatch');
+      // Never the provider's payload, and never the other URL.
+      expect((error as OAuthConfigurationError).message).not.toContain('other.example.test');
+    }
+  });
+
+  it('does not judge a configured client, whose provider-side binding Agor never saw', () => {
+    expect(() => assertAuthorizeRedirectUriMatchesClient({}, registered)).not.toThrow();
+  });
+});
+
+describe('DCR registration identity end to end', () => {
+  const originalFetch = globalThis.fetch;
+  const prefetchedOptions = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.example.test',
+      authorization_endpoint: 'https://auth.example.test/oauth/authorize',
+      token_endpoint: 'https://auth.example.test/oauth/token',
+      registration_endpoint: 'https://auth.example.test/oauth/register',
+    },
+    cacheKey: 'https://mcp.example.test/mcp',
+    resourceUri: 'https://mcp.example.test/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    reuseDynamicClientRegistration: false,
+  };
+
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const registerAndCapture = async (
+    redirectUri: string,
+    clientRegistrantId?: string
+  ): Promise<{
+    body: Record<string, unknown>;
+    context: Awaited<ReturnType<typeof startMCPOAuthFlow>>;
+  }> => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'identity-client',
+          // A provider that echoes back exactly what it was sent, which is
+          // what makes a deduplicated client_id invisible to Agor.
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      ...(clientRegistrantId ? { clientRegistrantId } : {}),
+    });
+    const body = JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0][1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    return { body, context };
+  };
+
+  it('registers under a name that identifies this deployment and server', async () => {
+    const { body } = await registerAndCapture(
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      '0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d'
+    );
+    expect(body.client_name).toBe(
+      'Agor MCP Client (agor.example.test/0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d)'
+    );
+    expect(body.client_name).not.toBe(LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME);
+  });
+
+  it('gives two deployments and two servers four distinct registrant names', async () => {
+    const names = new Set<unknown>();
+    for (const host of ['agor-a.example.test', 'agor-b.example.test']) {
+      for (const server of ['server-one', 'server-two']) {
+        const { body } = await registerAndCapture(
+          `https://${host}/mcp-servers/oauth-callback`,
+          server
+        );
+        names.add(body.client_name);
+      }
+    }
+    expect(names.size).toBe(4);
+  });
+
+  it('authorizes with exactly the redirect URI it registered, and records the binding', async () => {
+    const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+    const { body, context } = await registerAndCapture(redirectUri, 'server-one');
+    expect(body.redirect_uris).toEqual([redirectUri]);
+    expect(new URL(context.authorizationUrl).searchParams.get('redirect_uri')).toBe(redirectUri);
+    expect(context.registeredRedirectUri).toBe(redirectUri);
+    expect(context.clientSource).toBe('dcr');
+    expect(context.clientName).toBe('Agor MCP Client (agor.example.test/server-one)');
+    expect(context.registrationEndpoint).toBe('https://auth.example.test/oauth/register');
+  });
+
+  it('carries no registration binding for a configured client', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('a configured client must not register');
+    }) as unknown as typeof fetch;
+    const context = await startMCPOAuthFlow(
+      '',
+      'configured-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      prefetchedOptions
+    );
+    expect(context.clientSource).toBe('configured');
+    expect(context.registeredRedirectUri).toBeUndefined();
+    expect(context.clientName).toBeUndefined();
   });
 });
 
