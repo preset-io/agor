@@ -4062,9 +4062,19 @@ describe('GatewayService Slack progress tenant scope', () => {
       resolveUpdated();
     });
 
+    // A DM thread, because `assistant.threads.setStatus` only applies to the
+    // app's own DM surface and the status call is now guarded to it. This
+    // case is about tenant scope, not about which surfaces qualify — that is
+    // the case below.
     const { service } = makeGatewayHarness({
       db,
-      existingMapping: makeMapping(),
+      existingMapping: makeMapping({
+        thread_id: 'D123-100.000000',
+        metadata: {
+          slack_last_delivered_ts: '101.000000',
+          slack_active_thread_id: 'D123-100.000000',
+        },
+      } as Partial<ThreadSessionMap>),
       connector: { setThreadStatus },
     });
 
@@ -4086,12 +4096,67 @@ describe('GatewayService Slack progress tenant scope', () => {
 
     expect(setThreadStatus).toHaveBeenCalledWith(
       expect.objectContaining({
-        threadId: 'C123-100.000000',
+        threadId: 'D123-100.000000',
         status: 'is using Read.',
       })
     );
     expect(seenTenants).toEqual(['tenant-channel']);
     expect(events.indexOf('tx:commit')).toBeLessThan(events.indexOf('status'));
+  });
+
+  /**
+   * `assistant.threads.setStatus` on a surface that has no assistant thread.
+   *
+   * The call fired on EVERY progress tick of every Slack conversation — public
+   * channels, private channels and MPIMs included — with no guard at all.
+   * Slack was never going to accept it there: the assistant-thread APIs are a
+   * property of the app's DM surface. So each tick spent a request, each
+   * refusal was then entitled to the WebClient's own retry ladder, and the
+   * result landed in a bare `catch` that said nothing. Invisible work and a
+   * silent refusal, forever, for every channel conversation Agor is in.
+   *
+   * The mapping's own metadata still has to be written — the guard is about
+   * the outbound call, not about the progress bookkeeping.
+   */
+  it('does not set an assistant status on channel-like Slack threads', async () => {
+    const tx = { execute: vi.fn(async () => []) };
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
+    } as TenantScopeAwareDatabase;
+
+    let resolveWritten!: () => void;
+    const written = new Promise<void>((resolve) => {
+      resolveWritten = resolve;
+    });
+    const setThreadStatus = vi.fn(async () => {});
+
+    // The default mapping is `C123-…`: a public channel, which is exactly the
+    // surface this fired on unguarded.
+    const { service, threadMapRepo } = makeGatewayHarness({
+      db,
+      existingMapping: makeMapping(),
+      connector: { setThreadStatus },
+    });
+    threadMapRepo.updateMetadata.mockImplementation(async () => {
+      resolveWritten();
+    });
+
+    await runWithTenantDatabaseScope(db, 'tenant-channel', async () => {
+      service.updateProgressAfterCommit(
+        { session_id: 'sess-1', state: 'working', task_id: 'task-1', tool_name: 'Read' },
+        { tenant: { tenant_id: 'tenant-channel' } }
+      );
+    });
+
+    // The progress bookkeeping still happens; the guard is about the outbound
+    // call, and reaching this write is what proves the status block was
+    // reached and declined rather than never arrived at. The status call sits
+    // immediately after it, so settle the rest of the chain before asserting
+    // its absence — otherwise this passes on an unguarded build too.
+    await written;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(threadMapRepo.updateMetadata).toHaveBeenCalled();
+    expect(setThreadStatus).not.toHaveBeenCalled();
   });
 });
 

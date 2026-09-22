@@ -78,6 +78,7 @@ import {
   parseGitHubThreadId,
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
+  sanitizeGatewayProviderError,
 } from '@agor/core/gateway';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
@@ -3383,6 +3384,39 @@ export class GatewayService {
     return `${channelId}-${messageTs}`;
   }
 
+  /**
+   * Can `assistant.threads.setStatus` apply to this thread at all?
+   *
+   * Slack's assistant-thread APIs are a property of the assistant container —
+   * the app's own DM surface. A public channel, a private channel or an MPIM
+   * has no assistant thread to set a status on, so the call is not "a status
+   * update that happened to fail": it is a request Slack was never going to
+   * accept, made on every progress tick of every channel conversation.
+   *
+   * Deliberately the SAME predicate that keeps streaming out of channel-like
+   * surfaces, rather than a second one beside it. Both questions are "is this
+   * the app's DM surface", and two spellings of that would drift.
+   */
+  private slackThreadSupportsAssistantStatus(threadId: string): boolean {
+    return !this.isSlackChannelLikeThreadId(threadId);
+  }
+
+  /**
+   * Account for a refused assistant-status write.
+   *
+   * It stays non-fatal — a status is cosmetic and must never take a turn down
+   * with it — but it stops being anonymous. A bare `catch` hid the one thing
+   * worth knowing: whether Slack refused because the method does not apply
+   * here (now guarded above) or because the workspace is rate limiting us,
+   * which the connector's retry ladder will have spent real time on first.
+   */
+  private warnSlackAssistantStatusFailed(threadId: string, error: unknown): void {
+    console.warn(
+      `[gateway] event=slack_assistant_status_failed thread=${shortId(threadId)} ` +
+        `code=${gatewayFailureCode(error)} detail=${sanitizeGatewayProviderError(error, 120)}`
+    );
+  }
+
   private isSlackChannelLikeThreadId(threadId: string): boolean {
     const lastHyphen = threadId.lastIndexOf('-');
     if (lastHyphen === -1) return false;
@@ -3703,6 +3737,7 @@ export class GatewayService {
     metadata: Record<string, unknown>
   ): Promise<void> {
     if (!connector.setThreadStatus) return;
+    if (!this.slackThreadSupportsAssistantStatus(threadId)) return;
     const progress: GatewayProgressData = {
       session_id: sessionId,
       state: 'working',
@@ -3928,6 +3963,12 @@ export class GatewayService {
       await this.threadMapRepo.updateMetadata(mapping.id, metadataForWrite);
 
       if (!connector.setThreadStatus) return;
+      // `assistant.threads.setStatus` belongs to the app's DM surface. This
+      // fired on EVERY progress tick of every channel conversation, where
+      // Slack was never going to accept it — and each refusal was then
+      // entitled to the WebClient's own retry ladder before landing in a bare
+      // `catch`. The work was invisible and the refusal was silent.
+      if (!this.slackThreadSupportsAssistantStatus(slackThreadId)) return;
 
       try {
         const loadingMessage = this.buildSlackAssistantLoadingMessage(data, metadataWithStart);
@@ -3937,8 +3978,8 @@ export class GatewayService {
           loadingMessages: loadingMessage ? [loadingMessage] : undefined,
           iconEmoji: ':hourglass_flowing_sand:',
         });
-      } catch (_error) {
-        console.warn('[gateway] Failed to set Slack assistant status');
+      } catch (error) {
+        this.warnSlackAssistantStatusFailed(slackThreadId, error);
       }
     } catch (_error) {
       console.warn('[gateway] Failed to update Slack progress status');
@@ -4038,8 +4079,8 @@ export class GatewayService {
               taskKey,
               metadata
             );
-          } catch (_error) {
-            console.warn('[gateway] Failed to refresh Slack status after stream start');
+          } catch (error) {
+            this.warnSlackAssistantStatusFailed(slackThreadId, error);
           }
           this.markMessageStreamedToSlack(messageId);
           this.markTaskStreamedToSlack(taskKey);
@@ -4063,8 +4104,8 @@ export class GatewayService {
             taskKey,
             metadata
           );
-        } catch (_error) {
-          console.warn('[gateway] Failed to refresh Slack status after stream append');
+        } catch (error) {
+          this.warnSlackAssistantStatusFailed(existing.threadId, error);
         }
         existing.hasContent = true;
         existing.lastMessageId = messageId;
