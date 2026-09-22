@@ -893,6 +893,29 @@ describe('MessagesRepository.mutateMetadataLocked', () => {
 
 describe('lean transcript POC', () => {
   dbTest(
+    'keeps reasoning-only history discoverable without transferring reasoning',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      await createMessages(repository, [
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 0,
+          content: [{ type: 'thinking', text: 'REASONING_PAYLOAD_CANARY' }],
+        }),
+      ]);
+      const lean = await repository.findPage({ sessionId, taskId, lean: true });
+      expect(lean.data[0].has_deferred_reasoning).toBe(true);
+      expect(lean.data[0].content).toEqual([]);
+      expect(JSON.stringify(lean)).not.toContain('REASONING_PAYLOAD_CANARY');
+      const full = await repository.findPage({ taskId });
+      expect(JSON.stringify(full)).toContain('REASONING_PAYLOAD_CANARY');
+    }
+  );
+
+  dbTest(
     'projects in SQL, preserves text/order and never transfers tool canaries from DB',
     async ({ db }) => {
       const repository = new MessagesRepository(db);

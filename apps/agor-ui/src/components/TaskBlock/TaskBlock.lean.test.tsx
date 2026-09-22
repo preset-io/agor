@@ -42,17 +42,39 @@ function view(overrides: Partial<React.ComponentProps<typeof TaskBlock>> = {}) {
       task={task}
       taskMessages={messages}
       taskMessagesLoaded={false}
-      isExpanded={false}
-      onExpandChange={vi.fn()}
       onLoadTaskMessages={vi.fn()}
-      onUnloadTaskMessages={vi.fn()}
-      leanTranscript
       {...overrides}
     />
   );
 }
 
 describe('lean task presentation', () => {
+  it('keeps deferred reasoning reachable even with a verified zero tool count', async () => {
+    const load = vi.fn().mockResolvedValue(undefined);
+    const reasoning = { ...message(1, MessageRole.ASSISTANT, []), has_deferred_reasoning: true };
+    const props = {
+      task: { ...task, recorded_tool_count: 0 },
+      taskMessages: [messages[0], reasoning],
+      onLoadTaskMessages: load,
+    };
+    const { rerender } = render(view(props));
+    expect(load).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    rerender(
+      view({
+        ...props,
+        taskMessagesLoaded: true,
+        taskMessages: [
+          messages[0],
+          { ...reasoning, content: [{ type: 'thinking', text: 'Saved reasoning' }] },
+        ],
+      })
+    );
+    expect(screen.queryByText('No tool calls')).toBeNull();
+    expect(screen.getByText('Saved reasoning')).toBeVisible();
+  });
+
   it('shows both roles without a task accordion or automatic detail fetch; retains prompt through retry', async () => {
     const load = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
     const { container, rerender } = render(view({ onLoadTaskMessages: load }));

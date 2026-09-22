@@ -358,12 +358,13 @@ Conversations show user and assistant messages without task-level accordions. Th
 is the default experience, not a display preference or environment feature flag.
 No database migration is needed.
 
-The conversation opens the latest five tasks with user and assistant text visible. Scroll
+The conversation opens the latest ten tasks with user and assistant text visible. Scroll
 up (or use **Load older history**) to fetch earlier tasks. Expanding **Tool calls** fetches
 one task’s full messages, restores tool blocks in their original positions, and opens
 the first loaded group. Other groups remain collapsed. Inside an opened group, edit/write
 tools show their diffs by default; other tool details retain their existing collapsed defaults.
-For newly finished turns, a verified recorded count hides the disclosure when zero and
+Reasoning-only turns retain a **Reasoning** disclosure without loading their reasoning text upfront.
+For newly finished turns, a verified recorded count hides the disclosure when zero (unless reasoning is deferred) and
 labels it **N tool calls** when positive. Legacy or subsequently modified transcripts
 retain the generic disclosure because their count is unknown; no backfill is required.
 If expanding an unknown turn returns no tools, **No tool calls** appears in its expanded body.
@@ -399,9 +400,13 @@ scrolls horizontally on narrow screens and retains the context-window usage back
 Search covers only loaded content, including tool details only after expansion.
 
 Historical tool data is projected out in SQL before transfer, but the database still
-reads/parses the stored message JSON. Five tasks is not a byte cap, and loading more
+reads/parses the stored message JSON. Ten tasks is not a byte cap, and loading more
 history retains it in memory. Reconnecting refreshes reached history and missed new
-turns; it does not reset the reader to ten tasks.
+turns; it does not reset the reader to ten tasks. Closing the last conversation consumer
+releases its message/tool cache. Card previews own a separate latest/active-turn cache,
+so they do not retain the conversation reader’s older pages or expanded tool details.
+Requests already in flight may finish, but disposed handles cannot repopulate their caches.
+This is reference cleanup, not a promise of immediate browser garbage collection.
 
 ## Related
 

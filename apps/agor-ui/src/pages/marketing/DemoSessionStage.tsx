@@ -480,13 +480,10 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
             sessionModel={STAGE_MODEL}
             userById={USER_BY_ID}
             currentUserId={CURRENT_USER_ID}
-            isExpanded
-            onExpandChange={NOOP}
             sessionId={STAGE_SESSION_ID}
             taskMessages={priorMessages}
             taskMessagesLoaded
             onLoadTaskMessages={NOOP}
-            onUnloadTaskMessages={NOOP}
             branchName={STAGE_BRANCH.name}
           />
           {liveTask && (
@@ -496,13 +493,10 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
               sessionModel={STAGE_MODEL}
               userById={USER_BY_ID}
               currentUserId={CURRENT_USER_ID}
-              isExpanded
-              onExpandChange={NOOP}
               sessionId={STAGE_SESSION_ID}
               taskMessages={liveMessages}
               taskMessagesLoaded
               onLoadTaskMessages={NOOP}
-              onUnloadTaskMessages={NOOP}
               branchName={STAGE_BRANCH.name}
               isLatestTask
             />

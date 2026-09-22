@@ -1,13 +1,4 @@
-/**
- * TaskBlock - Collapsible task section containing messages
- *
- * Features:
- * - Collapsed: Shows task summary with metadata
- * - Expanded: Shows all messages in the task
- * - Default: Latest task expanded, older collapsed
- * - Progressive disclosure pattern
- * - Groups 3+ sequential tool-only messages into ToolBlock
- */
+/** TaskBlock renders one continuous turn, with lazy supporting activity and hover metadata. */
 
 import {
   AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
@@ -31,21 +22,14 @@ import {
   type User,
 } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
-import {
-  DownOutlined,
-  FileTextOutlined,
-  GithubOutlined,
-  RobotOutlined,
-  UpOutlined,
-} from '@ant-design/icons';
+import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Alert, Button, Collapse, Flex, Spin, Typography, theme } from 'antd';
+import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
-import { CopyableContent } from '../CopyableContent';
 import { MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
@@ -59,7 +43,6 @@ import {
 import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
-import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { LeanTurnMetadata } from './LeanTurnMetadata';
@@ -85,13 +68,6 @@ interface TaskBlockProps {
   sessionModel?: string;
   userById?: Map<string, User>;
   currentUserId?: string;
-  isExpanded: boolean;
-  /**
-   * Called when the user toggles this task's expand state. Receives the
-   * `taskId` so the parent can use a single stable callback shared across
-   * every TaskBlock — see ConversationView's `handleTaskExpandChange`.
-   */
-  onExpandChange: (taskId: string, expanded: boolean) => void;
   sessionId?: SessionID | null;
   onPermissionDecision?: (
     sessionId: string,
@@ -107,7 +83,6 @@ interface TaskBlockProps {
   taskMessages: Message[];
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
-  onUnloadTaskMessages: (taskId: string) => void;
   teammateEmoji?: string;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
@@ -116,7 +91,6 @@ interface TaskBlockProps {
   isLatestTask?: boolean;
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
-  leanTranscript?: boolean;
   latestActivity?: ToolExecutionState;
 }
 
@@ -657,8 +631,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     sessionModel,
     userById = EMPTY_USER_MAP,
     currentUserId,
-    isExpanded,
-    onExpandChange,
     sessionId,
     onPermissionDecision,
     branchName,
@@ -668,13 +640,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessages,
     taskMessagesLoaded,
     onLoadTaskMessages,
-    onUnloadTaskMessages,
     teammateEmoji,
     onOpenAgenticToolSettings,
     isLatestTask = false,
     client = null,
     compact = false,
-    leanTranscript = false,
     latestActivity,
   }) => {
     const { token } = theme.useToken();
@@ -682,34 +652,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
     const canRequestMcpReconnect =
       currentUserId === task.created_by || hasMinimumRole(currentUser?.role, ROLES.ADMIN);
-
-    const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
-
-    React.useEffect(() => {
-      if (leanTranscript) return;
-      if (isExpanded) {
-        if (!taskMessagesLoaded) {
-          setReactiveMessagesLoading(true);
-          Promise.resolve(onLoadTaskMessages(task.task_id))
-            .catch((error) => {
-              console.error('[TaskBlock] Failed to load task messages:', error);
-            })
-            .finally(() => {
-              setReactiveMessagesLoading(false);
-            });
-        }
-      } else if (onUnloadTaskMessages && taskMessagesLoaded) {
-        onUnloadTaskMessages(task.task_id);
-      }
-    }, [
-      leanTranscript,
-      isExpanded,
-      onLoadTaskMessages,
-      onUnloadTaskMessages,
-      task.task_id,
-      taskMessagesLoaded,
-    ]);
-    const messagesLoading = reactiveMessagesLoading && !taskMessagesLoaded;
 
     // Convert streaming messages map to array once the reference changes
     const streamingForTask = useMemo(
@@ -739,11 +681,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const prevBlocksRef = useRef<Block[]>([]);
     const blocks = useMemo(() => {
       const next = groupMessagesIntoBlocks(
-        leanTranscript
-          ? messages.filter(
-              (message) => !Array.isArray(message.content) || message.content.length > 0
-            )
-          : messages
+        messages.filter((message) => !Array.isArray(message.content) || message.content.length > 0)
       );
       const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
       const reconciled = next.map((block) => {
@@ -752,7 +690,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       });
       prevBlocksRef.current = reconciled;
       return reconciled;
-    }, [messages, leanTranscript]);
+    }, [messages]);
 
     // Index of the last agent-chain block — used for isLatest so that a streaming
     // text bubble appearing after the chain doesn't prematurely collapse it
@@ -792,10 +730,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     const metadataPills = (
       <Flex
-        wrap={!leanTranscript}
+        wrap={false}
         gap={token.sizeUnit}
         align="center"
-        style={leanTranscript ? { width: 'max-content', flexShrink: 0 } : undefined}
+        style={{ width: 'max-content', flexShrink: 0 }}
       >
         <TimerPill
           status={task.status}
@@ -878,54 +816,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       </Flex>
     );
 
-    // Task header shows when collapsed
-    const taskHeader = (
-      <Flex gap={token.sizeUnit * 2} style={{ width: '100%' }}>
-        {/* Left column: Icons stacked vertically */}
-        <Flex
-          vertical
-          align="center"
-          gap={token.sizeUnit / 2}
-          style={{ width: 'auto', paddingTop: token.sizeUnit }}
-        >
-          {isExpanded ? (
-            <UpOutlined style={{ color: token.colorPrimary }} />
-          ) : (
-            <DownOutlined style={{ color: token.colorPrimary }} />
-          )}
-          <TaskStatusIcon status={task.status} size={16} />
-        </Flex>
-
-        {/* Right column: Content */}
-        <Flex vertical flex={1} style={{ minWidth: 0 }}>
-          {/* Full prompt rendered with one-line CSS ellipsis. The complete
-              text stays in the DOM so users can recover it via the
-              copy-overlay (matches MessageBlock's pattern) — no tooltip,
-              which got in the way of normal hover behavior. */}
-          <CopyableContent
-            textContent={task.full_prompt || ''}
-            // Default offsets place the icon outside the wrapper, but the
-            // task header has rounded corners with overflow:hidden which
-            // clips it. Pull the icon inside the prompt row instead.
-            copyButtonOffset={{ top: 0, right: 0 }}
-          >
-            <Typography.Text
-              ellipsis
-              style={{
-                marginBottom: token.sizeUnit,
-                display: 'block',
-                paddingRight: token.sizeUnit * 3,
-              }}
-            >
-              {task.full_prompt || 'User Prompt'}
-            </Typography.Text>
-          </CopyableContent>
-
-          {metadataPills}
-        </Flex>
-      </Flex>
-    );
-
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
@@ -960,59 +850,63 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             (block) => block.type === 'tool_use' || block.type === 'tool_result'
           ))
     );
-    const toolDisclosure = leanTranscript &&
-      (task.recorded_tool_count !== 0 ||
-        hasTools ||
-        latestActivity ||
-        !isTerminalTaskStatus(task.status)) && (
-        <div style={{ marginBottom: token.marginSM }}>
-          {!taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-            <ToolDisclosureHeader
-              label={
-                detailsLoading
-                  ? 'Loading tool activity…'
-                  : detailsError
-                    ? 'Couldn’t load tool activity · Retry'
-                    : task.recorded_tool_count != null && task.recorded_tool_count > 0
-                      ? `${task.recorded_tool_count} tool ${task.recorded_tool_count === 1 ? 'call' : 'calls'}`
+    const hasDeferredReasoning = messages.some((message) => message.has_deferred_reasoning);
+    const hasReasoning = messages.some(
+      (message) =>
+        Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
+    );
+    const toolDisclosure = (task.recorded_tool_count !== 0 ||
+      hasDeferredReasoning ||
+      hasReasoning ||
+      hasTools ||
+      latestActivity ||
+      !isTerminalTaskStatus(task.status)) && (
+      <div style={{ marginBottom: token.marginSM }}>
+        {!taskMessagesLoaded && !hasTools && !hasReasoning && !isTaskExecuting(task) ? (
+          <ToolDisclosureHeader
+            label={
+              detailsLoading
+                ? 'Loading tool activity…'
+                : detailsError
+                  ? 'Couldn’t load tool activity · Retry'
+                  : task.recorded_tool_count != null && task.recorded_tool_count > 0
+                    ? `${task.recorded_tool_count} tool ${task.recorded_tool_count === 1 ? 'call' : 'calls'}`
+                    : hasDeferredReasoning
+                      ? task.recorded_tool_count === 0
+                        ? 'Reasoning'
+                        : 'Tool calls and reasoning'
                       : 'Tool calls'
-              }
-              expanded={false}
-              loading={detailsLoading}
-              onClick={loadActivity}
+            }
+            expanded={false}
+            loading={detailsLoading}
+            onClick={loadActivity}
+          />
+        ) : taskMessagesLoaded && !hasTools && !hasReasoning && !isTaskExecuting(task) ? (
+          <>
+            <ToolDisclosureHeader
+              label="Tool calls"
+              expanded={emptyActivityExpanded}
+              onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
             />
-          ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-            <>
-              <ToolDisclosureHeader
-                label="Tool calls"
-                expanded={emptyActivityExpanded}
-                onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
-              />
-              {emptyActivityExpanded && (
-                <div
-                  style={{
-                    fontSize: token.fontSizeSM,
-                    color: token.colorTextSecondary,
-                    paddingInlineStart: token.marginSM,
-                  }}
-                >
-                  {latestActivity
-                    ? 'Tool activity was observed, but no details are recorded for this turn'
-                    : 'No tool calls'}
-                </div>
-              )}
-            </>
-          ) : null}
-        </div>
-      );
+            {emptyActivityExpanded && (
+              <div
+                style={{
+                  fontSize: token.fontSizeSM,
+                  color: token.colorTextSecondary,
+                  paddingInlineStart: token.marginSM,
+                }}
+              >
+                {latestActivity
+                  ? 'Tool activity was observed, but no details are recorded for this turn'
+                  : 'No tool calls'}
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
+    );
     const taskContent = (
       <div style={{ paddingTop: token.sizeUnit }}>
-        {!leanTranscript && isVerifiedRuntimeInterruption(task, isLatestTask) && (
-          <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
-        )}
-        {!leanTranscript && isAuthorizationRevokedFailure(task) && (
-          <AuthorizationRevokedNotice task={task} />
-        )}
         {isLatestTask &&
           (task.status === TaskStatus.RUNNING ||
             task.status === TaskStatus.AWAITING_PERMISSION ||
@@ -1025,172 +919,141 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               canRequestReconnect={canRequestMcpReconnect}
             />
           )}
-        {/* Show loading spinner while fetching messages */}
-        {messagesLoading && (
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              padding: `${token.sizeUnit * 2}px 0`,
-            }}
-          >
-            <Spin size="small" />
-          </div>
-        )}
-
         {/* Render all blocks (messages and agent chains). Each block
                       gets a `data-conversation-block` wrapper: in-session
                       search's MutationObserver keys off these boundaries to
                       tell structural transcript changes (new message/chain,
                       task hydration, a block settling after streaming) apart
                       from per-frame streaming churn inside a block. */}
-        {!messagesLoading &&
-          blocks.map((block, blockIndex) => {
-            if (block.type === 'message') {
-              // Find if this is a permission request and if it's the first pending one
-              const isPermissionRequest = block.message.type === 'permission_request';
-              let isFirstPending = false;
+        {blocks.map((block, blockIndex) => {
+          if (block.type === 'message') {
+            // Find if this is a permission request and if it's the first pending one
+            const isPermissionRequest = block.message.type === 'permission_request';
+            let isFirstPending = false;
 
-              if (isPermissionRequest) {
-                const content = block.message.content as PermissionRequestContent;
-                if (content.status === PermissionStatus.PENDING) {
-                  // Check if this is the first pending permission request
-                  isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
-                    if (b.type === 'message' && b.message.type === 'permission_request') {
-                      const c = b.message.content as PermissionRequestContent;
-                      return c.status === PermissionStatus.PENDING;
-                    }
-                    return false;
-                  });
-                }
+            if (isPermissionRequest) {
+              const content = block.message.content as PermissionRequestContent;
+              if (content.status === PermissionStatus.PENDING) {
+                // Check if this is the first pending permission request
+                isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
+                  if (b.type === 'message' && b.message.type === 'permission_request') {
+                    const c = b.message.content as PermissionRequestContent;
+                    return c.status === PermissionStatus.PENDING;
+                  }
+                  return false;
+                });
               }
+            }
 
-              // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
-              if (isSdkStatusMessage(block.message)) {
-                return (
-                  <div
-                    key={block.message.message_id}
-                    data-conversation-block={getBlockMarker(block)}
-                  >
-                    <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
-                  </div>
-                );
-              }
-
-              // Check if this is the latest agent message (last message block)
-              const isLatestMessage =
-                block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
-
+            // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
+            if (isSdkStatusMessage(block.message)) {
               return (
                 <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
-                  {leanTranscript && block.message.message_id === firstPromptId ? (
-                    <>
-                      <LeanTurnMetadata
-                        metadata={metadataPills}
-                        background={taskHeaderGradient}
-                        reserveSpace={hasPendingApproval}
-                      >
-                        <MessageBlock
-                          message={block.message}
-                          agentic_tool={agentic_tool}
-                          userById={userById}
-                          currentUserId={task.created_by}
-                          isTaskRunning={runtimeLive}
-                          sessionId={sessionId}
-                          onPermissionDecision={onPermissionDecision}
-                          isFirstPendingPermission={isFirstPending}
-                          isLatestMessage={isLatestMessage}
-                          taskId={task.task_id}
-                          teammateEmoji={teammateEmoji}
-                          client={client}
-                          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                          compact={compact}
-                          leanTranscript={leanTranscript}
-                        />
-                      </LeanTurnMetadata>
-                      {toolDisclosure}
-                    </>
-                  ) : (
-                    <MessageBlock
-                      message={block.message}
-                      agentic_tool={agentic_tool}
-                      userById={userById}
-                      currentUserId={task.created_by}
-                      isTaskRunning={runtimeLive}
-                      sessionId={sessionId}
-                      onPermissionDecision={onPermissionDecision}
-                      isFirstPendingPermission={isFirstPending}
-                      isLatestMessage={isLatestMessage}
-                      taskId={task.task_id}
-                      teammateEmoji={teammateEmoji}
-                      client={client}
-                      onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                      compact={compact}
-                      leanTranscript={leanTranscript}
-                    />
-                  )}
+                  <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
                 </div>
               );
             }
-            if (block.type === 'agent-chain') {
-              // Use first message ID as key for agent chain
-              const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
-              return (
-                <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                  <AgentChain
-                    messages={block.messages}
-                    leanTranscript={leanTranscript}
-                    revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
-                    latestActivity={
-                      blockIndex === lastAgentChainIndex &&
-                      block.messages.some(
-                        (message) =>
-                          message.tool_uses?.some(
-                            (tool) => tool.id === latestActivity?.toolUseId
-                          ) ||
-                          (Array.isArray(message.content) &&
-                            message.content.some(
-                              (item) =>
-                                item.type === 'tool_use' && item.id === latestActivity?.toolUseId
+
+            // Check if this is the latest agent message (last message block)
+            const isLatestMessage =
+              block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
+
+            const messageElement = (
+              <MessageBlock
+                key={block.message.message_id}
+                message={block.message}
+                agentic_tool={agentic_tool}
+                userById={userById}
+                currentUserId={task.created_by}
+                isTaskRunning={runtimeLive}
+                sessionId={sessionId}
+                onPermissionDecision={onPermissionDecision}
+                isFirstPendingPermission={isFirstPending}
+                isLatestMessage={isLatestMessage}
+                taskId={task.task_id}
+                teammateEmoji={teammateEmoji}
+                client={client}
+                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                compact={compact}
+                leanTranscript
+              />
+            );
+            return (
+              <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+                {block.message.message_id === firstPromptId ? (
+                  <>
+                    <LeanTurnMetadata
+                      metadata={metadataPills}
+                      background={taskHeaderGradient}
+                      reserveSpace={hasPendingApproval}
+                    >
+                      {messageElement}
+                    </LeanTurnMetadata>
+                    {toolDisclosure}
+                  </>
+                ) : (
+                  messageElement
+                )}
+              </div>
+            );
+          }
+          if (block.type === 'agent-chain') {
+            // Use first message ID as key for agent chain
+            const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
+            return (
+              <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                <AgentChain
+                  messages={block.messages}
+                  leanTranscript
+                  revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
+                  latestActivity={
+                    blockIndex === lastAgentChainIndex &&
+                    block.messages.some(
+                      (message) =>
+                        message.tool_uses?.some((tool) => tool.id === latestActivity?.toolUseId) ||
+                        (Array.isArray(message.content) &&
+                          message.content.some(
+                            (item) =>
+                              item.type === 'tool_use' && item.id === latestActivity?.toolUseId
+                          ))
+                    )
+                      ? latestActivity
+                      : undefined
+                  }
+                  isTaskRunning={runtimeLive && !hasPendingApproval}
+                  isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                  hasFollowingResponse={blocks
+                    .slice(blockIndex + 1)
+                    .some(
+                      (next) =>
+                        next.type === 'message' &&
+                        next.message.role === MessageRole.ASSISTANT &&
+                        (typeof next.message.content === 'string'
+                          ? !!next.message.content.trim()
+                          : Array.isArray(next.message.content) &&
+                            next.message.content.some(
+                              (content) =>
+                                content.type === 'text' &&
+                                typeof content.text === 'string' &&
+                                !!content.text.trim()
                             ))
-                      )
-                        ? latestActivity
-                        : undefined
-                    }
-                    isTaskRunning={runtimeLive && !hasPendingApproval}
-                    isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
-                    hasFollowingResponse={blocks
-                      .slice(blockIndex + 1)
-                      .some(
-                        (next) =>
-                          next.type === 'message' &&
-                          next.message.role === MessageRole.ASSISTANT &&
-                          (typeof next.message.content === 'string'
-                            ? !!next.message.content.trim()
-                            : Array.isArray(next.message.content) &&
-                              next.message.content.some(
-                                (content) =>
-                                  content.type === 'text' &&
-                                  typeof content.text === 'string' &&
-                                  !!content.text.trim()
-                              ))
-                      )}
-                    compact={compact}
-                  />
-                </div>
-              );
-            }
-            if (block.type === 'compaction') {
-              // Render compaction block with aggregated messages
-              const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
-              return (
-                <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                  <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
-                </div>
-              );
-            }
-            return null;
-          })}
+                    )}
+                  compact={compact}
+                />
+              </div>
+            );
+          }
+          if (block.type === 'compaction') {
+            // Render compaction block with aggregated messages
+            const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+            return (
+              <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
+              </div>
+            );
+          }
+          return null;
+        })}
 
         {/* Tool events can precede their durable message. Keep that actual activity
             visible without inventing a message ID or dropping it behind an older group. */}
@@ -1290,70 +1153,32 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         )}
       </div>
     );
-    if (leanTranscript)
-      return (
-        <div data-task-block={task.task_id}>
-          {!firstPromptId && (
-            <>
-              {task.full_prompt && (
-                <LeanTurnMetadata
-                  metadata={metadataPills}
-                  background={taskHeaderGradient}
-                  reserveSpace={hasPendingApproval}
-                >
-                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-                    {task.full_prompt}
-                  </Typography.Paragraph>
-                </LeanTurnMetadata>
-              )}
-              {toolDisclosure}
-            </>
-          )}
-          {taskContent}
-          {isAuthorizationRevokedFailure(task) ? (
-            <AuthorizationRevokedNotice task={task} />
-          ) : isVerifiedRuntimeInterruption(task, isLatestTask) ? (
-            <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
-          ) : (
-            <TurnOutcome task={task} />
-          )}
-        </div>
-      );
-
     return (
       <div data-task-block={task.task_id}>
-        <Collapse
-          activeKey={isExpanded ? ['task-content'] : []}
-          onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
-          expandIcon={() => null}
-          style={{
-            background: 'transparent',
-            margin: compact ? '8px 0' : `${token.sizeUnit * 3}px 0`,
-            borderRadius: compact ? token.borderRadiusLG : undefined,
-            overflow: 'hidden',
-          }}
-          items={[
-            {
-              key: 'task-content',
-              label: taskHeader,
-              styles: {
-                header: {
-                  padding: compact ? '10px 8px' : token.sizeUnit * 2,
-                  alignItems: 'flex-start',
-                  background: compact
-                    ? token.colorBgContainer
-                    : taskHeaderGradient || 'transparent',
-                  borderRadius: isExpanded ? '8px 8px 0 0' : 8,
-                },
-                body: {
-                  background: 'transparent',
-                  padding: compact ? '8px' : `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
-                },
-              },
-              children: taskContent,
-            },
-          ]}
-        />
+        {!firstPromptId && (
+          <>
+            {task.full_prompt && (
+              <LeanTurnMetadata
+                metadata={metadataPills}
+                background={taskHeaderGradient}
+                reserveSpace={hasPendingApproval}
+              >
+                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                  {task.full_prompt}
+                </Typography.Paragraph>
+              </LeanTurnMetadata>
+            )}
+            {toolDisclosure}
+          </>
+        )}
+        {taskContent}
+        {isAuthorizationRevokedFailure(task) ? (
+          <AuthorizationRevokedNotice task={task} />
+        ) : isVerifiedRuntimeInterruption(task, isLatestTask) ? (
+          <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+        ) : (
+          <TurnOutcome task={task} />
+        )}
       </div>
     );
   }

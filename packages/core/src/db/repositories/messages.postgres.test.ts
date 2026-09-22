@@ -131,7 +131,15 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
           provider_payload: { 'bad�key': 'value�' },
         },
       ]);
+      const reasoning = await repository.create({
+        ...message(2, ''),
+        content: [{ type: 'thinking', text: 'REASONING_CANARY' }],
+      });
       const lean = await repository.findPage({ sessionId: session.session_id, lean: true });
+      expect(
+        lean.data.find((item) => item.message_id === reasoning.message_id)?.has_deferred_reasoning
+      ).toBe(true);
+      expect(JSON.stringify(lean)).not.toContain('REASONING_CANARY');
       expect(lean.data.find((item) => item.message_id === first.message_id)?.content).toEqual([]);
       expect(JSON.stringify(lean)).not.toContain('read-binary');
       expect(lean.data.find((item) => item.message_id === second.message_id)?.content).toBe(

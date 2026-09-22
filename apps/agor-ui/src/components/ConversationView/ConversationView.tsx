@@ -128,11 +128,6 @@ export interface ConversationViewProps {
    */
   teammateEmoji?: string;
 
-  /**
-   * When true, all task blocks are force-expanded (used by in-session search)
-   */
-  forceExpandAll?: boolean;
-
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
   /** Use the denser, full-width task treatment for phone-sized session routes. */
@@ -156,7 +151,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     teammateEmoji,
-    forceExpandAll = false,
     onOpenAgenticToolSettings,
     compact = false,
   }) => {
@@ -301,73 +295,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
 
-    // Track which tasks are expanded (default: last task expanded)
-    const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(() => {
-      if (tasks.length > 0) {
-        return new Set([tasks[tasks.length - 1].task_id]);
-      }
-      return new Set();
-    });
-
-    // When a new task arrives (i.e. the *last* task id changes), expand it.
-    // If the user is still at the bottom, collapse older tasks and follow the
-    // new one; if the user has scrolled away, preserve what they were reading.
-    // Following is handled by the library's persistent observer — a new last
-    // task while `isAtBottom` re-pins automatically, so we only need to manage
-    // the expand state here. We deliberately depend on `lastTaskId` rather than
-    // `tasks` so that:
-    //   1. unrelated re-renders don't fire this effect (`tasks` still gets
-    //      a new reference whenever any task patch lands — the useMemo bails
-    //      out only when the *upstream* `reactiveState.tasks` array is
-    //      identity-stable), and
-    //   2. if the user collapses the current last task, we don't immediately
-    //      re-open it — that "auto re-expand on empty" behavior fought the
-    //      user and showed up as a flicker.
-    const lastTaskId = tasks.length > 0 ? tasks[tasks.length - 1].task_id : null;
-    useEffect(() => {
-      if (!isActive || !lastTaskId) return;
-      // Read the library's SYNCHRONOUS live state, not the returned `isAtBottom`
-      // React value. The returned value lags a render and also counts
-      // "near bottom" as pinned — both would mis-classify a user who just
-      // scrolled up moments before a task arrives, collapsing the tasks they're
-      // reading. `state.escapedFromLock` is mutated synchronously the instant
-      // the user scrolls away from the bottom lock, restoring the old
-      // `userScrolledUpRef` semantics exactly.
-      const userScrolledUp = state.escapedFromLock;
-      setExpandedTaskIds((prev) => {
-        if (prev.has(lastTaskId)) return prev;
-        if (userScrolledUp) {
-          // User has scrolled away — just expand the new task, keep older ones
-          // visible so we don't disturb what they're reading.
-          const next = new Set(prev);
-          next.add(lastTaskId);
-          return next;
-        }
-        // At bottom — collapse older tasks and focus the new one.
-        return new Set([lastTaskId]);
-      });
-    }, [isActive, lastTaskId, state]);
-
-    // Handle task expand/collapse. Single stable callback shared by every
-    // TaskBlock — the callback takes `taskId` so we don't need to mint a
-    // per-task closure (which previously rebuilt on every render and broke
-    // TaskBlock's React.memo for the entire task list).
-    const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
-      setExpandedTaskIds((prev) => {
-        const next = new Set(prev);
-        if (expanded) {
-          next.add(taskId);
-        } else {
-          next.delete(taskId);
-        }
-        return next;
-      });
-    }, []);
-
-    // Stable load/unload callbacks. The previous inline arrows were minted on
-    // every ConversationView render → every TaskBlock saw new `onLoadTaskMessages`
-    // / `onUnloadTaskMessages` refs → memo bailout failed for every TaskBlock,
-    // including ones whose messages weren't changing.
+    // Stable task-scoped detail loading; the transcript itself never collapses.
     const handleLoadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
@@ -376,22 +304,25 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
-    const handleUnloadTaskMessages = useCallback(
-      (taskId: string) => {
-        if (!reactiveSession) return;
-        reactiveSession.unloadTaskMessages(taskId);
-      },
-      [reactiveSession]
-    );
-
     const [loadingOlder, setLoadingOlder] = useState(false);
-    const olderInflight = useRef(false);
+    const olderInflight = useRef<object | null>(null);
     const previousScrollTop = useRef(0);
     const olderAnchor = useRef<{
       element: HTMLElement;
       top: number;
       sessionId: SessionID | null;
     } | null>(null);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: reset view-local paging ownership when the session handle changes.
+    useLayoutEffect(() => {
+      olderInflight.current = null;
+      olderAnchor.current = null;
+      previousScrollTop.current = 0;
+      setLoadingOlder(false);
+      return () => {
+        olderInflight.current = null;
+        olderAnchor.current = null;
+      };
+    }, [reactiveSession]);
     const loadOlder = useCallback(async () => {
       if (!reactiveSession || olderInflight.current || !currentReactiveState?.hasOlderTasks) return;
       const viewport = scrollRef.current;
@@ -406,15 +337,18 @@ export const ConversationView = React.memo<ConversationViewProps>(
           top: anchor.getBoundingClientRect().top,
           sessionId,
         };
-      olderInflight.current = true;
+      const request = {};
+      olderInflight.current = request;
       setLoadingOlder(true);
       try {
         await reactiveSession.loadOlderTasks();
       } catch {
         /* Existing history stays visible; the state carries a retryable error. */
       } finally {
-        olderInflight.current = false;
-        setLoadingOlder(false);
+        if (olderInflight.current === request) {
+          olderInflight.current = null;
+          setLoadingOlder(false);
+        }
       }
     }, [reactiveSession, currentReactiveState?.hasOlderTasks, scrollRef, stopScroll, sessionId]);
     useLayoutEffect(() => {
@@ -595,14 +529,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
             <TaskBlock
               key={task.task_id}
               task={task}
-              leanTranscript
               latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
               agentic_tool={agentic_tool}
               sessionModel={sessionModel}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
-              onExpandChange={handleTaskExpandChange}
               sessionId={sessionId}
               onPermissionDecision={onPermissionDecision}
               branchName={branchName}
@@ -614,7 +545,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
               }
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={handleUnloadTaskMessages}
               teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}

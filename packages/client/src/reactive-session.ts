@@ -10,7 +10,7 @@ import {
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
-export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 5;
+export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
 const LEAN_ACTIVE_STATUSES = EXECUTING_TASK_STATUSES;
 const isLeanActive = isTaskExecuting;
 
@@ -23,6 +23,8 @@ export interface ReactiveSessionOptions {
    * - eager: load all session messages during bootstrap
    */
   taskHydration?: TaskHydrationMode;
+  /** Preview owns only latest/active data, never the conversation reader's cache. */
+  cacheScope?: 'session' | 'preview';
 }
 
 export interface StreamingMessageState {
@@ -211,6 +213,7 @@ export class ReactiveSessionHandle {
     this.client = client;
     this.options = {
       taskHydration: options?.taskHydration ?? 'lazy',
+      cacheScope: options?.cacheScope ?? 'session',
     };
     this.stateSnapshot = {
       sessionId,
@@ -612,6 +615,27 @@ export class ReactiveSessionHandle {
     }
     this.disposeCallbacks.length = 0;
     this.listeners.clear();
+    this.stateSnapshot = {
+      ...this.stateSnapshot,
+      session: null,
+      tasks: [],
+      queuedTasks: [],
+      messagesByTask: new Map(),
+      loadedTaskIds: new Set(),
+      streamingMessages: new Map(),
+      toolsByTask: new Map(),
+      loading: false,
+      connected: false,
+      hasOlderTasks: false,
+    };
+    this.detailInflight.clear();
+    this.leanLiveTaskIds.clear();
+    this.messageFetches.clear();
+    this.streamingAtMessageFetch.clear();
+    this.messageMutations.length = 0;
+    this.messageCacheMutationsByTask.clear();
+    this.taskFetches.clear();
+    this.taskMutations.length = 0;
   }
 
   private assertNotDisposed(): void {
@@ -629,7 +653,27 @@ export class ReactiveSessionHandle {
   private updateState(
     updater: (previous: ReactiveSessionState) => ReactiveSessionState
   ): ReactiveSessionState {
-    const next = updater(this.stateSnapshot);
+    if (this.disposed) return this.stateSnapshot;
+    let next = updater(this.stateSnapshot);
+    if (this.options.cacheScope === 'preview') {
+      const latest = next.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
+      const keep = new Set<string>(next.tasks.filter(isTaskExecuting).map((task) => task.task_id));
+      if (latest) keep.add(latest.task_id);
+      next = {
+        ...next,
+        hasOlderTasks: false,
+        tasks: next.tasks.filter((task) => keep.has(task.task_id)),
+        messagesByTask: new Map([...next.messagesByTask].filter(([id]) => keep.has(id))),
+        loadedTaskIds: new Set([...next.loadedTaskIds].filter((id) => keep.has(id))),
+        toolsByTask: new Map([...next.toolsByTask].filter(([id]) => keep.has(id))),
+        streamingMessages: new Map(
+          [...next.streamingMessages].filter(
+            ([, message]) => !message.task_id || keep.has(message.task_id)
+          )
+        ),
+      };
+      for (const id of this.leanLiveTaskIds) if (!keep.has(id)) this.leanLiveTaskIds.delete(id);
+    }
     this.stateSnapshot = next;
     this.notify();
     return next;
@@ -725,7 +769,11 @@ export class ReactiveSessionHandle {
 
   /** Older paging is single-flight, never findAll() over the entire Session. */
   loadOlderTasks(): Promise<void> {
-    if (this.options.taskHydration !== 'lean' || !this.stateSnapshot.hasOlderTasks)
+    if (
+      this.options.cacheScope === 'preview' ||
+      this.options.taskHydration !== 'lean' ||
+      !this.stateSnapshot.hasOlderTasks
+    )
       return Promise.resolve();
     return this.syncLeanHistory(true);
   }
@@ -763,22 +811,21 @@ export class ReactiveSessionHandle {
       const session = await this.client.service('sessions').get(this.sessionId);
       if (stale()) return;
       this.canonicalSessionId = session.session_id;
+      const pageSize = this.options.cacheScope === 'preview' ? 1 : LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
       const cursor = older ? this.leanOldestTaskId : undefined;
       const result = await this.client.service('tasks').find({
         query: {
           session_id: this.sessionId,
           $sort: { task_id: -1 },
-          $limit: LEAN_TRANSCRIPT_TASK_PAGE_SIZE + 1,
+          $limit: pageSize + 1,
           ...(cursor ? { task_id: { $lte: cursor } } : {}),
         },
       });
       if (stale()) return;
       const rows = Array.isArray(result) ? result : result.data;
       const candidates = rows.filter((task) => task.task_id !== cursor);
-      const page = candidates.slice(0, LEAN_TRANSCRIPT_TASK_PAGE_SIZE);
-      const hasOlder = cursor
-        ? candidates.length >= LEAN_TRANSCRIPT_TASK_PAGE_SIZE
-        : candidates.length > LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
+      const page = candidates.slice(0, pageSize);
+      const hasOlder = cursor ? candidates.length >= pageSize : candidates.length > pageSize;
       const byId = new Map(this.stateSnapshot.tasks.map((task) => [task.task_id, task]));
       const queue = (await this.client
         .service(`/sessions/${this.sessionId}/tasks/queue`)
@@ -792,7 +839,7 @@ export class ReactiveSessionHandle {
         // the oldest turn the reader has reached.
         const through = rows[0]?.task_id;
         let after = this.leanOldestTaskId;
-        while (through && after && after < through) {
+        while (this.options.cacheScope !== 'preview' && through && after && after < through) {
           if (stale()) return;
           const window = await this.client.service('tasks').find({
             query: {
@@ -2056,11 +2103,12 @@ function normalizeReactiveSessionOptions(
 ): Required<ReactiveSessionOptions> {
   return {
     taskHydration: options?.taskHydration ?? 'lazy',
+    cacheScope: options?.cacheScope ?? 'session',
   };
 }
 
 function getSharedSessionKey(sessionId: string, options: Required<ReactiveSessionOptions>): string {
-  return `${sessionId}:${options.taskHydration}`;
+  return `${sessionId}:${options.taskHydration}:${options.cacheScope}`;
 }
 
 /**

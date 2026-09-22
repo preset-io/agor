@@ -1867,7 +1867,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
-            forceExpandAll={searchOpen && query.trim().length > 0}
           />
         </div>
 

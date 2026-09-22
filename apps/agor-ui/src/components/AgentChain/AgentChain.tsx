@@ -246,7 +246,7 @@ export const AgentChain = React.memo<AgentChainProps>(
 
         // Collect blocks from this message
         for (const block of message.content) {
-          if (block.type === 'text') {
+          if (block.type === 'text' || block.type === 'thinking') {
             const text = (block as unknown as TextBlock).text.trim();
             if (text) {
               if (hasSeenTool) {

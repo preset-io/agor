@@ -21,10 +21,16 @@ beforeEach(() => vi.clearAllMocks());
 it('uses lean history without an environment flag or caller override', () => {
   const client = {} as AgorClient;
   const { result, unmount } = renderHook(() => useSharedReactiveSession(client, 'session-id'));
-  expect(retain).toHaveBeenCalledWith(client, 'session-id', { taskHydration: 'lean' });
+  expect(retain).toHaveBeenCalledWith(client, 'session-id', {
+    taskHydration: 'lean',
+    cacheScope: 'session',
+  });
   expect(result.current.handle).toBe(handle);
   unmount();
-  expect(release).toHaveBeenCalledWith(client, 'session-id', { taskHydration: 'lean' });
+  expect(release).toHaveBeenCalledWith(client, 'session-id', {
+    taskHydration: 'lean',
+    cacheScope: 'session',
+  });
 });
 
 it('does not bootstrap an inactive conversation', () => {

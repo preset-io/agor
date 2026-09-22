@@ -26,9 +26,13 @@ export function useSharedReactiveSession(
 ): UseSharedReactiveSessionResult {
   const { enabled = true, reactiveOptions } = options;
   const taskHydration = reactiveOptions?.taskHydration ?? 'lean';
-  const binding = useRef<{ client: AgorClient; sessionId: string; taskHydration: string } | null>(
-    null
-  );
+  const cacheScope = reactiveOptions?.cacheScope ?? 'session';
+  const binding = useRef<{
+    client: AgorClient;
+    sessionId: string;
+    taskHydration: string;
+    cacheScope: string;
+  } | null>(null);
   const [handle, setHandle] = useState<ReactiveSessionHandle | null>(null);
   const [state, setState] = useState<ReactiveSessionState | null>(null);
 
@@ -40,8 +44,8 @@ export function useSharedReactiveSession(
       return;
     }
 
-    binding.current = { client, sessionId, taskHydration };
-    const sharedHandle = retainReactiveSession(client, sessionId, { taskHydration });
+    binding.current = { client, sessionId, taskHydration, cacheScope };
+    const sharedHandle = retainReactiveSession(client, sessionId, { taskHydration, cacheScope });
     setHandle(sharedHandle);
     let disposed = false;
 
@@ -58,9 +62,9 @@ export function useSharedReactiveSession(
     return () => {
       disposed = true;
       unsubscribe();
-      releaseReactiveSession(client, sessionId, { taskHydration });
+      releaseReactiveSession(client, sessionId, { taskHydration, cacheScope });
     };
-  }, [client, sessionId, enabled, taskHydration]);
+  }, [client, sessionId, enabled, taskHydration, cacheScope]);
 
   // Re-trigger resync() when an external signal suggests our error state may
   // be stale. The reactive session itself only resyncs on socket `connect`
@@ -111,6 +115,7 @@ export function useSharedReactiveSession(
     enabled &&
     binding.current?.client === client &&
     binding.current?.sessionId === sessionId &&
-    binding.current?.taskHydration === taskHydration;
+    binding.current?.taskHydration === taskHydration &&
+    binding.current?.cacheScope === cacheScope;
   return { handle: current ? handle : null, state: current ? state : null };
 }

@@ -46,7 +46,7 @@ vi.mock('../../hooks/useSharedReactiveSession', async () => {
   const { useSyncExternalStore } = await import('react');
   return {
     useSharedReactiveSession: () => ({
-      handle,
+      handle: currentHandle,
       state: useSyncExternalStore(
         (listener) => {
           listeners.add(listener);
@@ -106,7 +106,7 @@ function update(next: ReactiveSessionState) {
 const loadOlderTasks = vi.fn(async () => {
   await new Promise((resolve) => setTimeout(resolve, 40));
   const start = tasks.findIndex((task) => task.task_id === state.tasks[0]?.task_id);
-  const next = Math.max(0, start - 5);
+  const next = Math.max(0, start - 10);
   update({ ...state, tasks: tasks.slice(next), hasOlderTasks: next > 0 });
 });
 const loadTaskMessages = vi.fn(async () => []);
@@ -116,13 +116,15 @@ const handle = {
   unloadTaskMessages: () => {},
   resync: async () => {},
 } as unknown as ReactiveSessionHandle;
+let currentHandle = handle;
 beforeEach(() => {
+  currentHandle = handle;
   loadOlderTasks.mockClear();
   loadTaskMessages.mockClear();
   state = {
     sessionId,
     session: null,
-    tasks: tasks.slice(15),
+    tasks: tasks.slice(10),
     messagesByTask: messages,
     loadedTaskIds: new Set(),
     streamingMessages: new Map(),
@@ -165,11 +167,57 @@ it('renders continuous history without detail fetching and anchors an upward pag
     top = anchor!.getBoundingClientRect().top;
     fireEvent.scroll(viewport);
   });
-  await waitFor(() => expect(screen.getByText('Prompt 10')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText('Prompt 0')).toBeInTheDocument());
   await waitFor(() => expect(Math.abs(anchor!.getBoundingClientRect().top - top)).toBeLessThan(3));
   expect(loadOlderTasks).toHaveBeenCalledTimes(1);
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-transcript-${window.innerWidth}.png` });
+});
+
+it('fences an old page request when navigating to another session', async () => {
+  let finishOld!: () => void;
+  let finishNew!: () => void;
+  const oldLoad = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishOld = resolve;
+      })
+  );
+  const newLoad = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishNew = resolve;
+      })
+  );
+  currentHandle = { ...handle, loadOlderTasks: oldLoad } as ReactiveSessionHandle;
+  const view = (id: typeof sessionId) => (
+    <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
+      <ConversationView client={null} sessionId={id} />
+    </div>
+  );
+  const { rerender } = render(view(sessionId));
+  fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
+  expect(oldLoad).toHaveBeenCalledTimes(1);
+  const nextId = generateId();
+  currentHandle = { ...handle, loadOlderTasks: newLoad } as ReactiveSessionHandle;
+  state = { ...state, sessionId: nextId };
+  rerender(view(nextId));
+  fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
+  expect(newLoad).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    finishOld();
+  });
+  // The old finally must not unlock or clear the new request.
+  fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
+  expect(newLoad).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    finishNew();
+  });
+  fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
+  expect(newLoad).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    finishNew();
+  });
 });
 
 it('keeps a long user prompt and its full-size avatar within the transcript width', () => {
@@ -489,26 +537,26 @@ it('keeps the full Bash command and ellipsizes only at the tool row boundary', a
   expect(tool.getBoundingClientRect().right - text.getBoundingClientRect().right).toBeLessThan(16);
 });
 
-it('pages upward in five-turn batches to the beginning without flooding or detail fetches', async () => {
+it('pages upward in ten-turn batches to the beginning without flooding or detail fetches', async () => {
   render(
     <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
       <ConversationView client={null} sessionId={sessionId} />
     </div>
   );
-  expect(document.querySelectorAll('[data-task-block]')).toHaveLength(5);
+  expect(document.querySelectorAll('[data-task-block]')).toHaveLength(10);
   const viewport = screen.getByTestId('conversation-scroll-container');
-  for (const count of [10, 15, 20]) {
+  for (const count of [20]) {
     act(() => {
       viewport.scrollTop = 0;
       for (let i = 0; i < 5; i++) fireEvent.wheel(viewport, { deltaY: -40 });
     });
     await waitFor(() => expect(document.querySelectorAll('[data-task-block]')).toHaveLength(count));
-    expect(loadOlderTasks).toHaveBeenCalledTimes(count / 5 - 1);
+    expect(loadOlderTasks).toHaveBeenCalledTimes(count / 10 - 1);
   }
-  expect(screen.queryByRole('button', { name: 'Load older history' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Load older history/ })).toBeNull();
   expect(screen.queryByText(/Older history loads above/)).toBeNull();
   fireEvent.wheel(viewport, { deltaY: -40 });
-  expect(loadOlderTasks).toHaveBeenCalledTimes(3);
+  expect(loadOlderTasks).toHaveBeenCalledTimes(1);
   expect(loadTaskMessages).not.toHaveBeenCalled();
 });
 
@@ -538,10 +586,10 @@ it('hides only verified empty history and lazily opens known counts while legacy
   render(<ConversationView client={null} sessionId={sessionId} />);
   expect(screen.getByText('Prompt 15')).toBeVisible();
   expect(screen.getByText(/Answer 15\./)).toBeVisible();
-  expect(screen.getAllByRole('button', { name: 'Tool calls' })).toHaveLength(3);
+  expect(screen.getAllByRole('button', { name: 'Tool calls' })).toHaveLength(8);
   expect(loadTaskMessages).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: '2 tool calls' }));
-  await waitFor(() => expect(loadTaskMessages).toHaveBeenCalledExactlyOnceWith(tasks[16].task_id));
+  await waitFor(() => expect(loadTaskMessages).toHaveBeenCalledExactlyOnceWith(tasks[11].task_id));
 });
 
 it('shows exceptional outcomes beneath their turn without floating top icons or narrow-screen overflow', async () => {

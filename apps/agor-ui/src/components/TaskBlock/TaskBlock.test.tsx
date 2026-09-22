@@ -248,12 +248,9 @@ describe('authorization-revoked failure projection', () => {
             },
           } as Task
         }
-        isExpanded
-        onExpandChange={vi.fn()}
         taskMessages={[]}
         taskMessagesLoaded
         onLoadTaskMessages={vi.fn()}
-        onUnloadTaskMessages={vi.fn()}
       />
     );
 

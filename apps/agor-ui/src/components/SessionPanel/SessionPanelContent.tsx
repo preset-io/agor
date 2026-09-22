@@ -38,7 +38,6 @@ export interface SessionPanelContentProps {
   inputValueRef: React.RefObject<string>;
   isOpen: boolean;
   /** When true, all task blocks are force-expanded (used by in-session search) */
-  forceExpandAll?: boolean;
 }
 
 export const SessionPanelContent = React.memo<SessionPanelContentProps>(
@@ -58,7 +57,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     onSpawnModalConfirm,
     inputValueRef,
     isOpen,
-    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const isMobileShell = useIsMobileViewport();
@@ -314,7 +312,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             teammateEmoji={
               branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
             }
-            forceExpandAll={forceExpandAll}
             onOpenAgenticToolSettings={onOpenAgenticToolSettings}
           />
         </SessionConversationLayout>

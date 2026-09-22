@@ -112,6 +112,9 @@ export class MessagesRepository {
       timestamp: new Date(row.timestamp).toISOString(),
       content_preview: row.content_preview || '',
       content: (row.data as { content: Message['content'] }).content,
+      ...((row.data as { has_deferred_reasoning?: boolean }).has_deferred_reasoning
+        ? { has_deferred_reasoning: true }
+        : {}),
       tool_uses: (row.data as { tool_uses?: Message['tool_uses'] }).tool_uses,
       parent_tool_use_id: row.parent_tool_use_id || undefined,
       metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
@@ -408,6 +411,7 @@ export class MessagesRepository {
     // Column qualifiers in single-table SELECTs, but json_each also has a type column.
     if (isSQLiteDatabase(this.db)) {
       return sql`json_object(
+        'has_deferred_reasoning', EXISTS(SELECT 1 FROM json_each(CASE WHEN json_type(${messages.data}, '$.content') = 'array' THEN json_extract(${messages.data}, '$.content') ELSE '[]' END) WHERE json_extract(value, '$.type') = 'thinking'),
         'content', json(CASE json_type(${messages.data}, '$.content')
           WHEN 'array' THEN (SELECT json_group_array(json(value))
             FROM json_each(${messages.data}, '$.content')
@@ -424,6 +428,7 @@ export class MessagesRepository {
       )`.mapWith(messages.data);
     }
     return sql`jsonb_build_object(
+      'has_deferred_reasoning', EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${messages.data}::jsonb -> 'content') = 'array' THEN ${messages.data}::jsonb -> 'content' ELSE '[]'::jsonb END) AS b(block) WHERE block ->> 'type' = 'thinking'),
       'content', CASE jsonb_typeof(${messages.data}::jsonb -> 'content')
         WHEN 'array' THEN COALESCE((SELECT jsonb_agg(block ORDER BY ordinal)
           FROM jsonb_array_elements(${messages.data}::jsonb -> 'content') WITH ORDINALITY AS b(block, ordinal)

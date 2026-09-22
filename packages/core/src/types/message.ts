@@ -238,6 +238,9 @@ export interface Message {
   /** Full message content (type depends on message type) */
   content: string | ContentBlock[] | PermissionRequestContent | InputRequestContent;
 
+  /** Read-only lean projection hint; contains no reasoning text. */
+  has_deferred_reasoning?: boolean;
+
   /** Tool uses in this message (for assistant messages) */
   tool_uses?: ToolUse[];
 
