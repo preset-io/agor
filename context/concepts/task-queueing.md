@@ -53,6 +53,17 @@ This is transient-admission recovery, not a diagnosis of an arbitrary wrapped
 `SELECT ... FOR UPDATE` error. See `utils/prompt-admission-transaction.ts` in the
 daemon.
 
+The outer prompt route sanitizes database failures even outside enqueue (and
+when a wrapped query has no SQLSTATE). Users receive a reference and a warning
+to inspect the session before resending: dispatch may already have committed.
+`prompt.database` logs that reference, nested SQLSTATE/allowlisted driver code,
+known row-lock table, numeric deadlock wait edges when available, and elapsed
+time. Admission failures also record attempt, failure phase and acquisition/setup
+time. Elapsed time is **not** a lock-hold measurement; acquisition/setup includes
+pool wait and tenant setup. Raw SQL, parameters, driver detail and stacks are
+never serialized; the original cause stays non-enumerable internally. Existing
+PostgreSQL transaction tracing separates root acquisition/setup from body time.
+
 `created` remains supported for the explicit `POST /tasks/:id` then
 `POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a
 different executing Task.

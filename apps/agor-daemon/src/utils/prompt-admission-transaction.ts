@@ -6,21 +6,11 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { Unavailable } from '@agor/core/feathers';
 import type { SessionID } from '@agor/core/types';
 
-/** Drizzle and repositories wrap the driver's SQLSTATE in nested causes. */
-export function promptAdmissionSqlState(error: unknown): string | undefined {
-  const seen = new Set<object>();
-  for (let depth = 0; depth < 8 && error && typeof error === 'object'; depth++) {
-    if (seen.has(error)) return undefined;
-    seen.add(error);
-    const { code, cause } = error as { code?: unknown; cause?: unknown };
-    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
-    error = cause;
-  }
-  return undefined;
-}
+import { promptAdmissionSqlState, safePromptDatabaseFailure } from './prompt-database-error.js';
+
+export { promptAdmissionSqlState } from './prompt-database-error.js';
 
 /**
  * Only the prompt's DB-only enqueue unit may be replayed, never the route,
@@ -40,10 +30,13 @@ export async function runPromptAdmissionTransaction<T>(
   const ownsTransaction = !scope || (scope.kind === 'tenant' && !scope.transactionActive);
   const postgres = isPostgresDatabaseHandle(db);
   for (let attempt = 0; ; attempt++) {
+    const started = performance.now();
+    let bodyStarted: number | undefined;
     let statementFailure: unknown;
     let failedDuringWork = false;
     try {
       return await runWithTenantDatabaseTransaction(db, tenantId, async (scoped) => {
+        bodyStarted = performance.now();
         try {
           await assertTenantWritable(scoped, tenantId);
           return await work(scoped);
@@ -61,18 +54,17 @@ export async function runPromptAdmissionTransaction<T>(
       const rolledBackStatement = failedDuringWork && statementFailure === error;
       const retry =
         rolledBackStatement && attempt < 2 && (sqlstate === '40P01' || sqlstate === '40001');
-      console.warn(
-        `[prompt.admission] tenant_id=${JSON.stringify(tenantId)} session_id=${JSON.stringify(sessionId ?? null)} sqlstate=${sqlstate} attempt=${attempt + 1} retry=${retry} phase=${rolledBackStatement ? 'statement' : 'commit_or_after_commit'}`
-      );
       if (!retry) {
-        const failure = new Unavailable(
-          'Could not confirm prompt admission. Check the session before sending again.'
-        );
-        // Preserve internal diagnostics without exposing SQL/params in the
-        // Feathers wire error or enumerable structured logging fields.
-        Object.defineProperty(failure, 'cause', { value: error });
-        throw failure;
+        throw safePromptDatabaseFailure(error, performance.now() - started, {
+          attempt: attempt + 1,
+          phase: rolledBackStatement ? 'statement' : 'commit_or_after_commit',
+          acquisitionSetupMs:
+            bodyStarted === undefined ? undefined : Math.round(bodyStarted - started),
+        });
       }
+      console.warn(
+        `[prompt.admission] tenant_id=${JSON.stringify(tenantId)} session_id=${JSON.stringify(sessionId ?? null)} sqlstate=${sqlstate} elapsed_ms=${Math.round(performance.now() - started)} acquisition_setup_ms=${bodyStarted === undefined ? 'unknown' : Math.round(bodyStarted - started)} attempt=${attempt + 1} retry=true phase=statement`
+      );
       await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
     }
   }

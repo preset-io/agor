@@ -8,6 +8,17 @@ import { assertTaskExecutorPrincipal, resolveQueuedTaskActor } from './register-
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
 
+  it('places prompt error sanitization outside tenant admission hooks', () => {
+    const registrar = source.slice(
+      source.indexOf('const registerLongAuthenticatedRoute:'),
+      source.indexOf('// Long routes carry')
+    );
+    expect(registrar).toContain("path.endsWith('/prompt')");
+    expect(registrar.indexOf('[promptDatabaseErrorAround]')).toBeLessThan(
+      registrar.indexOf('tenantIdentityAround')
+    );
+  });
+
   it('uses long-route admission and short Task repository units without a duplicate gate check', () => {
     const promptStart = source.indexOf("'/sessions/:id/prompt'");
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
