@@ -14,6 +14,8 @@ export interface SessionTreeNode extends DataNode {
   key: string;
   session: Session;
   relationshipType: SessionRelationshipType;
+  /** Agent of the rendered parent node, so rows can skip repeating an unchanged agent icon. */
+  parentAgenticTool?: Session['agentic_tool'];
   children?: SessionTreeNode[];
 }
 
@@ -91,7 +93,8 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
   }
 
   // Build tree recursively
-  function buildNode(session: Session, isRoot = false): SessionTreeNode {
+  function buildNode(session: Session, parent?: Session): SessionTreeNode {
+    const isRoot = !parent;
     const children = childrenMap.get(session.session_id) || [];
 
     // Determine relationship type
@@ -111,15 +114,16 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
       title: '', // Empty string to prevent default tooltip (titleRender handles display)
       session,
       relationshipType,
+      parentAgenticTool: parent?.agentic_tool,
     };
 
     if (children.length > 0) {
-      node.children = children.map((child) => buildNode(child, false));
+      node.children = children.map((child) => buildNode(child, session));
     }
 
     return node;
   }
 
   // Build trees for each root
-  return roots.map((root) => buildNode(root, true));
+  return roots.map((root) => buildNode(root));
 }

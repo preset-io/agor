@@ -166,6 +166,12 @@
   padding: 0;
 }
 
+/* Panel session titles are single-line; Tree exposes no semantic slot for the
+   content wrapper, so let it shrink below its content for the ellipsis. */
+.agor-flat-tree.agor-panel-session-tree .ant-tree-node-content-wrapper {
+  min-width: 0;
+}
+
 /* Collapse's motion wrapper has no semantic style prop. Carry the bounded
    teammate flex slot through it; never affect auto-sized canvas cards or
    override the hidden-panel display rule during collapse. */

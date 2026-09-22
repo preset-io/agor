@@ -139,7 +139,7 @@ it.each([false, true])(
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Open session Conversation 1000' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Open session Conversation 1000(;|$)/ }));
     expect(onSessionClick).toHaveBeenCalledWith('session-1000');
   }
 );

@@ -17,6 +17,7 @@ import {
   MinusSquareOutlined,
   PlusOutlined,
   PlusSquareOutlined,
+  RightOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import {
@@ -35,6 +36,7 @@ import {
 import type React from 'react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import {
@@ -46,6 +48,7 @@ import {
   EMPTY_COLLAPSED_BRANCH_NODES,
   setCollapsedBranchNode,
 } from '../../utils/collapsedBranchNodes';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { useThemedMessage } from '../../utils/message';
 import {
   getMatchSnippet,
@@ -80,10 +83,15 @@ import { PagedSessions } from './PagedSessions';
 const NO_MOTION_THEME = { token: { motion: false } };
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
+const PANEL_AGENT_ICON_SIZE = 16;
+const PANEL_STATUS_DOT_SIZE = 6;
 
 const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
 
-function getSessionRowAccessibleLabel(session: Session): string {
+function getSessionRowAccessibleLabel(
+  session: Session,
+  panel?: { hiddenChildCount?: number }
+): string {
   const details = [
     `Open session ${getSessionDisplayTitle(session, { includeAgentFallback: true })}`,
   ];
@@ -91,8 +99,17 @@ function getSessionRowAccessibleLabel(session: Session): string {
   if (session.remote_surrogate) {
     details.push('remote session', 'opens in its own branch');
   }
-  if (isSessionFailed(session)) {
+  // Panel rows show these only as a status mark or count, so the name must carry them.
+  if (panel && isSessionExecuting(session)) {
+    details.push('running');
+  } else if (isSessionFailed(session)) {
     details.push('latest task failed');
+  } else if (panel && session.ready_for_prompt) {
+    details.push('ready for prompt');
+  }
+  if (panel?.hiddenChildCount) {
+    const { hiddenChildCount } = panel;
+    details.push(`${hiddenChildCount} hidden child session${hiddenChildCount === 1 ? '' : 's'}`);
   }
 
   return details.join('; ');
@@ -129,6 +146,8 @@ const SessionItemWithActions: React.FC<{
   sessionId: string;
   isArchiving: boolean;
   isPeeked?: boolean;
+  /** Paint a hover surface for rows that are not inside Tree, which supplies its own. */
+  hoverFill?: boolean;
   onArchive: (sessionId: string, e: React.MouseEvent) => void;
   onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   onTogglePeek?: (sessionId: string, e: React.MouseEvent) => void;
@@ -148,6 +167,7 @@ const SessionItemWithActions: React.FC<{
   sessionId,
   isArchiving,
   isPeeked = false,
+  hoverFill = false,
   onArchive,
   onSettings,
   onTogglePeek,
@@ -182,7 +202,17 @@ const SessionItemWithActions: React.FC<{
 
   return (
     <div
-      style={{ position: 'relative', minWidth: 0, width: '100%' }}
+      style={{
+        position: 'relative',
+        minWidth: 0,
+        width: '100%',
+        ...(hoverFill
+          ? {
+              borderRadius: token.borderRadiusSM,
+              background: showActions ? token.controlItemBgHover : undefined,
+            }
+          : undefined),
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setFocusWithin(true)}
@@ -305,6 +335,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const isMobileViewport = useIsMobileViewport();
   const { archiveSession } = useSessionActions(client);
 
   const [forkSpawnModal, setForkSpawnModal] = useState<{
@@ -666,6 +697,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   // that newly gain children start expanded, while stored exceptions survive
   // sessions temporarily leaving the tree (archive, lost children).
   const collapsedSessionIds = collapsedNode.sessionIds;
+  const collapsedSessionIdSet = useMemo(
+    () => new Set(isPanel ? collapsedSessionIds : undefined),
+    [collapsedSessionIds, isPanel]
+  );
   const expandedManualKeys = useMemo(
     () => manualExpandableKeys.filter((key) => !collapsedSessionIds?.includes(String(key))),
     [collapsedSessionIds, manualExpandableKeys]
@@ -708,17 +743,36 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
     const isRemoteSurrogate = Boolean(session.remote_surrogate);
+    if (isPanel) {
+      // Borderless rows: status lives in the trailing dot, selection in the fill.
+      return {
+        border: 0,
+        borderRadius: token.borderRadiusSM,
+        paddingBlock: 0,
+        paddingInline: token.paddingXS,
+        minHeight: isMobileViewport ? MOBILE_TOUCH_TARGET : token.controlHeight,
+        background: isSessionSelected ? token.colorFillSecondary : 'transparent',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        width: '100%',
+        boxSizing: 'border-box',
+        cursor: 'pointer',
+        color: 'inherit',
+        font: 'inherit',
+        textAlign: 'left',
+        whiteSpace: 'normal',
+        marginBottom: 4,
+        opacity: isRemoteSurrogate ? 0.78 : undefined,
+      };
+    }
     return {
       borderWidth: 1,
       borderStyle: isRemoteSurrogate ? 'dashed' : 'solid',
       borderColor: session.ready_for_prompt ? token.colorPrimary : token.colorBorderSecondary,
-      borderRadius: isPanel ? 6 : 4,
-      padding: isPanel ? 10 : 8,
-      background: isRemoteSurrogate
-        ? token.colorFillQuaternary
-        : isPanel
-          ? token.colorBgContainer
-          : 'transparent',
+      borderRadius: 4,
+      padding: 8,
+      background: isRemoteSurrogate ? token.colorFillQuaternary : 'transparent',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'flex-start',
@@ -744,17 +798,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     options: { strong?: boolean; secondary?: boolean; query?: string } = {}
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
-    const failed = isSessionFailed(session);
+    // Panel rows signal failure with the status dot instead of danger-colored text.
+    const failed = !isPanel && isSessionFailed(session);
 
     return (
       <Typography.Text
         strong={options.strong}
         type={failed ? 'danger' : options.secondary ? 'secondary' : undefined}
+        title={isPanel ? titleText : undefined}
         style={{
           fontSize: isPanel ? 13 : 12,
           flex: 1,
           minWidth: 0,
-          ...getSessionTitleStyles(2),
+          ...(isPanel
+            ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+            : getSessionTitleStyles(2)),
         }}
       >
         <HighlightMatch text={titleText} query={options.query ?? ''} />
@@ -763,7 +821,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   };
 
   const renderSessionFailureIcon = (session: Session) => {
-    if (!isSessionFailed(session)) return null;
+    if (isPanel || !isSessionFailed(session)) return null;
 
     return (
       <Tooltip title="Latest task failed">
@@ -785,8 +843,70 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </>
   );
 
+  const renderAgentIcon = (session: Session, visible = true) => {
+    if (!isPanel) {
+      return isSessionExecuting(session) ? (
+        <Spin size="small" />
+      ) : (
+        <ToolIcon tool={session.agentic_tool} size={20} />
+      );
+    }
+    const icon = <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} />;
+    // A hidden icon keeps its exact slot so titles stay aligned with siblings.
+    return visible ? (
+      icon
+    ) : (
+      <span aria-hidden="true" style={{ display: 'flex', visibility: 'hidden' }}>
+        {icon}
+      </span>
+    );
+  };
+
+  const renderPanelStatusDot = (session: Session) => {
+    if (!isPanel) return null;
+    const running = isSessionExecuting(session);
+    const failed = !running && isSessionFailed(session);
+    if (!running && !failed && !session.ready_for_prompt) return null;
+    if (failed) {
+      // A shape, not just a color, separates failure from the ready dot.
+      return (
+        <ExclamationCircleOutlined
+          role="img"
+          aria-label="Latest task failed"
+          title="Latest task failed"
+          style={{ color: token.colorErrorText, fontSize: token.fontSizeSM, flex: '0 0 auto' }}
+        />
+      );
+    }
+    const label = running ? 'Running' : 'Ready for prompt';
+    return (
+      <span
+        role="img"
+        aria-label={label}
+        title={label}
+        className={running ? 'status-dot-run' : undefined}
+        style={{
+          display: 'inline-block',
+          width: PANEL_STATUS_DOT_SIZE,
+          height: PANEL_STATUS_DOT_SIZE,
+          borderRadius: '50%',
+          flex: '0 0 auto',
+          background: running ? token.colorSuccess : token.colorPrimary,
+        }}
+      />
+    );
+  };
+
+  const renderSectionCount = (count: number, badgeColor: string) =>
+    isPanel ? (
+      <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+        {count}
+      </Typography.Text>
+    ) : (
+      <Badge count={count} showZero style={{ backgroundColor: badgeColor }} />
+    );
+
   const renderFlatSessionRow = (session: Session, query = '') => {
-    const isActive = isSessionExecuting(session);
     const callbackToggle = getCallbackToggle(session);
     const remoteParentId = getRemoteParentId(session);
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
@@ -806,6 +926,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         key={session.session_id}
         sessionId={session.session_id}
         isArchiving={archivingSessionIds.has(session.session_id)}
+        hoverFill={isPanel}
         onArchive={handleArchiveSession}
         callbackToggle={callbackToggle ?? undefined}
         onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
@@ -828,11 +949,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           type="button"
           style={sessionRowStyle(session)}
           data-session-id={session.session_id}
-          aria-label={getSessionRowAccessibleLabel(session)}
+          aria-label={getSessionRowAccessibleLabel(session, isPanel ? {} : undefined)}
           onClick={() => onSessionClick?.(session.session_id)}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, flex: 1, minWidth: 0 }}>
-            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: isPanel ? 'center' : 'flex-start',
+              gap: isPanel ? token.marginXS : 4,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            {renderAgentIcon(session)}
             <SessionRelationshipIcon session={session} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
@@ -867,6 +996,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 </Typography.Text>
               )}
             </div>
+            {renderPanelStatusDot(session)}
           </div>
         </button>
       </SessionItemWithActions>
@@ -888,6 +1018,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         ? getSessionDisplayTitle(nodeProps.session, { includeAgentFallback: true })
         : 'session';
       const Icon = expanded ? MinusSquareOutlined : PlusSquareOutlined;
+      const icon = isPanel ? (
+        <RightOutlined
+          rotate={expanded ? 90 : 0}
+          style={{ fontSize: token.fontSizeSM - 2, color: token.colorTextTertiary }}
+        />
+      ) : (
+        <Icon />
+      );
 
       return (
         <button
@@ -907,22 +1045,24 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             alignItems: 'center',
             justifyContent: 'center',
             width: '100%',
-            height: '1lh',
+            // Panel rows can be taller than one line; center the caret on the whole row.
+            height: isPanel ? '100%' : '1lh',
             lineHeight: 'inherit',
             cursor: 'pointer',
             color: 'inherit',
           }}
         >
-          <Icon />
+          {icon}
         </button>
       );
     },
-    [toggleSessionCollapsed]
+    [isPanel, toggleSessionCollapsed, token.colorTextTertiary, token.fontSizeSM]
   );
 
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
-    const isActive = isSessionExecuting(session);
+    const hiddenChildCount =
+      isPanel && collapsedSessionIdSet.has(session.session_id) ? (node.children?.length ?? 0) : 0;
     const isRemoteSurrogate = node.relationshipType === 'remote';
     const callbackToggle = getCallbackToggle(session);
     const remoteParentId = getRemoteParentId(session);
@@ -956,9 +1096,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         <button
           type="button"
           // Keep the same total row spacing, but center the border inside Tree's hover fill.
-          style={{ ...sessionRowStyle(session), marginBlock: 2 }}
+          style={{ ...sessionRowStyle(session), marginBlock: isPanel ? 0 : 2 }}
           data-session-id={session.session_id}
-          aria-label={getSessionRowAccessibleLabel(session)}
+          aria-label={getSessionRowAccessibleLabel(
+            session,
+            isPanel ? { hiddenChildCount } : undefined
+          )}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
             if (onForkSession || onSpawnSession) {
@@ -967,17 +1110,18 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           }}
         >
           <Flex
-            align={isGateway ? 'flex-start' : 'center'}
-            gap={token.marginXXS}
+            align={isGateway && !isPanel ? 'flex-start' : 'center'}
+            gap={isPanel ? token.marginXS : token.marginXXS}
             flex={1}
             style={{ minWidth: 0 }}
           >
-            {isActive ? <Spin size="small" /> : <ToolIcon tool={session.agentic_tool} size={20} />}
+            {renderAgentIcon(session, !isPanel || node.parentAgenticTool !== session.agentic_tool)}
             {isRemoteSurrogate ? (
               <Tooltip title="Remote session created from this session. Click to open it in its own branch.">
                 <ExportOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
               </Tooltip>
-            ) : (
+            ) : isPanel && node.relationshipType === 'spawn' ? null : (
+              // Panel indentation already shows a spawn; forks and btw keep their marker.
               <SessionRelationshipIcon session={session} size={10} />
             )}
             <Flex vertical gap={isGateway ? token.marginXXS : 0} flex={1} style={{ minWidth: 0 }}>
@@ -997,6 +1141,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                   </Typography.Text>
                 ))}
             </Flex>
+            {hiddenChildCount > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {hiddenChildCount}
+              </Typography.Text>
+            )}
+            {renderPanelStatusDot(session)}
           </Flex>
         </button>
       </SessionItemWithActions>
@@ -1010,13 +1160,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     onContentSizeChange: (contentHeight: number, viewportHeight: number) => void
   ) => (
     <BranchSessionTree
-      className="agor-flat-tree nodrag nowheel"
+      className={`agor-flat-tree nodrag nowheel${isPanel ? ' agor-panel-session-tree' : ''}`}
       fillAvailableHeight={fillPanel}
       onContentSizeChange={onContentSizeChange}
       treeData={treeData}
       expandedKeys={expandedKeys}
       onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
-      showLine
+      showLine={!isPanel}
       switcherIcon={renderTreeSwitcherIcon}
       showIcon={false}
       blockNode
@@ -1056,30 +1206,48 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
         <Typography.Text strong>Sessions</Typography.Text>
-        <Badge
-          count={manualSessions.length}
-          showZero
-          style={{ backgroundColor: token.colorPrimaryBgHover }}
-        />
+        {renderSectionCount(manualSessions.length, token.colorPrimaryBgHover)}
         {!isPanel && (
           <SessionSortButton sort={sort} onSortChange={setSort} compact stopPropagation />
         )}
       </Space>
       {onCreateSession && (
         <div className="nodrag">
-          <Button
-            type="default"
-            size="small"
-            icon={<PlusOutlined />}
-            disabled={connectionDisabled || isCreating}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCreateSession(branch.branch_id);
-            }}
-            title={isCreating ? 'Branch is being created...' : undefined}
-          >
-            New Session
-          </Button>
+          {isPanel ? (
+            <Tooltip title={isCreating ? undefined : 'New session'}>
+              <Button
+                type="text"
+                size={isMobileViewport ? 'middle' : 'small'}
+                icon={<PlusOutlined />}
+                aria-label="New Session"
+                disabled={connectionDisabled || isCreating}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateSession(branch.branch_id);
+                }}
+                title={isCreating ? 'Branch is being created...' : undefined}
+                style={
+                  isMobileViewport
+                    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+                    : undefined
+                }
+              />
+            </Tooltip>
+          ) : (
+            <Button
+              type="default"
+              size="small"
+              icon={<PlusOutlined />}
+              disabled={connectionDisabled || isCreating}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateSession(branch.branch_id);
+              }}
+              title={isCreating ? 'Branch is being created...' : undefined}
+            >
+              New Session
+            </Button>
+          )}
         </div>
       )}
     </Flex>
@@ -1088,13 +1256,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const scheduledRunsHeader = (
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
-        <ClockCircleOutlined style={{ color: token.colorInfo }} />
+        {!isPanel && <ClockCircleOutlined style={{ color: token.colorInfo }} />}
         <Typography.Text strong>Scheduled Runs</Typography.Text>
-        <Badge
-          count={scheduledSessions.length}
-          showZero
-          style={{ backgroundColor: token.colorInfoBgHover }}
-        />
+        {renderSectionCount(scheduledSessions.length, token.colorInfoBgHover)}
         {hasRunningScheduledSession && <Spin size="small" />}
       </Space>
     </Flex>
@@ -1103,7 +1267,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const scheduledRunsContent = isScheduledRunsOpen ? (
     <PagedSessions key={branch.branch_id} sessions={scheduledSessions}>
       {(session) => {
-        const isActive = isSessionExecuting(session);
         const callbackToggle = getCallbackToggle(session);
         const remoteParentId = getRemoteParentId(session);
         return (
@@ -1112,6 +1275,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             sessionId={session.session_id}
             isArchiving={archivingSessionIds.has(session.session_id)}
             isPeeked={peekedIds.has(session.session_id)}
+            hoverFill={isPanel}
             onArchive={handleArchiveSession}
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
             callbackToggle={callbackToggle ?? undefined}
@@ -1134,17 +1298,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <button
               type="button"
               style={sessionRowStyle(session)}
-              aria-label={getSessionRowAccessibleLabel(session)}
+              aria-label={getSessionRowAccessibleLabel(session, isPanel ? {} : undefined)}
               onClick={() => onSessionClick?.(session.session_id)}
             >
-              <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-                {isActive ? (
-                  <Spin size="small" />
-                ) : (
-                  <ToolIcon tool={session.agentic_tool} size={20} />
-                )}
-                {renderSessionTitleWithFailure(session, { secondary: true })}
-              </Space>
+              {isPanel ? (
+                <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
+                  {renderAgentIcon(session)}
+                  {renderSessionTitleWithFailure(session, { secondary: true })}
+                  {renderPanelStatusDot(session)}
+                </Flex>
+              ) : (
+                <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
+                  {renderAgentIcon(session)}
+                  {renderSessionTitleWithFailure(session, { secondary: true })}
+                </Space>
+              )}
             </button>
           </SessionItemWithActions>
         );
@@ -1155,13 +1323,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const gatewaySessionsHeader = (
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
       <Space size={4} align="center">
-        <MessageOutlined style={{ color: token.colorSuccess }} />
+        {!isPanel && <MessageOutlined style={{ color: token.colorSuccess }} />}
         <Typography.Text strong>Gateway Sessions</Typography.Text>
-        <Badge
-          count={gatewayRootSessions.length}
-          showZero
-          style={{ backgroundColor: token.colorSuccessBgHover }}
-        />
+        {renderSectionCount(gatewayRootSessions.length, token.colorSuccessBgHover)}
         {hasRunningGatewaySession && <Spin size="small" />}
       </Space>
     </Flex>
