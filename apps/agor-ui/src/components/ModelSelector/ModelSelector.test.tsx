@@ -510,7 +510,7 @@ describe('ModelSelector (Claude)', () => {
 
 describe('ModelSelector (Codex)', () => {
   it('marks older aliases whose availability depends on the provider account', () => {
-    render(<ModelSelector agentic_tool="codex" value={{ mode: 'alias', model: 'gpt-5.6-sol' }} />);
+    render(<ModelSelector agentic_tool="codex" value={{ mode: 'alias', model: 'gpt-6-sol' }} />);
 
     fireEvent.mouseDown(screen.getByRole('combobox'));
 

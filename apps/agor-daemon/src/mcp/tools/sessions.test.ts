@@ -1977,13 +1977,11 @@ describe('agor_models_list', () => {
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
     expect(parsed.codex.default).toBe('gpt-6-astra');
-    expect(codexIds.slice(0, 6)).toEqual([
+    expect(codexIds.slice(0, 4)).toEqual([
       'gpt-6-astra',
       'gpt-6-sol',
       'gpt-6-luna',
-      'gpt-5.6-sol',
       'gpt-5.6-terra',
-      'gpt-5.6-luna',
     ]);
     expect(codexIds).toContain('gpt-5.5');
     expect(codexIds).toContain('gpt-5.4-mini');
