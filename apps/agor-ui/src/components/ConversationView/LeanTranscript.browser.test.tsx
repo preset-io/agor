@@ -170,7 +170,7 @@ it('renders continuous history without detail fetching and anchors an upward pag
   await page.screenshot({ path: `./.vitest/lean-transcript-${window.innerWidth}.png` });
 });
 
-it('reveals existing metadata pills without layout shift through focus, hover and touch-equivalent click', async () => {
+it('reveals existing metadata pills without layout shift through focus, hover and touch', async () => {
   const metadata = (
     <Flex gap="small" style={{ width: 'max-content', flexShrink: 0 }}>
       <ModelPill model="synthetic-model" />
@@ -193,8 +193,10 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   const row = screen.getByRole('region', { name: 'Turn metadata' });
   const overlay = row.parentElement!;
   expect(getComputedStyle(overlay).position).toBe('absolute');
-  expect(overlay.getBoundingClientRect().bottom).toBe(
-    prompt.parentElement!.getBoundingClientRect().bottom
+  await waitFor(() =>
+    expect(overlay.getBoundingClientRect().bottom).toBe(
+      prompt.parentElement!.getBoundingClientRect().bottom
+    )
   );
   expect(overlay.getBoundingClientRect().top).toBeGreaterThanOrEqual(
     prompt.getBoundingClientRect().bottom
@@ -208,12 +210,16 @@ it('reveals existing metadata pills without layout shift through focus, hover an
       <p>Prompt for metadata</p>
     </LeanTurnMetadata>
   );
-  await userEvent.click(screen.getByRole('button', { name: 'Show turn metadata' }));
-  expect(screen.getByRole('button', { name: 'Show turn metadata' })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
+  expect(screen.queryByRole('button', { name: 'Show turn metadata' })).toBeNull();
+  const touchPrompt = screen.getByText('Prompt for metadata');
+  fireEvent.pointerDown(touchPrompt, { pointerType: 'touch', clientX: 10, clientY: 10 });
+  fireEvent.pointerUp(touchPrompt, { pointerType: 'touch', clientX: 10, clientY: 60 });
+  expect(screen.getByText('synthetic-model')).not.toBeVisible();
+  fireEvent.pointerDown(touchPrompt, { pointerType: 'touch', clientX: 10, clientY: 10 });
+  fireEvent.pointerUp(touchPrompt, { pointerType: 'touch', clientX: 10, clientY: 10 });
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+  fireEvent.keyDown(touchPrompt, { key: 'Escape' });
+  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
   cleanup();
   render(
     <LeanTurnMetadata metadata={metadata}>
@@ -222,6 +228,8 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   );
   await userEvent.hover(screen.getByText('Prompt for metadata'));
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+  await userEvent.unhover(screen.getByText('Prompt for metadata'));
+  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
 });
 
 it('keeps familiar icon-led tool rows and results inside the quiet outer disclosure', async () => {

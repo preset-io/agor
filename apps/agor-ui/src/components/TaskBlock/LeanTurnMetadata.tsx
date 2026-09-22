@@ -1,8 +1,8 @@
-import { MoreOutlined } from '@ant-design/icons';
-import { Button, Flex, theme } from 'antd';
-import { type ReactNode, useId, useState } from 'react';
+import { Flex, theme } from 'antd';
+import { type ReactNode, useRef, useState } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
-/** Bottom overlay uses the existing footer space: no text occlusion or hover layout shift. */
+/** Fixed footer geometry; only opacity/transform animate, never transcript layout. */
 export function LeanTurnMetadata({
   metadata,
   background,
@@ -13,25 +13,67 @@ export function LeanTurnMetadata({
   children: ReactNode;
 }) {
   const { token } = theme.useToken();
-  const id = useId();
+  const reducedMotion = usePrefersReducedMotion();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const visible = hovered || focused || pinned;
+  const [dismissed, setDismissed] = useState(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const visible = !dismissed && (hovered || focused || pinned);
   return (
-    <div
+    <section
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: focus reveals metadata without turning the rich prompt (with links/buttons) into a nested button.
+      tabIndex={0}
+      aria-label="User prompt and turn metadata"
       style={{ position: 'relative', minWidth: 0, paddingBottom: token.controlHeight }}
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={() => {
+        setHovered(true);
+        setDismissed(false);
+      }}
       onMouseLeave={() => setHovered(false)}
-      onFocusCapture={() => setFocused(true)}
+      onFocusCapture={() => {
+        setFocused(true);
+        setDismissed(false);
+      }}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false);
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setFocused(false);
+          setPinned(false);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setPinned(false);
+          setDismissed(true);
+        }
+      }}
+      onPointerDown={(event) => {
+        touchStart.current =
+          event.pointerType === 'touch' ? { x: event.clientX, y: event.clientY } : null;
+      }}
+      onPointerCancel={() => {
+        touchStart.current = null;
+      }}
+      onPointerUp={(event) => {
+        const start = touchStart.current;
+        touchStart.current = null;
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > token.marginSM)
+          return;
+        // Do not hijack selection, links, copy controls, or scrolling/interacting with the metadata.
+        if (
+          (event.target as HTMLElement).closest(
+            'a, button, input, textarea, [aria-label="Turn metadata"]'
+          ) ||
+          window.getSelection()?.toString()
+        )
+          return;
+        setPinned(!pinned);
+        setDismissed(pinned);
       }}
     >
       {children}
       <Flex
         align="center"
-        gap={token.marginXS}
         style={{
           position: 'absolute',
           bottom: 0,
@@ -40,22 +82,18 @@ export function LeanTurnMetadata({
           height: token.controlHeight,
           minWidth: 0,
           borderRadius: token.borderRadius,
-          background: visible ? token.colorBgElevated : undefined,
-          boxShadow: visible ? token.boxShadowSecondary : undefined,
+          background: token.colorBgElevated,
+          boxShadow: token.boxShadowSecondary,
+          visibility: visible ? 'visible' : 'hidden',
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : `translateY(${token.sizeUnit}px)`,
+          pointerEvents: visible ? 'auto' : 'none',
+          transition: reducedMotion
+            ? 'none'
+            : `opacity ${token.motionDurationFast} ${token.motionEaseOut}, transform ${token.motionDurationFast} ${token.motionEaseOut}`,
         }}
       >
-        <Button
-          type="text"
-          size="small"
-          icon={<MoreOutlined />}
-          aria-label="Show turn metadata"
-          aria-expanded={visible}
-          aria-controls={id}
-          aria-pressed={pinned}
-          onClick={() => setPinned(!pinned)}
-        />
         <section
-          id={id}
           aria-label="Turn metadata"
           aria-hidden={!visible}
           style={{
@@ -67,7 +105,6 @@ export function LeanTurnMetadata({
             overflowX: 'auto',
             overflowY: 'hidden',
             scrollbarWidth: 'thin',
-            visibility: visible ? 'visible' : 'hidden',
             background,
             borderRadius: token.borderRadiusSM,
           }}
@@ -75,6 +112,6 @@ export function LeanTurnMetadata({
           {metadata}
         </section>
       </Flex>
-    </div>
+    </section>
   );
 }
