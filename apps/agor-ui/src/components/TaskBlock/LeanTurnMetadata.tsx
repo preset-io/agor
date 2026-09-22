@@ -2,7 +2,7 @@ import { MoreOutlined } from '@ant-design/icons';
 import { Button, Flex, theme } from 'antd';
 import { type ReactNode, useId, useState } from 'react';
 
-/** Reserve one row outside the bubble: revealing metadata never moves the transcript. */
+/** Bottom overlay uses the existing footer space: no text occlusion or hover layout shift. */
 export function LeanTurnMetadata({
   metadata,
   background,
@@ -20,7 +20,7 @@ export function LeanTurnMetadata({
   const visible = hovered || focused || pinned;
   return (
     <div
-      style={{ minWidth: 0 }}
+      style={{ position: 'relative', minWidth: 0, paddingBottom: token.controlHeight }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocusCapture={() => setFocused(true)}
@@ -32,7 +32,17 @@ export function LeanTurnMetadata({
       <Flex
         align="center"
         gap={token.marginXS}
-        style={{ height: token.controlHeight, minWidth: 0 }}
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          insetInline: 0,
+          zIndex: 1,
+          height: token.controlHeight,
+          minWidth: 0,
+          borderRadius: token.borderRadius,
+          background: visible ? token.colorBgElevated : undefined,
+          boxShadow: visible ? token.boxShadowSecondary : undefined,
+        }}
       >
         <Button
           type="text"

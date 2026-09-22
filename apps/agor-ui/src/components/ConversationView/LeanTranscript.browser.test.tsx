@@ -191,6 +191,14 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   expect(prompt.parentElement!.getBoundingClientRect().height).toBe(before.height);
   expect(prompt.parentElement!.getBoundingClientRect().top).toBe(before.top);
   const row = screen.getByRole('region', { name: 'Turn metadata' });
+  const overlay = row.parentElement!;
+  expect(getComputedStyle(overlay).position).toBe('absolute');
+  expect(overlay.getBoundingClientRect().bottom).toBe(
+    prompt.parentElement!.getBoundingClientRect().bottom
+  );
+  expect(overlay.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    prompt.getBoundingClientRect().bottom
+  );
   expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
   if (window.innerWidth === 320) expect(row.scrollWidth).toBeGreaterThan(row.clientWidth);
   await page.screenshot({ path: `./.vitest/lean-metadata-${window.innerWidth}.png` });
