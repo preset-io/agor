@@ -550,6 +550,12 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
   const root = container.querySelector('[data-task-block]')!;
   const stopped = screen.getByText('Turn stopped');
   expect(stopped).toBeVisible();
+  const outcome = root.querySelector<HTMLElement>('[data-turn-outcome]')!;
+  expect(outcome).toHaveClass('ant-alert-warning');
+  expect(
+    Math.abs(outcome.getBoundingClientRect().left - root.getBoundingClientRect().left)
+  ).toBeLessThan(1);
+  expect(getComputedStyle(outcome).fontSize).toBe('14px');
   expect(root.querySelector(':scope > .anticon')).toBeNull();
   expect(stopped.getBoundingClientRect().top).toBeGreaterThan(
     screen.getByText(/Answer 19\./).getBoundingClientRect().bottom
@@ -567,6 +573,7 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
     })
   );
   expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
+  expect(screen.getByRole('alert')).toHaveClass('ant-alert-error');
   expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
 });

@@ -115,7 +115,7 @@ describe('lean task presentation', () => {
     const failure = { ...task, status: TaskStatus.FAILED, error_message: 'Synthetic failure' };
     const result = render(view({ task: failure, taskMessages: [] }));
     expect(screen.getByText('Retained prompt')).toBeVisible();
-    expect(screen.getByText('Synthetic failure')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Turn failed: Synthetic failure');
     result.rerender(view({ task: { ...task, full_prompt: '' }, taskMessages: [messages[1]] }));
     expect(screen.getByText('Visible answer')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Tool calls', expanded: false })).toBeVisible();
@@ -212,6 +212,7 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
   expect(screen.queryByText('Starting turn…')).toBeNull();
   rerender(view({ task: { ...task, status: TaskStatus.STOPPING } }));
   expect(screen.getByRole('status')).toHaveTextContent('Stopping');
+  expect(screen.getByRole('status')).toHaveClass('ant-alert-info');
   rerender(
     view({
       task: { ...task, status: TaskStatus.AWAITING_PERMISSION },
@@ -311,4 +312,12 @@ it('keeps verified recovery and authorization notices visible at the bottom with
   expect(screen.getAllByRole('alert')).toHaveLength(1);
   expect(screen.getByRole('alert')).toHaveTextContent('Task access revoked');
   expect(screen.queryByRole('button', { name: 'Resume in new task' })).toBeNull();
+});
+
+it('keeps stopped outcomes warning-level even with an explanatory reason', () => {
+  render(
+    view({ task: { ...task, status: TaskStatus.STOPPED, error_message: 'Stopped by request' } })
+  );
+  expect(screen.getByRole('status')).toHaveClass('ant-alert-warning');
+  expect(screen.getByRole('status')).toHaveTextContent('Turn stopped: Stopped by request');
 });

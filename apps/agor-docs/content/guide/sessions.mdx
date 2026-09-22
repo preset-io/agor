@@ -370,7 +370,9 @@ If expanding an unknown turn returns no tools, **No tool calls** appears in its 
 Counts describe persisted activity, not calls an agent adapter failed to record.
 
 Successful turns have no status badge. Stopping, stopped, failed, and timed-out turns
-show a small outcome row after their content; failure reasons stay visible without hover.
+show a normal-size alert after their content, aligned with the tool blocks: info while
+stopping, warning when stopped, and error for failures/timeouts. Failure reasons stay
+visible without hover; short outcomes occupy one line and longer reasons wrap.
 Approval/input requests remain actionable in the transcript. Runtime recovery and
 access-revocation notices also appear after the turn, retaining their explanations and actions.
 
