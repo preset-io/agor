@@ -162,7 +162,11 @@ function createMockClient(opts: MockClientOptions) {
     messages: { findAll: messageFindAll, ...listener('messages') },
     'session-streams': sessionStreams,
   };
-  const queueService = { find: vi.fn(async () => ({ data: [] })) };
+  const queueService = {
+    find: vi.fn(async () => ({
+      data: opts.tasks.filter((task) => task.status === TaskStatus.QUEUED),
+    })),
+  };
 
   const ioHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
   const client = {
@@ -1497,17 +1501,89 @@ describe('queue-management realtime compatibility', () => {
     const active = makeTask('active', TaskStatus.RUNNING);
     const a = { ...makeTask('a', TaskStatus.QUEUED), queue_position: 1 };
     const b = { ...makeTask('b', TaskStatus.QUEUED), queue_position: 2 };
-    const mock = createMockClient({ tasks: [active, a, b], messagesByTask: {} });
+    const opts = { tasks: [active, a, b], messagesByTask: {} };
+    const mock = createMockClient(opts);
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
     await handle.ready();
+    opts.tasks = [active, { ...b, queue_position: 1 }, { ...a, queue_position: 2 }];
     mock.emitServiceEvent('tasks', 'patched', { ...b, queue_position: 1 });
     mock.emitServiceEvent('tasks', 'patched', { ...a, queue_position: 2 });
-    expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual(['b', 'a']);
+    await vi.waitFor(() =>
+      expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual(['b', 'a'])
+    );
+    opts.tasks = [active, a];
     mock.emitServiceEvent('tasks', 'removed', b);
     expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual(['a']);
     expect(handle.state.tasks.find((t) => t.task_id === active.task_id)).toEqual(active);
     handle.dispose();
   });
+});
+
+describe('authoritative queue snapshot ownership', () => {
+  it('does not lose an invalidation between publishing a snapshot and promise cleanup', async () => {
+    const a = { ...makeTask('a', TaskStatus.QUEUED), queue_position: 1 };
+    const b = { ...makeTask('b', TaskStatus.QUEUED), queue_position: 2 };
+    const c = { ...makeTask('c', TaskStatus.QUEUED), queue_position: 3 };
+    const opts: MockClientOptions = { tasks: [a], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    let delivered = false;
+    handle.subscribe(() => {
+      if (delivered || handle.state.queuedTasks.length !== 2) return;
+      delivered = true;
+      void Promise.resolve().then(() => {
+        opts.tasks = [b, c];
+        mock.emitServiceEvent('tasks', 'queued', c);
+      });
+    });
+    opts.tasks = [a, b];
+    mock.emitServiceEvent('tasks', 'queued', b);
+    await vi.waitFor(() => expect(delivered).toBe(true));
+    await vi.waitFor(() => expect(handle.state.queuedTasks).toEqual([b, c]));
+    // A late old reorder still reconciles, rather than using event payloads.
+    mock.emitServiceEvent('tasks', 'patched', a);
+    await handle.resync();
+    expect(handle.state.queuedTasks).toEqual([b, c]);
+    handle.dispose();
+  });
+
+  it.each(['eager', 'lazy', 'none', 'lean'] as const)(
+    '%s bootstrap and resync cannot replay queued rows over newer removals',
+    async (taskHydration) => {
+      const active = makeTask('active', TaskStatus.COMPLETED);
+      const a = { ...makeTask('a', TaskStatus.QUEUED), queue_position: 1 };
+      const b = { ...makeTask('b', TaskStatus.QUEUED), queue_position: 2 };
+      const opts: MockClientOptions = {
+        tasks: [active, a, b],
+        messagesByTask: {},
+        deferSessionGet: true,
+      };
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      await vi.waitFor(() => expect(handle.state.queuedTasks).toHaveLength(2));
+      opts.tasks = [active, a];
+      mock.emitServiceEvent('tasks', 'removed', b);
+      mock.emitServiceEvent('tasks', 'patched', b);
+      mock.releaseSessionGet();
+      await handle.ready();
+      expect(handle.state.queuedTasks).toEqual([a]);
+      expect(handle.state.tasks.some((task) => task.task_id === b.task_id)).toBe(false);
+
+      const syncing = handle.resync();
+      await vi.waitFor(() =>
+        expect(mock.order.filter((step) => step === 'hydrate')).toHaveLength(2)
+      );
+      opts.tasks = [active];
+      mock.emitServiceEvent('tasks', 'removed', a);
+      mock.emitServiceEvent('tasks', 'queued', a);
+      mock.releaseSessionGet();
+      await syncing;
+      expect(handle.state.queuedTasks).toEqual([]);
+      expect(handle.state.tasks).toEqual([active]);
+      handle.dispose();
+    }
+  );
 });
 
 describe('lean transcript POC hydration', () => {

@@ -183,6 +183,12 @@ export class ReactiveSessionHandle {
   private taskFetchTokenSequence = 0;
   private readonly taskFetches = new Map<number, number>();
   private readonly taskMutations: TaskMutation[] = [];
+  // Queue events are invalidations, not ordered row revisions: a delayed
+  // reorder can follow cancellation or a newer reorder from another daemon.
+  private queueInvalidation = 0;
+  private queueInflight: Promise<void> | null = null;
+  private queueSnapshot: Task[] = [];
+  private queueError: string | null = null;
   private sessionMutationSequence = 0;
   private leanConnectionGeneration = 0;
   private leanOldestTaskId: string | undefined;
@@ -621,6 +627,7 @@ export class ReactiveSessionHandle {
       connected: false,
       hasOlderTasks: false,
     };
+    this.queueSnapshot = [];
     this.detailInflight.clear();
     this.leanLiveTaskIds.clear();
     this.messageFetches.clear();
@@ -629,6 +636,75 @@ export class ReactiveSessionHandle {
     this.messageCacheMutationsByTask.clear();
     this.taskFetches.clear();
     this.taskMutations.length = 0;
+  }
+
+  private refreshQueue(): Promise<void> {
+    this.queueInvalidation += 1;
+    if (this.queueInflight) return this.queueInflight;
+    let settledInvalidation = -1;
+    const promise = Promise.resolve()
+      .then(async () => {
+        while (!this.disposed && !this.stateSnapshot.terminal && this.stateSnapshot.connected) {
+          const invalidation = this.queueInvalidation;
+          try {
+            const result = (await this.client
+              .service(`/sessions/${this.sessionId}/tasks/queue`)
+              .find()) as QueueFindResult;
+            if (this.disposed || this.stateSnapshot.terminal || !this.stateSnapshot.connected)
+              return;
+            // A request-order counter alone is insufficient: even the newest
+            // request can have read before a cancellation/reorder observed live.
+            // Discard it and read again after ALL observed invalidations.
+            if (invalidation !== this.queueInvalidation) continue;
+            this.queueSnapshot = sortTasksByQueuePosition(
+              (result.data ?? []).filter(
+                (task) => this.matchesSession(task.session_id) && task.status === TaskStatus.QUEUED
+              )
+            );
+            const previousError = this.queueError;
+            this.queueError = null;
+            this.updateState((prev) => ({
+              ...prev,
+              error: previousError !== null && prev.error === previousError ? null : prev.error,
+            }));
+          } catch (error) {
+            if (this.disposed || this.stateSnapshot.terminal || !this.stateSnapshot.connected)
+              return;
+            if (invalidation !== this.queueInvalidation) continue;
+            // Keep confirmed rows on a transient failure. The shared hook's
+            // auth/visibility recovery and socket reconnect retry the read.
+            this.queueError = error instanceof Error ? error.message : 'Failed to refresh queue';
+            this.updateState((prev) => ({ ...prev, error: prev.error ?? this.queueError }));
+          }
+          settledInvalidation = invalidation;
+          if (invalidation === this.queueInvalidation) return;
+        }
+      })
+      .finally(() => {
+        if (this.queueInflight === promise) this.queueInflight = null;
+        // An event can also land between the async loop settling and this
+        // promise's cleanup microtask. Do not lose that final invalidation.
+        if (
+          settledInvalidation !== this.queueInvalidation &&
+          !this.disposed &&
+          !this.stateSnapshot.terminal &&
+          this.stateSnapshot.connected
+        )
+          return this.refreshQueue();
+      });
+    this.queueInflight = promise;
+    return promise;
+  }
+
+  private invalidateQueue(task: Task, removed = false): void {
+    const inQueue = this.queueSnapshot.some((row) => row.task_id === task.task_id);
+    if (task.status !== TaskStatus.QUEUED && !inQueue && !this.queueInflight) return;
+    if (inQueue && (removed || task.status !== TaskStatus.QUEUED)) {
+      // Removal/dispatch is immediately safe to project. Never insert or
+      // reorder from an event payload, including a late created/queued event.
+      this.queueSnapshot = this.queueSnapshot.filter((row) => row.task_id !== task.task_id);
+    }
+    void this.refreshQueue();
   }
 
   private assertNotDisposed(): void {
@@ -648,6 +724,26 @@ export class ReactiveSessionHandle {
   ): ReactiveSessionState {
     if (this.disposed) return this.stateSnapshot;
     let next = updater(this.stateSnapshot);
+    if (next.error === null && this.queueError !== null) next = { ...next, error: this.queueError };
+    // Bootstrap, history paging and reconnect also read Tasks. Their older
+    // snapshots/journals must not become a second source of queue membership.
+    const queuedTasks = next.terminal ? [] : this.queueSnapshot;
+    if (next.tasks !== this.stateSnapshot.tasks || next.queuedTasks !== queuedTasks) {
+      const queuedIds = new Set(queuedTasks.map((task) => task.task_id));
+      next = {
+        ...next,
+        queuedTasks,
+        tasks: orderTasksBySession(
+          [
+            ...next.tasks.filter(
+              (task) => task.status !== TaskStatus.QUEUED && !queuedIds.has(task.task_id)
+            ),
+            ...queuedTasks,
+          ],
+          next.session?.tasks
+        ),
+      };
+    }
     if (this.options.cacheScope === 'preview') {
       const latest = next.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
       const keep = new Set<string>(next.tasks.filter(isTaskExecuting).map((task) => task.task_id));
@@ -678,7 +774,6 @@ export class ReactiveSessionHandle {
     sessionFetchSequence: number;
     taskFetchToken: number;
     taskSnapshot: Task[];
-    queueResult: QueueFindResult;
     messageFetchToken: number | null;
     eagerMessageSnapshot: Message[] | null;
     lazyMessageSnapshot: { taskId: string; messages: Message[]; cacheSequence: number } | null;
@@ -729,14 +824,6 @@ export class ReactiveSessionHandle {
     messagesByTask = new Map([...messagesByTask].filter(([taskId]) => liveTaskIds.has(taskId)));
     loadedTaskIds = new Set([...loadedTaskIds].filter((taskId) => liveTaskIds.has(taskId)));
 
-    const queuedById = new Map(
-      (args.queueResult.data ?? []).map((task) => [task.task_id, task] as const)
-    );
-    for (const task of tasks) {
-      if (task.status === TaskStatus.QUEUED) queuedById.set(task.task_id, task);
-      else queuedById.delete(task.task_id);
-    }
-
     return {
       ...args.previous,
       session,
@@ -753,7 +840,6 @@ export class ReactiveSessionHandle {
         ),
         tasks
       ),
-      queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
       loading: false,
       error: null,
       lastSyncedAt: new Date().toISOString(),
@@ -811,7 +897,7 @@ export class ReactiveSessionHandle {
     try {
       const pageSize = this.options.cacheScope === 'preview' ? 1 : LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
       const cursor = older ? this.leanOldestTaskId : undefined;
-      const [session, result, queue] = await Promise.all([
+      const [session, result] = await Promise.all([
         older && this.stateSnapshot.session
           ? Promise.resolve(this.stateSnapshot.session)
           : this.client.service('sessions').get(this.sessionId),
@@ -824,11 +910,7 @@ export class ReactiveSessionHandle {
             ...(cursor ? { task_id: { $lte: cursor } } : {}),
           },
         }),
-        older
-          ? Promise.resolve({ data: this.stateSnapshot.queuedTasks } as QueueFindResult)
-          : (this.client
-              .service(`/sessions/${this.sessionId}/tasks/queue`)
-              .find() as Promise<QueueFindResult>),
+        older ? Promise.resolve() : this.refreshQueue(),
       ]);
       if (stale()) return;
       this.canonicalSessionId = session.session_id;
@@ -837,7 +919,7 @@ export class ReactiveSessionHandle {
       const page = candidates.slice(0, pageSize);
       const hasOlder = cursor ? candidates.length >= pageSize : candidates.length > pageSize;
       const byId = new Map(this.stateSnapshot.tasks.map((task) => [task.task_id, task]));
-      for (const task of queue.data ?? []) byId.set(task.task_id, task);
+      for (const task of this.queueSnapshot) byId.set(task.task_id, task);
       if (!older) {
         // A reconnect can span more than ten newly completed turns. Fill the
         // already-open ID window so advancing the latest page cannot strand
@@ -944,9 +1026,6 @@ export class ReactiveSessionHandle {
           tasks: committedTasks,
           messagesByTask,
           loadedTaskIds,
-          queuedTasks: sortTasksByQueuePosition(
-            committedTasks.filter((task) => task.status === TaskStatus.QUEUED)
-          ),
           streamingMessages: restampStreamingTaskIds(
             this.reconcilePersistedStreams(prev.streamingMessages, fetched, messageToken),
             committedTasks
@@ -987,13 +1066,10 @@ export class ReactiveSessionHandle {
     const sessionFetchSequence = this.sessionMutationSequence;
     let messageFetchToken: number | null = null;
     try {
-      const [session, taskSnapshot, queueResult] = await Promise.all([
+      const [session, taskSnapshot] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
         this.fetchTasksAtHighWater(),
-        this.client
-          .service(`/sessions/${this.sessionId}/tasks/queue`)
-          .find()
-          .catch(() => ({ data: [] }) as QueueFindResult),
+        this.refreshQueue(),
       ]);
 
       // The fetched row's id is canonical even when we asked by short id — the
@@ -1050,7 +1126,6 @@ export class ReactiveSessionHandle {
           sessionFetchSequence,
           taskFetchToken,
           taskSnapshot,
-          queueResult: queueResult as QueueFindResult,
           messageFetchToken,
           eagerMessageSnapshot,
           lazyMessageSnapshot,
@@ -1096,6 +1171,7 @@ export class ReactiveSessionHandle {
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;
+      this.queueInvalidation += 1;
       if (this.options.taskHydration === 'lean') this.leanConnectionGeneration += 1;
       this.updateState((prev) => ({ ...prev, connected: false }));
     };
@@ -1143,28 +1219,25 @@ export class ReactiveSessionHandle {
 
     const onTaskCreated = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.invalidateQueue(task);
+      if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
           : orderTasksBySession([...prev.tasks, task], prev.session?.tasks);
-        // Tasks can be born QUEUED (e.g. when the daemon auto-queues a prompt
-        // because the session is busy) — track them in queuedTasks too.
-        const queuedTasks =
-          task.status === 'queued' && !prev.queuedTasks.some((t) => t.task_id === task.task_id)
-            ? sortTasksByQueuePosition([...prev.queuedTasks, task])
-            : prev.queuedTasks;
         return {
           ...prev,
           tasks,
-          queuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
       });
     };
     const onTaskPatched = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.invalidateQueue(task);
+      if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
@@ -1174,30 +1247,16 @@ export class ReactiveSessionHandle {
           nextTasks[index] = task;
         }
 
-        // Maintain queuedTasks: in if status='queued', out otherwise.
-        const isQueued = task.status === 'queued';
-        const inQueue = prev.queuedTasks.some((t) => t.task_id === task.task_id);
-        let nextQueuedTasks = prev.queuedTasks;
-        if (isQueued) {
-          nextQueuedTasks = inQueue
-            ? sortTasksByQueuePosition(
-                prev.queuedTasks.map((t) => (t.task_id === task.task_id ? task : t))
-              )
-            : sortTasksByQueuePosition([...prev.queuedTasks, task]);
-        } else if (inQueue) {
-          nextQueuedTasks = prev.queuedTasks.filter((t) => t.task_id !== task.task_id);
-        }
-
         return {
           ...prev,
           tasks: orderTasksBySession(nextTasks, prev.session?.tasks),
-          queuedTasks: nextQueuedTasks,
           lastSyncedAt: new Date().toISOString(),
         };
       });
     };
     const onTaskRemoved = (task: Task) => {
       if (!this.matchesSession(task.session_id)) return;
+      this.invalidateQueue(task, true);
       this.recordTaskMutation('remove', task);
       this.updateState((prev) => {
         const nextByTask = new Map(prev.messagesByTask);
@@ -1209,7 +1268,6 @@ export class ReactiveSessionHandle {
         return {
           ...prev,
           tasks: prev.tasks.filter((t) => t.task_id !== task.task_id),
-          queuedTasks: prev.queuedTasks.filter((t) => t.task_id !== task.task_id),
           messagesByTask: nextByTask,
           loadedTaskIds: nextLoaded,
           toolsByTask: nextTools,
@@ -1220,7 +1278,7 @@ export class ReactiveSessionHandle {
     // The daemon emits a custom 'queued' event in addition to the standard
     // 'created' event, so subscribers can distinguish "task entered the queue"
     // from "task was created but is already running". onTaskCreated handles
-    // the queued state too as a safety net for clients that miss the event.
+    // the invalidation too as a safety net for clients that miss the event.
     const onTaskQueued = (task: Task) => onTaskCreated(task);
 
     tasksService.on('created', onTaskCreated);
@@ -1644,13 +1702,10 @@ export class ReactiveSessionHandle {
     const sessionFetchSequence = this.sessionMutationSequence;
     let messageFetchToken: number | null = null;
     try {
-      const [session, taskSnapshot, queueResult] = await Promise.all([
+      const [session, taskSnapshot] = await Promise.all([
         this.client.service('sessions').get(this.sessionId),
         this.fetchTasksAtHighWater(),
-        this.client
-          .service(`/sessions/${this.sessionId}/tasks/queue`)
-          .find()
-          .catch(() => ({ data: [] }) as QueueFindResult),
+        this.refreshQueue(),
       ]);
 
       // The fetched row's id is canonical even when we asked by short id.
@@ -1748,19 +1803,11 @@ export class ReactiveSessionHandle {
         const liveTaskIds = new Set<string>(tasks.map((task) => task.task_id));
         messagesByTask = new Map([...messagesByTask].filter(([taskId]) => liveTaskIds.has(taskId)));
         loadedTaskIds = new Set([...loadedTaskIds].filter((taskId) => liveTaskIds.has(taskId)));
-        const queuedById = new Map(
-          ((queueResult as QueueFindResult).data ?? []).map((task) => [task.task_id, task] as const)
-        );
-        for (const task of tasks) {
-          if (task.status === TaskStatus.QUEUED) queuedById.set(task.task_id, task);
-          else queuedById.delete(task.task_id);
-        }
 
         return {
           ...prev,
           session: committedSession,
           tasks,
-          queuedTasks: sortTasksByQueuePosition([...queuedById.values()]),
           messagesByTask,
           loadedTaskIds,
           streamingMessages: restampStreamingTaskIds(

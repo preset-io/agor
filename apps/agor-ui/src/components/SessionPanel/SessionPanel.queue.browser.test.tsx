@@ -38,7 +38,8 @@ const b = makeTask('b', 2);
 const c = makeTask('c', 3);
 
 function fixture(status: Session['status'] = 'running') {
-  let rows = [a, b];
+  const active = { ...makeTask('active', 0), status, queue_position: undefined } as Task;
+  let rows = [active, a, b];
   const listeners = new Map<string, Set<(payload: never) => void>>();
   const events = (service: string) => {
     const on = (event: string, listener: (payload: never) => void) => {
@@ -101,7 +102,7 @@ function fixture(status: Session['status'] = 'running') {
     panel,
     listeners,
     setRows: (tasks: Task[]) => {
-      rows = tasks;
+      rows = [active, ...tasks];
     },
     fireIo: (event: string) =>
       act(() => {
@@ -147,6 +148,7 @@ it.each(['running', 'failed'] as const)(
     f.emit('removed', { ...b, session_id: 'foreign-session' as Task['session_id'] });
     expect(order()).toHaveLength(2);
     expect(f.patch).not.toHaveBeenCalled();
+    expect(screen.getByText('Transcript active')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Copy queued task 1' }));
     expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B');
     if (status === 'failed') {
@@ -181,3 +183,156 @@ it.each(['running', 'failed'] as const)(
     ).toBe(true);
   }
 );
+
+it('does not resurrect a removed task when an older reorder patch arrives', async () => {
+  const f = fixture();
+  render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  f.setRows([a]);
+  f.emit('removed', b);
+  expect(order()).toEqual([expect.stringContaining('Queue A')]);
+  await act(async () => f.emit('patched', { ...b, queue_position: 0 }));
+  expect(order()).toEqual([expect.stringContaining('Queue A')]);
+});
+
+it('does not roll back a newer reorder when older patches arrive last', async () => {
+  const f = fixture('failed');
+  render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  f.setRows([{ ...b, queue_position: 0 }, a]);
+  await act(async () => f.emit('patched', { ...b, queue_position: 0 }));
+  await waitFor(() => expect(order()[0]).toContain('Queue B'));
+  await act(async () => f.emit('patched', b));
+  expect(order()[0]).toContain('Queue B');
+  expect(
+    screen.getByRole('button', { name: 'Run next' }).parentElement?.parentElement?.parentElement
+  ).toHaveTextContent('Queue B');
+});
+
+function deferredQueue() {
+  let resolve!: (value: { data: Task[] }) => void;
+  const promise = new Promise<{ data: Task[] }>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+it.each(['removed', 'patched'] as const)(
+  'discards an in-flight snapshot invalidated by a newer %s event before refetching',
+  async (event) => {
+    const f = fixture();
+    render(f.panel());
+    await screen.findByText('Queued Tasks (2)');
+    const old = deferredQueue();
+    const fresh = deferredQueue();
+    const before = f.queueFind.mock.calls.length;
+    f.queueFind
+      .mockImplementationOnce(() => old.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    f.emit('patched', a);
+    await waitFor(() => expect(f.queueFind).toHaveBeenCalledTimes(before + 1));
+    f.setRows(event === 'removed' ? [a] : [b, { ...a, queue_position: 3 }]);
+    f.emit(event, event === 'removed' ? b : { ...a, queue_position: 3 });
+    await act(async () => old.resolve({ data: [c, b, a] }));
+    await waitFor(() => expect(f.queueFind).toHaveBeenCalledTimes(before + 2));
+    // The invalidated response is NEVER rendered, even before the reread settles.
+    expect(screen.queryByText('Queue C')).toBeNull();
+    expect(order()).toEqual(
+      event === 'removed'
+        ? [expect.stringContaining('Queue A')]
+        : [expect.stringContaining('Queue A'), expect.stringContaining('Queue B')]
+    );
+    await act(async () =>
+      fresh.resolve({
+        data: event === 'removed' ? [a] : [b, { ...a, queue_position: 3 }],
+      })
+    );
+    expect(order()).toEqual(
+      event === 'removed'
+        ? [expect.stringContaining('Queue A')]
+        : [expect.stringContaining('Queue B'), expect.stringContaining('Queue A')]
+    );
+  }
+);
+
+it('never resurrects a started task from delayed admission or reorder events', async () => {
+  const f = fixture();
+  render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  const running = { ...b, status: 'running' as const, queue_position: undefined };
+  f.setRows([a, running]);
+  f.emit('patched', running);
+  for (const event of ['created', 'queued', 'patched', 'updated']) {
+    await act(async () => f.emit(event, b));
+    expect(order()).toEqual([expect.stringContaining('Queue A')]);
+  }
+  expect(screen.getByText('Transcript b')).toBeVisible();
+});
+
+it('fences session replacement and unmount while queue reads are pending', async () => {
+  const f = fixture();
+  const view = render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  const old = deferredQueue();
+  const before = f.queueFind.mock.calls.length;
+  f.queueFind.mockImplementationOnce(() => old.promise);
+  f.emit('patched', a);
+  await waitFor(() => expect(f.queueFind).toHaveBeenCalledTimes(before + 1));
+  const other = { ...c, session_id: 'session-2' as Task['session_id'] };
+  f.setRows([other]);
+  view.rerender(f.panel({ ...session, session_id: other.session_id }));
+  await screen.findByText('Queue C');
+  await act(async () => old.resolve({ data: [a, b] }));
+  expect(order()).toEqual([expect.stringContaining('Queue C')]);
+  // Foreign events must not even initiate a read for the new session.
+  const currentReads = f.queueFind.mock.calls.length;
+  f.emit('removed', a);
+  f.emit('patched', b);
+  expect(f.queueFind).toHaveBeenCalledTimes(currentReads);
+
+  const unmounted = deferredQueue();
+  f.queueFind.mockImplementationOnce(() => unmounted.promise);
+  f.emit('patched', other);
+  await waitFor(() => expect(f.queueFind).toHaveBeenCalledTimes(currentReads + 1));
+  view.unmount();
+  await act(async () => unmounted.resolve({ data: [a, b] }));
+  expect(screen.queryByText(/Queue [ABC]/)).toBeNull();
+  expect(
+    [...f.listeners]
+      .filter(([key]) => key.startsWith('tasks:'))
+      .every(([, handlers]) => handlers.size === 0)
+  ).toBe(true);
+});
+
+it('refreshes missed admission/removal/reorder on reconnect and fences the pre-disconnect read', async () => {
+  const f = fixture();
+  render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  const old = deferredQueue();
+  const before = f.queueFind.mock.calls.length;
+  f.queueFind.mockImplementationOnce(() => old.promise);
+  f.emit('patched', a);
+  await waitFor(() => expect(f.queueFind).toHaveBeenCalledTimes(before + 1));
+  f.fireIo('disconnect');
+  f.setRows([c, { ...a, queue_position: 4 }]);
+  f.fireIo('connect');
+  await act(async () => old.resolve({ data: [b, a] }));
+  await waitFor(() =>
+    expect(order()).toEqual([
+      expect.stringContaining('Queue C'),
+      expect.stringContaining('Queue A'),
+    ])
+  );
+});
+
+it('keeps confirmed rows on a failed reconciliation and recovers on a later invalidation', async () => {
+  const f = fixture();
+  render(f.panel());
+  await screen.findByText('Queued Tasks (2)');
+  f.queueFind.mockRejectedValueOnce(new Error('temporary queue outage'));
+  await act(async () => f.emit('patched', a));
+  expect(order()).toEqual([expect.stringContaining('Queue A'), expect.stringContaining('Queue B')]);
+  f.setRows([c]);
+  await act(async () => f.emit('queued', c));
+  await waitFor(() => expect(order()).toEqual([expect.stringContaining('Queue C')]));
+});
