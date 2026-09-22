@@ -136,6 +136,37 @@ In practice, that means Knowledge follows the same posture as the rest of Agor: 
 
 ---
 
+## Discover and inspect Knowledge with the CLI
+
+The read-only commands use your connected deployment and normal Knowledge read
+permissions; they do not require export-admin access or write Knowledge data.
+
+```bash
+agor kb namespace list
+agor kb namespace show pr-2821-test
+agor kb document list --namespace pr-2821-test
+agor kb document list --namespace pr-2821-test --status draft
+agor kb document get index.md --namespace pr-2821-test
+```
+
+Lists default to 50 rows, sorted by namespace slug or document path. Use
+`--limit 20 --offset 20` for the next display page. The footer reports **N of X**
+accessible active entries, with the displayed range. Empty and out-of-range pages
+report zero displayed rows. These existing APIs return the complete authorized
+metadata inventory: pagination limits **display**, not server-side retrieval.
+Document lists include every draft you are allowed to read, omit archived documents,
+and do not fetch Markdown bodies. Counts can change between invocations and are
+not a snapshot or a count of inaccessible documents.
+
+All four commands accept `--json`. Lists emit `{ total, limit, offset, data }`;
+namespace show emits namespace details; document get emits metadata, current
+version, and content. Without `--json`, document get writes only current Markdown
+to stdout, preserving content when piped or redirected. Interactive terminal output
+escapes control characters. Paths are logical Knowledge paths, including `.md`
+when stored that way, not local filenames. Read these details before exporting and
+again after importing to spot-check the destination. No archive, edit, or history
+management commands are added by this workflow.
+
 ## Move a namespace with the CLI
 
 Use `agor kb export` and `agor kb import` to migrate **current markdown documents**

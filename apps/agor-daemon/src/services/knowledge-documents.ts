@@ -23,6 +23,7 @@ import {
 import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  HydratedKnowledgeDocument,
   Id,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
@@ -113,13 +114,29 @@ type KnowledgeDocumentRef = {
   version?: string | number;
 };
 
-type HydratedKnowledgeDocument = KnowledgeDocument & {
-  document: KnowledgeDocument;
-  current_version: KnowledgeDocumentVersion | null;
-  content: string | null;
-  first_line_is_title: boolean;
-  links?: unknown[];
-};
+// REST transports deliver query booleans as strings; normalize before filtering
+// drafts or hydrating content. Permissions are still checked for every result.
+function normalizeDocumentQuery(query: KnowledgeDocumentParams['query']) {
+  const normalized = { ...query };
+  for (const key of [
+    'archived',
+    'include_my_drafts',
+    'includeMyDrafts',
+    'include_other_user_drafts',
+    'includeOtherUserDrafts',
+    'include_content',
+    'include_links',
+    'include_indexing',
+    'includeIndexing',
+  ] as const) {
+    const value: unknown = normalized[key];
+    if (value === undefined) continue;
+    if (value === true || value === 'true') normalized[key] = true;
+    else if (value === false || value === 'false') normalized[key] = false;
+    else throw new BadRequest(`Invalid boolean query parameter: ${key}`);
+  }
+  return normalized;
+}
 
 type HydrateOptions = Pick<
   KnowledgeDocumentRef,
@@ -506,7 +523,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   }
 
   async find(params?: KnowledgeDocumentParams): Promise<KnowledgeDocument[]> {
-    const query = params?.query;
+    const query = normalizeDocumentQuery(params?.query);
     const user = params?.user as User | undefined;
     const isAdmin = this.isAdmin(user);
     const filters: KnowledgeDocumentFilters | undefined = query
@@ -533,19 +550,19 @@ export class KnowledgeDocumentsService extends DrizzleService<
     for (const doc of rows) {
       if (await this.canRead(doc, user)) readable.push(doc);
     }
-    if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
+    if (query.include_content !== true && query.include_links !== true) {
       const attributed = await this.attribution.attachToDocuments(readable);
-      if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
+      if (query.include_indexing === true || query.includeIndexing === true) {
         return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
       return attributed;
     }
     return this.hydrateDocuments(readable, {
-      include_content: params?.query?.include_content,
-      include_links: params?.query?.include_links,
-      include_indexing: params?.query?.include_indexing,
-      includeIndexing: params?.query?.includeIndexing,
-      version: params?.query?.version,
+      include_content: query.include_content,
+      include_links: query.include_links,
+      include_indexing: query.include_indexing,
+      includeIndexing: query.includeIndexing,
+      version: query.version,
     });
   }
 
@@ -556,7 +573,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    return this.hydrateDocument(doc, params?.query);
+    return this.hydrateDocument(doc, normalizeDocumentQuery(params?.query));
   }
 
   async getDocument(
