@@ -269,9 +269,10 @@ export never publishes a new completed manifest; an older completed export may
 still be present and represents the older state.
 
 Limits are 10,000 documents, 10 MiB per body, 100 MiB total body bytes, a 10 MiB
-manifest and a 9 MiB encoded import request (below the daemon's HTTP JSON ceiling).
-JSON escaping and metadata count toward the request limit and are checked during
-import planning. Excessive nesting, unsafe filenames, symlinks, hardlinks, invalid
+manifest, a 9 MiB encoded import request (below the daemon's HTTP JSON ceiling),
+and 110 MiB across all encoded document requests. Import planning checks the full
+rewritten plan, including JSON escaping and metadata, before creating the namespace.
+Excessive nesting, unsafe filenames, symlinks, hardlinks, invalid
 UTF-8 and mismatched hashes fail closed. Archive extraction is not part of this v1.
 
 ---

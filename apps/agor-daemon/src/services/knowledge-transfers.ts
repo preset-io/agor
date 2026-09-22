@@ -8,10 +8,10 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import {
-  transferCanonical,
   transferDigest,
   transferDocumentMetadata,
   transferEntryDigest,
+  transferRequestBytes,
   transferSha256,
 } from '@agor/core/knowledge';
 import type {
@@ -216,7 +216,7 @@ export class KnowledgeTransfersService {
   async create(input: unknown, params?: TransferParams): Promise<KnowledgeTransferWriteResult> {
     const user = this.user(params);
     const data = parseTransfer(knowledgeTransferWriteSchema, input);
-    if (Buffer.byteLength(transferCanonical(data)) > KNOWLEDGE_TRANSFER.maxRequestBytes)
+    if (transferRequestBytes(data) > KNOWLEDGE_TRANSFER.maxRequestBytes)
       throw new BadRequest('Transfer request exceeds size limit');
     if (
       data.action === 'document' &&
@@ -310,11 +310,10 @@ export class KnowledgeTransfersService {
       }
       if (data.action === 'reconcile') throw new Conflict('Document import has not completed');
       const usage = await repo.usage(user.user_id, data.bundle, data.slug);
-      const requestBytes = Buffer.byteLength(transferCanonical(data), 'utf8');
+      const requestBytes = transferRequestBytes(data);
       if (
         usage.count >= KNOWLEDGE_TRANSFER.maxDocuments ||
-        usage.bytes + requestBytes >
-          KNOWLEDGE_TRANSFER.maxTotalBytes + KNOWLEDGE_TRANSFER.maxManifestBytes
+        usage.bytes + requestBytes > KNOWLEDGE_TRANSFER.maxTotalRequestBytes
       )
         throw new BadRequest('Import exceeds namespace transfer limits');
       const documents = new KnowledgeDocumentsService(scoped, this.app);

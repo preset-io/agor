@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type {
   KnowledgeTransferEntry,
   KnowledgeTransferManifest,
+  KnowledgeTransferWrite,
 } from '../types/knowledge-transfer';
 import { KNOWLEDGE_TRANSFER, knowledgeTransferManifestSchema } from '../types/knowledge-transfer';
 
@@ -46,6 +47,19 @@ export function validateTransferManifest(value: unknown): KnowledgeTransferManif
     throw new Error('Namespace exceeds transfer byte limit');
   return manifest;
 }
+/** Same encoded-request accounting for CLI planning and daemon admission. */
+export function transferRequestBytes(request: KnowledgeTransferWrite): number {
+  return Buffer.byteLength(transferCanonical(request), 'utf8');
+}
+
+/** Publish exactly the bounded bytes that our readers accept, with no pretty-print expansion. */
+export function serializeTransferManifest(value: KnowledgeTransferManifest): string {
+  const serialized = transferCanonical(validateTransferManifest(value));
+  if (Buffer.byteLength(serialized, 'utf8') > KNOWLEDGE_TRANSFER.maxManifestBytes)
+    throw new Error('Manifest is too large');
+  return serialized;
+}
+
 /** Source policy/IDs stay inert, outside live document metadata and authority columns. */
 export function transferDocumentMetadata(entry: KnowledgeTransferEntry) {
   return { knowledge_import: { key: entry.key, provenance: entry.provenance } };

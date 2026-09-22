@@ -15,6 +15,8 @@ export const KNOWLEDGE_TRANSFER = {
   maxDocumentBytes: 10 * 1024 * 1024,
   // Leave headroom below the daemon HTTP JSON parser ceiling (10 MiB).
   maxRequestBytes: 9 * 1024 * 1024,
+  // Aggregate encoded document requests, including metadata and JSON escaping.
+  maxTotalRequestBytes: 110 * 1024 * 1024,
   maxTotalBytes: 100 * 1024 * 1024,
   maxManifestBytes: 10 * 1024 * 1024,
   pageSize: 100,

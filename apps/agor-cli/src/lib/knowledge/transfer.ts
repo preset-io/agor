@@ -1,7 +1,9 @@
 import {
   rewriteTransferLinks,
+  serializeTransferManifest,
   transferDigest,
   transferEntryDigest,
+  transferRequestBytes,
   transferSha256,
   validateTransferManifest,
 } from '@agor/core/knowledge';
@@ -272,7 +274,7 @@ export async function exportKnowledge(
       progress.report('Verifying local files', ++verified, documents.length);
     }
     checkAbort(options.signal);
-    await directory!.write('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+    await directory!.write('manifest.json', serializeTransferManifest(manifest));
     progress.summary(`Complete: ${completed} / ${pending} actions; ${unchanged} unchanged`);
     return {
       documents: documents.length,
@@ -306,6 +308,7 @@ export async function importKnowledge(
       reconciled: boolean;
     }> = [];
     let unresolved = 0;
+    let totalRequestBytes = 0;
     for (const entry of manifest.documents) {
       checkAbort(options.signal);
       const original = await directory.read(
@@ -320,7 +323,7 @@ export async function importKnowledge(
         throw new Error(`Checksum mismatch: ${entry.path}`);
       const rewritten = rewriteTransferLinks(original, manifest, options.namespace);
       const request = {
-        action: 'document',
+        action: 'document' as const,
         bundle,
         slug: options.namespace,
         entry: {
@@ -330,8 +333,12 @@ export async function importKnowledge(
         },
         content: rewritten.content,
       };
-      if (Buffer.byteLength(JSON.stringify(request), 'utf8') > KNOWLEDGE_TRANSFER.maxRequestBytes)
+      const requestBytes = transferRequestBytes(request);
+      if (requestBytes > KNOWLEDGE_TRANSFER.maxRequestBytes)
         throw new Error(`Encoded import request exceeds HTTP transfer limit: ${entry.path}`);
+      totalRequestBytes += requestBytes;
+      if (totalRequestBytes > KNOWLEDGE_TRANSFER.maxTotalRequestBytes)
+        throw new Error('Encoded import plan exceeds namespace transfer limit');
       unresolved += rewritten.unresolved;
       plan.push({
         entry: {

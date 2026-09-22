@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { KnowledgeTransferManifest } from '../types/knowledge-transfer';
+import { KNOWLEDGE_TRANSFER, type KnowledgeTransferManifest } from '../types/knowledge-transfer';
 import {
+  serializeTransferManifest,
   transferCanonical,
   transferDigest,
   transferSha256,
@@ -35,6 +36,21 @@ function manifest(): KnowledgeTransferManifest {
   };
 }
 describe('Knowledge portable format', () => {
+  it('publishes the exact bounded serialization rather than oversized pretty JSON', () => {
+    const value = manifest();
+    value.namespace.provenance = { padding: '' };
+    const overhead = Buffer.byteLength(serializeTransferManifest(value));
+    value.namespace.provenance.padding = 'x'.repeat(KNOWLEDGE_TRANSFER.maxManifestBytes - overhead);
+    const serialized = serializeTransferManifest(value);
+    expect(Buffer.byteLength(serialized)).toBe(KNOWLEDGE_TRANSFER.maxManifestBytes);
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2))).toBeGreaterThan(
+      KNOWLEDGE_TRANSFER.maxManifestBytes
+    );
+    expect(validateTransferManifest(JSON.parse(serialized))).toEqual(value);
+    value.namespace.provenance.padding += 'x';
+    expect(() => serializeTransferManifest(value)).toThrow('Manifest is too large');
+  });
+
   it('validates digests, exact UTF-8, uniqueness, paths and JSON depth', () => {
     expect(validateTransferManifest(manifest()).documents).toHaveLength(1);
     expect(transferSha256('café\r\n')).not.toBe(transferSha256('café\n'));
