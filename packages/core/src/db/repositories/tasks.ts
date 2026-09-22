@@ -2507,7 +2507,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     created_by: string;
     status: TaskPendingDispatchStatus;
     metadata?: TaskMetadata;
+    /**
+     * Prepared launch metadata for a fresh prompt only. Under the same Branch/
+     * Session fence, insert DISPATCHING directly when no unfinished work exists.
+     * Stable-ID producers retain their existing queue/reconciliation protocol.
+     */
+    dispatchIfIdle?: Partial<Task>;
   }): Promise<Task> {
+    if (
+      input.dispatchIfIdle &&
+      (input.task_id ||
+        input.status !== TaskStatus.QUEUED ||
+        input.dispatchIfIdle.status !== TaskStatus.DISPATCHING)
+    ) {
+      throw new RepositoryError(
+        'Direct admission requires a fresh queued input and dispatch preparation'
+      );
+    }
     const taskBase: Partial<Task> = {
       task_id: input.task_id,
       session_id: input.session_id,
@@ -2565,12 +2581,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         this.db,
         async (txDb) => {
           await lockSessionBranchForAdmission(txDb, input.session_id);
-          await lockRowForUpdate(
-            txDb,
-            this.db,
-            sessions,
-            eq(sessions.session_id, input.session_id)
-          );
           const sessionRow = await select(txDb)
             .from(sessions)
             .where(eq(sessions.session_id, input.session_id))
@@ -2607,6 +2617,58 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               // that same Task into the durable queue rather than letting it
               // jump an already-admitted prompt or remain undiscoverable.
               existingCreated = existing;
+            }
+          }
+
+          if (
+            input.dispatchIfIdle &&
+            sessionCanStartTask(sessionRow.status, sessionRow.ready_for_prompt)
+          ) {
+            // Include CREATED handoffs as well as executor-owned states.
+            // Queue emptiness alone cannot authorize another executor.
+            const unfinished = await select(txDb, { task_id: tasks.task_id })
+              .from(tasks)
+              .where(
+                and(
+                  eq(tasks.session_id, input.session_id),
+                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+                )
+              )
+              .limit(1)
+              .one();
+            const actor = !unfinished
+              ? await select(txDb, { user_id: users.user_id })
+                  .from(users)
+                  .where(eq(users.user_id, input.created_by))
+                  .one()
+              : undefined;
+            if (actor) {
+              const nowRow = isPostgresDatabase(this.db)
+                ? await select(txDb, { now: sql<Date>`clock_timestamp()` })
+                    .from(sessions)
+                    .where(eq(sessions.session_id, input.session_id))
+                    .one()
+                : undefined;
+              const dispatchAt = nowRow ? new Date(nowRow.now) : new Date();
+              const insertData = this.taskToInsert({
+                ...input.dispatchIfIdle,
+                ...taskBase,
+                // Preparation supplies launch state, not caller identity or payload.
+                message_range: input.dispatchIfIdle.message_range,
+                git_state: input.dispatchIfIdle.git_state,
+                status: TaskStatus.DISPATCHING,
+                started_at: dispatchAt.toISOString(),
+                queue_position: undefined,
+              });
+              await insert(txDb, tasks).values(insertData).run();
+              const row = await select(txDb)
+                .from(tasks)
+                .where(eq(tasks.task_id, insertData.task_id))
+                .one();
+              if (!row) throw new RepositoryError('Failed to retrieve directly admitted task');
+              const admitted = this.rowToTask(row);
+              await this.projectDispatchedSession(txDb, sessionRow, admitted, dispatchAt);
+              return admitted;
             }
           }
 
@@ -2762,22 +2824,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // point where a Task could be DISPATCHING while its Session remained
         // IDLE and omitted the task from data.tasks. The Session row is already
         // locked by mutateLockedSessionTask.
-        const sessionTasks = sessionRow.data.tasks.includes(current.task_id)
-          ? sessionRow.data.tasks
-          : [...sessionRow.data.tasks, current.task_id];
-        await update(txDb, sessions)
-          .set({
-            status: SessionStatus.RUNNING,
-            ready_for_prompt: false,
-            updated_at: dispatchAt,
-            data: { ...sessionRow.data, tasks: sessionTasks },
-          })
-          .where(eq(sessions.session_id, current.session_id))
-          .run();
+        await this.projectDispatchedSession(txDb, sessionRow, merged, dispatchAt);
         return { outcome: 'claimed', task: merged };
       },
       true
     );
+  }
+
+  private async projectDispatchedSession(
+    txDb: Database,
+    sessionRow: SessionRow,
+    task: Task,
+    dispatchAt: Date
+  ): Promise<void> {
+    const sessionTasks = sessionRow.data.tasks.includes(task.task_id)
+      ? sessionRow.data.tasks
+      : [...sessionRow.data.tasks, task.task_id];
+    await update(txDb, sessions)
+      .set({
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        updated_at: dispatchAt,
+        data: { ...sessionRow.data, tasks: sessionTasks },
+      })
+      .where(eq(sessions.session_id, task.session_id))
+      .run();
   }
 
   /**

@@ -134,6 +134,66 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       throw new Error('fixture did not reach the intended lock wait');
     }
 
+    it('direct admission has one winner across concurrent PostgreSQL transactions', async () => {
+      const f = await seed();
+      const prepare = { status: TaskStatus.DISPATCHING, executor_mode: 'local' as const };
+      const admit = (connection: Database) =>
+        runWithTenantDatabaseTransaction(connection, f.tenant, async (tx) => {
+          await lockTenantAuthorizationFence(tx);
+          await resolveCurrentTenantAuthorityActor(tx, { user: f.actor });
+          return new TaskRepository(tx).createPending({ ...f.input, dispatchIfIdle: prepare });
+        });
+      const result = await Promise.all([admit(a), admit(b)]);
+      expect(result.filter((t) => t.status === TaskStatus.DISPATCHING)).toHaveLength(1);
+      expect(result.filter((t) => t.status === TaskStatus.QUEUED)).toHaveLength(1);
+      const winner = result.find((t) => t.status === TaskStatus.DISPATCHING)!;
+      const loser = result.find((t) => t.status === TaskStatus.QUEUED)!;
+      expect(loser.queue_position).toBe(1);
+      await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
+        expect(await new SessionRepository(tx).findById(f.session.session_id)).toMatchObject({
+          status: 'running',
+          ready_for_prompt: false,
+          tasks: [winner.task_id],
+        });
+        // A queue worker cannot dispatch the loser while the direct winner owns the turn.
+        expect(
+          await new TaskRepository(tx).claimDispatchAndProjectSession(
+            loser.task_id,
+            TaskStatus.QUEUED,
+            prepare
+          )
+        ).toMatchObject({ outcome: 'condition_changed' });
+      });
+      // RLS rejects the identical admission request under a foreign tenant.
+      await expect(
+        runWithTenantDatabaseTransaction(b, `foreign-${generateId()}`, (tx) =>
+          new TaskRepository(tx).createPending({ ...f.input, dispatchIfIdle: prepare })
+        )
+      ).rejects.toThrow();
+    });
+
+    it('direct admission and a queue-head claimant share the Session fence', async () => {
+      const f = await seed();
+      const head = await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
+        new TaskRepository(tx).createPending(f.input)
+      );
+      const updates = { status: TaskStatus.DISPATCHING };
+      const [next, claimed] = await Promise.all([
+        runWithTenantDatabaseTransaction(a, f.tenant, (tx) =>
+          new TaskRepository(tx).createPending({ ...f.input, dispatchIfIdle: updates })
+        ),
+        runWithTenantDatabaseTransaction(b, f.tenant, (tx) =>
+          new TaskRepository(tx).claimDispatchAndProjectSession(
+            head.task_id,
+            TaskStatus.QUEUED,
+            updates
+          )
+        ),
+      ]);
+      expect(next.status).toBe(TaskStatus.QUEUED);
+      expect(claimed).toMatchObject({ outcome: 'claimed', task: { task_id: head.task_id } });
+    });
+
     it('surfaces a rolled-back deadlock without replay or post-commit effects', async () => {
       const f = await seed();
       const branchHeld = deferred();
@@ -397,26 +457,32 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       15_000
     );
 
-    it('never replays admission after a committed task and a failing post-commit effect', async () => {
-      const f = await seed();
-      let attempts = 0;
-      await expect(
-        runPromptAdmissionTransaction(db, f.tenant, async (tx) => {
-          attempts++;
-          const task = await new TaskRepository(tx).createPending(f.input);
-          enqueueAfterTenantDatabaseCommit(async () => {
-            throw Object.assign(new Error('post-commit failure'), { code: '40001' });
-          });
-          return task;
-        })
-      ).rejects.toThrow('Could not confirm');
-      expect(attempts).toBe(1);
-      await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
-        expect(
-          (await new TaskRepository(tx).findPage({ sessionId: f.session.session_id })).total
-        ).toBe(1);
-      });
-    });
+    it.each([false, true])(
+      'never replays committed admission after a post-commit failure (direct=%s)',
+      async (direct) => {
+        const f = await seed();
+        let attempts = 0;
+        await expect(
+          runPromptAdmissionTransaction(db, f.tenant, async (tx) => {
+            attempts++;
+            const task = await new TaskRepository(tx).createPending({
+              ...f.input,
+              ...(direct ? { dispatchIfIdle: { status: TaskStatus.DISPATCHING } } : {}),
+            });
+            enqueueAfterTenantDatabaseCommit(async () => {
+              throw Object.assign(new Error('post-commit failure'), { code: '40001' });
+            });
+            return task;
+          })
+        ).rejects.toThrow('Could not confirm');
+        expect(attempts).toBe(1);
+        await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
+          expect(
+            (await new TaskRepository(tx).findPage({ sessionId: f.session.session_id })).total
+          ).toBe(1);
+        });
+      }
+    );
 
     it.each(['lock_timeout', 'statement_timeout'] as const)(
       'does not replay %s; rollback frees the connection for a later explicit admission',
@@ -481,44 +547,51 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
     });
 
-    it('retains maintenance, tenant identity and RLS denials without retry', async () => {
-      const f = await seed();
-      let attempts = 0;
-      await expect(
-        runPromptAdmissionTransaction(db, `foreign-${generateId()}`, (tx) => {
-          attempts++;
-          return new TaskRepository(tx).createPending(f.input);
-        })
-      ).rejects.toThrow('not found');
-      expect(attempts).toBe(1);
-      await expect(
-        runWithTenantContext('other-tenant', () =>
-          runPromptAdmissionTransaction(db, f.tenant, (tx) =>
-            new TaskRepository(tx).createPending(f.input)
+    it.each([false, true])(
+      'retains maintenance, tenant identity and RLS denials (direct=%s)',
+      async (direct) => {
+        const f = await seed();
+        const input = {
+          ...f.input,
+          ...(direct ? { dispatchIfIdle: { status: TaskStatus.DISPATCHING } } : {}),
+        };
+        let attempts = 0;
+        await expect(
+          runPromptAdmissionTransaction(db, `foreign-${generateId()}`, (tx) => {
+            attempts++;
+            return new TaskRepository(tx).createPending(input);
+          })
+        ).rejects.toThrow('not found');
+        expect(attempts).toBe(1);
+        await expect(
+          runWithTenantContext('other-tenant', () =>
+            runPromptAdmissionTransaction(db, f.tenant, (tx) =>
+              new TaskRepository(tx).createPending(input)
+            )
           )
-        )
-      ).rejects.toThrow('active tenant context');
-      const gate = await acquireTenantWriteGate(a, f.tenant, { reason: 'fixture freeze' });
-      try {
+        ).rejects.toThrow('active tenant context');
+        const gate = await acquireTenantWriteGate(a, f.tenant, { reason: 'fixture freeze' });
+        try {
+          await expect(
+            runPromptAdmissionTransaction(db, f.tenant, (tx) =>
+              new TaskRepository(tx).createPending(input)
+            )
+          ).rejects.toThrow();
+        } finally {
+          await releaseTenantWriteGate(a, f.tenant, { generation: gate.generation });
+        }
+        await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
+          executeRaw(
+            tx,
+            sql`UPDATE branches SET deletion_status = 'deleting' WHERE branch_id = ${f.branch.branch_id}`
+          )
+        );
         await expect(
           runPromptAdmissionTransaction(db, f.tenant, (tx) =>
-            new TaskRepository(tx).createPending(f.input)
+            new TaskRepository(tx).createPending(input)
           )
-        ).rejects.toThrow();
-      } finally {
-        await releaseTenantWriteGate(a, f.tenant, { generation: gate.generation });
+        ).rejects.toThrow('Branch deletion');
       }
-      await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
-        executeRaw(
-          tx,
-          sql`UPDATE branches SET deletion_status = 'deleting' WHERE branch_id = ${f.branch.branch_id}`
-        )
-      );
-      await expect(
-        runPromptAdmissionTransaction(db, f.tenant, (tx) =>
-          new TaskRepository(tx).createPending(f.input)
-        )
-      ).rejects.toThrow('Branch deletion');
-    });
+    );
   }
 );

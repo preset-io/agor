@@ -183,6 +183,7 @@ import { createMCPEgressHttpHandler } from './mcp-egress/http-handler.js';
 import { validateMCPEgressRolloutChange } from './mcp-egress/rollout.js';
 import { createFeathersMetricsHook } from './metrics/feathers.js';
 import { getDaemonMetrics, getDaemonOperationalMetrics } from './metrics/index.js';
+import { recordDispatchClaim } from './metrics/task-lifecycle.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -1688,9 +1689,66 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     });
   }
 
+  // Preparation may materialize configuration; never run it under admission locks.
+  async function prepareTaskDispatch(sessionId: SessionID, params: RouteParams) {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing tenant context for dispatch preparation');
+    const {
+      agenticToolEnabled,
+      messageStartIndex,
+      session: loadedSession,
+    } = await runWithTenantDatabaseScope(db, tenantId, async () => {
+      const session = await sessionsService.get(sessionId, params);
+      const agenticTool = requireActiveAgenticTool(session.agentic_tool);
+      return {
+        session,
+        agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
+        // Recompute message_range.start_index against the live message count.
+        messageStartIndex: await sessionsRepository.countMessages(sessionId),
+      };
+    });
+    if (!agenticToolEnabled) {
+      throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
+    }
+    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
+      sessionsService.materializeAgenticToolPreset(loadedSession, params)
+    );
+    const startTimestamp = new Date().toISOString();
+
+    // The daemon persists launch intent and writes required sentinel git fields
+    // before executor spawn. Executors claim DISPATCHING → RUNNING after
+    // authenticating.
+    const gitStateAtStart = 'unknown';
+    const refAtStart = 'unknown';
+
+    const launchState = buildTaskLaunchState(
+      startTimestamp,
+      config.execution?.executor_command_template ? 'templated' : 'local'
+    );
+
+    const updates: Partial<Task> = {
+      ...launchState,
+      ...(launchState.executor_mode
+        ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+        : {}),
+      queue_position: undefined,
+      message_range: {
+        start_index: messageStartIndex,
+        end_index: messageStartIndex + 1,
+        start_timestamp: startTimestamp,
+        end_timestamp: startTimestamp,
+      },
+      git_state: {
+        ref_at_start: refAtStart,
+        sha_at_start: gitStateAtStart,
+      },
+    };
+    return { session, messageStartIndex, startTimestamp, updates };
+  }
+
   /**
-   * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `dispatching`.
+   * spawnTaskExecutor — shared post-commit launch path. Claims pending work,
+   * or consumes the fresh prompt admission's already-committed dispatch claim.
    *
    * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
    * queued-task drainer call this helper. Centralising the transition
@@ -1723,6 +1781,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       stream?: boolean;
       messageSource?: MessageSource;
       stableInitialMessageId?: MessageID;
+      /** Only the fresh admission winner may bypass the second dispatch claim. */
+      admittedLaunch?: Awaited<ReturnType<typeof prepareTaskDispatch>>;
     },
     params: RouteParams
   ): Promise<Task> {
@@ -1742,7 +1802,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // deterministic projection repair. Do not make that reconciliation depend
     // on mutable launch-time state (tool enablement, preset validity, or user
     // defaults): no new executor launch will occur on this path.
-    if (shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
+    if (
+      !options.admittedLaunch &&
+      shouldReconcileStableInitialMessage(task, stableInitialMessageId)
+    ) {
       await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
         messageSource: runtimeMessageSource,
       });
@@ -1755,70 +1818,29 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // authorize consuming somebody else's provider credential.
     assertTaskExecutorPrincipal(task, params);
 
-    const {
-      agenticToolEnabled,
-      messageStartIndex,
-      session: loadedSession,
-    } = await runWithTenantDatabaseScope(db, tenantId, async () => {
-      const session = await sessionsService.get(task.session_id, params);
-      const agenticTool = requireActiveAgenticTool(session.agentic_tool);
-      return {
-        session,
-        agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
-        // Recompute message_range.start_index against the live message count.
-        messageStartIndex: await sessionsRepository.countMessages(task.session_id),
-      };
-    });
-    if (!agenticToolEnabled) {
-      throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
+    const prepared = options.admittedLaunch ?? (await prepareTaskDispatch(task.session_id, params));
+    const { session, messageStartIndex, startTimestamp } = prepared;
+
+    if (options.admittedLaunch && task.status !== TaskStatus.DISPATCHING) {
+      throw new Error('Direct launch requires a freshly admitted dispatching task');
     }
-    const session = await runWithTenantDatabaseScope(db, tenantId, () =>
-      sessionsService.materializeAgenticToolPreset(loadedSession, params)
-    );
-    const startTimestamp = new Date().toISOString();
-
-    // The daemon persists launch intent and writes required sentinel git fields
-    // before executor spawn. Executors claim DISPATCHING → RUNNING after
-    // authenticating.
-    const gitStateAtStart = 'unknown';
-    const refAtStart = 'unknown';
-
-    const launchState = buildTaskLaunchState(
-      startTimestamp,
-      config.execution?.executor_command_template ? 'templated' : 'local'
-    );
-
-    if (!isTaskPendingDispatch(task)) return task;
+    if (!options.admittedLaunch && !isTaskPendingDispatch(task)) return task;
 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
-      await lockTenantAuthorizationFence(tenantDb, params);
-      await assertTenantWritable(tenantDb, tenantId);
-      return tasksService.claimDispatchAndProjectSession(
-        task.task_id,
-        task.status,
-        {
-          ...launchState,
-          ...(launchState.executor_mode
-            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-            : {}),
-          queue_position: undefined,
-          message_range: {
-            start_index: messageStartIndex,
-            end_index: messageStartIndex + 1,
-            start_timestamp: startTimestamp,
-            end_timestamp: startTimestamp,
-          },
-          git_state: {
-            ref_at_start: refAtStart,
-            sha_at_start: gitStateAtStart,
-          },
-        },
-        { ...params, provider: undefined }
-      );
-    });
+    const dispatchClaim = options.admittedLaunch
+      ? { outcome: 'claimed' as const, task }
+      : await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
+          await lockTenantAuthorizationFence(tenantDb, params);
+          await assertTenantWritable(tenantDb, tenantId);
+          return tasksService.claimDispatchAndProjectSession(
+            task.task_id,
+            task.status as import('@agor/core/types').TaskPendingDispatchStatus,
+            prepared.updates,
+            { ...params, provider: undefined }
+          );
+        });
     if (dispatchClaim.outcome !== 'claimed') {
       const workIdentity = app.get('distributedWorkIdentity');
       console.info(
@@ -1847,6 +1869,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return dispatchClaim.task;
     }
     const updatedTask = dispatchClaim.task;
+    if (options.admittedLaunch) recordDispatchClaim(getDaemonMetrics(app), dispatchClaim);
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1886,7 +1909,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         {
           status: SessionStatus.RUNNING,
           ready_for_prompt: false,
-          tasks: [...session.tasks, task.task_id],
         },
         params
       )
@@ -2185,11 +2207,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // Every prompt first takes one durable queue position. The subsequent
-        // Session+Task database claim decides whether this Task leaves the
-        // queue immediately or remains queued. This avoids a split
-        // read-session/create-CREATED race: two daemons can admit concurrently,
-        // but only the durable head can claim the idle Session.
+        // Admission decides direct dispatch vs durable queueing under one
+        // Branch/Session fence. Preflight reads never authorize a launch.
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
@@ -2230,6 +2249,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
+            // A preflight hint avoids preparation for known-busy sessions. The
+            // repository rechecks queue/active work under its durable locks.
+            // Stable-ID callback/widget producers keep their existing protocol.
+            const preparedLaunch =
+              !data.idempotencyTaskId &&
+              sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)
+                ? await prepareTaskDispatch(id as SessionID, params)
+                : undefined;
             const task = await runPromptAdmissionTransaction(
               db,
               promptTenantId,
@@ -2252,6 +2279,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   created_by: createdBy,
                   status: TaskStatus.QUEUED,
                   metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
+                  dispatchIfIdle: preparedLaunch?.updates,
                 });
               }
             );
@@ -2276,6 +2304,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
+                ...(task.status === TaskStatus.DISPATCHING && preparedLaunch
+                  ? { admittedLaunch: preparedLaunch }
+                  : {}),
                 ...(data.idempotencyTaskId
                   ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
                   : {}),

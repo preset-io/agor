@@ -249,6 +249,24 @@ describe('shared ReactiveSessionHandle call counts', () => {
 });
 
 describe('ReactiveSessionHandle prompt contract', () => {
+  it('never renders a queue entry for a task born dispatching', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    const queueSizes: number[] = [];
+    const unsubscribe = handle.subscribe(() => queueSizes.push(handle.state.queuedTasks.length));
+    const task = makeTask('direct-prompt', TaskStatus.DISPATCHING);
+    mock.emitServiceEvent('tasks', 'created', task);
+    mock.emitServiceEvent('tasks', 'created', task); // duplicate delivery
+    mock.emitServiceEvent('messages', 'created', makeMessage(task.task_id, 0));
+    mock.emitServiceEvent('tasks', 'patched', { ...task, status: TaskStatus.RUNNING });
+    expect(handle.state.tasks).toEqual([{ ...task, status: TaskStatus.RUNNING }]);
+    expect(queueSizes.length).toBeGreaterThan(0);
+    expect(queueSizes.every((size) => size === 0)).toBe(true);
+    unsubscribe();
+    handle.dispose();
+  });
+
   it('returns the admitted Task from the shared sessions helper', async () => {
     const mock = createMockClient({ tasks: [], messagesByTask: {} });
     const admittedTask = makeTask('task-admitted', TaskStatus.DISPATCHING);
