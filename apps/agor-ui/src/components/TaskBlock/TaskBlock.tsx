@@ -1141,7 +1141,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         ? latestActivity
                         : undefined
                     }
-                    isTaskRunning={runtimeLive}
+                    isTaskRunning={runtimeLive && !hasPendingApproval}
                     isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                     compact={compact}
                   />
@@ -1176,6 +1176,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`}
               expanded={false}
               loading={detailsLoading}
+              executing={
+                task.status === TaskStatus.RUNNING &&
+                !hasPendingApproval &&
+                latestActivity.status === 'executing'
+              }
               onClick={loadActivity}
             />
           )}
@@ -1260,8 +1265,17 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     if (leanTranscript)
       return (
         <div data-task-block={task.task_id}>
-          {task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.FAILED && (
-            <TaskStatusIcon status={task.status} size={16} />
+          {task.status !== TaskStatus.COMPLETED &&
+            task.status !== TaskStatus.FAILED &&
+            task.status !== TaskStatus.RUNNING &&
+            task.status !== TaskStatus.DISPATCHING &&
+            task.status !== TaskStatus.STOPPING && (
+              <TaskStatusIcon status={task.status} size={16} />
+            )}
+          {(task.status === TaskStatus.DISPATCHING || task.status === TaskStatus.STOPPING) && (
+            <Typography.Text type="secondary" role="status" style={{ fontSize: token.fontSizeSM }}>
+              {task.status === TaskStatus.DISPATCHING ? 'Starting turn…' : 'Stopping…'}
+            </Typography.Text>
           )}
           {(task.error_message || task.status === TaskStatus.FAILED) && (
             <Alert type="error" showIcon title={task.error_message || 'Turn failed'} />

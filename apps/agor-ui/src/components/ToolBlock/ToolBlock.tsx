@@ -14,9 +14,11 @@ import {
   ToolOutlined,
   UpOutlined,
 } from '@ant-design/icons';
+import { ThoughtChain } from '@ant-design/x';
 import { Button, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 /** Shared quiet disclosure for unloaded history and outer tool groups. */
 export function ToolDisclosureHeader({
@@ -24,19 +26,22 @@ export function ToolDisclosureHeader({
   expanded,
   onClick,
   loading = false,
+  executing = false,
 }: {
   label: string;
   expanded: boolean;
   onClick: () => void;
   loading?: boolean;
+  executing?: boolean;
 }) {
   const { token } = theme.useToken();
+  const reducedMotion = usePrefersReducedMotion();
   return (
     <Button
       type="text"
       block
       disabled={loading}
-      aria-busy={loading}
+      aria-busy={loading || executing}
       icon={loading ? <LoadingOutlined spin /> : <ToolOutlined />}
       aria-expanded={expanded}
       aria-label={label}
@@ -59,7 +64,15 @@ export function ToolDisclosureHeader({
           textAlign: 'left',
         }}
       >
-        {label}
+        <ThoughtChain.Item
+          title={label}
+          variant="text"
+          blink={executing && !reducedMotion}
+          style={{ padding: 0, fontSize: token.fontSizeSM, color: 'inherit' }}
+          styles={{
+            title: { fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit' },
+          }}
+        />
       </span>
       {expanded ? (
         <UpOutlined style={{ flexShrink: 0 }} />

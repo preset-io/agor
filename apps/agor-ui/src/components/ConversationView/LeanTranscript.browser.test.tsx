@@ -354,7 +354,12 @@ it('shows live tool events before persistence and preserves the group through co
     state = { ...state, toolsByTask: new Map([[task.task_id, [latest]]]) };
     for (const listener of listeners) listener();
   });
-  expect(screen.getByRole('button', { name: 'Running: Read', expanded: false })).toBeVisible();
+  const activeHeader = screen.getByRole('button', { name: 'Running: Read', expanded: false });
+  expect(activeHeader).toBeVisible();
+  expect(activeHeader).toHaveAttribute('aria-busy', 'true');
+  const shimmer = activeHeader.querySelector('.ant-thought-chain-motion-blink')!;
+  expect(getComputedStyle(shimmer).animationName).not.toBe('none');
+  expect(document.querySelector('[data-task-block] > .ant-spin')).toBeNull();
   const tool: Message = {
     message_id: generateId(),
     session_id: sessionId,

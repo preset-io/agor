@@ -203,3 +203,21 @@ it('renders a real tool event before persistence and hands it to the recorded gr
     'false'
   );
 });
+
+it('removes the standalone live spinner while retaining startup, stopping and approval feedback', () => {
+  const { container, rerender } = render(view({ task: { ...task, status: TaskStatus.RUNNING } }));
+  expect(container.querySelector('[data-task-block] > .ant-spin')).toBeNull();
+  // The response bubble still supplies progress before the first tool/text arrives.
+  expect(container.querySelector('.ant-bubble')).not.toBeNull();
+  rerender(view({ task: { ...task, status: TaskStatus.DISPATCHING } }));
+  expect(screen.getByRole('status')).toHaveTextContent('Starting turn');
+  rerender(view({ task: { ...task, status: TaskStatus.STOPPING } }));
+  expect(screen.getByRole('status')).toHaveTextContent('Stopping');
+  rerender(
+    view({
+      task: { ...task, status: TaskStatus.AWAITING_PERMISSION },
+      latestActivity: { toolUseId: 'pending', toolName: 'Read', status: 'executing' },
+    })
+  );
+  expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
+});

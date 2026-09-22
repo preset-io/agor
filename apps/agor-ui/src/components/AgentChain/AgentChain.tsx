@@ -643,6 +643,17 @@ export const AgentChain = React.memo<AgentChainProps>(
                     : 'Reasoning'
             }${hasErrors ? ' · Errors' : ''}`}
             expanded={expanded}
+            executing={
+              !!(
+                isTaskRunning &&
+                isLatest &&
+                (latestActivity
+                  ? latestActivity.status === 'executing'
+                  : latestToolItem &&
+                    typeof latestToolItem.content !== 'string' &&
+                    !latestToolItem.content.toolResult)
+              )
+            }
             onClick={() => setExpanded(!expanded)}
           />
         ) : (
