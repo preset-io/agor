@@ -1,5 +1,6 @@
 import {
   getCurrentTenantDatabaseScope,
+  getPostgresSqlState,
   isPostgresDatabaseHandle,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -7,12 +8,10 @@ import {
 } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  promptAdmissionSqlState,
-  runPromptAdmissionTransaction,
-} from './prompt-admission-transaction.js';
+import { runPromptAdmissionTransaction } from './prompt-admission-transaction.js';
 
-vi.mock('@agor/core/db', () => ({
+vi.mock('@agor/core/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/db')>()),
   assertTenantWritable: vi.fn(),
   getCurrentTenantDatabaseScope: vi.fn(),
   isPostgresDatabaseHandle: vi.fn(() => true),
@@ -55,6 +54,23 @@ describe('prompt admission transaction', () => {
     expect(work).toHaveBeenCalledOnce();
     expect(failure.cause).toBe(original);
     expect(JSON.stringify(failure)).not.toMatch(/private|SQL|params|detail/);
+  });
+
+  it('distinguishes acquisition/setup failures before the work callback', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      vi.mocked(runWithTenantDatabaseTransaction).mockRejectedValue(wrapped('53300'));
+      const work = vi.fn();
+      await expect(runPromptAdmissionTransaction(db, 'tenant-a', work)).rejects.toThrow(
+        'Could not confirm'
+      );
+      expect(work).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledOnce();
+      expect(log.mock.calls[0][0]).toContain('phase=acquisition_or_setup');
+      expect(log.mock.calls[0][0]).toContain('outcome=unconfirmed');
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('does not retry uncertain commit or post-commit errors', async () => {
@@ -100,9 +116,9 @@ describe('prompt admission transaction', () => {
   it('bounds cause traversal and never classifies by query/message text', () => {
     const cycle = { cause: {} };
     cycle.cause = cycle;
-    expect(promptAdmissionSqlState(cycle)).toBeUndefined();
-    expect(promptAdmissionSqlState(new Error('40P01 deadlock detected'))).toBeUndefined();
-    expect(promptAdmissionSqlState({ code: 'SQLITE_BUSY' })).toBeUndefined();
-    expect(promptAdmissionSqlState(wrapped('40P01'))).toBe('40P01');
+    expect(getPostgresSqlState(cycle)).toBeUndefined();
+    expect(getPostgresSqlState(new Error('40P01 deadlock detected'))).toBeUndefined();
+    expect(getPostgresSqlState({ code: 'SQLITE_BUSY' })).toBeUndefined();
+    expect(getPostgresSqlState(wrapped('40P01'))).toBe('40P01');
   });
 });

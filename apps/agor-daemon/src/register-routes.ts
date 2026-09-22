@@ -1,5 +1,5 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
-import { isPostgresDatabaseHandle } from '@agor/core/db';
+import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -256,10 +256,7 @@ import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { authorizeMcpSessionConfigAccess } from './utils/mcp-session-config-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
 import { runPromptAdmissionTransaction } from './utils/prompt-admission-transaction.js';
-import {
-  promptAdmissionSqlState,
-  promptDatabaseErrorAround,
-} from './utils/prompt-database-error.js';
+import { promptDatabaseErrorAround } from './utils/prompt-database-error.js';
 import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
@@ -994,7 +991,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
       around: [
-        ...(path.endsWith('/prompt') ? [promptDatabaseErrorAround] : []),
+        ...(path === '/sessions/:id/prompt' ? [promptDatabaseErrorAround] : []),
         tenantIdentityAround,
         tenantWriteAdmissionAround,
         ...(options.around ?? []),
@@ -2301,7 +2298,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   await sessionsService.triggerQueueProcessing(id as SessionID, params);
                 } catch (error) {
                   console.error(
-                    `[prompt.queue_trigger] failed sqlstate=${promptAdmissionSqlState(error) ?? 'unknown'} recovery=durable_queue_discovery`
+                    `[prompt.queue_trigger] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'} recovery=durable_queue_discovery`
                   );
                 }
               });

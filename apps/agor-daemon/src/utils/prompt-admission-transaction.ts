@@ -1,15 +1,14 @@
 import {
   assertTenantWritable,
   getCurrentTenantDatabaseScope,
+  getPostgresSqlState,
   isPostgresDatabaseHandle,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
 
-import { promptAdmissionSqlState, safePromptDatabaseFailure } from './prompt-database-error.js';
-
-export { promptAdmissionSqlState } from './prompt-database-error.js';
+import { safePromptDatabaseFailure } from './prompt-database-error.js';
 
 /** Observe one admission transaction. Never replay it, including transient SQLSTATEs. */
 export async function runPromptAdmissionTransaction<T>(
@@ -37,14 +36,19 @@ export async function runPromptAdmissionTransaction<T>(
       }
     });
   } catch (error) {
-    const sqlstate = postgres ? promptAdmissionSqlState(error) : undefined;
+    const sqlstate = postgres ? getPostgresSqlState(error) : undefined;
     // Never disguise an error from a caller-owned transaction as a fresh
     // admission result; propagate it so that owner can roll back.
     if (!ownsTransaction || !sqlstate) throw error;
     const rolledBackStatement = failedDuringWork && statementFailure === error;
     throw safePromptDatabaseFailure(error, performance.now() - started, {
       attempt: 1,
-      phase: rolledBackStatement ? 'statement' : 'commit_or_after_commit',
+      phase:
+        bodyStarted === undefined
+          ? 'acquisition_or_setup'
+          : rolledBackStatement
+            ? 'statement'
+            : 'commit_or_after_commit',
       acquisitionSetupMs: bodyStarted === undefined ? undefined : Math.round(bodyStarted - started),
     });
   }

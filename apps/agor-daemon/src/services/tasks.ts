@@ -22,6 +22,7 @@ import {
   enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
+  getPostgresSqlState,
   isPostgresDatabaseHandle,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -85,7 +86,6 @@ import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
-import { promptAdmissionSqlState as databaseSqlState } from '../utils/prompt-database-error.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import type { SessionParams, SessionsService } from './sessions';
@@ -621,7 +621,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         else await work();
       } catch (error) {
         console.warn(
-          `[tasks.after_commit] operation=${label} sqlstate=${databaseSqlState(error) ?? 'unknown'} outcome=failed`
+          `[tasks.after_commit] operation=${label} sqlstate=${getPostgresSqlState(error) ?? 'unknown'} outcome=failed`
         );
       }
     };
@@ -703,7 +703,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           },
           (error) => {
             console.warn(
-              `[tasks.origin_alignment] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`
+              `[tasks.origin_alignment] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`
             );
           }
         );
@@ -775,7 +775,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           } catch (error) {
             console.warn(
-              `[tasks.btw_archive] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`
+              `[tasks.btw_archive] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`
             );
           }
         }
@@ -1018,7 +1018,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
       );
     } catch (error) {
-      console.warn(`[tasks.btw_result] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`);
+      console.warn(`[tasks.btw_result] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`);
       // Non-critical — don't break task completion
     }
   }

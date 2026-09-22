@@ -13,14 +13,17 @@ describe('prompt and widget transaction scopes', () => {
       source.indexOf('const registerLongAuthenticatedRoute:'),
       source.indexOf('// Long routes carry')
     );
-    expect(registrar).toContain("path.endsWith('/prompt')");
+    expect(registrar).toContain("path === '/sessions/:id/prompt'");
     expect(registrar.indexOf('[promptDatabaseErrorAround]')).toBeLessThan(
       registrar.indexOf('tenantIdentityAround')
     );
   });
 
   it('uses long-route admission and short Task repository units without a duplicate gate check', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart - 100, promptEnd);
 
@@ -37,7 +40,10 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('rechecks branch prompt RBAC inside the durable Task-admission transaction', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, promptEnd);
 
@@ -63,7 +69,10 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('restores only the explicitly prompted archived session', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, promptEnd);
 
@@ -93,7 +102,10 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('routes prompt admission and explicit Task runs through server-owned provenance', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, runStart);
     const run = source.slice(runStart, source.indexOf("'/sessions/:id/spawn-prompt'", runStart));

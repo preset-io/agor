@@ -10,6 +10,7 @@ import {
   executeRaw,
   generateId,
   getCurrentTenantId,
+  getPostgresSqlState,
   initializeDatabase,
   lockRowForUpdate,
   MessagesRepository,
@@ -39,10 +40,7 @@ import {
   resolveCurrentTenantAuthorityActor,
 } from '../services/tenant-authorization-fence.js';
 import { resolveSessionPromptAccess } from './branch-authorization.js';
-import {
-  promptAdmissionSqlState,
-  runPromptAdmissionTransaction,
-} from './prompt-admission-transaction.js';
+import { runPromptAdmissionTransaction } from './prompt-admission-transaction.js';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
 const deferred = () => {
@@ -177,7 +175,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(peerResult.status).toBe('fulfilled');
         expect(admitted.status).toBe('rejected');
         if (admitted.status === 'rejected') {
-          expect(promptAdmissionSqlState(admitted.reason)).toBe('40P01');
+          expect(getPostgresSqlState(admitted.reason)).toBe('40P01');
           expect(JSON.stringify(admitted.reason)).not.toContain(f.branch.branch_id);
         }
         expect(attempts).toBe(1);
@@ -242,7 +240,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         );
         expect(attempts).toBe(1);
         expect(effects).toBe(0);
-        expect(promptAdmissionSqlState(result.error)).toBe('40001');
+        expect(getPostgresSqlState(result.error)).toBe('40001');
         await runWithTenantDatabaseScope(db, f.tenant, async (tx) => {
           expect(
             (await new TaskRepository(tx).findPage({ sessionId: f.session.session_id })).total
@@ -439,9 +437,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             await executeRaw(tx, sql`SELECT set_config(${timeout}, '100ms', true)`);
             return new TaskRepository(tx).createPending(f.input);
           }).catch((error: unknown) => error);
-          expect(promptAdmissionSqlState(error)).toBe(
-            timeout === 'lock_timeout' ? '55P03' : '57014'
-          );
+          expect(getPostgresSqlState(error)).toBe(timeout === 'lock_timeout' ? '55P03' : '57014');
           expect(attempts).toBe(1);
           expect(JSON.stringify(error)).not.toContain(f.branch.branch_id);
         } finally {

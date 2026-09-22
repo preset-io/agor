@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getPostgresSqlState } from '@agor/core/db';
 import { Unavailable } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 
@@ -11,13 +12,6 @@ function causes(error: unknown): Record<string, unknown>[] {
     error = item.cause;
   }
   return chain;
-}
-
-/** Never infer SQLSTATE from an exception's SQL-bearing message. */
-export function promptAdmissionSqlState(error: unknown): string | undefined {
-  return causes(error)
-    .map((item) => item.code)
-    .find((code): code is string => typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code));
 }
 
 const safeFailures = new WeakSet<object>();
@@ -35,11 +29,13 @@ const driverCodes = new Set([
 ]);
 
 function isDatabaseError(error: unknown): boolean {
-  return causes(error).some(
-    (item) =>
-      (typeof item.query === 'string' && Array.isArray(item.params)) ||
-      (typeof item.code === 'string' &&
-        (driverCodes.has(item.code) || /^[0-9A-Z]{5}$/.test(item.code)))
+  return (
+    getPostgresSqlState(error) !== undefined ||
+    causes(error).some(
+      (item) =>
+        (typeof item.query === 'string' && Array.isArray(item.params)) ||
+        (typeof item.code === 'string' && driverCodes.has(item.code))
+    )
   );
 }
 
@@ -49,7 +45,7 @@ export function safePromptDatabaseFailure(
   elapsedMs: number,
   admission?: {
     attempt: number;
-    phase: 'statement' | 'commit_or_after_commit';
+    phase: 'acquisition_or_setup' | 'statement' | 'commit_or_after_commit';
     acquisitionSetupMs?: number;
   }
 ): Error {
@@ -71,7 +67,7 @@ export function safePromptDatabaseFailure(
   // PostgreSQL deadlock detail also contains arbitrary query text. Retain only
   // the numeric wait edges, enough to correlate with restricted server logs.
   const deadlockEdges =
-    promptAdmissionSqlState(error) === '40P01'
+    getPostgresSqlState(error) === '40P01'
       ? chain
           .flatMap((item) =>
             typeof item.detail === 'string'
@@ -88,7 +84,7 @@ export function safePromptDatabaseFailure(
           .join(',')
       : '';
   console.error(
-    `[prompt.database] failed reference=${reference} sqlstate=${promptAdmissionSqlState(error) ?? 'unknown'} driver_code=${driverCode ?? 'unknown'} elapsed_ms=${Math.max(0, Math.round(elapsedMs))} deadlock_edges=${deadlockEdges || 'unknown'} lock_table=${lockTable ?? 'unknown'} attempt=${admission?.attempt ?? 'unknown'} phase=${admission?.phase ?? 'prompt_route'} acquisition_setup_ms=${admission?.acquisitionSetupMs ?? 'unknown'} outcome=unconfirmed`
+    `[prompt.database] failed reference=${reference} sqlstate=${getPostgresSqlState(error) ?? 'unknown'} driver_code=${driverCode ?? 'unknown'} elapsed_ms=${Math.max(0, Math.round(elapsedMs))} deadlock_edges=${deadlockEdges || 'unknown'} lock_table=${lockTable ?? 'unknown'} attempt=${admission?.attempt ?? 'unknown'} phase=${admission?.phase ?? 'prompt_route'} acquisition_setup_ms=${admission?.acquisitionSetupMs ?? 'unknown'} outcome=unconfirmed`
   );
   const failure = new Unavailable(
     `Could not confirm prompt admission. Check the session before sending again. Reference: ${reference}.`,
