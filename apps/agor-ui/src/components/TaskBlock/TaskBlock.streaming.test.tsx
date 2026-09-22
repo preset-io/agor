@@ -90,17 +90,23 @@ it.each([false, true])(
       [
         second.message_id,
         {
-          ...second,
-          content: second.content as StreamingMessageState['content'],
+          message_id: second.message_id,
+          session_id: task.session_id,
+          task_id: task.task_id,
+          role: 'assistant',
+          timestamp: task.created_at,
+          content: '',
+          thinkingContent: '',
           isStreaming: true,
         },
       ],
     ]);
     rerender(view([first], activity(2), { streamingMessages: streaming }));
     assertSingle();
-    // Partial persistence overlaps the stream; the next tool event is already here.
-    rerender(view([second, first], activity(3), { streamingMessages: streaming }));
+    // The next event arrives before the second call's message is recorded.
+    rerender(view([first], activity(3), { streamingMessages: streaming }));
     assertSingle();
+    // messages.created removes the matching stream in the same client update.
     rerender(view([second, first], activity(3)));
     assertSingle();
     rerender(view([third, second, first], activity(3, 'complete')));
@@ -167,7 +173,7 @@ it('keeps event feedback visible through an empty first streamed message and its
   expect(screen.getAllByRole('button', { name: /Read$/ })).toHaveLength(2);
 });
 
-it('does not absorb the next top-level event into a nested Task result chain', () => {
+it('reconciles result-chain ownership when its parent Task arrives later', () => {
   const delegation: Message = {
     ...call(1, 'Task'),
     tool_uses: [{ id: 'call-1', name: 'Task', input: {} }],
@@ -178,7 +184,12 @@ it('does not absorb the next top-level event into a nested Task result chain', (
     type: 'user',
     content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'Nested result' }],
   };
-  render(view([delegation, result], activity(3)));
-  expect(screen.getByRole('button', { name: 'Reasoning' })).toBeVisible();
+  const { rerender } = render(view([result], activity(3)));
+  const header = screen.getByRole('button', { name: 'Running: Bash' });
+  fireEvent.click(header);
+  // The result reference and group key stay the same; only its ownership changes.
+  rerender(view([delegation, result], activity(3)));
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toBe(header);
+  expect(header).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByRole('button', { name: 'Running: Bash' })).toBeVisible();
 });

@@ -627,10 +627,16 @@ function getBlockMarker(block: Block): 'streaming' | 'settled' {
     : 'settled';
 }
 
-/** Same composition: identical message references in identical order. */
-function blocksHaveSameMessages(a: Block, b: Block): boolean {
+/** Same render composition: grouping ownership and ordered message references. */
+function blocksHaveSameComposition(a: Block, b: Block): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'message' && b.type === 'message') return a.message === b.message;
+  if (
+    a.type === 'agent-chain' &&
+    b.type === 'agent-chain' &&
+    a.parentToolUseId !== b.parentToolUseId
+  )
+    return false;
   const aMessages = (a as { messages: Message[] }).messages;
   const bMessages = (b as { messages: Message[] }).messages;
   if (aMessages.length !== bMessages.length) return false;
@@ -699,7 +705,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
       const reconciled = next.map((block) => {
         const prev = prevByKey.get(getBlockKey(block));
-        return prev && blocksHaveSameMessages(prev, block) ? prev : block;
+        return prev && blocksHaveSameComposition(prev, block) ? prev : block;
       });
       prevBlocksRef.current = reconciled;
       return reconciled;
