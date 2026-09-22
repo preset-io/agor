@@ -1019,3 +1019,54 @@ describe('Knowledge MCP input schemas', () => {
     expect(result[0].snippet).toBe('knowledge body');
   });
 });
+
+describe('Knowledge search mode and policy wiring', () => {
+  it('forwards semantic and hybrid modes through all search tools and preserves failures', async () => {
+    const find = vi.fn().mockResolvedValue([]);
+    const branch = {
+      branch_id: 'branch-1',
+      teammate: {
+        kb: {
+          primary_namespace_id: 'ns-1',
+          primary_namespace_slug: 'teammate',
+          global_access: 'read',
+        },
+      },
+    };
+    const tools = await captureKnowledgeTools(
+      {
+        sessions: { get: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) },
+        branches: { get: vi.fn().mockResolvedValue(branch) },
+        'kb/namespaces': {
+          get: vi
+            .fn()
+            .mockResolvedValue({ namespace_id: 'ns-1', slug: 'teammate', archived: false }),
+        },
+        'kb/search': { find },
+      },
+      { sessionId: 'session-1' }
+    );
+    for (const name of [
+      'agor_kb_search',
+      'agor_teammate_memory_search',
+      'agor_teammate_knowledge_search',
+    ]) {
+      for (const mode of ['semantic', 'hybrid']) {
+        expect(textResultJson(await tools[name].handler?.({ query: 'needle', mode }))).toEqual([]);
+        expect(find).toHaveBeenLastCalledWith(
+          expect.objectContaining({ query: expect.objectContaining({ q: 'needle', mode }) })
+        );
+      }
+      find.mockRejectedValueOnce(new Error('Semantic Knowledge search is disabled.'));
+      await expect(tools[name].handler?.({ query: 'needle', mode: 'semantic' })).rejects.toThrow(
+        'disabled'
+      );
+    }
+    find.mockClear();
+    branch.teammate.kb.global_access = 'none';
+    await expect(
+      tools.agor_teammate_knowledge_search.handler?.({ query: 'needle', mode: 'semantic' })
+    ).rejects.toThrow('does not grant whole-Knowledge-Base read access');
+    expect(find).not.toHaveBeenCalled();
+  });
+});

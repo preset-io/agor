@@ -20,7 +20,6 @@ import {
   type AuthenticatedParams,
   buildKnowledgeUnitUri,
   type KnowledgeSearchResult,
-  normalizeKnowledgeFolderPath,
   type QueryParams,
   type User,
 } from '@agor/core/types';
@@ -36,6 +35,7 @@ import {
   semanticUnavailableMessage,
 } from '../knowledge/pgvector.js';
 import { canReadKnowledgeSearchResult, isKnowledgeAdmin } from './knowledge-access.js';
+import { prepareKnowledgeSearchQuery } from './knowledge-search-query.js';
 
 export type KnowledgeSearchParams = QueryParams<KnowledgeSearchQuery> & AuthenticatedParams;
 
@@ -87,6 +87,7 @@ export class KnowledgeSearchService {
     query: KnowledgeSearchQuery | undefined,
     user?: User
   ): Promise<KnowledgeSearchQuery> {
+    query = prepareKnowledgeSearchQuery(query);
     this.assertSupportedMode(query);
     const isAdmin = isKnowledgeAdmin(user);
     const rawQuery = (query ?? {}) as KnowledgeSearchQuery & {
@@ -112,15 +113,6 @@ export class KnowledgeSearchService {
     if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
     const rows = (result as { rows?: unknown[] } | undefined)?.rows;
     return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
-  }
-
-  private parseMinSimilarity(value: unknown): number | null {
-    if (value === undefined || value === null || value === '') return null;
-    const parsed = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-      throw new BadRequest('Knowledge semantic min_similarity must be a number between 0 and 1');
-    }
-    return parsed;
   }
 
   private async attachIndexingToResults<T extends KnowledgeSearchResult>(
@@ -214,18 +206,10 @@ export class KnowledgeSearchService {
 
     const q = rawQuery.q?.trim() ?? '';
     if (!q) return [];
-    const [queryEmbedding] = await this.embeddingProvider.embed(
-      [{ id: 'query', text: q, inputType: 'query' }],
-      { apiKey, model, dimensions }
-    );
-    const vector = embeddingToPgvector(queryEmbedding.embedding);
     const limit = Math.min(Math.max(rawQuery.rerank_limit ?? rawQuery.limit ?? 25, 1), 100);
     const isAdmin = isKnowledgeAdmin(user);
-    const normalizedPathPrefix = rawQuery.path_prefix?.trim()
-      ? normalizeKnowledgeFolderPath(rawQuery.path_prefix)
-      : '';
-    const pathPrefix = normalizedPathPrefix || null;
-    const minSimilarity = this.parseMinSimilarity(rawQuery.min_similarity);
+    const pathPrefix = rawQuery.path_prefix || null;
+    const minSimilarity = rawQuery.min_similarity ?? null;
     const includeMyDrafts = rawQuery.include_my_drafts !== false;
     const includeOtherUserDrafts = rawQuery.include_other_user_drafts === true;
     const readableNamespaceIds =
@@ -240,6 +224,44 @@ export class KnowledgeSearchService {
           sql`, `
         )})`
       : sql``;
+
+    // Both queries use this same current-version, namespace, visibility and draft
+    // boundary. Similarity is the only filter that requires a query embedding.
+    const eligibleVectors = sql`
+        FROM kb_unit_embeddings e
+        JOIN kb_document_units u ON u.unit_id = e.unit_id
+        JOIN kb_documents d ON d.document_id = u.document_id AND d.current_version_id = u.version_id
+        JOIN kb_namespaces ns ON ns.namespace_id = d.namespace_id
+        JOIN kb_embedding_spaces sp ON sp.embedding_space_id = e.embedding_space_id
+        WHERE d.archived = false
+          AND ns.archived = false
+          AND sp.provider = ${provider}
+          AND sp.model = ${model}
+          AND sp.dimensions = ${dimensions}
+          ${readableNamespaceFilter}
+          AND (${rawQuery.namespace_id ?? null}::text IS NULL OR d.namespace_id = ${rawQuery.namespace_id ?? null})
+          AND (${rawQuery.namespace_slug ?? null}::text IS NULL OR ns.slug = ${rawQuery.namespace_slug ?? null})
+          AND (${pathPrefix}::text IS NULL OR d.path = ${pathPrefix} OR d.path LIKE (${pathPrefix} || '/%'))
+          AND (${rawQuery.kind ?? null}::text IS NULL OR d.kind = ${rawQuery.kind ?? null})
+          AND (${rawQuery.visibility ?? null}::text IS NULL OR d.visibility = ${rawQuery.visibility ?? null})
+          AND (${rawQuery.status ?? null}::text IS NULL OR d.status = ${rawQuery.status ?? null})
+          AND (${isAdmin}::boolean = true OR d.visibility = 'public' OR d.created_by = ${user?.user_id ?? null})
+          AND (
+            ${includeOtherUserDrafts}::boolean = true
+            OR d.status = 'published'
+            OR (${includeMyDrafts}::boolean = true AND d.created_by = ${user?.user_id ?? null})
+          )`;
+    const candidates = await executeRaw(
+      this.db,
+      sql`SELECT 1 AS eligible ${eligibleVectors} LIMIT 1`
+    );
+    if (this.rawRows(candidates).length === 0) return [];
+
+    const [queryEmbedding] = await this.embeddingProvider.embed(
+      [{ id: 'query', text: q, inputType: 'query' }],
+      { apiKey, model, dimensions }
+    );
+    const vector = embeddingToPgvector(queryEmbedding.embedding);
 
     const baseUrl = await getBaseUrl(this.db);
     const result = await executeRaw(
@@ -283,29 +305,7 @@ export class KnowledgeSearchService {
           u.start_offset,
           u.end_offset,
           ((e.embedding::vector(1536)) <=> ${vector}::vector(1536)) AS distance
-        FROM kb_unit_embeddings e
-        JOIN kb_document_units u ON u.unit_id = e.unit_id
-        JOIN kb_documents d ON d.document_id = u.document_id AND d.current_version_id = u.version_id
-        JOIN kb_namespaces ns ON ns.namespace_id = d.namespace_id
-        JOIN kb_embedding_spaces sp ON sp.embedding_space_id = e.embedding_space_id
-        WHERE d.archived = false
-          AND ns.archived = false
-          AND sp.provider = ${provider}
-          AND sp.model = ${model}
-          AND sp.dimensions = ${dimensions}
-          ${readableNamespaceFilter}
-          AND (${rawQuery.namespace_id ?? null}::text IS NULL OR d.namespace_id = ${rawQuery.namespace_id ?? null})
-          AND (${rawQuery.namespace_slug ?? null}::text IS NULL OR ns.slug = ${rawQuery.namespace_slug ?? null})
-          AND (${pathPrefix}::text IS NULL OR d.path = ${pathPrefix} OR d.path LIKE (${pathPrefix} || '/%'))
-          AND (${rawQuery.kind ?? null}::text IS NULL OR d.kind = ${rawQuery.kind ?? null})
-          AND (${rawQuery.visibility ?? null}::text IS NULL OR d.visibility = ${rawQuery.visibility ?? null})
-          AND (${rawQuery.status ?? null}::text IS NULL OR d.status = ${rawQuery.status ?? null})
-          AND (${isAdmin}::boolean = true OR d.visibility = 'public' OR d.created_by = ${user?.user_id ?? null})
-          AND (
-            ${includeOtherUserDrafts}::boolean = true
-            OR d.status = 'published'
-            OR (${includeMyDrafts}::boolean = true AND d.created_by = ${user?.user_id ?? null})
-          )
+        ${eligibleVectors}
           AND (${minSimilarity}::float IS NULL OR (1 - ((e.embedding::vector(1536)) <=> ${vector}::vector(1536))) >= ${minSimilarity})
         ORDER BY (e.embedding::vector(1536)) <=> ${vector}::vector(1536)
         LIMIT ${limit}`

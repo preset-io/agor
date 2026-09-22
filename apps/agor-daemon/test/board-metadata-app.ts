@@ -36,7 +36,8 @@ export async function boardMetadataTestApp(
   db: TenantScopeAwareDatabase,
   config: RegisterHooksContext['config'],
   withSocketIO = false,
-  withMcp = false
+  withMcp = false,
+  registerTestServices?: (app: RegisterHooksContext['app']) => void
 ) {
   const app = feathersExpress(feathers());
   app.use(express.json());
@@ -87,6 +88,7 @@ export async function boardMetadataTestApp(
   app.use('board-objects', new BoardObjectsService(db, app));
   setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin: false });
   setupCapabilityPolicyServices(app, db, { allowSuperadmin: false });
+  registerTestServices?.(app);
   registerHooks({
     db,
     app,
