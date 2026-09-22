@@ -1520,6 +1520,83 @@ describe('queue-management realtime compatibility', () => {
 });
 
 describe('authoritative queue snapshot ownership', () => {
+  it('lean queue recovery clears successive different refresh failures', async () => {
+    const queued = { ...makeTask('queued', TaskStatus.QUEUED), queue_position: 1 };
+    const mock = createMockClient({ tasks: [queued], messagesByTask: {} });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    try {
+      await handle.ready();
+      const queueFind = vi.mocked(mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find);
+      queueFind.mockRejectedValueOnce(new Error('Timeout'));
+      mock.emitServiceEvent('tasks', 'queued', queued);
+      await vi.waitFor(() => expect(handle.state.error).toBe('Timeout'));
+      expect(handle.state.queuedTasks).toEqual([queued]);
+
+      queueFind.mockRejectedValueOnce(new Error('Service unavailable'));
+      mock.emitServiceEvent('tasks', 'queued', queued);
+      await vi.waitFor(() => expect(queueFind).toHaveBeenCalledTimes(3));
+      expect.soft(handle.state.error).toBe('Service unavailable');
+      expect(handle.state.queuedTasks).toEqual([queued]);
+
+      queueFind.mockResolvedValueOnce({ data: [], total: 0, limit: 100, skip: 0 });
+      mock.emitServiceEvent('tasks', 'queued', queued);
+      await vi.waitFor(() => expect(handle.state.queuedTasks).toEqual([]));
+      expect(handle.state.error).toBeNull();
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  it.each(['before failures', 'between failures', 'before recovery'])(
+    'lean queue refresh preserves an unrelated history error introduced %s',
+    async (timing) => {
+      const queued = { ...makeTask('queued', TaskStatus.QUEUED), queue_position: 1 };
+      const history = Array.from({ length: 11 }, (_, i) =>
+        makeTask(`task-${String(i).padStart(2, '0')}`, TaskStatus.COMPLETED)
+      );
+      const mock = createMockClient({ tasks: [...history, queued], messagesByTask: {} });
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, {
+        taskHydration: 'lean',
+      });
+      try {
+        await handle.ready();
+        expect(handle.state.hasOlderTasks).toBe(true);
+        const queueFind = vi.mocked(
+          mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find
+        );
+        const failHistory = async () => {
+          vi.mocked(mock.client.service('tasks').find).mockRejectedValueOnce(
+            new Error('History unavailable')
+          );
+          await expect(handle.loadOlderTasks()).rejects.toThrow('History unavailable');
+          expect(handle.state.error).toBe('History unavailable');
+        };
+        if (timing === 'before failures') await failHistory();
+        queueFind.mockRejectedValueOnce(new Error('Timeout'));
+        mock.emitServiceEvent('tasks', 'queued', queued);
+        await vi.waitFor(() => expect(queueFind).toHaveBeenCalledTimes(2));
+        expect(handle.state.error).toBe(
+          timing === 'before failures' ? 'History unavailable' : 'Timeout'
+        );
+
+        if (timing === 'between failures') await failHistory();
+        queueFind.mockRejectedValueOnce(new Error('Service unavailable'));
+        mock.emitServiceEvent('tasks', 'queued', queued);
+        await vi.waitFor(() => expect(queueFind).toHaveBeenCalledTimes(3));
+        if (timing === 'before recovery') await failHistory();
+        expect(handle.state.error).toBe('History unavailable');
+        expect(handle.state.queuedTasks).toEqual([queued]);
+
+        queueFind.mockResolvedValueOnce({ data: [], total: 0, limit: 100, skip: 0 });
+        mock.emitServiceEvent('tasks', 'queued', queued);
+        await vi.waitFor(() => expect(handle.state.queuedTasks).toEqual([]));
+        expect(handle.state.error).toBe('History unavailable');
+      } finally {
+        handle.dispose();
+      }
+    }
+  );
+
   it('does not lose an invalidation between publishing a snapshot and promise cleanup', async () => {
     const a = { ...makeTask('a', TaskStatus.QUEUED), queue_position: 1 };
     const b = { ...makeTask('b', TaskStatus.QUEUED), queue_position: 2 };

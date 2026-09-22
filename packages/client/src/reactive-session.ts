@@ -673,8 +673,14 @@ export class ReactiveSessionHandle {
             if (invalidation !== this.queueInvalidation) continue;
             // Keep confirmed rows on a transient failure. The shared hook's
             // auth/visibility recovery and socket reconnect retry the read.
+            const previousError = this.queueError;
             this.queueError = error instanceof Error ? error.message : 'Failed to refresh queue';
-            this.updateState((prev) => ({ ...prev, error: prev.error ?? this.queueError }));
+            this.updateState((prev) => ({
+              ...prev,
+              // Advance only a queue-owned banner so recovery can clear it.
+              error:
+                prev.error === null || prev.error === previousError ? this.queueError : prev.error,
+            }));
           }
           settledInvalidation = invalidation;
           if (invalidation === this.queueInvalidation) return;
