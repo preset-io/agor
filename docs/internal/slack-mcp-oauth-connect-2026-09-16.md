@@ -2110,6 +2110,108 @@ their own suites.
 `withGatewayTimeout` exists and is used only for `stopListening` — and the
 `setThreadStatus` guard. Separate ticket.
 
+### 7.1.16 One client name for the whole fleet
+
+The next live failure was not in this lane either, and not in the Slack
+projection at all. Against `com.datadoghq/mcp` on the HA cell, discovery
+succeeded, DCR succeeded — `Dynamic client registered` — and the provider's
+authorize endpoint answered `invalid_request — Mismatching redirect URI`.
+
+**The thing it was not.** That Agor sends one redirect URI to DCR and a
+different one to authorize was refuted with a probe rather than argued away.
+There is one construction site (`config/deployment.ts:175`); `haCallbackUrl` is
+that string or `null`, never a third value; HA hard-asserts equality
+(`register-services.ts`); one getter returns a startup constant; and
+`startMCPOAuthFlowWithAS` binds `actualRedirectUri` once, using it for both
+`redirect_uris:[…]` and the authorize parameter. A probe in HA mode with a real
+DCR round trip printed `identical = true`.
+
+**What it was.** `client_name` was the hardcoded constant `'Agor MCP Client'`
+at both DCR call sites, with no deployment, tenant, or server identity in it.
+**Every Agor install registered under that name.** A provider that treats the
+client name as the client's identity answers a second install with the FIRST
+install's client — a `client_id` bound to a different deployment's callback —
+while echoing our request body back, so `validateDynamicClientRegistration`
+sees its own `redirect_uris` and finds nothing wrong. This cell had six earlier
+attempts from a different origin during the `getBaseUrl` incident above.
+
+The name now carries the callback host, which is exactly what a reused
+`client_id` would be wrongly bound to, plus the saved MCP server id when one
+owns the flow, so two servers on one deployment cannot be collapsed onto one
+provider client and one server's scope. Both parts are already in the same
+request — the host is in `redirect_uris`, the server id is a random Agor UUID —
+so nothing new is disclosed to the provider, and a registrant id that is not
+Agor-shaped is dropped rather than sent. The constant survives as
+`LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME`, for the fingerprint story below and as
+the fallback for an unparseable callback.
+
+**The blast radius is fleet-wide, and is the remediation.** `bindingFingerprint`
+(`mcp-oauth-client-registration-authority.ts`) covers `clientName`, so every
+stored registration stops being `exactBinding` on its next OAuth start:
+`claimOrObserve` marks the current row `superseded` /
+`server_configuration_changed` with its sealed material dropped, and inserts a
+fresh `registering` row. One extra DCR per server per tenant, once, with no
+user-visible re-auth and no grant touched.
+
+That changes the operator advice. The Datadog registration is poisoned in the
+precise sense that it was registered with `token_endpoint_auth_method: 'none'`,
+so there is no `client_secret_expires_at`, `client_secret_live` is permanently
+true, and `claimOrObserve` answers `ready` forever — every retry reuses the same
+broken `client_id`. `POST /mcp-servers/oauth-client-registration-reset` does
+what it claims (admin-gated, under `lockOAuthGrantConfiguration`: bumps
+`config_version`, deletes every grant for the server, invalidates pending flows
+and registrations), but **this deployment does not need it**: the name change
+alone retires that row. The reset stays the tool for a poisoning that arrives
+without a code change. Both halves are pinned in
+`mcp-oauth-client-registration-authority.postgres.test.ts`.
+
+**What could not be proved, and was fixed anyway.** Nobody reproduced Datadog's
+deduplication against their endpoint, so the constant is treated as a defect on
+its own terms rather than as a diagnosis. It is modelled instead: the provider
+fixture now deduplicates by client name on request, and without the fix the
+test fails with `expected 'another-deployments-client' not to be
+'another-deployments-client'`.
+
+**The blind spot, and its proxy.** A redirect-URI mismatch is rejected
+**front-channel**. The provider refuses on its own page and never redirects, so
+Agor cannot observe it at all — not in a callback, not in a token response, not
+in any provider payload. The only durable trace is a pending flow that expires
+with no callback, which is now classified `authorization_never_returned`
+(distinct from `authorization_timed_out`, which stays where a callback did
+arrive), and whose guidance leads with an unregistered callback URL. Beside it,
+one `event=oauth_authorize_built` line per attempt states the binding Agor
+used — origins only, never a path, a full URL, a secret, or the provider's
+payload, plus `client_source`, `redirect_matches_registered`, and the
+Agor-constructed `client_name` that makes a deduplicating provider visible.
+
+The authorize URL also now asserts that the redirect URI it is about to send is
+the one the client was registered under, refusing with a named
+`redirect_uri_mismatch` (classified `redirect_configuration_required`, because
+the provider said nothing — Agor refused its own request) rather than shipping a
+URL already known to be wrong. Both values are Agor's and come from one binding
+today, which is exactly why it is asserted rather than trusted: there is no
+second chance to classify this one.
+
+**The fixture gap that let all of this through.** `/register` was served only
+under `rejectDynamicRegistration` (418) or `holdDynamicRegistration`, and the
+latter echoed back exactly the `redirect_uris` it was sent. There was no
+`/authorize` handler **at all** — tests read `state` off the URL and never
+fetched it. So nothing compared registered-vs-authorized, and no fixture
+modelled a provider that echoes one thing and stores another. `/authorize` is
+now a real endpoint that checks the request's `redirect_uri` against what the
+provider REGISTERED, and two options reproduce the two ways those come apart:
+`deduplicateRegistrationByClientName` and `registrationStoresRedirectUri`. The
+second one is refused at `/authorize` even with a correct client name, and the
+test asserts the end state that makes this class hard: no callback, no token,
+and an attempt still `pending`.
+
+**Correction to §7.1.14.** The claim that the daemon host serves no `/ui` under
+`uiServingMode: "separate"`, and that a link on the cell origin would therefore
+404, is false — `https://sdx-us1a-v4.dp-sdx-us1a.cloud-sdx.agor.live/ui/`
+answers `HTTP/2 200 text/html` from nginx. The tenant origin is still the right
+one for the card's button, but because `/mcp-oauth-connect` needs the browser's
+tenant context, not because the cell origin 404s.
+
 ### 7.2 Deliberately not built
 
 - **No Slack interaction handler.** The button is a plain URL; Agor registers

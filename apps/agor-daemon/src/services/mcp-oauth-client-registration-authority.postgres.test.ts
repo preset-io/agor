@@ -20,6 +20,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import {
+  LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
   mcpOAuthDynamicClientName,
   OAuthDCRFailure,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
@@ -184,6 +185,66 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         throw new Error('must reuse the exact application binding');
       });
       expect(reused.registration.client_id).toBe('native-client');
+    });
+
+    it('retires a registration poisoned under the legacy shared client name, with no reset', async () => {
+      // The production shape: registered with token_endpoint_auth_method
+      // 'none', so there is no client_secret_expires_at, `client_secret_live`
+      // is permanently true, and `claimOrObserve` answers `ready` forever.
+      // Every retry reuses the same broken client_id.
+      const seedRow = await seed('poisoned-legacy-name');
+      const poisoned = {
+        ...inputFor(seedRow),
+        clientName: LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
+      };
+      const first = await authorityA.resolve(poisoned, async () => ({
+        client_id: 'another-deployments-client',
+      }));
+      expect(first.registration.client_id).toBe('another-deployments-client');
+      const reusedForever = await authorityB.resolve(poisoned, async () => {
+        throw new Error('the poisoned row is reused without a code change');
+      });
+      expect(reusedForever.registration.client_id).toBe('another-deployments-client');
+
+      // The registrant-bearing name alone retires it: `bindingFingerprint`
+      // covers clientName, so the row stops being `exactBinding` and the next
+      // OAuth start supersedes it and registers again. No administrative
+      // `oauth-client-registration-reset` is required for this class.
+      const repaired = inputFor(seedRow);
+      expect(__fingerprintMCPOAuthClientRegistrationForTests(masterSecret, repaired)).not.toBe(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, poisoned)
+      );
+      let registrations = 0;
+      const next = await authorityB.resolve(repaired, async () => {
+        registrations += 1;
+        return { client_id: 'our-own-client' };
+      });
+      expect(registrations).toBe(1);
+      expect(next.registration.client_id).toBe('our-own-client');
+      expect(next.registrationId).not.toBe(first.registrationId);
+
+      const rows = await runWithTenantDatabaseScope(dbA, seedRow.tenantId, async (scoped) => {
+        const result = await executeRaw(
+          scoped,
+          sql`SELECT registration_id, status, is_current, failure_code, sealed_material
+              FROM mcp_oauth_client_registrations
+              WHERE mcp_server_id = ${seedRow.serverId}`
+        );
+        return rawRows(result);
+      });
+      const retired = rows.find((row) => row.registration_id === first.registrationId);
+      expect(retired).toMatchObject({
+        status: 'superseded',
+        is_current: false,
+        failure_code: 'server_configuration_changed',
+      });
+      // The superseded row keeps no material, so the broken client_id cannot
+      // be reached again through it.
+      expect(retired?.sealed_material).toBeNull();
+      expect(rows.find((row) => row.registration_id === next.registrationId)).toMatchObject({
+        status: 'registered',
+        is_current: true,
+      });
     });
 
     it('does not invalidate a reusable fleet credential when caller authority is lost', async () => {
