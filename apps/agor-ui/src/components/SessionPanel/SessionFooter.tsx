@@ -1533,11 +1533,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               latestContextWindow.limit > 0 &&
               pinnedChips.includes('context') && (
                 <Tag
-                  icon={
-                    <PercentageOutlined
-                      style={{ color: contextWarning ? token.colorWarning : undefined }}
-                    />
-                  }
                   color={contextWarning ? 'warning' : 'default'}
                   style={{
                     cursor: 'default',

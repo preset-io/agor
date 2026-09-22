@@ -196,6 +196,8 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     const chip = screen.getByTestId('context-chip');
+    expect(chip.querySelector('.anticon-percentage')).toBeNull();
+    expect(chip).toHaveTextContent(/^85%$/);
     expect(chip).toBeInTheDocument();
     expect(chip.getAttribute('data-warning')).toBe('true');
   });
