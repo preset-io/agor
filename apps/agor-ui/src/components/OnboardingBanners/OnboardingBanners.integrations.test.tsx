@@ -36,10 +36,13 @@ afterEach(() => {
 });
 
 it('snoozes for 24 hours across mobile-style unmount/remount and still honors integration eligibility', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // Exact expiry assertions need a manually controlled clock: wall-clock
+  // auto-advance can cross the final millisecond while React work is settling.
+  vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-09-20T12:00:00Z'));
   const first = render(<OnboardingBanners {...props} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
+  await act(() => vi.advanceTimersByTimeAsync(0));
+  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
   expect(JSON.parse(localStorage.getItem(key)!)).toBe(Date.now() + DAY);
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   first.unmount();
@@ -48,13 +51,13 @@ it('snoozes for 24 hours across mobile-style unmount/remount and still honors in
   await act(() => vi.advanceTimersByTimeAsync(DAY - 1));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
-  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
+  expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
   second.rerender(<OnboardingBanners {...props} gatewayChannelCount={1} />);
   await act(() => vi.advanceTimersByTimeAsync(DAY));
   expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   second.rerender(<OnboardingBanners {...props} />);
-  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
 });
 
 it('does not transfer a user snooze across logout or a different user/workspace identity', async () => {
