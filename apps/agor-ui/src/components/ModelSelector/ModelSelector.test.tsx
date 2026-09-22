@@ -495,10 +495,15 @@ describe('ModelSelector (Claude)', () => {
       />
     );
 
-    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const input = screen.getByRole('combobox');
+    fireEvent.mouseDown(input);
 
+    // Search narrows the virtualized list so older aliases render regardless of registry length.
+    fireEvent.change(input, { target: { value: 'opus 4.7' } });
     expect(screen.getByText('Claude Opus 4.7 · 200k')).toBeInTheDocument();
     expect(screen.getByText('Claude Opus 4.7 · 1M')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'sonnet 4.6' } });
     expect(screen.getByText('Claude Sonnet 4.6 · 200k')).toBeInTheDocument();
   });
 });
