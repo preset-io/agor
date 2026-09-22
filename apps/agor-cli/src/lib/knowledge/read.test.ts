@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import {
   createTenantScopedDatabaseProxy,
   generateId,
@@ -16,11 +17,13 @@ import {
 import { KnowledgeNamespacesService } from '../../../../agor-daemon/src/services/knowledge-namespaces';
 import {
   getDocument,
+  knowledgeListFlags,
   listDocuments,
   listNamespaces,
   namespaceBySlug,
   page,
   pageSummary,
+  renderKnowledgePage,
   table,
 } from './read';
 
@@ -35,6 +38,23 @@ function restQuery(query: Record<string, unknown> = {}) {
 }
 
 describe('Knowledge discovery', () => {
+  it('shares default flags without mutable flag instances and preserves rendering contracts', () => {
+    const flags = knowledgeListFlags();
+    expect(flags.limit.default).toBe(PAGINATION.CLI_DEFAULT_LIMIT);
+    expect(flags.limit).not.toBe(knowledgeListFlags().limit);
+    const result = page(['one', 'two'], 1, 0);
+    expect(
+      JSON.parse(
+        renderKnowledgePage(result, true, ['Name'], () => {
+          throw new Error('JSON must not format table rows');
+        })
+      )
+    ).toEqual(result);
+    expect(renderKnowledgePage(result, false, ['Name'], (value) => [value])).toBe(
+      `${table(['Name'], [['one']])}\n${pageSummary(result)}`
+    );
+  });
+
   it('reports bounded display pages, empty results and terminal-safe metadata', () => {
     expect(page([1, 2, 3], 2, 1)).toEqual({ total: 3, limit: 2, offset: 1, data: [2, 3] });
     expect(pageSummary(page([1, 2, 3], 2, 1))).toContain('Showing 2 of 3 (2–3)');

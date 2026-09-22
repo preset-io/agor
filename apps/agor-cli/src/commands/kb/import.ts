@@ -1,8 +1,8 @@
 import { knowledgeTransferSlug } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
-import { KnowledgeProgress } from '../../lib/knowledge/progress';
 import { importKnowledge, knowledgeTransferClient } from '../../lib/knowledge/transfer';
+import { withKnowledgeTransfer } from '../../lib/knowledge/transfer-lifecycle';
 
 export default class KnowledgeImport extends BaseCommand {
   static override description =
@@ -22,35 +22,31 @@ export default class KnowledgeImport extends BaseCommand {
     const { args, flags } = await this.parse(KnowledgeImport);
     const namespace = knowledgeTransferSlug.parse(flags.namespace);
     const client = await this.connectToDaemon();
-    const progress = new KnowledgeProgress();
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    process.once('SIGINT', cancel);
-    process.once('SIGTERM', cancel);
     try {
-      const result = await importKnowledge(
-        knowledgeTransferClient(client),
+      await withKnowledgeTransfer(
         {
-          namespace,
-          directory: args.directory,
-          dryRun: !flags.apply,
-          resume: flags.resume,
-          sourceIdentity: this.deploymentId!,
-          signal: controller.signal,
+          failureNote:
+            'Import incomplete. Committed documents are retained. Re-run the same command with --resume --apply. Conflicts are never overwritten.',
+          cleanup: () => this.cleanupClient(client),
         },
-        progress
+        async ({ signal, progress }) => {
+          const result = await importKnowledge(
+            knowledgeTransferClient(client),
+            {
+              namespace,
+              directory: args.directory,
+              dryRun: !flags.apply,
+              resume: flags.resume,
+              sourceIdentity: this.deploymentId!,
+              signal,
+            },
+            progress
+          );
+          this.log(JSON.stringify(result));
+        }
       );
-      this.log(JSON.stringify(result));
     } catch (error) {
-      progress.failure(
-        'Import incomplete. Committed documents are retained. Re-run the same command with --resume --apply. Conflicts are never overwritten.'
-      );
       this.error(error instanceof Error ? error.message : 'Knowledge import failed');
-    } finally {
-      process.off('SIGINT', cancel);
-      process.off('SIGTERM', cancel);
-      progress.close();
-      await this.cleanupClient(client);
     }
   }
 }

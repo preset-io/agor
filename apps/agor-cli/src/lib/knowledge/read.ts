@@ -1,6 +1,8 @@
+import { PAGINATION } from '@agor/core/config';
 import type { HydratedKnowledgeDocument, KnowledgeDocumentStatus } from '@agor/core/types';
 import { normalizeKnowledgePath } from '@agor/core/types';
 import type { AuthenticatedAgorClient } from '@agor-live/client';
+import { Flags } from '@oclif/core';
 import Table from 'cli-table3';
 
 export async function listNamespaces(client: AuthenticatedAgorClient) {
@@ -70,4 +72,28 @@ export function terminalText(text: string) {
 export function pageSummary(result: { data: unknown[]; total: number; offset: number }) {
   const count = result.data.length;
   return `Showing ${count} of ${result.total}${count ? ` (${result.offset + 1}–${result.offset + count})` : ''}; accessible, active entries only.`;
+}
+
+/** Return fresh flag definitions for each oclif command. */
+export function knowledgeListFlags() {
+  return {
+    limit: Flags.integer({
+      default: PAGINATION.CLI_DEFAULT_LIMIT,
+      min: 1,
+      description: 'Maximum rows to display',
+    }),
+    offset: Flags.integer({ default: 0, min: 0, description: 'Number of sorted rows to skip' }),
+    json: Flags.boolean({ description: 'Output JSON with total, limit, offset and data' }),
+  };
+}
+
+export function renderKnowledgePage<T>(
+  result: ReturnType<typeof page<T>>,
+  json: boolean,
+  headers: string[],
+  row: (value: T) => unknown[]
+) {
+  return json
+    ? JSON.stringify(result)
+    : `${table(headers, result.data.map(row))}\n${pageSummary(result)}`;
 }
