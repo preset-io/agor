@@ -513,6 +513,33 @@ dbTest(
       const leanBody = await leanResponse.text();
       expect(JSON.parse(leanBody)).toMatchObject({ total: 4 });
       expect(leanBody).not.toContain('HTTP_TOOL_CANARY');
+      const batchQuery = new URLSearchParams({
+        session_id: accessibleSessionId,
+        transcript: 'lean',
+        'task_id[$in][0]': accessibleTask.task_id,
+        'task_id[$in][1]': hiddenTask.task_id,
+      });
+      const batchUrl = `http://127.0.0.1:${address.port}/messages?${batchQuery}`;
+      expect((await fetch(batchUrl)).status).toBe(401);
+      const batch = await fetch(batchUrl, { headers });
+      expect(batch.status).toBe(200);
+      const batchBody = await batch.text();
+      expect(batchBody).not.toContain('HTTP_TOOL_CANARY');
+      const batchData = JSON.parse(batchBody).data;
+      expect(batchData.length).toBeGreaterThan(0);
+      expect(
+        batchData.every((message: Message) => message.task_id === accessibleTask.task_id)
+      ).toBe(true);
+      batchQuery.set('session_id', inaccessibleSessionId);
+      const hiddenBatch = await fetch(`http://127.0.0.1:${address.port}/messages?${batchQuery}`, {
+        headers,
+      });
+      expect(await hiddenBatch.json()).toMatchObject({ data: [], total: 0 });
+      batchQuery.delete('session_id');
+      expect(
+        (await fetch(`http://127.0.0.1:${address.port}/messages?${batchQuery}`, { headers })).status
+      ).toBe(400);
+
       const detail = await fetch(
         `http://127.0.0.1:${address.port}/messages?task_id=${accessibleTask.task_id}`,
         { headers }
@@ -764,6 +791,9 @@ dbTest(
           if (mode === 'lean') {
             expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
             expect(handle.state.tasks).toHaveLength(10);
+            // Subscription + session + task page + queue + active set + one message batch.
+            expect(initial).toHaveLength(6);
+            expect(initial.filter((receipt) => receipt.path === '/messages')).toHaveLength(1);
           }
           const detailStart = receipts.length;
           if (mode === 'lean') await handle.loadTaskMessages(latestTaskId);
@@ -785,17 +815,18 @@ dbTest(
         };
         const baseline = await measure('lazy');
         const lean = await measure('lean');
-        console.info(
-          'LEAN_POC_HTTP',
-          JSON.stringify({
-            dataset,
-            tasks: 100,
-            messages: 300,
-            textBytes,
-            toolBytes,
-            baseline,
-            lean,
-          })
+        process.stdout.write(
+          'LEAN_POC_HTTP ' +
+            JSON.stringify({
+              dataset,
+              tasks: 100,
+              messages: 300,
+              textBytes,
+              toolBytes,
+              baseline,
+              lean,
+            }) +
+            '\n'
         );
       }
     } finally {

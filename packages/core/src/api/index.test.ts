@@ -635,7 +635,10 @@ describe('createClient', () => {
       );
     });
 
-    it('uses a high-water keyset rather than offsets for a multi-page transcript', async () => {
+    it.each([
+      { task_id: 't1' },
+      { session_id: 's1', task_id: { $in: ['t1', 't2'] }, transcript: 'lean' },
+    ])('uses a high-water keyset for a multi-page transcript %j', async (scope) => {
       const client = createClient();
       const messagesService = client.service('messages');
       const findMock = messagesService.find as unknown as MockedFunction<any>;
@@ -648,13 +651,13 @@ describe('createClient', () => {
       mockExactMessagePages(findMock, [...firstPage, final]);
 
       const results = await messagesService.findAll({
-        query: { task_id: 't1', $sort: { index: 1 } },
+        query: { ...scope, $sort: { index: 1 } },
       });
       expect(results).toHaveLength(1001);
       expect(results.at(-1)).toEqual(final);
       expect(findMock).toHaveBeenCalledWith({
         query: expect.objectContaining({
-          task_id: 't1',
+          ...scope,
           message_id: { $gt: 'm0999', $lte: 'm1000' },
           $sort: { message_id: 1 },
         }),

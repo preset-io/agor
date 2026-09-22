@@ -173,6 +173,27 @@ describe('sessionQueryValidator', () => {
 });
 
 describe('messageQueryValidator', () => {
+  it('preserves bounded task batches and rejects oversized sets', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          task_id: { $in: ['019e8e1d', '019e8e1e'] },
+          transcript: 'lean',
+        },
+      },
+    };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.task_id.$in).toHaveLength(2);
+    await expect(
+      typedValidateQuery(messageQueryValidator)({
+        params: {
+          query: { session_id: '019e8e1c', task_id: { $in: Array(101).fill('019e8e1d') } },
+        },
+      })
+    ).rejects.toThrow();
+  });
+
   it('preserves the explicit lean transcript projection', async () => {
     const context = { params: { query: { session_id: '019e8e1c', transcript: 'lean' } } };
     await typedValidateQuery(messageQueryValidator)(context);

@@ -53,7 +53,7 @@ export type MessageParams = QueryParams<{
         $lte: MessageID;
       };
   session_id?: SessionID;
-  task_id?: TaskID;
+  task_id?: TaskID | { $in: TaskID[] };
   /** Experimental historical projection. Full details remain the default. */
   transcript?: 'lean';
   type?: Message['type'];
@@ -154,8 +154,21 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
   ) {
     throw new BadRequest('session_id must be an ID or a bounded $in array of IDs');
   }
-  if (rawQuery.task_id !== undefined && typeof rawQuery.task_id !== 'string') {
-    throw new BadRequest('task_id must be an ID');
+  const taskId = rawQuery.task_id;
+  if (taskId !== undefined && typeof taskId !== 'string') {
+    if (
+      !taskId ||
+      typeof taskId !== 'object' ||
+      Array.isArray(taskId) ||
+      Object.keys(taskId).length !== 1 ||
+      !('$in' in taskId) ||
+      !Array.isArray(taskId.$in) ||
+      taskId.$in.length > MESSAGE_PAGINATION.MAX_TASK_IDS ||
+      !taskId.$in.every((id) => typeof id === 'string') ||
+      typeof sessionId !== 'string'
+    ) {
+      throw new BadRequest('task_id must be an ID or bounded $in with an exact session_id');
+    }
   }
   const messageId = rawQuery.message_id;
   if (
@@ -344,6 +357,8 @@ export class MessagesService extends DrizzleService<
       pageOptions.sessionIds = sessionId.$in as SessionID[];
     }
     if (typeof query.task_id === 'string') pageOptions.taskId = query.task_id as TaskID;
+    else if (query.task_id && typeof query.task_id === 'object' && '$in' in query.task_id)
+      pageOptions.taskIds = query.task_id.$in as TaskID[];
     if (typeof query.type === 'string') pageOptions.type = query.type as Message['type'];
     if (typeof query.role === 'string') pageOptions.role = query.role as Message['role'];
     if (params?._agorSqlSessionAccessUserId) {

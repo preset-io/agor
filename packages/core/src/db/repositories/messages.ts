@@ -36,6 +36,7 @@ export type MessageFindPageOptions = {
   sessionId?: SessionID;
   sessionIds?: SessionID[];
   taskId?: TaskID;
+  taskIds?: TaskID[];
   type?: Message['type'];
   role?: Message['role'];
   visibleToUserId?: UUID;
@@ -369,6 +370,7 @@ export class MessagesRepository {
     sessionId?: SessionID;
     sessionIds?: SessionID[];
     taskId?: TaskID;
+    taskIds?: TaskID[];
     type?: Message['type'];
     role?: Message['role'];
     visibleToUserId?: UUID;
@@ -454,7 +456,7 @@ export class MessagesRepository {
   async findPage(
     opts: MessageFindPageOptions = {}
   ): Promise<{ data: Partial<Message>[]; total: number }> {
-    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+    if (opts.sessionIds?.length === 0 || opts.taskIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
     if (opts.messageId) conditions.push(eq(messages.message_id, opts.messageId));
@@ -463,6 +465,7 @@ export class MessagesRepository {
     if (opts.sessionId) conditions.push(eq(messages.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(messages.session_id, opts.sessionIds));
     if (opts.taskId) conditions.push(eq(messages.task_id, opts.taskId));
+    if (opts.taskIds) conditions.push(inArray(messages.task_id, opts.taskIds));
     if (opts.type) conditions.push(eq(messages.type, opts.type));
     if (opts.role) conditions.push(eq(messages.role, opts.role));
     if (opts.visibleToUserId) {

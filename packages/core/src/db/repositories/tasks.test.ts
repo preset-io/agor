@@ -4100,6 +4100,22 @@ describe('transcript-independent task queries', () => {
       });
       expect(page.data).toHaveLength(10);
       expect(page.total).toBe(20);
+      const selected = await repository.findPage({
+        sessionId,
+        statuses: [TaskStatus.COMPLETED, TaskStatus.RUNNING],
+        limit: 10,
+      });
+      expect(selected.total).toBe(20);
+      expect(
+        selected.data.every(
+          (task) => task.session_id === sessionId && task.status === TaskStatus.COMPLETED
+        )
+      ).toBe(true);
+      expect(await repository.findPage({ sessionId, statuses: [] })).toEqual({
+        data: [],
+        total: 0,
+      });
+
       expect(page.data.every((task) => task.status === TaskStatus.COMPLETED)).toBe(true);
       expect(await repository.getSessionUsage(sessionId)).toEqual({
         total: 600,

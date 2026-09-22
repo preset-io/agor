@@ -291,6 +291,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         throw new BadRequest('Only queued status exclusion is supported');
       pageOptions.excludeQueued = true;
     }
+    if (query.status && typeof query.status === 'object' && '$in' in query.status) {
+      const statuses = query.status.$in;
+      if (
+        !Array.isArray(statuses) ||
+        statuses.length > Object.keys(TaskStatus).length ||
+        !statuses.every((status) => Object.values(TaskStatus).includes(status as TaskStatus))
+      )
+        throw new BadRequest('status.$in must be a bounded list of task statuses');
+      pageOptions.statuses = statuses as Task['status'][];
+    }
     if (typeof query.status === 'string') pageOptions.status = query.status as Task['status'];
     if (typeof query.created_at === 'number' && Number.isFinite(query.created_at)) {
       pageOptions.createdAt = new Date(query.created_at);

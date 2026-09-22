@@ -47,12 +47,19 @@ function createMockClient(opts: MockClientOptions) {
 
   const messageFetchResolvers: Array<() => void> = [];
   const messageFindAll = vi.fn(async ({ query }: { query: Record<string, unknown> }) => {
-    if (typeof query.task_id === 'string') {
+    if (
+      typeof query.task_id === 'string' ||
+      (query.task_id && typeof query.task_id === 'object' && '$in' in query.task_id)
+    ) {
+      const ids =
+        typeof query.task_id === 'string'
+          ? [query.task_id]
+          : (query.task_id as { $in: string[] }).$in;
       if (opts.failTaskMessageFetch) {
         throw new Error('latest-task message fetch failed');
       }
-      const snapshot = [...(opts.messagesByTask[query.task_id] ?? [])];
-      if (opts.deferTaskMessageFetch === query.task_id) {
+      const snapshot = ids.flatMap((id) => opts.messagesByTask[id] ?? []);
+      if (opts.deferTaskMessageFetch && ids.includes(opts.deferTaskMessageFetch)) {
         await new Promise<void>((resolve) => messageFetchResolvers.push(resolve));
       }
       return query.transcript === 'lean'
@@ -70,7 +77,11 @@ function createMockClient(opts: MockClientOptions) {
     // Eager path: every message for the session.
     return Object.values(opts.messagesByTask).flat();
   });
-  const taskFindAll = vi.fn(async () => opts.tasks);
+  const taskFindAll = vi.fn(async (params?: { query?: { status?: { $in?: string[] } } }) =>
+    params?.query?.status?.$in
+      ? opts.tasks.filter((task) => params.query!.status!.$in!.includes(task.status))
+      : opts.tasks
+  );
 
   // Capture service event handlers so tests can fire realtime events (e.g. a
   // streaming:chunk that arrives with no preceding streaming:start).
@@ -1568,7 +1579,7 @@ describe('lean transcript POC hydration', () => {
     await handle.ready();
     opts.deferTaskMessageFetch = 'task-023';
     const old = handle.resync();
-    await vi.waitFor(() => expect(mock.messageFindAll.mock.calls.length).toBe(20));
+    await vi.waitFor(() => expect(mock.messageFindAll.mock.calls.length).toBe(2));
     mock.fireIo('disconnect');
     opts.tasks.push(makeTask('task-024', TaskStatus.COMPLETED));
     mock.fireIo('connect');
@@ -1589,15 +1600,26 @@ describe('lean transcript POC hydration', () => {
     await handle.ready();
     expect(handle.state.error).toBeNull();
     expect(handle.state.tasks).toHaveLength(10);
-    expect(mock.taskFindAll).not.toHaveBeenCalled();
-    expect(mock.messageFindAll).toHaveBeenCalledTimes(10);
+    expect(mock.taskFindAll).toHaveBeenCalledTimes(1);
+    expect(mock.taskFindAll.mock.calls[0][0]?.query?.status?.$in).toEqual([
+      TaskStatus.DISPATCHING,
+      TaskStatus.RUNNING,
+      TaskStatus.STOPPING,
+      TaskStatus.AWAITING_PERMISSION,
+      TaskStatus.AWAITING_INPUT,
+    ]);
+    expect(mock.messageFindAll.mock.calls[0][0].query).toMatchObject({
+      session_id: SESSION_ID,
+      task_id: { $in: handle.state.tasks.map((task) => task.task_id) },
+    });
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(1);
     expect(
       mock.messageFindAll.mock.calls.every(([params]) => params.query.transcript === 'lean')
     ).toBe(true);
     expect(JSON.stringify([...handle.state.messagesByTask])).not.toContain('TOOL_CANARY');
     expect(handle.state.loadedTaskIds.size).toBe(0);
     await Promise.all([handle.loadTaskMessages('task-023'), handle.loadTaskMessages('task-023')]);
-    expect(mock.messageFindAll).toHaveBeenCalledTimes(11);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(2);
     expect(handle.state.messagesByTask.get('task-023')?.map((message) => message.index)).toEqual([
       0, 1, 2,
     ]);
@@ -1697,7 +1719,9 @@ describe('lean transcript POC hydration', () => {
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
     await vi.waitFor(() =>
       expect(
-        mock.messageFindAll.mock.calls.some(([params]) => params.query.task_id === 'task-023')
+        mock.messageFindAll.mock.calls.some(([params]) =>
+          (params.query.task_id as { $in?: string[] })?.$in?.includes('task-023')
+        )
       ).toBe(true)
     );
     const streamed = { ...makeMessage('task-023', 3), content: 'Live answer' } as Message;
@@ -1747,7 +1771,11 @@ describe('lean transcript POC hydration', () => {
     let releaseFull: (() => void) | undefined;
     let releaseLean: (() => void) | undefined;
     mock.messageFindAll.mockImplementation(async (params) => {
-      if (params.query.task_id !== 'task-023') return original(params);
+      if (
+        params.query.task_id !== 'task-023' &&
+        !(params.query.task_id as { $in?: string[] })?.$in?.includes('task-023')
+      )
+        return original(params);
       return new Promise<Message[]>((resolve) => {
         const release = () => resolve(original(params));
         if (params.query.transcript === 'lean') releaseLean = release;
