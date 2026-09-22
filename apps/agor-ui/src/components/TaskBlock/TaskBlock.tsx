@@ -23,6 +23,7 @@ import {
   type SessionID,
   type Task,
   TaskStatus,
+  type ToolExecutionState,
   type User,
 } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
@@ -111,7 +112,7 @@ interface TaskBlockProps {
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
   leanTranscript?: boolean;
-  latestActivity?: string;
+  latestActivity?: ToolExecutionState;
 }
 
 /**
@@ -911,6 +912,20 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
+    const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
+    const firstAgentChainIndex = blocks.findIndex((block) => block.type === 'agent-chain');
+    const loadActivity = async () => {
+      setDetailsLoading(true);
+      setDetailsError(null);
+      setRevealLoadedActivity(true);
+      try {
+        await onLoadTaskMessages(task.task_id);
+      } catch {
+        setDetailsError('Could not load tool activity. Try again.');
+      } finally {
+        setDetailsLoading(false);
+      }
+    };
     const firstPromptId = messages.find(
       (message) =>
         message.role === MessageRole.USER &&
@@ -940,24 +955,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             }
             expanded={false}
             loading={detailsLoading}
-            onClick={async () => {
-              setDetailsLoading(true);
-              setDetailsError(null);
-              try {
-                await onLoadTaskMessages(task.task_id);
-              } catch {
-                setDetailsError('Could not load tool activity. Try again.');
-              } finally {
-                setDetailsLoading(false);
-              }
-            }}
+            onClick={loadActivity}
           />
         ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-          <Typography.Text type="secondary">No tool calls</Typography.Text>
+          <Typography.Text type="secondary">
+            {latestActivity
+              ? 'Tool activity was observed, but no details are recorded for this turn'
+              : 'No tool calls recorded for this turn'}
+          </Typography.Text>
         ) : null}
-        {latestActivity && !hasTools && isTaskExecuting(task) && (
-          <Typography.Text type="secondary">Latest: {latestActivity}</Typography.Text>
-        )}
       </div>
     );
     const taskContent = (
@@ -1089,6 +1095,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   <AgentChain
                     messages={block.messages}
                     leanTranscript={leanTranscript}
+                    revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
+                    latestActivity={
+                      blockIndex === lastAgentChainIndex &&
+                      block.messages.some(
+                        (message) =>
+                          message.tool_uses?.some(
+                            (tool) => tool.id === latestActivity?.toolUseId
+                          ) ||
+                          (Array.isArray(message.content) &&
+                            message.content.some(
+                              (item) =>
+                                item.type === 'tool_use' && item.id === latestActivity?.toolUseId
+                            ))
+                      )
+                        ? latestActivity
+                        : undefined
+                    }
                     isTaskRunning={runtimeLive}
                     isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
                     compact={compact}
@@ -1107,6 +1130,29 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             }
             return null;
           })}
+
+        {/* Tool events can precede their durable message. Keep that actual activity
+            visible without inventing a message ID or dropping it behind an older group. */}
+        {latestActivity &&
+          runtimeLive &&
+          !messages.some(
+            (message) =>
+              message.tool_uses?.some((tool) => tool.id === latestActivity.toolUseId) ||
+              (Array.isArray(message.content) &&
+                message.content.some(
+                  (block) => block.type === 'tool_use' && block.id === latestActivity.toolUseId
+                ))
+          ) && (
+            <ToolDisclosureHeader
+              label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName} · Show details`}
+              expanded={false}
+              loading={detailsLoading}
+              onClick={loadActivity}
+            />
+          )}
+        {detailsError && !(!taskMessagesLoaded && !isTaskExecuting(task)) && (
+          <Alert type="error" title={detailsError} />
+        )}
 
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />

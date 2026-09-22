@@ -17,6 +17,7 @@ import type {
   ContentBlock as CoreContentBlock,
   DiffEnrichment,
   Message,
+  ToolExecutionState,
   TranscriptTruncation,
 } from '@agor-live/client';
 import {
@@ -41,7 +42,7 @@ import {
   ToolOutlined,
 } from '@ant-design/icons';
 import { Button, Popover, Space, Typography, theme } from 'antd';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -92,6 +93,8 @@ interface AgentChainProps {
   /** Remove desktop transcript indentation at phone widths. */
   compact?: boolean;
   leanTranscript?: boolean;
+  revealRequested?: boolean;
+  latestActivity?: ToolExecutionState;
 }
 
 interface ChainItem {
@@ -147,9 +150,20 @@ function getToolIcon(toolName: string): React.ReactElement {
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest, compact = false, leanTranscript = false }) => {
+  ({
+    messages,
+    isTaskRunning = false,
+    isLatest,
+    compact = false,
+    leanTranscript = false,
+    revealRequested = false,
+    latestActivity,
+  }) => {
     const { token } = theme.useToken();
-    const [expanded, setExpanded] = useState(!leanTranscript);
+    const [expanded, setExpanded] = useState(!leanTranscript || revealRequested);
+    useEffect(() => {
+      if (revealRequested) setExpanded(true);
+    }, [revealRequested]);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -620,11 +634,13 @@ export const AgentChain = React.memo<AgentChainProps>(
         {leanTranscript ? (
           <ToolDisclosureHeader
             label={`${
-              isTaskRunning && isLatest && latestToolName
-                ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
-                : stats.toolCount
-                  ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
-                  : 'Reasoning'
+              isTaskRunning && isLatest && latestActivity
+                ? `${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`
+                : isTaskRunning && isLatest && latestToolName
+                  ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
+                  : stats.toolCount
+                    ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
+                    : 'Reasoning'
             }${hasErrors ? ' · Errors' : ''} · ${expanded ? 'Hide details' : 'Show details'}`}
             expanded={expanded}
             onClick={() => setExpanded(!expanded)}

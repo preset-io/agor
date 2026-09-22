@@ -69,7 +69,7 @@ describe('lean task presentation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Couldn’t load tool activity · Retry' }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     rerender(view({ taskMessagesLoaded: true, onLoadTaskMessages: load }));
-    expect(screen.getByText('No tool calls')).toBeVisible();
+    expect(screen.getByText('No tool calls recorded for this turn')).toBeVisible();
     expect(screen.getByText('Visible answer')).toBeVisible();
   });
 
@@ -126,4 +126,62 @@ describe('lean task presentation', () => {
     expect(screen.getByRole('button', { name: /Approve/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /Deny/ })).toBeVisible();
   });
+});
+
+it('opens only the first fetched group, retaining chronological messages and user collapse choice', async () => {
+  const load = vi.fn(async () => {});
+  const { rerender } = render(view({ onLoadTaskMessages: load }));
+  fireEvent.click(screen.getByRole('button', { name: 'Tool calls · Show details' }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  const activity = (index: number, name: string) =>
+    message(index, MessageRole.ASSISTANT, [
+      { type: 'tool_use', id: `call-${index}`, name, input: {} },
+      { type: 'tool_result', tool_use_id: `call-${index}`, content: 'Result' },
+    ]);
+  const full = [
+    messages[0],
+    activity(1, 'Read'),
+    message(2, MessageRole.ASSISTANT, 'Between groups'),
+    activity(3, 'Bash'),
+  ];
+  rerender(view({ onLoadTaskMessages: load, taskMessages: full, taskMessagesLoaded: true }));
+  expect(screen.getByRole('button', { name: '1 tool call · Hide details' })).toHaveAttribute(
+    'aria-expanded',
+    'true'
+  );
+  expect(screen.getByRole('button', { name: '1 tool call · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  expect(screen.getByText('Between groups')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '1 tool call · Hide details' }));
+  rerender(view({ onLoadTaskMessages: load, taskMessages: [...full], taskMessagesLoaded: true }));
+  expect(screen.getAllByRole('button', { name: '1 tool call · Show details' })).toHaveLength(2);
+  expect(load).toHaveBeenCalledTimes(1);
+});
+
+it('renders a real tool event before persistence and hands it to the recorded group without duplication', () => {
+  const running = { ...task, status: TaskStatus.RUNNING };
+  const latestActivity = { toolUseId: 'live', toolName: 'Read', status: 'executing' as const };
+  const { rerender } = render(view({ task: running, latestActivity, isLatestTask: true }));
+  expect(screen.getByRole('button', { name: 'Running: Read · Show details' })).toBeVisible();
+  const tool = message(2, MessageRole.ASSISTANT, [
+    { type: 'tool_use', id: 'live', name: 'Read', input: {} },
+  ]);
+  rerender(
+    view({ task: running, latestActivity, isLatestTask: true, taskMessages: [...messages, tool] })
+  );
+  expect(screen.getAllByRole('button', { name: 'Running: Read · Show details' })).toHaveLength(1);
+  rerender(
+    view({
+      task: running,
+      latestActivity: { ...latestActivity, status: 'complete' },
+      isLatestTask: true,
+      taskMessages: [...messages, tool],
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Latest: Read · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
 });

@@ -360,8 +360,10 @@ No database migration is needed.
 
 The conversation opens the latest ten tasks with user and assistant text visible. Scroll
 up (or use **Load older history**) to fetch earlier tasks. **Tool calls · Show details** fetches
-one task’s full messages and restores tool blocks in their original positions. Tool
-groups start collapsed; active tasks continue receiving full live activity and approvals.
+one task’s full messages, restores tool blocks in their original positions, and opens
+the first loaded group. Other groups and individual tool details remain collapsed.
+Active tasks continue receiving full live activity and approvals; live events update
+the current tool header even before the corresponding message is persisted.
 Turn metadata reuses the existing pills in a bottom-anchored floating strip below the prompt.
 It overlays the reserved footer space, without covering prompt text or shifting the conversation.
 Hover or keyboard focus reveals it; the metadata button pins it open for touch. The row

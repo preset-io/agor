@@ -287,6 +287,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               userById={userById}
               currentUserId={currentUserId}
               leanTranscript
+              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
               isExpanded={true}
               onExpandChange={handleExpandChange}
               sessionId={currentSession.session_id}

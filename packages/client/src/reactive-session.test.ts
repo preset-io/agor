@@ -1641,11 +1641,46 @@ describe('lean transcript POC hydration', () => {
     ).toHaveLength(1);
     expect(handle.state.streamingMessages.has(streamed.message_id)).toBe(false);
     expect(handle.state.toolsByTask.get('task-023')?.at(-1)?.toolName).toBe('Read');
+    // A task-status event may be missed; observed tool activity still requires full reconnect hydration.
+    opts.deferTaskMessageFetch = undefined;
+    mock.messageFindAll.mockClear();
+    await handle.resync();
+    expect(
+      mock.messageFindAll.mock.calls.find(([params]) => params.query.task_id === 'task-023')?.[0]
+        .query.transcript
+    ).toBeUndefined();
     mock.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
     expect(handle.state.messagesByTask.size).toBe(0);
     expect(handle.state.terminal).toBe(true);
     mock.emitServiceEvent('messages', 'created', streamed);
     expect(handle.state.messagesByTask.size).toBe(0);
+    handle.dispose();
+  });
+
+  it('does not let a lean reconnect snapshot erase a concurrent completed expansion', async () => {
+    const mock = createMockClient(history());
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    const original = mock.messageFindAll.getMockImplementation()!;
+    let releaseFull: (() => void) | undefined;
+    let releaseLean: (() => void) | undefined;
+    mock.messageFindAll.mockImplementation(async (params) => {
+      if (params.query.task_id !== 'task-023') return original(params);
+      return new Promise<Message[]>((resolve) => {
+        const release = () => resolve(original(params));
+        if (params.query.transcript === 'lean') releaseLean = release;
+        else releaseFull = release;
+      });
+    });
+    const expanded = handle.loadTaskMessages('task-023');
+    const reconnect = handle.resync();
+    await vi.waitFor(() => expect(releaseLean).toBeDefined());
+    releaseFull!();
+    await expanded;
+    releaseLean!();
+    await reconnect;
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
+    expect(JSON.stringify(handle.state.messagesByTask.get('task-023'))).toContain('TOOL_CANARY');
     handle.dispose();
   });
 

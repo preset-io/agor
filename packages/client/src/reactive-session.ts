@@ -875,6 +875,9 @@ export class ReactiveSessionHandle {
         for (const [id, snapshot] of snapshots) {
           if (!ids.has(id) || sequences.get(id) !== (this.messageCacheMutationsByTask.get(id) ?? 0))
             continue;
+          // A full expansion may have completed while this lean query was in flight.
+          // Never replace its tools with a projected snapshot while keeping the loaded bit.
+          if (!fullIds.has(id) && prev.loadedTaskIds.has(id)) continue;
           const merged = this.reconcileMessageFetch(
             messageToken,
             snapshot,
@@ -1184,6 +1187,7 @@ export class ReactiveSessionHandle {
 
     const onToolStart = (event: ToolStartEvent) => {
       if (!this.matchesSession(event.session_id)) return;
+      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.some((t) => t.toolUseId === event.tool_use_id)) return prev;
@@ -1204,6 +1208,7 @@ export class ReactiveSessionHandle {
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
       if (!this.matchesSession(event.session_id)) return;
+      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.length === 0) return prev;

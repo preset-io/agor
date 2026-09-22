@@ -259,3 +259,49 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   await waitFor(() => expect(screen.getByText('SYNTHETIC_TOOL_RESULT')).toBeVisible());
   await page.screenshot({ path: `./.vitest/lean-tool-content-${window.innerWidth}.png` });
 });
+
+it('shows live tool events before persistence and preserves the group through completion', async () => {
+  const task = { ...tasks[19], status: TaskStatus.RUNNING };
+  state = { ...state, tasks: [task], hasOlderTasks: false };
+  render(<ConversationView client={null} sessionId={sessionId} />);
+  const latest = { toolUseId: 'live-tool', toolName: 'Read', status: 'executing' as const };
+  act(() => {
+    state = { ...state, toolsByTask: new Map([[task.task_id, [latest]]]) };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getByRole('button', { name: 'Running: Read · Show details' })).toBeVisible();
+  const tool: Message = {
+    message_id: generateId(),
+    session_id: sessionId,
+    task_id: task.task_id,
+    type: 'assistant',
+    role: MessageRole.ASSISTANT,
+    index: 99,
+    timestamp: task.created_at,
+    content_preview: '',
+    content: [{ type: 'tool_use', id: 'live-tool', name: 'Read', input: {} }],
+  };
+  act(() => {
+    state = {
+      ...state,
+      messagesByTask: new Map([[task.task_id, [...messages.get(task.task_id)!, tool]]]),
+      toolsByTask: new Map([[task.task_id, [{ ...latest, status: 'complete' }]]]),
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getAllByRole('button', { name: 'Latest: Read · Show details' })).toHaveLength(1);
+  act(() => {
+    state = {
+      ...state,
+      tasks: [{ ...task, status: TaskStatus.COMPLETED }],
+      loadedTaskIds: new Set([task.task_id]),
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getByRole('button', { name: '1 tool call · Show details' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  expect(screen.queryByText(/No tool calls recorded/)).not.toBeInTheDocument();
+  expect(loadTaskMessages).not.toHaveBeenCalled();
+});

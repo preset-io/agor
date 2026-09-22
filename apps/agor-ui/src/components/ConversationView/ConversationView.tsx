@@ -592,7 +592,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               key={task.task_id}
               task={task}
               leanTranscript
-              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)?.toolName}
+              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
               agentic_tool={agentic_tool}
               sessionModel={sessionModel}
               userById={userById}
