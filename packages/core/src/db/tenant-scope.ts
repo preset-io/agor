@@ -67,11 +67,28 @@ function assertDatabaseScopeAllowed(options: TenantScopedDatabaseProxyOptions): 
 
 function scopedTarget(base: Database, options: TenantScopedDatabaseProxyOptions): Database {
   assertDatabaseScopeAllowed(options);
-  return tenantDatabaseScope.getStore()?.db ?? base;
+  const scope = tenantDatabaseScope.getStore();
+  assertMatchingDatabase(base, scope);
+  return scope?.db ?? base;
 }
 
 function unwrapTenantScopedDatabaseProxy(db: Database): RawDatabase | Database {
-  return tenantScopedProxyTargets.get(db as unknown as object) ?? db;
+  let target = db;
+  while (tenantScopedProxyTargets.has(target as unknown as object)) {
+    target = tenantScopedProxyTargets.get(target as unknown as object)!;
+  }
+  return target;
+}
+
+function assertMatchingDatabase(db: Database, scope: TenantDatabaseScope | undefined): void {
+  if (!scope) return;
+  const target = unwrapTenantScopedDatabaseProxy(db);
+  // Accept the originating handle (including its proxies) or the current
+  // transaction passed to a nested unit. Tenant equality alone cannot authorize
+  // routing a different database into this scope, even for opt-out proxies.
+  if (target !== scope.baseDb && target !== scope.db) {
+    throw new Error('Cannot use a different database from the active database scope');
+  }
 }
 
 /** Inspect a raw or tenant-guarded handle without requiring an active DB scope. */
@@ -132,6 +149,7 @@ function createTenantCommitCallbacks(): TenantCommitCallbacks {
 }
 
 function resolveTenantBoundary(
+  db: Database,
   tenantId: TenantID | string | undefined,
   boundary: 'scope' | 'transaction'
 ): {
@@ -162,6 +180,7 @@ function resolveTenantBoundary(
     );
   }
 
+  assertMatchingDatabase(db, existingScope);
   return { existingScope, effectiveTenantId };
 }
 
@@ -178,6 +197,7 @@ async function configurePostgresTenantScope(
 
 function enterOwnedTenantDatabaseScope<T>(
   scopedDb: Database,
+  baseDb: Database,
   tenantId: TenantID | string | undefined,
   transactionActive: boolean,
   callbacks: TenantCommitCallbacks,
@@ -186,6 +206,7 @@ function enterOwnedTenantDatabaseScope<T>(
   return tenantDatabaseScope.run(
     {
       db: scopedDb,
+      baseDb,
       kind: 'tenant',
       tenantId,
       transactionActive,
@@ -215,7 +236,7 @@ export async function runWithTenantDatabaseScope<T>(
   tenantId: TenantID | string | undefined,
   work: (db: TenantScopedDatabase) => Promise<T>
 ): Promise<T> {
-  const { existingScope, effectiveTenantId } = resolveTenantBoundary(tenantId, 'scope');
+  const { existingScope, effectiveTenantId } = resolveTenantBoundary(db, tenantId, 'scope');
   if (existingScope) {
     if (existingScope.kind === 'system') {
       if (effectiveTenantId) {
@@ -234,6 +255,7 @@ export async function runWithTenantDatabaseScope<T>(
   if (!isPostgresDatabase(baseDb) || !effectiveTenantId) {
     const result = await enterOwnedTenantDatabaseScope(
       baseDb,
+      baseDb,
       effectiveTenantId,
       false,
       callbacks,
@@ -246,7 +268,14 @@ export async function runWithTenantDatabaseScope<T>(
   const result = await baseDb.transaction(async (tx) => {
     const scopedDb = tx as unknown as Database;
     await configurePostgresTenantScope(scopedDb, baseDb, effectiveTenantId);
-    return enterOwnedTenantDatabaseScope(scopedDb, effectiveTenantId, true, callbacks, work);
+    return enterOwnedTenantDatabaseScope(
+      scopedDb,
+      baseDb,
+      effectiveTenantId,
+      true,
+      callbacks,
+      work
+    );
   });
   await drainTenantCommitCallbacks(baseDb, effectiveTenantId, callbacks);
   return result;
@@ -269,7 +298,7 @@ export async function runWithTenantDatabaseTransaction<T>(
   work: (db: TenantScopedDatabase) => Promise<T>,
   options: { postgresIsolationLevel?: 'repeatable read' | 'serializable' } = {}
 ): Promise<T> {
-  const { existingScope, effectiveTenantId } = resolveTenantBoundary(tenantId, 'transaction');
+  const { existingScope, effectiveTenantId } = resolveTenantBoundary(db, tenantId, 'transaction');
   if (existingScope?.kind === 'system') {
     if (effectiveTenantId) {
       throw new Error(
@@ -289,7 +318,7 @@ export async function runWithTenantDatabaseTransaction<T>(
       baseDb,
       async (tx) => {
         await configurePostgresTenantScope(tx, baseDb, effectiveTenantId);
-        return enterOwnedTenantDatabaseScope(tx, effectiveTenantId, true, callbacks, work);
+        return enterOwnedTenantDatabaseScope(tx, baseDb, effectiveTenantId, true, callbacks, work);
       },
       { sqliteImmediate: true, postgresIsolationLevel: options.postgresIsolationLevel }
     );
@@ -327,6 +356,7 @@ export async function runWithSystemDatabaseScope<T>(
     );
   }
   const existingScope = tenantDatabaseScope.getStore();
+  assertMatchingDatabase(db, existingScope);
   if (existingScope) {
     if (existingScope.kind === 'tenant') {
       throw new Error(
@@ -346,6 +376,7 @@ export async function runWithSystemDatabaseScope<T>(
     tenantDatabaseScope.run(
       {
         db: scopedDb,
+        baseDb,
         kind: 'system',
         systemReason: reason,
         ...(options.capability ? { systemCapability: options.capability } : {}),

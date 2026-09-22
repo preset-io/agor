@@ -68,6 +68,7 @@ it('records only bounded capacity/context tags and restores pending count after 
         tenantId: 'tenant-a',
         transactionActive: true,
         db: {} as Database,
+        baseDb: {} as Database,
         postCommitCallbacks: [],
         afterCommitCallbacks: [],
       },

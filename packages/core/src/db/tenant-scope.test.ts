@@ -75,6 +75,68 @@ describe('tenant operation context', () => {
 });
 
 describe('tenant-scoped database proxy', () => {
+  it.each(['sqlite', 'postgres'])(
+    'rejects cross-database scope reuse and proxy routing (%s)',
+    async (dialect) => {
+      const query = vi.fn();
+      const tx = {
+        ...(dialect === 'sqlite' ? { run: query } : {}),
+        execute: vi.fn(async () => []),
+        select: query,
+      };
+      const base = {
+        ...(dialect === 'sqlite' ? { run: query } : {}),
+        select: query,
+        transaction: vi.fn(async (work: (db: unknown) => Promise<unknown>) => work(tx)),
+      } as unknown as Database;
+      const foreign = {
+        run: query,
+        select: query,
+        transaction: vi.fn(),
+      } as unknown as Database;
+      const a = createTenantScopedDatabaseProxy(base);
+      const b = createTenantScopedDatabaseProxy(foreign);
+      const unguardedB = createTenantScopedDatabaseProxy(foreign, { requireScope: false });
+      const work = vi.fn(async () => undefined);
+      const checkRouting = () => {
+        for (const handle of [b, unguardedB]) {
+          expect(() => handle.select()).toThrow('different database');
+          expect(() => 'run' in handle).toThrow('different database');
+          expect(() => Reflect.ownKeys(handle)).toThrow('different database');
+          expect(() => Object.getOwnPropertyDescriptor(handle, 'select')).toThrow(
+            'different database'
+          );
+        }
+      };
+      const checkTenant = async () => {
+        for (const handle of [foreign, b]) {
+          await expect(runWithTenantDatabaseScope(handle, 'tenant-a', work)).rejects.toThrow(
+            'different database'
+          );
+          await expect(runWithTenantDatabaseTransaction(handle, 'tenant-a', work)).rejects.toThrow(
+            'different database'
+          );
+        }
+        checkRouting();
+      };
+      await runWithTenantDatabaseScope(a, 'tenant-a', checkTenant);
+      await runWithTenantDatabaseTransaction(a, 'tenant-a', checkTenant);
+      await runWithSystemDatabaseScope(a, 'test', async () => {
+        await expect(runWithSystemDatabaseScope(b, 'test', work)).rejects.toThrow(
+          'different database'
+        );
+        // No tenant identity must not permit the system-scope reuse path either.
+        await expect(runWithTenantDatabaseScope(b, undefined, work)).rejects.toThrow(
+          'different database'
+        );
+        checkRouting();
+      });
+      expect(work).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(foreign.transaction).not.toHaveBeenCalled();
+    }
+  );
+
   it('shares scope and proxy identity across independently loaded core entrypoints', async () => {
     // Production emits independently bundled db and OAuth entrypoints. A
     // source-only import graph otherwise hides their duplicate module state.
@@ -215,11 +277,23 @@ describe('tenant-scoped database proxy', () => {
     };
     const db = createTenantScopedDatabaseProxy(base as unknown as Database);
 
-    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+    await runWithTenantDatabaseScope(db, 'tenant-a', async (scoped) => {
       expect((db as unknown as { marker(): string }).marker()).toBe('tx');
-      await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
-        expect((db as unknown as { marker(): string }).marker()).toBe('tx');
-      });
+      for (const handle of [
+        base as unknown as Database,
+        db,
+        scoped,
+        createTenantScopedDatabaseProxy(scoped),
+        createTenantScopedDatabaseProxy(db),
+      ]) {
+        await runWithTenantDatabaseScope(handle, 'tenant-a', async (nested) => {
+          expect(nested).toBe(scoped);
+          expect((db as unknown as { marker(): string }).marker()).toBe('tx');
+        });
+        await runWithTenantDatabaseTransaction(handle, 'tenant-a', async (nested) => {
+          expect(nested).toBe(scoped);
+        });
+      }
     });
 
     expect(base.transaction).toHaveBeenCalledTimes(1);
@@ -279,10 +353,13 @@ describe('tenant-scoped database proxy', () => {
 
     await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
       expect((db as unknown as { marker(): string }).marker()).toBe('base');
-      await runWithTenantDatabaseTransaction(db, undefined, async () => {
+      await runWithTenantDatabaseTransaction(db, undefined, async (scoped) => {
         expect(getCurrentTenantId()).toBe('tenant-a');
         expect((db as unknown as { marker(): string }).marker()).toBe('tx');
         events.push('work');
+        await runWithTenantDatabaseTransaction(scoped, undefined, async (nested) => {
+          expect(nested).toBe(scoped);
+        });
         expect(
           enqueueAfterTenantDatabaseCommit(() => {
             events.push('callback');
@@ -490,6 +567,22 @@ describe('tenant-scoped database proxy', () => {
           kind: 'system',
           systemCapability: 'gateway_listener_discovery',
         });
+        for (const handle of [
+          base as unknown as Database,
+          db,
+          systemDb,
+          createTenantScopedDatabaseProxy(systemDb),
+        ]) {
+          await runWithSystemDatabaseScope(
+            handle,
+            'nested gateway discovery',
+            async (nested) => {
+              expect(nested).toBe(systemDb);
+              expect((db as unknown as { marker(): string }).marker()).toBe('tx');
+            },
+            { capability: 'gateway_listener_discovery' }
+          );
+        }
       },
       { capability: 'gateway_listener_discovery' }
     );

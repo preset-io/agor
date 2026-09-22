@@ -3,6 +3,8 @@ import type { TenantID } from '../types/tenant';
 import type { Database, RawDatabase } from './client';
 
 export interface TenantOwnedDatabaseScope {
+  /** Unwrapped originating handle; `db` may instead be its active transaction. */
+  baseDb: Database;
   db: Database;
   kind: 'tenant';
   /** Whether `db` is a native transaction handle rather than an identity-only scope. */
@@ -13,6 +15,8 @@ export interface TenantOwnedDatabaseScope {
 }
 
 export interface SystemDatabaseScope {
+  /** Unwrapped originating handle; `db` may instead be its active transaction. */
+  baseDb: Database;
   db: Database;
   kind: 'system';
   systemReason: string;
