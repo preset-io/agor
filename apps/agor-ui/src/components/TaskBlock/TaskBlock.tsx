@@ -975,7 +975,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 client={client}
                 onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                 compact={compact}
-                leanTranscript
               />
             );
             return (
@@ -1004,7 +1003,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                 <AgentChain
                   messages={block.messages}
-                  leanTranscript
                   revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
                   latestActivity={
                     blockIndex === lastAgentChainIndex &&

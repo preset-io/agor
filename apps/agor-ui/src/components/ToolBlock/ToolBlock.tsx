@@ -20,7 +20,9 @@ import type React from 'react';
 import { useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
-/** Shared quiet disclosure for unloaded history and outer tool groups. */
+/** Shared disclosure for both lazy task hydration and already-loaded tool groups.
+ * A button keeps keyboard semantics without requiring a fixed Collapse body:
+ * hydration can replace the trigger with multiple chronological groups. */
 export function ToolDisclosureHeader({
   label,
   expanded,
@@ -75,9 +77,9 @@ export function ToolDisclosureHeader({
         />
       </span>
       {expanded ? (
-        <UpOutlined style={{ flexShrink: 0 }} />
+        <UpOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
       ) : (
-        <DownOutlined style={{ flexShrink: 0 }} />
+        <DownOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
       )}
     </Button>
   );

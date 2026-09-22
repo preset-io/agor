@@ -227,7 +227,7 @@ it('keeps a long user prompt and its full-size avatar within the transcript widt
   };
   const { container } = render(
     <div style={{ maxWidth: 586 }}>
-      <MessageBlock message={prompt} leanTranscript />
+      <MessageBlock message={prompt} />
     </div>
   );
   const root = container.querySelector('.ant-bubble')!;
@@ -376,7 +376,7 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
       { type: 'tool_result', tool_use_id: 'read', content: 'SYNTHETIC_TOOL_RESULT' },
     ],
   };
-  render(<AgentChain messages={[activity]} leanTranscript />);
+  render(<AgentChain messages={[activity]} />);
   const header = screen.getByRole('button', { name: '1 tool call', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
   await userEvent.tab();
@@ -389,6 +389,9 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   const caret = header.querySelector('.anticon-up')!;
   expect(getComputedStyle(label).fontSize).toBe(
     getComputedStyle(tool.querySelector('strong')!).fontSize
+  );
+  expect(Number.parseFloat(getComputedStyle(caret).fontSize)).toBeLessThan(
+    Number.parseFloat(getComputedStyle(label).fontSize)
   );
   const caretGap = caret.getBoundingClientRect().left - label.getBoundingClientRect().right;
   expect(caretGap).toBeGreaterThanOrEqual(0);
@@ -509,7 +512,7 @@ it('shows edit diffs on the first outer expansion without changing other tool de
       },
     ],
   };
-  render(<AgentChain messages={[activity]} leanTranscript />);
+  render(<AgentChain messages={[activity]} />);
   expect(screen.queryByText('after_restore')).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: '1 tool call', expanded: false }));
   await waitFor(() => expect(screen.getByText('after_restore')).toBeVisible());
@@ -525,7 +528,7 @@ it('keeps the full Bash command and ellipsizes only at the tool row boundary', a
       { type: 'tool_result', tool_use_id: 'bash-width', content: 'ok' },
     ],
   };
-  render(<AgentChain messages={[activity]} leanTranscript />);
+  render(<AgentChain messages={[activity]} />);
   await userEvent.click(screen.getByRole('button', { name: '1 tool call' }));
   const text = screen.getByText(command);
   const tool = screen.getByRole('button', { name: /Bash/ });

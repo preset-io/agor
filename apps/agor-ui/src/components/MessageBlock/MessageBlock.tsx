@@ -94,7 +94,7 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
-  isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
+  isLatestMessage?: boolean; // Whether this is the most recent message (for pending tool status)
   teammateEmoji?: string; // Emoji override for teammate avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
@@ -107,7 +107,6 @@ interface MessageBlockProps {
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   compact?: boolean;
-  leanTranscript?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -341,7 +340,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   client = null,
   onOpenAgenticToolSettings,
   compact = false,
-  leanTranscript = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -752,7 +750,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}
-                                defaultExpanded={leanTranscript || isLatestMessage}
+                                defaultExpanded
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -895,7 +893,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
                             maxLines={10}
-                            defaultExpanded={leanTranscript || isLatestMessage}
+                            defaultExpanded
                             isStreaming={isStreaming}
                           >
                             {combinedText}

@@ -31,21 +31,17 @@ function activity(name: string, index: number, complete = false): Message {
 }
 it('updates a quiet collapsed header from live activity to a known count without forcing it open', () => {
   const first = activity('Read', 0, true);
-  const { container, rerender } = render(
-    <AgentChain messages={[first]} isTaskRunning isLatest leanTranscript />
-  );
+  const { container, rerender } = render(<AgentChain messages={[first]} isTaskRunning isLatest />);
   expect(screen.getByRole('button', { name: 'Latest: Read', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
-  rerender(
-    <AgentChain messages={[first, activity('Bash', 1)]} isTaskRunning isLatest leanTranscript />
-  );
+  rerender(<AgentChain messages={[first, activity('Bash', 1)]} isTaskRunning isLatest />);
   expect(screen.getByRole('button', { name: 'Running: Bash', expanded: false })).toHaveAttribute(
     'aria-expanded',
     'false'
   );
-  rerender(<AgentChain messages={[first, activity('Bash', 1, true)]} isLatest leanTranscript />);
+  rerender(<AgentChain messages={[first, activity('Bash', 1, true)]} isLatest />);
   const header = screen.getByRole('button', { name: '2 tool calls', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
   expect(container.querySelector('.ant-tag')).toBeNull();
@@ -64,12 +60,12 @@ it.each(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'edit_files'])(
   'restores %s body defaults inside the closed outer group and direct message renderer',
   (name) => {
     const message = activity(name, 0, true);
-    const { unmount } = render(<AgentChain messages={[message]} leanTranscript />);
+    const { unmount } = render(<AgentChain messages={[message]} />);
     expect(screen.queryByTestId('tool-body')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '1 tool call', expanded: false }));
     expect(screen.getByTestId('tool-body')).toBeVisible();
     unmount();
-    render(<MessageBlock message={message} leanTranscript />);
+    render(<MessageBlock message={message} />);
     expect(screen.getByTestId('tool-body')).toBeVisible();
   }
 );
@@ -81,7 +77,6 @@ it('hands activity to a following assistant response unless the latest tool is e
       messages={[message]}
       isTaskRunning
       isLatest
-      leanTranscript
       hasFollowingResponse={following}
       latestActivity={{ toolUseId: 'call-0', toolName: 'Read', status }}
     />
