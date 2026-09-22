@@ -263,6 +263,12 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
+**Tool counts in custom callbacks and API clients.** Use `recordedToolCount` in
+callback templates and nullable `recorded_tool_count` in task API responses. These
+replace `toolUseCount` and `tool_use_count`. A missing count means unknown, not zero.
+To include a verified zero while omitting unknown counts, use
+`{{#if recordedToolCount includeZero=true}}{{recordedToolCount}} tool calls{{/if}}`.
+
 **Use the current caller for self callbacks.** With `agor_sessions_create`, set `enableCallback: true` and omit `callbackSessionId` to receive completion in the calling session—even from a fork, nested coordinator, or across branches. Only supply `callbackSessionId` for an intentional authorized alternate destination. Inherited conversation examples and shared workspace IDs may refer to an earlier session; the runtime-supplied Agor session identity is distinct from fork ancestry and the provider SDK thread ID.
 
 **Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
@@ -354,61 +360,21 @@ without creating a session, avoiding repeated retries while their configuration 
 
 ## Conversation history
 
-Conversations show user and assistant messages without task-level accordions. This
-is the default experience, not a display preference or environment feature flag.
-No database migration is needed.
+Conversations open with the latest ten turns, showing user and assistant messages.
+Scroll up or select **Load older history** to read earlier turns.
 
-The conversation opens the latest ten tasks with user and assistant text visible. Scroll
-up (or use **Load older history**) to fetch earlier tasks. Queued prompts do not consume
-transcript page slots. Session token/cost totals are aggregated separately across all tasks,
-so scrolling history does not change the totals. Expanding **Tool calls** fetches
-one task’s full messages, restores tool blocks in their original positions, and opens
-the first loaded group. Other groups remain collapsed. Inside an opened group, edit/write
-tools show their diffs by default; other tool details retain their existing collapsed defaults.
-Reasoning-only turns retain a **Reasoning** disclosure without loading their reasoning text upfront.
-For newly finished turns, a verified recorded count hides the disclosure when zero (unless reasoning is deferred) and
-labels it **N tool calls** when positive. Legacy or subsequently modified transcripts
-retain the generic disclosure because their count is unknown; no backfill is required.
-If expanding an unknown turn returns no tools, **No tool calls** appears in its expanded body.
-Counts describe persisted activity, not calls an agent adapter failed to record.
+Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
+collapsed by default; inside an open group, file edits show their diffs. Expand
+**Reasoning** where available to read the agent's reasoning. Active turns show
+live activity, and approval requests remain available in the conversation.
 
-Successful turns have no status badge. Stopping, stopped, failed, and timed-out turns
-show a normal-size alert after their content, aligned with the tool blocks: info while
-stopping, warning when stopped, and error for failures/timeouts. Failure reasons stay
-visible without hover; short outcomes occupy one line and longer reasons wrap.
-Approval/input requests remain actionable in the transcript. Runtime recovery and
-access-revocation notices also appear after the turn, retaining their explanations and actions.
+Hover over or focus a user prompt to see its metadata, such as model, duration,
+and token usage. On touch screens, tap the prompt to toggle the metadata; press
+Escape to dismiss it. Stopped and failed turns show a notice below their content,
+with an error explanation when available.
 
-
-**API/template compatibility:** The inaccurate `tool_use_count` task field and
-`toolUseCount` callback variable are retired. API and analytics consumers should use
-nullable `recorded_tool_count`; custom callback templates should use `recordedToolCount`.
-Unknown is not zero. To include verified zero while omitting unknown counts, use
-`{{#if recordedToolCount includeZero=true}}{{recordedToolCount}} tool calls{{/if}}`.
-Existing stored legacy keys need no migration and are not returned by the task API.
-Active tasks continue receiving full live activity and approvals; live events update
-the current tool header even before the corresponding message is persisted.
-The latest tool-group label shimmers while the turn remains active, including gaps between
-calls, until a following assistant message takes over (unless a tool is still executing); “Latest” means the last call finished, not that another call is guaranteed. Approval
-waits and completed turns do not shimmer, and reduced-motion settings disable it. Response loading remains visible without a standalone task spinner.
-Successful turns have no standalone status icon; failures remain visible as error notices.
-Turn metadata reuses the existing pills in a right-aligned, bottom-anchored floating strip below the prompt.
-It reserves no footer space and may overlap the following tool row without shifting the conversation.
-While an approval is pending, footer space is reserved so its controls remain unobscured.
-Hover or keyboard focus on the prompt reveals it; tapping the prompt toggles it on touch.
-Escape dismisses the row. A short fade/slide animates its reveal without changing layout;
-reduced-motion settings disable the animation. The row
-scrolls horizontally on narrow screens and retains the context-window usage backdrop.
-Search covers only loaded content, including tool details only after expansion.
-
-Historical tool data is projected out in SQL before transfer, but the database still
-reads/parses the stored message JSON. Ten tasks is not a byte cap, and loading more
-history retains it in memory. Reconnecting refreshes reached history and missed new
-turns; it does not reset the reader to ten tasks. Closing the last conversation consumer
-releases its message/tool cache. Card previews own a separate latest/active-turn cache,
-so they do not retain the conversation reader’s older pages or expanded tool details.
-Requests already in flight may finish, but disposed handles cannot repopulate their caches.
-This is reference cleanup, not a promise of immediate browser garbage collection.
+Search covers loaded history only. Load earlier turns to include them in search;
+tool details become searchable after expansion.
 
 ## Related
 
