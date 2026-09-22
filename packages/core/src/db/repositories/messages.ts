@@ -370,7 +370,6 @@ export class MessagesRepository {
     sessionId?: SessionID;
     sessionIds?: SessionID[];
     taskId?: TaskID;
-    taskIds?: TaskID[];
     type?: Message['type'];
     role?: Message['role'];
     visibleToUserId?: UUID;
