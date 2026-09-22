@@ -2,15 +2,18 @@ import { Flex, theme } from 'antd';
 import { type ReactNode, useRef, useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
-/** Fixed footer geometry; only opacity/transform animate, never transcript layout. */
+/** Floating metadata; only opacity/transform animate, never transcript layout. */
 export function LeanTurnMetadata({
   metadata,
   background,
   children,
+  reserveSpace = false,
 }: {
   metadata: ReactNode;
   background?: string;
   children: ReactNode;
+  /** Keep pending approval controls below the prompt unobscured. */
+  reserveSpace?: boolean;
 }) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
@@ -25,7 +28,12 @@ export function LeanTurnMetadata({
       // biome-ignore lint/a11y/noNoninteractiveTabindex: focus reveals metadata without turning the rich prompt (with links/buttons) into a nested button.
       tabIndex={0}
       aria-label="User prompt and turn metadata"
-      style={{ position: 'relative', minWidth: 0, paddingBottom: token.controlHeight }}
+      style={{
+        position: 'relative',
+        display: 'flow-root',
+        minWidth: 0,
+        paddingBottom: reserveSpace ? token.controlHeight : 0,
+      }}
       onMouseEnter={() => {
         setHovered(true);
         setDismissed(false);
@@ -76,8 +84,11 @@ export function LeanTurnMetadata({
         align="center"
         style={{
           position: 'absolute',
-          bottom: 0,
-          insetInline: 0,
+          top: reserveSpace ? undefined : '100%',
+          bottom: reserveSpace ? 0 : undefined,
+          insetInlineEnd: 0,
+          width: 'max-content',
+          maxWidth: '100%',
           zIndex: 1,
           height: token.controlHeight,
           minWidth: 0,

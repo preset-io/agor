@@ -230,13 +230,14 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   const before = prompt.parentElement!.getBoundingClientRect();
   await userEvent.tab();
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+  expect(getComputedStyle(prompt.parentElement!).paddingBottom).toBe('0px');
   expect(prompt.parentElement!.getBoundingClientRect().height).toBe(before.height);
   expect(prompt.parentElement!.getBoundingClientRect().top).toBe(before.top);
   const row = screen.getByRole('region', { name: 'Turn metadata' });
   const overlay = row.parentElement!;
   expect(getComputedStyle(overlay).position).toBe('absolute');
   await waitFor(() =>
-    expect(overlay.getBoundingClientRect().bottom).toBe(
+    expect(overlay.getBoundingClientRect().top).toBe(
       prompt.parentElement!.getBoundingClientRect().bottom
     )
   );
@@ -279,6 +280,33 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
   await userEvent.unhover(screen.getByText('Prompt for metadata'));
   await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
+});
+
+it('floats metadata over the following row, but reserves space for approval controls', async () => {
+  const view = (reserveSpace: boolean) => (
+    <div>
+      <LeanTurnMetadata reserveSpace={reserveSpace} metadata={<span>Metadata pills</span>}>
+        <div>Prompt</div>
+      </LeanTurnMetadata>
+      <button type="button" style={{ display: 'block' }}>
+        Following controls
+      </button>
+    </div>
+  );
+  const { rerender } = render(view(false));
+  await userEvent.hover(screen.getByText('Prompt'));
+  const overlay = screen.getByRole('region', { name: 'Turn metadata' }).parentElement!;
+  await waitFor(() =>
+    expect(overlay.getBoundingClientRect().top).toBe(
+      screen.getByRole('button', { name: 'Following controls' }).getBoundingClientRect().top
+    )
+  );
+  await userEvent.hover(screen.getByText('Metadata pills'));
+  expect(screen.getByText('Metadata pills')).toBeVisible();
+  rerender(view(true));
+  expect(overlay.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    screen.getByRole('button', { name: 'Following controls' }).getBoundingClientRect().top
+  );
 });
 
 it('keeps familiar icon-led tool rows and results inside the quiet outer disclosure', async () => {

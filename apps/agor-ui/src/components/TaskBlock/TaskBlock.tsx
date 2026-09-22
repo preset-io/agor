@@ -774,6 +774,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         })
       : undefined;
 
+    const hasPendingApproval =
+      task.status === TaskStatus.AWAITING_PERMISSION ||
+      messages.some(
+        (message) =>
+          message.type === 'permission_request' &&
+          (message.content as PermissionRequestContent)?.status === PermissionStatus.PENDING
+      );
+
     const metadataPills = (
       <Flex
         wrap={!leanTranscript}
@@ -1061,7 +1069,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
                   {leanTranscript && block.message.message_id === firstPromptId ? (
                     <>
-                      <LeanTurnMetadata metadata={metadataPills} background={taskHeaderGradient}>
+                      <LeanTurnMetadata
+                        metadata={metadataPills}
+                        background={taskHeaderGradient}
+                        reserveSpace={hasPendingApproval}
+                      >
                         <MessageBlock
                           message={block.message}
                           agentic_tool={agentic_tool}
@@ -1257,7 +1269,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           {!firstPromptId && (
             <>
               {task.full_prompt && (
-                <LeanTurnMetadata metadata={metadataPills} background={taskHeaderGradient}>
+                <LeanTurnMetadata
+                  metadata={metadataPills}
+                  background={taskHeaderGradient}
+                  reserveSpace={hasPendingApproval}
+                >
                   <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
                     {task.full_prompt}
                   </Typography.Paragraph>
