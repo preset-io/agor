@@ -247,3 +247,68 @@ it('uses only verified recorded counts, never legacy zero; streamed tools overri
   );
   expect(screen.getByRole('button', { name: /Read/ })).toBeVisible();
 });
+
+it.each(Object.values(TaskStatus))(
+  'places %s status deliberately, never in the old top icon slot',
+  (status) => {
+    const { container } = render(view({ task: { ...task, status } }));
+    const root = container.querySelector('[data-task-block]')!;
+    expect(root.querySelector(':scope > .anticon')).toBeNull();
+    const outcome = root.querySelector('[data-turn-outcome]');
+    if (
+      new Set<TaskStatus>([
+        TaskStatus.STOPPING,
+        TaskStatus.STOPPED,
+        TaskStatus.FAILED,
+        TaskStatus.TIMED_OUT,
+      ]).has(status)
+    ) {
+      expect(outcome).toBeVisible();
+      expect(root.lastElementChild).toBe(outcome);
+      expect(screen.getByText('Visible answer').compareDocumentPosition(outcome!)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING
+      );
+    } else {
+      expect(outcome).toBeNull();
+    }
+  }
+);
+
+it('keeps verified recovery and authorization notices visible at the bottom without duplicate failure banners', () => {
+  const interrupted = {
+    ...task,
+    status: TaskStatus.FAILED,
+    error_message: 'Durable failure reason',
+    sdk_failure: { termination: 'verified' },
+    termination_request: { cause: 'heartbeat_lost' },
+  } as Task;
+  const { container, rerender } = render(
+    view({
+      task: interrupted,
+      isLatestTask: true,
+      sessionId: task.session_id,
+      client: {} as NonNullable<React.ComponentProps<typeof TaskBlock>['client']>,
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Resume in new task' })).toBeVisible();
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(screen.getByRole('alert')).toHaveTextContent('Durable failure reason');
+  expect(container.querySelector('[data-task-block]')!.lastElementChild).toBe(
+    screen.getByRole('alert')
+  );
+  rerender(
+    view({
+      task: {
+        ...interrupted,
+        termination_request: {
+          ...interrupted.termination_request!,
+          cause: 'authorization_revoked',
+        },
+      },
+      isLatestTask: true,
+    })
+  );
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(screen.getByRole('alert')).toHaveTextContent('Task access revoked');
+  expect(screen.queryByRole('button', { name: 'Resume in new task' })).toBeNull();
+});

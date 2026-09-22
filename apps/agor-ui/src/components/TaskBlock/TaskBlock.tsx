@@ -63,6 +63,7 @@ import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { LeanTurnMetadata } from './LeanTurnMetadata';
+import { TurnOutcome } from './TurnOutcome';
 
 const { Paragraph } = Typography;
 
@@ -189,9 +190,12 @@ function RuntimeInterruptionNotice({
       style={{ marginBottom: 12 }}
       message="Task interrupted"
       description={
-        task.sdk_failure?.reason === 'startup_timeout'
-          ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
-          : 'Agor lost contact with the executor and verified containment before making this session promptable.'
+        <>
+          {task.sdk_failure?.reason === 'startup_timeout'
+            ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
+            : 'Agor lost contact with the executor and verified containment before making this session promptable.'}
+          {task.error_message && <div>{task.error_message}</div>}
+        </>
       }
       action={
         client && sessionId && !resumed ? (
@@ -1003,10 +1007,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       );
     const taskContent = (
       <div style={{ paddingTop: token.sizeUnit }}>
-        {isVerifiedRuntimeInterruption(task, isLatestTask) && (
+        {!leanTranscript && isVerifiedRuntimeInterruption(task, isLatestTask) && (
           <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
         )}
-        {isAuthorizationRevokedFailure(task) && <AuthorizationRevokedNotice task={task} />}
+        {!leanTranscript && isAuthorizationRevokedFailure(task) && (
+          <AuthorizationRevokedNotice task={task} />
+        )}
         {isLatestTask &&
           (task.status === TaskStatus.RUNNING ||
             task.status === TaskStatus.AWAITING_PERMISSION ||
@@ -1287,21 +1293,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     if (leanTranscript)
       return (
         <div data-task-block={task.task_id}>
-          {task.status !== TaskStatus.COMPLETED &&
-            task.status !== TaskStatus.FAILED &&
-            task.status !== TaskStatus.RUNNING &&
-            task.status !== TaskStatus.DISPATCHING &&
-            task.status !== TaskStatus.STOPPING && (
-              <TaskStatusIcon status={task.status} size={16} />
-            )}
-          {task.status === TaskStatus.STOPPING && (
-            <Typography.Text type="secondary" role="status" style={{ fontSize: token.fontSizeSM }}>
-              Stopping…
-            </Typography.Text>
-          )}
-          {(task.error_message || task.status === TaskStatus.FAILED) && (
-            <Alert type="error" showIcon title={task.error_message || 'Turn failed'} />
-          )}
           {!firstPromptId && (
             <>
               {task.full_prompt && (
@@ -1319,6 +1310,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             </>
           )}
           {taskContent}
+          {isAuthorizationRevokedFailure(task) ? (
+            <AuthorizationRevokedNotice task={task} />
+          ) : isVerifiedRuntimeInterruption(task, isLatestTask) ? (
+            <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+          ) : (
+            <TurnOutcome task={task} />
+          )}
         </div>
       );
 

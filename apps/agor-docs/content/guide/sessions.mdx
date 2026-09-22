@@ -369,6 +369,12 @@ retain the generic disclosure because their count is unknown; no backfill is req
 If expanding an unknown turn returns no tools, **No tool calls** appears in its expanded body.
 Counts describe persisted activity, not calls an agent adapter failed to record.
 
+Successful turns have no status badge. Stopping, stopped, failed, and timed-out turns
+show a small outcome row after their content; failure reasons stay visible without hover.
+Approval/input requests remain actionable in the transcript. Runtime recovery and
+access-revocation notices also appear after the turn, retaining their explanations and actions.
+
+
 **API/template compatibility:** The inaccurate `tool_use_count` task field and
 `toolUseCount` callback variable are retired. API and analytics consumers should use
 nullable `recorded_tool_count`; custom callback templates should use `recordedToolCount`.

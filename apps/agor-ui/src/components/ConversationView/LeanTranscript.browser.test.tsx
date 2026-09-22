@@ -543,3 +543,30 @@ it('hides only verified empty history and lazily opens known counts while legacy
   await userEvent.click(screen.getByRole('button', { name: '2 tool calls' }));
   await waitFor(() => expect(loadTaskMessages).toHaveBeenCalledExactlyOnceWith(tasks[16].task_id));
 });
+
+it('shows exceptional outcomes beneath their turn without floating top icons or narrow-screen overflow', async () => {
+  state = { ...state, tasks: [{ ...tasks[19], status: TaskStatus.STOPPED }], hasOlderTasks: false };
+  const { container } = render(<ConversationView client={null} sessionId={sessionId} />);
+  const root = container.querySelector('[data-task-block]')!;
+  const stopped = screen.getByText('Turn stopped');
+  expect(stopped).toBeVisible();
+  expect(root.querySelector(':scope > .anticon')).toBeNull();
+  expect(stopped.getBoundingClientRect().top).toBeGreaterThan(
+    screen.getByText(/Answer 19\./).getBoundingClientRect().bottom
+  );
+  act(() =>
+    update({
+      ...state,
+      tasks: [
+        {
+          ...state.tasks[0],
+          status: TaskStatus.FAILED,
+          error_message: 'Synthetic failure: ' + 'long-diagnostic-'.repeat(50),
+        },
+      ],
+    })
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
+  expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
+  await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
+});
