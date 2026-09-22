@@ -131,7 +131,9 @@ describe('hosted OpenCode execute-handler composition', () => {
     await expect(execute(handler(false))).rejects.toThrow('local containment slot');
     expect(mocks.slot).toHaveBeenCalledOnce();
     expect(mocks.spawn).not.toHaveBeenCalled();
-    await expect(execute(handler(true, 'another-user'))).rejects.toThrow();
+    await expect(execute(handler(true, 'another-user'))).rejects.toThrow(
+      /Only the OpenCode session owner/
+    );
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 });

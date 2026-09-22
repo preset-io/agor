@@ -118,8 +118,9 @@ generic user env loop never sees these fields because prompt launch does not
 pass a tool to it; the OpenCode executor handler alone converts the pulled
 connection into the `OPENCODE_AUTH_CONTENT` map, restricted to the reviewed
 list, keeps it out of `process.env` and `AGOR_USER_ENV_KEYS`, and registers
-each key value individually with the managed-server sanitizer (whose env-name
-pattern also learns the `_CONTENT` suffix).
+each key value and the serialized auth content explicitly with the managed-server
+sanitizer. The env-name pattern does not cover `OPENCODE_AUTH_CONTENT`; explicit
+secret registration is required.
 
 Saved keys are **saved, unverified**. Verification happens on the first
 prompt: `assertExplicitModelAvailable` (existing) checks the provider is

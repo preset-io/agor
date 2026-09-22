@@ -1,4 +1,8 @@
 import {
+  OpenCodeUnsupportedError,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
+import {
   AgenticToolPresetRepository,
   BranchRepository,
   CapabilityPolicyRepository,
@@ -152,6 +156,77 @@ function createSchedulerApp(db: SchedulerDb) {
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
   return { app, prompt, removeSession, sessionEvent, workIdentity };
 }
+
+describe('scheduler deployment capability admission', () => {
+  for (const missing of ['opt-in', 'persistent-home'] as const) {
+    for (const trigger of ['manual', 'cron'] as const) {
+      dbTest(
+        `rejects OpenCode ${trigger} before creating a row without ${missing}`,
+        async ({ db }) => {
+          const { creator, schedule } = await seedRunnableSchedule(
+            db,
+            {
+              email: `scheduler-opencode-${generateId()}@example.com`,
+              name: 'Owner',
+            },
+            {
+              agentic_tool: 'opencode',
+              model_config: { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-4-5' },
+            }
+          );
+          const { app, prompt } = createSchedulerApp(db);
+          const capabilities = resolveOpenCodeCapabilities({
+            multi_tenancy: { mode: 'required_from_auth' },
+            agentic_tools: {
+              opencode_hosted_native_state: missing === 'opt-in' ? undefined : 'checkpointed',
+            },
+            execution: {
+              unix_user_mode: 'delegated',
+              executor_command_template: 'launch {payload}',
+              executor_storage: {
+                user_home: missing === 'persistent-home' ? 'shared' : 'persistent-per-user',
+              },
+            },
+          });
+          const gate = vi.fn(() =>
+            capabilities.mode === 'unsupported'
+              ? new OpenCodeUnsupportedError(capabilities.reason)
+              : undefined
+          );
+          const scheduler = new SchedulerService(db, app, {
+            deploymentPolicy: { managed: true, installed: new Set(['opencode']) },
+            deploymentToolUnsupported: gate,
+          });
+          const run =
+            trigger === 'manual'
+              ? scheduler.executeScheduleNow({
+                  scheduleId: schedule.schedule_id,
+                  triggeredBy: creator.user_id,
+                })
+              : (
+                  scheduler as unknown as {
+                    processSchedule(schedule: Schedule, now: number): Promise<void>;
+                  }
+                ).processSchedule(schedule, NOW + 30_000);
+          await expect(run).rejects.toMatchObject({
+            name: 'OpenCodeUnsupportedError',
+            reason: {
+              code:
+                missing === 'opt-in'
+                  ? 'hosted_native_state_disabled'
+                  : 'persistent_user_home_required',
+            },
+          });
+          expect(gate).toHaveBeenCalledWith('opencode');
+          expect(
+            await new SessionRepository(db).findByScheduleId(schedule.schedule_id)
+          ).toHaveLength(0);
+          expect(prompt).not.toHaveBeenCalled();
+        }
+      );
+    }
+  }
+});
 
 describe('scheduler HA occurrence recovery', () => {
   const killStages = [

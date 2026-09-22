@@ -9,6 +9,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
+  OpenCodeUnsupportedError,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
+import {
   type AgorConfig,
   getAgorHome,
   type ResolvedEnvironmentHealthMonitorSettings,
@@ -846,6 +850,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
   const schedulerService = new SchedulerService(db, app, {
     deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    deploymentToolUnsupported: (tool) => {
+      if (tool !== 'opencode') return undefined;
+      const capabilities = resolveOpenCodeCapabilities(config);
+      return capabilities.mode === 'unsupported'
+        ? new OpenCodeUnsupportedError(capabilities.reason)
+        : undefined;
+    },
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',
