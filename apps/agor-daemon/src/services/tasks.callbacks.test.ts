@@ -72,6 +72,13 @@ function makeService(
     task?: Partial<Task>;
     childSession?: Partial<Session>;
     parentSession?: Partial<Session>;
+    /**
+     * Handle the service is constructed with, mirroring `ctx.db` in the daemon.
+     * Tests that open an ambient tenant scope must pass the same handle they
+     * scope on: `queueCallbackToSession` re-enters the scope with `this.db`,
+     * and a tenant scope is bound to its originating database.
+     */
+    db?: unknown;
   } = {}
 ) {
   const initialTask = makeTask(options.task);
@@ -131,7 +138,9 @@ function makeService(
     app: { service: ReturnType<typeof vi.fn> };
     completionCallbackDispatches: Map<string, Promise<unknown>>;
     executorCredentialRevoker: { revokeTaskTokens: typeof revokeTaskTokens };
+    db: unknown;
   };
+  if (options.db !== undefined) service.db = options.db;
   service.repository = repository;
   service.taskRepo = { ...repository, createPending };
   service.id = 'task_id';
@@ -197,7 +206,6 @@ describe('TasksService completion callbacks', () => {
 
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
-    const { service, createPending } = makeService();
     const tx = {
       execute: vi.fn(async () => []),
     };
@@ -209,6 +217,15 @@ describe('TasksService completion callbacks', () => {
         return result;
       }),
     };
+    // Single-handle topology, as in the daemon: the service re-enters the scope
+    // with `this.db`, so it must hold the handle the scope below is opened on.
+    // Leaving it unset silently drops the callback — the post-commit unit
+    // rejects the foreign handle and `runAfterTenantDatabaseCommit` swallows it.
+    const { service, createPending } = makeService({ db });
+    // `runAfterTenantDatabaseCommit` catches and only warns, so a rejected
+    // post-commit unit is invisible in the events alone. Fail on that warning
+    // rather than inferring success from ordering.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     createPending.mockImplementationOnce(async (data: Partial<Task>) => {
       events.push('callback:queued');
       return {
@@ -243,6 +260,10 @@ describe('TasksService completion callbacks', () => {
       'tx:committed',
     ]);
     expect(createPending).toHaveBeenCalledTimes(1);
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes('[tasks.after_commit]'))
+    ).toEqual([]);
+    warn.mockRestore();
   });
 
   it('queues exactly one templated callback with last-message metadata for a completed subsession task', async () => {

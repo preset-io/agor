@@ -373,6 +373,10 @@ function makeGatewayHarness(args: {
 
   return {
     service,
+    // The handle the service was constructed with. Tests that open their own
+    // ambient scope must use it: service methods re-enter with `this.db`, and a
+    // tenant scope is bound to one originating database.
+    db,
     createUnscoped: create,
     promptCreate,
     sessionsCreate,
@@ -1066,12 +1070,12 @@ describe('GatewayService Slack thread catch-up', () => {
 
   it('passes ambient tenant context into the internal prompt call', async () => {
     const mapping = makeMapping();
-    const { service, promptCreate } = makeGatewayHarness({
+    const { service, promptCreate, db } = makeGatewayHarness({
       existingMapping: mapping,
       connector: {},
     });
 
-    await runWithTenantDatabaseScope({ run: vi.fn() } as never, 'tenant-channel', () =>
+    await runWithTenantDatabaseScope(db as never, 'tenant-channel', () =>
       service.create({
         channel_key: 'slack-key',
         thread_id: 'C123-100.000000',

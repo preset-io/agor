@@ -299,8 +299,21 @@ function createServiceHarness() {
   };
 }
 
-async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
-  return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
+/**
+ * Open the ambient tenant scope on the SERVICE's own handle.
+ *
+ * `createTenantScopeTestDb()` mints a fresh double per call, so scoping a new
+ * one here would model two databases. The daemon threads a single handle
+ * (`initializeDatabase` builds one proxy that becomes both `ctx.db` and the
+ * around hook's db), and service methods re-enter the scope with `this.db` —
+ * so the scope must be opened on that same handle.
+ */
+async function runInTestTenantScope<T>(
+  service: BranchesService,
+  work: () => Promise<T>
+): Promise<T> {
+  const serviceDb = (service as unknown as { db: unknown }).db;
+  return runWithTenantDatabaseScope(serviceDb as never, 'tenant-test', work);
 }
 
 function waitForDeferredWork(): Promise<void> {
@@ -456,7 +469,7 @@ describe('BranchesService environment start async behavior', () => {
     const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
 
     const result = await Promise.race([
-      runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
+      runInTestTenantScope(service, () => service.startEnvironment(branch.branch_id)),
       new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
     ]);
 
@@ -510,7 +523,7 @@ describe('BranchesService environment start async behavior', () => {
       environment_instance: { status: 'starting' },
     } as never);
 
-    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+    await runInTestTenantScope(service, () => service.startEnvironment(branch.branch_id));
 
     expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
@@ -557,7 +570,7 @@ describe('BranchesService environment start async behavior', () => {
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
     ).processes.set(branch.branch_id, { process: { kill } });
 
-    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
+    await runInTestTenantScope(service, () => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();

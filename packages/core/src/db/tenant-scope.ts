@@ -86,6 +86,16 @@ function assertMatchingDatabase(db: Database, scope: TenantDatabaseScope | undef
   // Accept the originating handle (including its proxies) or the current
   // transaction passed to a nested unit. Tenant equality alone cannot authorize
   // routing a different database into this scope, even for opt-out proxies.
+  //
+  // Two deliberate limits, both failing closed:
+  // - Only `baseDb`/`db` are accepted, so a `tx` from a direct
+  //   `runDatabaseTransaction(baseDb, ...)` is not recognized as a descendant.
+  //   No such call site re-enters a scope today; widening this would mean
+  //   tracking transaction parentage, not relaxing the comparison.
+  // - A nullish handle has no identity to match and so reports as a mismatch.
+  //   The parameter is required, so this is reachable only from a caller that
+  //   never received a database (e.g. a service double with no `db`); the
+  //   message will say "different database" rather than "no handle".
   if (target !== scope.baseDb && target !== scope.db) {
     throw new Error('Cannot use a different database from the active database scope');
   }

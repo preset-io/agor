@@ -91,8 +91,20 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
     ['me/artifact-trust-grants', 'remove'],
   ] as const;
 
-  /** Run registerHooks against a recorder app and return around hooks per path. */
-  function captureAroundHooks(): Map<string, AroundHook[]> {
+  /**
+   * Run registerHooks against a recorder app and return the around hooks per
+   * path together with the raw handle they were registered over.
+   *
+   * The handle is returned because a guarded probe is only a valid
+   * scope-presence assertion when it wraps the SAME originating handle the
+   * around hook opens its scope on: a tenant scope is bound to one database,
+   * so a proxy over an unrelated handle is rejected on origin regardless of
+   * whether a scope is active.
+   */
+  function captureAroundHooks(): {
+    hooks: Map<string, AroundHook[]>;
+    db: RegisterHooksContext['db'];
+  } {
     const captured = new Map<string, AroundHook[]>();
     const app = {
       service(path: string) {
@@ -109,13 +121,15 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
       io: { to: () => ({ emit() {} }) },
     };
 
+    // Unguarded stub: registerHooks constructs repositories over this db at
+    // registration time, which must not trip the guard. The scope assertion
+    // below uses a separate guarded proxy over THIS handle. `run` marks it as
+    // SQLite (isPostgresDatabase keys off the absence of `.run`), so the around
+    // hook opens a no-op scope rather than a native transaction.
+    const db = { run: () => undefined } as unknown as RegisterHooksContext['db'];
+
     registerHooks({
-      // Unguarded stub: registerHooks constructs repositories over this db at
-      // registration time, which must not trip the guard. The scope assertion
-      // below uses a SEPARATE guarded probe. `run` marks it as SQLite
-      // (isPostgresDatabase keys off the absence of `.run`), so the around hook
-      // opens a no-op scope rather than a native transaction.
-      db: { run: () => undefined } as unknown as RegisterHooksContext['db'],
+      db,
       app: app as unknown as RegisterHooksContext['app'],
       config: {
         database: { dialect: 'sqlite' },
@@ -136,17 +150,19 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
       sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
     });
 
-    return captured;
+    return { hooks: captured, db };
   }
 
   it('installs an around hook that enters a DB scope for a tenant-owned service', async () => {
-    const around = captureAroundHooks().get('boards') ?? [];
+    const { hooks, db } = captureAroundHooks();
+    const around = hooks.get('boards') ?? [];
     expect(around.length).toBeGreaterThan(0);
 
     // A guarded probe touched inside the composed around chain: it succeeds only
     // if a tenant DB scope is active. A revert to identity-only would leave no
-    // scope, so this touch would throw MissingTenantDatabaseScopeError.
-    const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+    // scope, so this touch would throw MissingTenantDatabaseScopeError. It wraps
+    // the registered handle so the touch tests scope presence, not origin.
+    const probe = createTenantScopedDatabaseProxy(db as never, {
       label: 'wiring probe db',
     });
     let scopeKind: string | undefined;
@@ -166,13 +182,16 @@ describe('registerHooks static-mode owned-service scope wiring', () => {
   it.each(artifactCustomRouteProbes)(
     'runs %s#%s inside the guarded tenant database scope',
     async (path, method) => {
-      const around = captureAroundHooks().get(path) ?? [];
+      const { hooks, db } = captureAroundHooks();
+      const around = hooks.get(path) ?? [];
       expect(around.length).toBeGreaterThan(0);
 
       // Exercise the installed chain instead of relying on its structural
       // arity. Any refactor that leaves identity but drops database scope will
-      // trip this guarded SQLite touch, including the trust write routes.
-      const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+      // trip this guarded SQLite touch, including the trust write routes. The
+      // probe wraps the registered handle so a failure means "no scope", not
+      // "wrong database".
+      const probe = createTenantScopedDatabaseProxy(db as never, {
         label: `${path} wiring probe db`,
       });
       const innermost = async () => {
