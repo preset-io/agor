@@ -18,6 +18,7 @@ export interface SpawnSubsessionContext {
   userPrompt: string;
   hasConfig?: boolean;
   agenticTool?: string;
+  presetId?: string;
   permissionMode?: string;
   modelConfig?: {
     mode?: string;
@@ -49,6 +50,10 @@ REQUEST: """
   {{#if agenticTool}}
     - Agentic Tool:
     {{agenticTool}}
+  {{/if}}
+  {{#if presetId}}
+    - Configuration Preset:
+    {{presetId}}
   {{/if}}
   {{#if permissionMode}}
     - Permission Mode:
@@ -107,6 +112,9 @@ hashing and JWT for tokens."
 {{#if agenticTool}}
   - agenticTool: "{{agenticTool}}"
 {{/if}}
+{{#if presetId}}
+  - presetId: "{{presetId}}"
+{{/if}}
 {{#if permissionMode}}
   - permissionMode: "{{permissionMode}}"
 {{/if}}
@@ -153,7 +161,9 @@ exact configuration parameters specified above - After spawning, briefly acknowl
 session will do YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn({ "prompt": "{{your_carefully_prepared_enriched_prompt_with_full_context}}",{{#if
   agenticTool
 }}
-  "agenticTool": "{{agenticTool}}",{{/if}}{{#if permissionMode}}
+  "agenticTool": "{{agenticTool}}",{{/if}}
+{{#if presetId}}
+  "presetId": "{{presetId}}",{{/if}}{{#if permissionMode}}
   "permissionMode": "{{permissionMode}}",{{/if}}{{#if modelConfig}}
   "modelConfig": { "mode": "{{modelConfig.mode}}", "model": "{{modelConfig.model}}"{{#if
     modelConfig.effort
@@ -187,6 +197,7 @@ export function renderSpawnSubsessionPrompt(context: SpawnSubsessionContext): st
   const hasConfig =
     context.hasConfig ??
     (context.agenticTool !== undefined ||
+      context.presetId !== undefined ||
       context.permissionMode !== undefined ||
       context.modelConfig !== undefined ||
       context.codexSandboxMode !== undefined ||
