@@ -47,24 +47,19 @@ export function hostedProviderIdsFromConnection(
 /**
  * Convert a resolved OpenCode connection into the `OPENCODE_AUTH_CONTENT`
  * map the pinned runtime reads in place of `auth.json`. Only reviewed
- * providers are projected. `secrets` lists every individual key so the
+ * providers are eligible; only the selected provider is projected. `secrets`
+ * lists its key and the complete serialized map so the
  * managed-server sanitizer can redact a bare key, not just the whole map.
  */
 export function buildOpenCodeAuthContent(
-  connection: Readonly<Record<string, string | undefined>>
+  connection: Readonly<Record<string, string | undefined>>,
+  provider: string
 ): { content: string | undefined; providerIds: string[]; secrets: string[] } {
-  const auth: Record<string, { type: 'api'; key: string }> = {};
-  const secrets: string[] = [];
-  for (const [providerId, field] of Object.entries(OPENCODE_HOSTED_PROVIDER_FIELDS)) {
-    const key = connection[field]?.trim();
-    if (!key) continue;
-    auth[providerId] = { type: 'api', key };
-    secrets.push(key);
-  }
-  const providerIds = Object.keys(auth);
-  if (providerIds.length === 0) return { content: undefined, providerIds, secrets };
-  const content = JSON.stringify(auth);
-  return { content, providerIds, secrets: [...secrets, content] };
+  const field = hostedCredentialFieldForProvider(provider);
+  const key = field ? connection[field]?.trim() : undefined;
+  if (!key) return { content: undefined, providerIds: [], secrets: [] };
+  const content = JSON.stringify({ [provider]: { type: 'api', key } });
+  return { content, providerIds: [provider], secrets: [key, content] };
 }
 
 interface KnownProvider {

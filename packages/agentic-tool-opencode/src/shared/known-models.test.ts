@@ -101,17 +101,21 @@ describe('OpenCode hosted provider projection', () => {
     const { buildOpenCodeAuthContent, hostedProviderIdsFromConnection } = await import(
       './known-models.js'
     );
-    const projected = buildOpenCodeAuthContent({
-      OPENCODE_API_KEY_ANTHROPIC: ' sk-ant-test ',
-      OPENCODE_API_KEY_OPENAI: '',
-      SOMETHING_ELSE: 'ignored',
-    });
+    const projected = buildOpenCodeAuthContent(
+      {
+        OPENCODE_API_KEY_ANTHROPIC: ' sk-ant-test ',
+        OPENCODE_API_KEY_OPENAI: '',
+        OPENCODE_API_KEY_KIMI_FOR_CODING: 'unused-key',
+        SOMETHING_ELSE: 'ignored',
+      },
+      'anthropic'
+    );
     expect(projected.providerIds).toEqual(['anthropic']);
     expect(JSON.parse(projected.content ?? '')).toEqual({
       anthropic: { type: 'api', key: 'sk-ant-test' },
     });
     expect(projected.secrets).toEqual(['sk-ant-test', projected.content]);
-    expect(buildOpenCodeAuthContent({})).toEqual({
+    expect(buildOpenCodeAuthContent({}, 'anthropic')).toEqual({
       content: undefined,
       providerIds: [],
       secrets: [],

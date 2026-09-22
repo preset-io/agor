@@ -75,3 +75,18 @@ verification and are re-run by QA only where noted.
 | OC-60 | cloud       | Exact deployed revision                                                          | Daemon and executor image carry the same Agor release; OpenCode binary reports the pinned `OPENCODE_VERSION` (1.18.31 at this revision); recorded in the QA evidence |
 | OC-61 | unit        | Mixed daemon/executor versions                                                   | Fail closed (OC-28); no partial feature                                                                                                                              |
 | OC-62 | unit, cloud | Scheduled, forked, or spawned session with OpenCode on an unsupported deployment | Creation fails at occurrence/fork/spawn time with the structured reason; no session row is created                                                                   |
+
+### Credential-free composition and compatibility regressions
+
+- Hosted execute-handler composition: real capability/admission/launch contributions
+  with a fake templated launcher admit repeated turns and concurrent same-owner
+  sessions without a daemon-local containment slot. Local native-file containment
+  and foreign-actor refusal remain enforced. This is not remote Job/provider QA.
+- A session pinned to provider A with only provider B saved fails as missing
+  credentials before scratch preparation or provider startup; only A's key is
+  projected when present. Session recovery checks the selected provider.
+- Checkpoint schema v2 records the pinned OpenCode version. Legacy v1 or a
+  different runtime version refuses restore without replacing accepted state.
+- Missing, empty, unrelated-schema and wrong-session SQLite files cannot publish.
+- Noncanonical uppercase session/task UUIDs are rejected before path creation;
+  canonical lowercase ids keep prune ordering consistent.

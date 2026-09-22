@@ -1,3 +1,4 @@
+import type { SessionID } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   assertOpenCodeNativeAuthSupported,
@@ -81,7 +82,7 @@ describe('OpenCode credential namespace routing', () => {
       ...input,
       session: {
         ...input.session,
-        session_id: '01a08d5f-775f-73f6-86a1-624b43050180',
+        session_id: '01a08d5f-775f-73f6-86a1-624b43050180' as SessionID,
         sdk_native_state: undefined,
       },
       taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
@@ -90,6 +91,7 @@ describe('OpenCode credential namespace routing', () => {
 
     expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(launch)).toEqual({
       namespaceKey: namespace.namespaceKey,
+      requiresLocalContainment: true,
       executorPayload: { agenticToolContext: { dataHome: namespace.dataHome } },
     });
   });
@@ -108,7 +110,7 @@ describe('OpenCode credential namespace routing', () => {
       session: {
         created_by: 'owner',
         unix_username: 'alice',
-        session_id: '01a08d5f-775f-73f6-86a1-624b43050180',
+        session_id: '01a08d5f-775f-73f6-86a1-624b43050180' as SessionID,
         sdk_native_state: accepted,
       },
       taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
@@ -123,7 +125,7 @@ describe('OpenCode credential namespace routing', () => {
         agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
       },
     });
-    const context = launch.executorPayload.agenticToolContext as Record<string, unknown>;
+    const context = launch.executorPayload.agenticToolContext;
     expect(context).toEqual({
       version: 2,
       mode: 'managed-projection',

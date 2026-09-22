@@ -4,7 +4,8 @@ import type { AgenticToolName, Session } from '@agor/core/types';
 
 /**
  * Result of a tool's executor-launch hook: a key used to serialize native-state
- * mutations plus a partial executor payload to merge into the spawn. Shaped from
+ * mutations when requiresLocalContainment is true, plus a partial executor
+ * payload to merge into the spawn. Hosted Job-local state skips local fences. Shaped from
  * OpenCode's hook — the only real implementation today.
  */
 export type ExecutorLaunchContribution = ReturnType<

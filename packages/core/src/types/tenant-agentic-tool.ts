@@ -115,12 +115,6 @@ export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgentic
   return tool;
 }
 
-export function isProviderConnectionTool(
-  tool: TenantAgenticToolName
-): tool is ProviderConnectionTool {
-  return (TENANT_AGENTIC_TOOL_NAMES as readonly string[]).includes(tool);
-}
-
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {
   for (const [tool, fields] of Object.entries(PROVIDER_CONNECTION_FIELDS) as Array<
     [ProviderConnectionTool, readonly AgenticToolConfigField[]]

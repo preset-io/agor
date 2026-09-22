@@ -63,6 +63,7 @@ async function readSessionIds(path: string): Promise<string[]> {
 
 describe('OpenCode hosted native state', () => {
   it('keeps every live root on scratch and only attempts under the home', () => {
+    expect(() => layoutFor(TASK_A.toUpperCase())).toThrow(/canonical lowercase/);
     const layout = layoutFor(TASK_A);
     for (const path of [layout.liveDbPath, ...Object.values(layout.xdg)]) {
       expect(path.startsWith(join(root, 'scratch', TASK_A))).toBe(true);
@@ -94,7 +95,7 @@ describe('OpenCode hosted native state', () => {
     });
 
     expect(attempt).toMatchObject({
-      version: 1,
+      version: 2,
       attemptTaskId: TASK_A,
       openCodeSessionId: 'ses_1',
     });
@@ -134,6 +135,47 @@ describe('OpenCode hosted native state', () => {
       /manifest is missing/
     );
     await expect(stat(second.liveDbPath)).rejects.toThrow();
+  });
+
+  it('refuses legacy or different-runtime checkpoints before restoring bytes', async () => {
+    const first = layoutFor(TASK_A);
+    await prepareOpenCodeScratch(first);
+    await writeSqliteDatabase(first.liveDbPath, ['ses_1']);
+    const attempt = await publishOpenCodeCheckpoint(first, {
+      taskId: TASK_A,
+      openCodeSessionId: 'ses_1',
+    });
+    const second = layoutFor(TASK_B);
+    await prepareOpenCodeScratch(second);
+    await expect(
+      restoreOpenCodeAcceptedState(second, { ...attempt, version: 2, openCodeVersion: '0.0.1' })
+    ).rejects.toThrow(/runtime version/);
+    const { openCodeVersion: _version, ...legacy } = attempt as typeof attempt & {
+      openCodeVersion: string;
+    };
+    await expect(restoreOpenCodeAcceptedState(second, { ...legacy, version: 1 })).rejects.toThrow(
+      /runtime version/
+    );
+    await expect(stat(second.liveDbPath)).rejects.toThrow();
+  });
+
+  it('does not publish missing, empty, unrelated or wrong-session SQLite state', async () => {
+    const layout = layoutFor(TASK_A);
+    await prepareOpenCodeScratch(layout);
+    const publish = () =>
+      publishOpenCodeCheckpoint(layout, { taskId: TASK_A, openCodeSessionId: 'ses_1' });
+    await expect(publish()).rejects.toThrow();
+    await expect(stat(layout.liveDbPath)).rejects.toThrow();
+    await writeFile(layout.liveDbPath, '');
+    await expect(publish()).rejects.toThrow(/empty/);
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(layout.liveDbPath);
+    db.exec('CREATE TABLE unrelated (id TEXT)');
+    db.close();
+    await expect(publish()).rejects.toThrow(/no such table/);
+    await writeSqliteDatabase(layout.liveDbPath, ['another_session']);
+    await expect(publish()).rejects.toThrow(/does not contain the completed session/);
+    await expect(stat(join(layout.attemptsDir, TASK_A, 'manifest.json'))).rejects.toThrow();
   });
 
   it('reports a non-durable checkpoint instead of publishing a partial artifact', async () => {

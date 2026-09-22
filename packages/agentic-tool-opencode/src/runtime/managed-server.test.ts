@@ -112,9 +112,9 @@ describe('managed OpenCode readiness', () => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),
-      exitCode: null,
+      exitCode: null as number | null,
       kill: () => true,
-    }) as ManagedChild;
+    }) satisfies ManagedChild;
     const spawn = vi.fn(() => child);
 
     const started = startManagedOpenCodeServer(
@@ -160,9 +160,9 @@ describe('managed OpenCode readiness', () => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),
-      exitCode: null,
+      exitCode: null as number | null,
       kill: () => true,
-    }) as ManagedChild;
+    }) satisfies ManagedChild;
     const fetchHealth = vi
       .fn<typeof globalThis.fetch>()
       .mockRejectedValueOnce(new TypeError('fetch failed'))
@@ -196,9 +196,10 @@ describe('managed OpenCode sanitizer', () => {
   it('redacts projected auth content and each individual key from diagnostics', async () => {
     const { createOpenCodeSanitizer } = await import('./managed-server.js');
     const content = JSON.stringify({ anthropic: { type: 'api', key: 'sk-ant-secret-1' } });
-    const sanitizer = createOpenCodeSanitizer(['sk-ant-secret-1'], {
+    const sanitizer = createOpenCodeSanitizer(['sk-ant-secret-1', content], {
       OPENCODE_AUTH_CONTENT: content,
       HARMLESS: 'keep-me',
+      TEMPLATE_CONTENT: 'startup',
     });
     const message = `startup failed with ${content} and bare sk-ant-secret-1 while HARMLESS=keep-me`;
     expect(sanitizer.text(message)).toBe(

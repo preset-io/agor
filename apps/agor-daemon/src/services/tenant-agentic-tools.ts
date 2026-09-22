@@ -15,7 +15,6 @@ import type {
 } from '@agor/core/types';
 import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
-  isProviderConnectionTool,
   PROVIDER_RESOLUTION_POLICIES,
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
@@ -47,10 +46,8 @@ export class TenantAgenticToolSettingsService {
   ): TenantAgenticToolSettings {
     const deploymentEnabled = this.deploymentAvailable(tool);
     const connection: TenantAgenticToolSettings['connection'] = {};
-    if (isProviderConnectionTool(tool)) {
-      for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
-        connection[field] = { configured: Boolean(stored.connection?.[field]) };
-      }
+    for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
+      connection[field] = { configured: Boolean(stored.connection?.[field]) };
     }
     return {
       tool,
@@ -102,9 +99,6 @@ export class TenantAgenticToolSettingsService {
       !(PROVIDER_RESOLUTION_POLICIES as readonly string[]).includes(data.resolution_policy)
     ) {
       throw new BadRequest('resolution_policy is invalid');
-    }
-    if (data.resolution_policy !== undefined && !isProviderConnectionTool(tool)) {
-      throw new BadRequest(`${tool} does not use provider resolution`);
     }
     if (
       tool === 'opencode' &&

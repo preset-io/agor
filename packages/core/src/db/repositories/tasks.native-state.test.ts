@@ -64,7 +64,8 @@ async function runningTask(db: Database, sessionId: UUID): Promise<Task> {
 
 function attemptFor(task: Task, overrides: Record<string, unknown> = {}) {
   return {
-    version: 1 as const,
+    version: 2 as const,
+    openCodeVersion: '1.18.31',
     attemptTaskId: task.task_id,
     digest: `sha256:${'b'.repeat(64)}`,
     bytes: 167936,

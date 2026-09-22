@@ -108,3 +108,23 @@ describe('MissingCredentialPanel', () => {
     expect(await screen.findAllByText(/already connected/i)).toHaveLength(2);
   });
 });
+
+it('checks the current session provider instead of any OpenCode key', async () => {
+  const create = vi.fn(async () => ({
+    status: 'unauthenticated',
+    authenticated: false,
+    method: 'none',
+  }));
+  const get = vi.fn(async () => ({ model_config: { provider: 'anthropic' } }));
+  const client = {
+    service: (name: string) => (name === 'sessions' ? { get } : { create }),
+  } as unknown as AgorClient;
+  render(
+    <AntApp>
+      <MissingCredentialPanel tool="opencode" sessionId="session-a" client={client} />
+    </AntApp>
+  );
+  await screen.findByRole('button', { name: /^Connect OpenCode$/i });
+  expect(get).toHaveBeenCalledWith('session-a');
+  expect(create).toHaveBeenCalledWith({ tool: 'opencode', provider: 'anthropic' });
+});

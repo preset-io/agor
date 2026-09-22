@@ -64,6 +64,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
       });
       return {
         namespaceKey: namespace.namespaceKey,
+        requiresLocalContainment: false,
         executorPayload: {
           agenticToolContext: createOpenCodeManagedExecutorContext({
             namespaceKey: namespace.namespaceKey,
@@ -77,6 +78,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     const namespace = resolveOpenCodeTaskCredentialNamespace(input);
     return {
       namespaceKey: namespace.namespaceKey,
+      requiresLocalContainment: true,
       executorPayload: {
         agenticToolContext: createOpenCodeExecutorContext(namespace.dataHome),
       },

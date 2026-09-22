@@ -33,7 +33,7 @@ export function createOpenCodeExecutorContext(dataHome: string): OpenCodeNativeF
 }
 
 const HEX_KEY = /^[0-9a-f]{64}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function createOpenCodeManagedExecutorContext(input: {
   namespaceKey: string;

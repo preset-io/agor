@@ -35,8 +35,11 @@ const UNSUPPORTED_MESSAGES: Record<OpenCodeUnsupportedCode, string> = {
     'OpenCode is not available in this workspace: hosted multi-tenant mode has no daemon-local native-state home, and no hosted execution mode is enabled.',
 };
 
-function unsupported(code: OpenCodeUnsupportedCode): OpenCodeCapabilities {
-  return { mode: 'unsupported', reason: { code, message: UNSUPPORTED_MESSAGES[code] } };
+function unsupported(
+  code: OpenCodeUnsupportedCode,
+  message = UNSUPPORTED_MESSAGES[code]
+): OpenCodeCapabilities {
+  return { mode: 'unsupported', reason: { code, message } };
 }
 
 export function resolveOpenCodeCapabilities(
@@ -56,9 +59,21 @@ export function resolveOpenCodeCapabilities(
         unixUserMode === 'delegated' ? 'delegated_execution' : 'templated_transport'
       );
     }
-    if (!hosted) return unsupported('hosted_tenancy');
-    if (unixUserMode !== 'delegated') return unsupported('delegated_execution');
-    if (!templated) return unsupported('templated_transport');
+    if (!hosted)
+      return unsupported(
+        'hosted_tenancy',
+        'OpenCode hosted checkpointing requires auth-derived tenancy.'
+      );
+    if (unixUserMode !== 'delegated')
+      return unsupported(
+        'delegated_execution',
+        'OpenCode hosted checkpointing requires delegated execution.'
+      );
+    if (!templated)
+      return unsupported(
+        'templated_transport',
+        'OpenCode hosted checkpointing requires an executor command template.'
+      );
     if (config.execution?.executor_storage?.user_home !== 'persistent-per-user') {
       return unsupported('persistent_user_home_required');
     }

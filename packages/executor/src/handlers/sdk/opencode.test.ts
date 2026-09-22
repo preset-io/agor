@@ -119,7 +119,7 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
     'config/resolve-api-key': {
       create: vi.fn(async () => ({
         apiKey: null,
-        connection: { OPENCODE_API_KEY_ANTHROPIC: 'sk-ant-test' },
+        connection: { OPENCODE_API_KEY_ANTHROPIC: 'sk-ant-test' } as Record<string, string>,
         source: 'user',
         useNativeAuth: false,
       })),
@@ -422,13 +422,28 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     });
 
     await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
-      /No OpenCode provider key is saved/
+      /selected for this session has no saved key/
     );
     expect(mocks.runTurn).not.toHaveBeenCalled();
     expect(state.services.tasks.patch).toHaveBeenCalledWith(
       taskId,
       expect.objectContaining({ status: 'failed' })
     );
+  });
+
+  it('rejects a different saved provider before scratch restore or a provider turn', async () => {
+    const state = client(); // openai session, only anthropic saved
+    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
+      /selected for this session has no saved key/
+    );
+    expect(state.services['config/resolve-api-key'].create).toHaveBeenCalledWith({
+      taskId,
+      keyName: 'OPENCODE_API_KEY_OPENAI',
+      tool: 'opencode',
+    });
+    expect(nativeState.prepare).not.toHaveBeenCalled();
+    expect(nativeState.restore).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
   });
 
   it('refuses a managed context that names another task and a turn without a checkpoint', async () => {

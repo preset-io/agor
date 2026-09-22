@@ -70,6 +70,30 @@ describe('OpenCode capability resolver', () => {
     ).toMatchObject({ mode: 'unsupported', reason: { code: 'hosted_tenancy' } });
   });
 
+  it('reports the missing prerequisite truthfully after checkpointing is enabled', () => {
+    const base = {
+      ...hostedBase,
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const },
+    };
+    for (const [config, message] of [
+      [{ ...base, multi_tenancy: { mode: 'static' as const } }, 'requires auth-derived tenancy'],
+      [
+        { ...base, execution: { ...base.execution, unix_user_mode: 'sandbox' as const } },
+        'requires delegated execution',
+      ],
+      [
+        { ...base, execution: { ...base.execution, executor_command_template: undefined } },
+        'requires an executor command template',
+      ],
+    ] as const) {
+      const result = resolveOpenCodeCapabilities(config);
+      expect(result).toMatchObject({
+        mode: 'unsupported',
+        reason: { message: expect.stringContaining(message) },
+      });
+    }
+  });
+
   it('fails closed with the structured reason and distinguishes non-admitted modes', () => {
     expect(() =>
       requireOpenCodeMode(resolveOpenCodeCapabilities(hostedBase), ['native-file'], 'x')

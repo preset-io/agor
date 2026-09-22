@@ -25,7 +25,6 @@ import {
   type AgenticToolName,
   type AuthenticatedParams,
   type DeepReadonly,
-  isProviderConnectionTool,
   type Params,
   PROVIDER_CONNECTION_FIELDS,
   type TaskID,
@@ -187,9 +186,7 @@ export class ConfigService {
       // provider connection (OpenCode has no single canonical key; its hosted
       // per-provider fields are the connection). Never another tool's bucket.
       const expectedKeyName = TOOL_API_KEY_NAMES[tool];
-      const connectionFields: readonly string[] = isProviderConnectionTool(tool)
-        ? PROVIDER_CONNECTION_FIELDS[tool]
-        : [];
+      const connectionFields: readonly string[] = PROVIDER_CONNECTION_FIELDS[tool];
       if (expectedKeyName !== keyName && !connectionFields.includes(keyName)) {
         throw new Forbidden('Executor token is not valid for this API key');
       }

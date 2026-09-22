@@ -46,6 +46,7 @@ describe('OpenCode executor context', () => {
   it('rejects a malformed or partial v2 context rather than falling back to legacy behavior', () => {
     for (const value of [
       { version: 2 },
+      { ...managed, version: 2, mode: 'managed-projection', taskId: managed.taskId.toUpperCase() },
       { mode: 'managed-projection', namespaceKey: 'short' },
       { ...managed, version: 2, mode: 'managed-projection', taskId: 'nope' },
       { ...managed, version: 2, mode: 'managed-projection', accepted: { digest: 'x' } },

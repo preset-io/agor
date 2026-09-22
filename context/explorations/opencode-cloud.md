@@ -143,7 +143,10 @@ executor payload:
   "agorSessionId": "<uuid>",
   "taskId": "<uuid>",
   "accepted": null | {                    // accepted checkpoint to resume from
-    "attemptTaskId": "<uuid>",
+    "version": 2,
+    "openCodeVersion": "<pinned runtime version>",
+    "attemptTaskId": "<canonical lowercase uuid>",
+    "bytes": 123456,
     "openCodeSessionId": "ses_…",
     "digest": "sha256:<hex>",
     "publishedAt": "<iso>"
@@ -153,14 +156,22 @@ executor payload:
 
 The payload carries no credential. The executor pulls the owner's connection
 through `config/resolve-api-key` (tool `opencode`) after claiming the task and
-sets `OPENCODE_AUTH_CONTENT` only on the managed server's environment; the
+requires the selected session provider's saved key, and projects only that key
+into `OPENCODE_AUTH_CONTENT` on the managed server's environment; the
 existing `OPENCODE_CONFIG_CONTENT` / `OPENCODE_PERMISSION` interception values
 are set by the executor as today. Old executors that only understand
 `{ dataHome }` fail closed on the v2 context (parse error → task failed), which
 is the intended mixed-version behavior; daemon and executor images are one
-release.
+release. New checkpoint manifests/pointers use schema v2 and record the pinned
+OpenCode version. Legacy v1 pointers remain structurally readable but restore
+fails closed because their runtime version is unknown. A different runtime
+version also refuses restore; a rollout must retain the matching runtime or
+explicitly start a new session, not silently migrate the SQLite schema. Session
+and task UUIDs must use canonical lowercase spelling so path identity and prune
+ordering agree.
 
-Executor turn (managed-projection mode), all inside `OpenCodeTool.runTurn`:
+Executor turn (managed-projection mode), across the executor adapter and
+`OpenCodeTool.runTurn`:
 
 1. Create a Job-private scratch root `<scratch>/<taskId>/` and point
    **all four** `XDG_*` roots and `OPENCODE_DB` at it. `<scratch>` is
@@ -239,6 +250,11 @@ service-account token). Enablement uses the existing daemon config mechanism
 hosting chart may supply this deployment policy by default; the generic runtime
 default stays absent. A configured value never bypasses the prerequisites in
 section 8 or supplies provider credentials.
+
+Publication first requires an existing non-empty database with the native
+`session` table containing the completed session id; SQLite integrity alone is
+not enough. A missing, empty, unrelated or wrong-session database fails the turn
+without publishing a pointer.
 
 ## 6. Storage decision: checkpointed local DB versus block-backed live DB
 

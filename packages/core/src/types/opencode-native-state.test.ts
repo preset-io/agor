@@ -13,10 +13,15 @@ const valid = {
 describe('OpenCode native-state attempt pointer', () => {
   it('accepts exactly the published shape', () => {
     expect(isOpenCodeNativeStateAttempt(valid)).toBe(true);
+    expect(isOpenCodeNativeStateAttempt({ ...valid, version: 2, openCodeVersion: '1.18.31' })).toBe(
+      true
+    );
   });
 
   it.each([
     ['wrong version', { ...valid, version: 2 }],
+    ['noncanonical uppercase task', { ...valid, attemptTaskId: valid.attemptTaskId.toUpperCase() }],
+    ['invalid runtime version', { ...valid, version: 2, openCodeVersion: 'unknown' }],
     ['non-uuid task', { ...valid, attemptTaskId: '../escape' }],
     ['bad digest', { ...valid, digest: 'md5:abc' }],
     ['zero bytes', { ...valid, bytes: 0 }],

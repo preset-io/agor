@@ -13,13 +13,14 @@ import { createReadStream } from 'node:fs';
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
-import type { OpenCodeNativeStateAttempt } from '@agor/core/types';
+import { isOpenCodeNativeStateAttempt, type OpenCodeNativeStateAttempt } from '@agor/core/types';
+import { OPENCODE_VERSION } from '../shared/known-models.js';
 
 /**
  * Job-local scratch root. The Cloud executor pod sets `AGOR_OPENCODE_SCRATCH_ROOT`
- * to its bounded emptyDir mount so the size limit (and "ENOSPC fails the turn")
- * holds even when the image redirects `TMPDIR`; anything else falls back to the
- * process temp directory.
+ * to its bounded emptyDir mount. A missing/relative root fails closed, even
+ * when the image redirects `TMPDIR`. The mount limit may cause pod eviction;
+ * it is not a writer-facing ENOSPC quota.
  */
 export const OPENCODE_SCRATCH_ROOT_ENV = 'AGOR_OPENCODE_SCRATCH_ROOT';
 
@@ -61,6 +62,12 @@ export function resolveOpenCodeNativeStateLayout(input: {
   homeDir?: string;
   scratchRoot?: string;
 }): OpenCodeNativeStateLayout {
+  // UUIDv7 ordering and on-disk paths use one canonical lowercase spelling.
+  if (!ATTEMPT_ENTRY.test(input.taskId) || !ATTEMPT_ENTRY.test(input.agorSessionId)) {
+    throw new OpenCodeNativeStateError(
+      'OpenCode native state requires canonical lowercase session and task ids'
+    );
+  }
   const home = input.homeDir ?? homedir();
   if (!home) throw new OpenCodeNativeStateError('OpenCode managed state requires a home directory');
   const scratchRoot = resolve(input.scratchRoot ?? resolveOpenCodeScratchRoot(), input.taskId);
@@ -191,6 +198,11 @@ export async function restoreOpenCodeAcceptedState(
   layout: OpenCodeNativeStateLayout,
   accepted: OpenCodeNativeStateAttempt
 ): Promise<void> {
+  if (accepted.version !== 2 || accepted.openCodeVersion !== OPENCODE_VERSION) {
+    throw new OpenCodeNativeStateError(
+      'OpenCode native state unavailable: checkpoint runtime version is missing or incompatible; use its matching runtime or start a new session'
+    );
+  }
   const attemptDir = join(layout.attemptsDir, accepted.attemptTaskId);
   let manifest: OpenCodeNativeStateAttempt;
   try {
@@ -201,10 +213,14 @@ export async function restoreOpenCodeAcceptedState(
     );
   }
   if (
+    !isOpenCodeNativeStateAttempt(manifest) ||
+    manifest.version !== 2 ||
+    manifest.openCodeVersion !== accepted.openCodeVersion ||
     manifest.attemptTaskId !== accepted.attemptTaskId ||
     manifest.digest !== accepted.digest ||
     manifest.bytes !== accepted.bytes ||
-    manifest.openCodeSessionId !== accepted.openCodeSessionId
+    manifest.openCodeSessionId !== accepted.openCodeSessionId ||
+    manifest.publishedAt !== accepted.publishedAt
   ) {
     throw new OpenCodeNativeStateError(
       'OpenCode native state unavailable: the accepted checkpoint manifest does not match the session pointer'
@@ -226,7 +242,7 @@ export async function restoreOpenCodeAcceptedState(
 
 export interface OpenCodeCheckpointDependencies {
   /** Seam for tests; production runs the real checkpoint through `node:sqlite`. */
-  checkpoint?: (dbPath: string) => Promise<void>;
+  checkpoint?: (dbPath: string, openCodeSessionId: string) => Promise<void>;
   now?: () => Date;
 }
 
@@ -248,10 +264,21 @@ export async function assertOpenCodeCheckpointRuntime(
   }
 }
 
-async function checkpointWithNodeSqlite(dbPath: string): Promise<void> {
+async function checkpointWithNodeSqlite(dbPath: string, openCodeSessionId: string): Promise<void> {
+  const existing = await stat(dbPath);
+  if (!existing.isFile() || existing.size === 0) {
+    throw new OpenCodeNativeStateError('OpenCode checkpoint database is missing or empty');
+  }
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(dbPath);
   try {
+    // Integrity alone accepts arbitrary SQLite files. Require the native session
+    // table and the exact session this successful turn claims to checkpoint.
+    if (!db.prepare('SELECT id FROM session WHERE id = ?').get(openCodeSessionId)) {
+      throw new OpenCodeNativeStateError(
+        'OpenCode checkpoint does not contain the completed session'
+      );
+    }
     const checkpoint = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as
       | { busy?: number }
       | undefined;
@@ -279,9 +306,14 @@ export async function publishOpenCodeCheckpoint(
   input: { taskId: string; openCodeSessionId: string },
   dependencies: OpenCodeCheckpointDependencies = {}
 ): Promise<OpenCodeNativeStateAttempt> {
+  if (input.taskId !== layout.attemptTaskId || !ATTEMPT_ENTRY.test(input.taskId)) {
+    throw new OpenCodeNativeStateError(
+      'OpenCode checkpoint task does not match its canonical layout identity'
+    );
+  }
   const checkpoint = dependencies.checkpoint ?? checkpointWithNodeSqlite;
   try {
-    await checkpoint(layout.liveDbPath);
+    await checkpoint(layout.liveDbPath, input.openCodeSessionId);
     const remainingWal = await stat(`${layout.liveDbPath}-wal`).catch(() => undefined);
     if (remainingWal && remainingWal.size > 0) {
       throw new OpenCodeNativeStateError('OpenCode checkpoint left uncommitted WAL frames');
@@ -291,7 +323,8 @@ export async function publishOpenCodeCheckpoint(
     await copyDurably(layout.liveDbPath, join(attemptDir, DB_FILE));
     const { digest, bytes } = await sha256File(join(attemptDir, DB_FILE));
     const attempt: OpenCodeNativeStateAttempt = {
-      version: 1,
+      version: 2,
+      openCodeVersion: OPENCODE_VERSION,
       attemptTaskId: input.taskId,
       digest,
       bytes,
