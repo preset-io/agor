@@ -49,6 +49,7 @@ it('updates a quiet collapsed header from live activity to a known count without
   const header = screen.getByRole('button', { name: '2 tool calls', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
   expect(container.querySelector('.ant-tag')).toBeNull();
+  expect(header).toHaveAttribute('aria-busy', 'false');
   expect(screen.queryByText('Result')).not.toBeInTheDocument();
   fireEvent.click(header);
   expect(screen.getByRole('button', { name: /Read/ })).toHaveAttribute('aria-expanded', 'false');

@@ -366,8 +366,9 @@ tools show their diffs by default; other tool details retain their existing coll
 Empty results retain the tool disclosure, with **No tool calls** inside its expanded body.
 Active tasks continue receiving full live activity and approvals; live events update
 the current tool header even before the corresponding message is persisted.
-The executing-tool label shimmers unless reduced motion is enabled; approval waits and
-completed tools do not shimmer. Response loading remains visible without a standalone task spinner.
+The latest tool-group label shimmers while the turn remains active, including gaps between
+calls; “Latest” means the last call finished, not that another call is guaranteed. Approval
+waits and completed turns do not shimmer, and reduced-motion settings disable it. Response loading remains visible without a standalone task spinner.
 Successful turns have no standalone status icon; failures remain visible as error notices.
 Turn metadata reuses the existing pills in a right-aligned, bottom-anchored floating strip below the prompt.
 It reserves no footer space and may overlap the following tool row without shifting the conversation.

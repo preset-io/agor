@@ -210,7 +210,7 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
   // The response bubble still supplies progress before the first tool/text arrives.
   expect(container.querySelector('.ant-bubble')).not.toBeNull();
   rerender(view({ task: { ...task, status: TaskStatus.DISPATCHING } }));
-  expect(screen.getByRole('status')).toHaveTextContent('Starting turn');
+  expect(screen.queryByText('Starting turn…')).toBeNull();
   rerender(view({ task: { ...task, status: TaskStatus.STOPPING } }));
   expect(screen.getByRole('status')).toHaveTextContent('Stopping');
   rerender(

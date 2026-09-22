@@ -380,11 +380,13 @@ it('shows live tool events before persistence and preserves the group through co
     for (const listener of listeners) listener();
   });
   expect(screen.getAllByRole('button', { name: 'Latest: Read', expanded: false })).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toHaveAttribute('aria-busy', 'true');
+  expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
   act(() => {
     state = {
       ...state,
       tasks: [{ ...task, status: TaskStatus.COMPLETED }],
-      loadedTaskIds: new Set([task.task_id]),
+      loadedTaskIds: new Set(),
     };
     for (const listener of listeners) listener();
   });
@@ -393,6 +395,8 @@ it('shows live tool events before persistence and preserves the group through co
     'false'
   );
   expect(screen.queryByText(/No tool calls/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+  expect(screen.getByRole('button', { name: '1 tool call' })).toHaveAttribute('aria-busy', 'false');
   expect(loadTaskMessages).not.toHaveBeenCalled();
 });
 
@@ -433,4 +437,25 @@ it('shows edit diffs on the first outer expansion without changing other tool de
   await userEvent.click(screen.getByRole('button', { name: '1 tool call', expanded: false }));
   await waitFor(() => expect(screen.getByText('after_restore')).toBeVisible());
   expect(screen.getByText('before_restore')).toBeVisible();
+});
+
+it('keeps the full Bash command and ellipsizes only at the tool row boundary', async () => {
+  const command = 'echo ' + 'synthetic-command-content-'.repeat(15) + 'END_OF_COMMAND';
+  const activity: Message = {
+    ...messages.get(tasks[19].task_id)![1],
+    content: [
+      { type: 'tool_use', id: 'bash-width', name: 'Bash', input: { command } },
+      { type: 'tool_result', tool_use_id: 'bash-width', content: 'ok' },
+    ],
+  };
+  render(<AgentChain messages={[activity]} leanTranscript />);
+  await userEvent.click(screen.getByRole('button', { name: '1 tool call' }));
+  const text = screen.getByText(command);
+  const tool = screen.getByRole('button', { name: /Bash/ });
+  expect(text.textContent).toBe(command);
+  expect(text.getBoundingClientRect().right).toBeLessThanOrEqual(
+    tool.getBoundingClientRect().right + 1
+  );
+  // A long command should use the available row, not stop at a character cap.
+  expect(tool.getBoundingClientRect().right - text.getBoundingClientRect().right).toBeLessThan(16);
 });

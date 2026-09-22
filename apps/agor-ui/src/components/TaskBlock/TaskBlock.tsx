@@ -954,7 +954,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     );
     const toolDisclosure = leanTranscript && (
       <div style={{ marginBottom: token.marginSM }}>
-        {!taskMessagesLoaded && !isTaskExecuting(task) ? (
+        {!taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
           <ToolDisclosureHeader
             label={
               detailsLoading
@@ -1176,11 +1176,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`}
               expanded={false}
               loading={detailsLoading}
-              executing={
-                task.status === TaskStatus.RUNNING &&
-                !hasPendingApproval &&
-                latestActivity.status === 'executing'
-              }
+              executing={task.status === TaskStatus.RUNNING && !hasPendingApproval}
               onClick={loadActivity}
             />
           )}
@@ -1272,9 +1268,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             task.status !== TaskStatus.STOPPING && (
               <TaskStatusIcon status={task.status} size={16} />
             )}
-          {(task.status === TaskStatus.DISPATCHING || task.status === TaskStatus.STOPPING) && (
+          {task.status === TaskStatus.STOPPING && (
             <Typography.Text type="secondary" role="status" style={{ fontSize: token.fontSizeSM }}>
-              {task.status === TaskStatus.DISPATCHING ? 'Starting turn…' : 'Stopping…'}
+              Stopping…
             </Typography.Text>
           )}
           {(task.error_message || task.status === TaskStatus.FAILED) && (
