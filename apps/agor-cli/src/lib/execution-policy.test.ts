@@ -14,6 +14,8 @@ describe('executionPolicyFor', () => {
     ['local:create-admin', 'local'],
     ['open', 'connection'],
     ['repo:list', 'connection'],
+    ['kb:export', 'connection'],
+    ['kb:import', 'connection'],
     ['session:list', 'connection'],
     ['user:list', 'connection'],
     ['version', 'connection'],

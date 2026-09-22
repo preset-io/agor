@@ -920,6 +920,9 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
+      mdast-util-from-markdown:
+        specifier: ^2.0.2
+        version: 2.0.2(supports-color@8.1.1)
       multer:
         specifier: ^2.4.0
         version: 2.4.0

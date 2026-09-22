@@ -66,7 +66,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(109);
+    expect(foreignKeys).toHaveLength(110);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -82,6 +82,21 @@ describe('tenantPortabilityForeignKeys', () => {
       expect(Object.isFrozen(foreignKey.childColumns)).toBe(true);
       expect(Object.isFrozen(foreignKey.parentColumns)).toBe(true);
     }
+  });
+
+  it('moves import receipts with their owners without requiring surviving targets', () => {
+    expect(
+      tenantPortabilityForeignKeys().filter((fk) => fk.childTable === 'kb_import_receipts')
+    ).toEqual([
+      expect.objectContaining({
+        childTable: 'kb_import_receipts',
+        childColumns: ['owner_user_id'],
+        parentTable: 'users',
+        parentColumns: ['user_id'],
+        onDelete: 'cascade',
+      }),
+    ]);
+    expect(tenantPortabilityTableNames()).toContain('kb_import_receipts');
   });
 
   it('moves normalized board and branch policies with their resources and principals', () => {
