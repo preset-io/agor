@@ -84,7 +84,8 @@ export type TerminationCause =
   | 'startup_timeout'
   | 'heartbeat_lost'
   | 'sdk_health_failure'
-  | 'authorization_revoked';
+  | 'authorization_revoked'
+  | 'tenant_suspension';
 
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =

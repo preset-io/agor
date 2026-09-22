@@ -846,7 +846,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const input = {
         app,
         taskId: seeded.task.task_id,
-        cause: 'authorization_revoked' as const,
+        cause: 'tenant_suspension' as const,
         errorMessage: 'Tenant restricted',
         params,
         runInFreshTenantWriteDatabase: <T>(work: () => Promise<T>) =>
@@ -854,6 +854,15 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       };
       const observer = new TenantRestrictionReconciler(db, app as never);
       expect((await observer.checkOnce()).stopping).toBe(1);
+      expect(
+        await runWithTenantDatabaseScope(
+          raw,
+          tenantId,
+          async (scoped) =>
+            (await new TaskRepository(scoped).findById(seeded.task.task_id))?.termination_request
+              ?.cause
+        )
+      ).toBe('tenant_suspension');
       expect(
         await runWithTenantDatabaseScope(
           raw,
@@ -896,7 +905,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             };
           })
         )
-        .toEqual({ status: TaskStatus.FAILED, quiesced: true });
+        .toEqual({ status: TaskStatus.STOPPED, quiesced: true });
       await expect(app.service('tasks').get(seeded.task.task_id, params)).rejects.toMatchObject({
         code: 403,
       });

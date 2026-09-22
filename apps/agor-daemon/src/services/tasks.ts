@@ -77,7 +77,11 @@ import {
   authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
 } from '../auth/executor-runtime-scope.js';
-import { assertRuntimeTenantAccess, isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
+import {
+  assertRuntimeTenantAccess,
+  isCurrentTenantRuntimeActive,
+  isTenantRestrictedRejection,
+} from '../auth/tenant-access.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -1636,11 +1640,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     } catch (error) {
       if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
+      const suspended =
+        report.outcome !== 'authorization_revoked' && isTenantRestrictedRejection(error);
       return beginExecutorTermination({
         app: this.app,
         taskId: data.task_id,
-        cause: 'authorization_revoked',
-        errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+        cause: suspended ? 'tenant_suspension' : 'authorization_revoked',
+        errorMessage: suspended
+          ? 'Tenant access is restricted.'
+          : AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
         params,
         runInFreshTenantWriteDatabase: (work) =>
           withFreshTenantWrite(this.db, authority.tenantId, work),

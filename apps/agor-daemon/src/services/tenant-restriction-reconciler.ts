@@ -84,7 +84,7 @@ export class TenantRestrictionReconciler {
             await beginExecutorTermination({
               app: this.app,
               taskId: ref.task_id,
-              cause: 'authorization_revoked',
+              cause: 'tenant_suspension',
               errorMessage: 'Tenant access is restricted.',
               params,
               runInFreshTenantWriteDatabase: (work) =>
