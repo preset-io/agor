@@ -1184,6 +1184,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       ...panelFlexStyle,
       background: 'transparent',
       paddingInline: isPanel ? 0 : undefined,
+      // Panel headers already separate the list; Collapse's body inset leaves a gap.
+      paddingTop: isPanel ? 0 : undefined,
     },
   };
   // Leave a few rows reachable when headers/other sections exceed a short
@@ -1506,7 +1508,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                   label: scheduledRunsHeader,
                   children: scheduledRunsContent,
                   styles: {
-                    body: { background: 'transparent', paddingInline: isPanel ? 0 : undefined },
+                    body: {
+                      background: 'transparent',
+                      paddingInline: isPanel ? 0 : undefined,
+                      paddingTop: isPanel ? 0 : undefined,
+                    },
                   },
                 },
               ]}
