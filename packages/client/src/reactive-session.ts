@@ -1,17 +1,10 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
-import {
-  EXECUTING_TASK_STATUSES,
-  isTaskExecuting,
-  MESSAGE_PAGINATION,
-  PAGINATION,
-  TaskStatus,
-} from '@agor/core/client';
+import { isTaskExecuting, MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
-const LEAN_ACTIVE_STATUSES = EXECUTING_TASK_STATUSES;
 const isLeanActive = isTaskExecuting;
 
 export interface ReactiveSessionOptions {
@@ -816,12 +809,12 @@ export class ReactiveSessionHandle {
     const messageToken = this.beginMessageFetch();
     const sessionSequence = this.sessionMutationSequence;
     try {
-      const session = await this.client.service('sessions').get(this.sessionId);
-      if (stale()) return;
-      this.canonicalSessionId = session.session_id;
       const pageSize = this.options.cacheScope === 'preview' ? 1 : LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
       const cursor = older ? this.leanOldestTaskId : undefined;
-      const [result, queue, active] = await Promise.all([
+      const [session, result, queue] = await Promise.all([
+        older && this.stateSnapshot.session
+          ? Promise.resolve(this.stateSnapshot.session)
+          : this.client.service('sessions').get(this.sessionId),
         this.client.service('tasks').find({
           query: {
             session_id: this.sessionId,
@@ -831,21 +824,14 @@ export class ReactiveSessionHandle {
             ...(cursor ? { task_id: { $lte: cursor } } : {}),
           },
         }),
-        this.client
-          .service(`/sessions/${this.sessionId}/tasks/queue`)
-          .find() as Promise<QueueFindResult>,
         older
-          ? Promise.resolve([] as Task[])
-          : this.client.service('tasks').findAll({
-              query: {
-                session_id: this.sessionId,
-                status: { $in: [...LEAN_ACTIVE_STATUSES] },
-                $sort: { task_id: 1 },
-                $limit: PAGINATION.MAX_LIMIT,
-              },
-            }),
+          ? Promise.resolve({ data: this.stateSnapshot.queuedTasks } as QueueFindResult)
+          : (this.client
+              .service(`/sessions/${this.sessionId}/tasks/queue`)
+              .find() as Promise<QueueFindResult>),
       ]);
       if (stale()) return;
+      this.canonicalSessionId = session.session_id;
       const rows = Array.isArray(result) ? result : result.data;
       const candidates = rows.filter((task) => task.task_id !== cursor);
       const page = candidates.slice(0, pageSize);
@@ -877,10 +863,6 @@ export class ReactiveSessionHandle {
           if (next <= after) throw new Error('History cursor did not advance');
           after = next;
         }
-        // Active work must remain reachable even behind more than a page of
-        // queued prompts. Existing status-filtered queries, no new auth route.
-        if (stale()) return;
-        for (const task of active) byId.set(task.task_id, task);
         // Refresh previously reached history without widening its membership.
         for (const task of this.stateSnapshot.tasks) {
           if (stale()) return;
@@ -898,6 +880,8 @@ export class ReactiveSessionHandle {
       const fullIds = new Set(this.stateSnapshot.loadedTaskIds);
       const snapshots = new Map<string, Message[]>();
       const sequences = new Map<string, number>();
+      // The executing turn belongs to the latest nonqueued page; hydrate it fully
+      // without a separate active-task lookup. Queued prompts do not consume page slots.
       const hydrateTasks = tasks.filter(
         (task) =>
           task.status !== TaskStatus.QUEUED &&

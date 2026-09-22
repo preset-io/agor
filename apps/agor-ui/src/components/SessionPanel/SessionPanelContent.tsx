@@ -31,7 +31,6 @@ export interface SessionPanelContentProps {
   setScrollToBottom: (fn: (() => void) | null) => void;
   setScrollToTop: (fn: (() => void) | null) => void;
   queuedTasks: Task[];
-  setQueuedTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   spawnModalOpen: boolean;
   setSpawnModalOpen: (open: boolean) => void;
   onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
@@ -51,7 +50,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     setScrollToBottom,
     setScrollToTop,
     queuedTasks,
-    setQueuedTasks,
     spawnModalOpen,
     setSpawnModalOpen,
     onSpawnModalConfirm,
@@ -62,6 +60,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     const isMobileShell = useIsMobileViewport();
     const { showSuccess, showError } = useThemedMessage();
     const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
+    const [removingQueuedTaskId, setRemovingQueuedTaskId] = React.useState<string | null>(null);
     const isQueueHeldByFailure = queuedTasks.length > 0 && session.status === 'failed';
 
     const handleResumeHeldQueue = React.useCallback(async () => {
@@ -261,15 +260,15 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                           danger
                           icon={<DeleteOutlined />}
                           aria-label={`Remove queued task ${idx + 1}`}
+                          loading={removingQueuedTaskId === task.task_id}
+                          disabled={
+                            removingQueuedTaskId !== null && removingQueuedTaskId !== task.task_id
+                          }
                           onClick={async () => {
-                            if (!client) return;
-
+                            if (!client || removingQueuedTaskId) return;
+                            setRemovingQueuedTaskId(task.task_id);
                             try {
-                              // Optimistically remove from UI
-                              setQueuedTasks((prev) =>
-                                prev.filter((t) => t.task_id !== task.task_id)
-                              );
-
+                              // Shared session events own queue membership. Keep the row on failure.
                               // Delete the queued task — cascade removes the row
                               // entirely; spawnTaskExecutor never gets a chance.
                               await client.service('tasks').remove(task.task_id);
@@ -277,13 +276,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                               showError(
                                 `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
                               );
-
-                              // Re-fetch queue to restore accurate state
-                              const response = await client
-                                .service(`sessions/${session.session_id}/tasks/queue`)
-                                .find();
-                              const data = (response as { data: Task[] }).data || [];
-                              setQueuedTasks(data);
+                            } finally {
+                              setRemovingQueuedTaskId(null);
                             }
                           }}
                         />

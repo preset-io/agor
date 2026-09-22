@@ -277,6 +277,14 @@ describe('SessionPanel search control', () => {
     expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
   });
 
+  it('does not fetch a duplicate queue in the panel', () => {
+    const service = vi.fn(() => ({ find: vi.fn(async () => ({ data: [] })) }));
+    renderPanel({ client: { service } as unknown as AgorClient });
+    expect(service.mock.calls.flat().some((name) => String(name).includes('/tasks/queue'))).toBe(
+      false
+    );
+  });
+
   it('retains the same lean reactive-session cache key as ConversationView', () => {
     renderPanel();
 

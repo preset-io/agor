@@ -316,13 +316,6 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         skip: 0,
       });
       expect(page).toMatchObject({ total: 0, data: [] });
-      expect(
-        await new TaskRepository(scoped).findPage({
-          sessionId: visibleSessionId!,
-          statuses: [TaskStatus.RUNNING, TaskStatus.COMPLETED],
-        })
-      ).toMatchObject({ total: 0, data: [] });
-
       expect(await new TaskRepository(scoped).getSessionUsage(visibleSessionId!)).toEqual({
         total: 0,
         input: 0,

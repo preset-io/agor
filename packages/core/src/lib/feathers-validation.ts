@@ -11,7 +11,6 @@ import { getValidator, Type } from '@feathersjs/typebox';
 import { MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
-import { TaskStatus } from '../types/task';
 
 /**
  * Query validator with type coercion enabled
@@ -154,15 +153,6 @@ export const taskQuerySchema = Type.Intersect(
       status: Type.Optional(
         Type.Union([
           Type.Object({ $ne: Type.Literal('queued') }, { additionalProperties: false }),
-          Type.Object(
-            {
-              $in: Type.Array(
-                Type.Union(Object.values(TaskStatus).map((status) => Type.Literal(status))),
-                { maxItems: Object.keys(TaskStatus).length }
-              ),
-            },
-            { additionalProperties: false }
-          ),
           Type.Literal('queued'),
           Type.Literal('created'),
           Type.Literal('dispatching'),

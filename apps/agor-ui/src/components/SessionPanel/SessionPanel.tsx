@@ -533,7 +533,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
-  const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -558,6 +557,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
+  const queuedTasks = reactiveSessionState?.queuedTasks ?? EMPTY_TASKS;
   React.useEffect(() => {
     if (
       forceFailTarget &&
@@ -641,62 +641,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
     null
   );
-
-  // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
-  React.useEffect(() => {
-    if (!client || !session) return;
-
-    const fetchQueue = async () => {
-      try {
-        const response = await client.service(`/sessions/${session.session_id}/tasks/queue`).find();
-        const data = (response as { data: Task[] }).data || [];
-        setQueuedTasks(data);
-      } catch (error) {
-        console.error('[SessionPanel] Failed to fetch queue:', error);
-      }
-    };
-
-    fetchQueue();
-
-    const tasksService = client.service('tasks');
-
-    const handleQueued = (task: Task) => {
-      if (task.session_id === session.session_id) {
-        setQueuedTasks((prev) => {
-          // Deduplicate: optimistic update from enqueue may have already added this task
-          if (prev.some((t) => t.task_id === task.task_id)) return prev;
-          return [...prev, task].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-        });
-      }
-    };
-
-    // A queued task drops out of the drawer when its status flips off 'queued'
-    // (drained by spawnTaskExecutor → RUNNING, or admin-cancelled to STOPPED).
-    const handleTaskPatched = (task: Task) => {
-      if (task.session_id !== session.session_id) return;
-      if (task.status !== TaskStatus.QUEUED) {
-        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
-      }
-    };
-
-    const handleTaskRemoved = (task: Task) => {
-      if (task.session_id === session.session_id) {
-        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
-      }
-    };
-
-    tasksService.on('queued', handleQueued);
-    tasksService.on('patched', handleTaskPatched);
-    tasksService.on('updated', handleTaskPatched);
-    tasksService.on('removed', handleTaskRemoved);
-
-    return () => {
-      tasksService.off('queued', handleQueued);
-      tasksService.off('patched', handleTaskPatched);
-      tasksService.off('updated', handleTaskPatched);
-      tasksService.off('removed', handleTaskRemoved);
-    };
-  }, [client, session]);
 
   // Accounting spans the whole Session, never just the reached transcript pages.
   const usage = useSessionUsage(client, reactiveSessionId, open, currentUserId);
@@ -1850,7 +1794,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setScrollToBottom={setScrollToBottom}
             setScrollToTop={setScrollToTop}
             queuedTasks={queuedTasks}
-            setQueuedTasks={setQueuedTasks}
             spawnModalOpen={spawnModalOpen}
             setSpawnModalOpen={setSpawnModalOpen}
             onSpawnModalConfirm={handleSpawnModalConfirm}

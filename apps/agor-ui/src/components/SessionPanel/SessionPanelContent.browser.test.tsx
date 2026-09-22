@@ -11,11 +11,13 @@ import { SessionPanelContent } from './SessionPanelContent';
 
 // Keep the actual ConversationView scroll owner and split/queue UI. Only its
 // data feed and expensive transcript rows are replaced with deterministic data.
+const queueFeed = vi.hoisted(() => ({ tasks: [] as Task[] }));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({
     handle: null,
     state: {
       sessionId: 'session-1',
+      queuedTasks: queueFeed.tasks,
       tasks: Array.from({ length: 20 }, (_, i) => ({
         task_id: `history-${i}`,
         status: 'completed',
@@ -45,7 +47,10 @@ const session = {
   status: 'running',
 } as Session;
 const noop = () => {};
-const remove = vi.fn().mockResolvedValue(undefined);
+const removedListeners = new Set<(id: string) => void>();
+const remove = vi.fn(async (id: string) => {
+  for (const listener of removedListeners) listener(id);
+});
 const patch = vi.fn().mockResolvedValue(undefined);
 const find = vi.fn();
 const client = { service: () => ({ remove, patch, find }) } as unknown as AgorClient;
@@ -75,6 +80,14 @@ function Harness({
 }) {
   const [queue, setQueue] = useState(() => tasks(count));
   useEffect(() => setQueue(tasks(count)), [count]);
+  useEffect(() => {
+    const onRemoved = (id: string) =>
+      setQueue((prev) => prev.filter((task) => task.task_id !== id));
+    removedListeners.add(onRemoved);
+    return () => {
+      removedListeners.delete(onRemoved);
+    };
+  }, []);
   return (
     <App>
       <AppActionsProvider value={{}}>
@@ -100,7 +113,6 @@ function Harness({
                 client={client}
                 session={failed ? { ...session, status: 'failed' } : session}
                 queuedTasks={queue}
-                setQueuedTasks={setQueue}
                 scrollToBottom={null}
                 scrollToTop={null}
                 setScrollToBottom={noop}
@@ -162,6 +174,7 @@ async function expectBounded() {
 
 afterEach(() => {
   cleanup();
+  queueFeed.tasks = [];
   vi.clearAllMocks();
 });
 
@@ -338,9 +351,9 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
   await userEvent.click(await screen.findByRole('button', { name: 'Run next' }));
   expect(patch).toHaveBeenCalledTimes(2);
   remove.mockRejectedValueOnce(new Error('Try again'));
-  find.mockResolvedValueOnce({ data: tasks(25) });
   await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-  await waitFor(() => expect(find).toHaveBeenCalled());
+  await screen.findByText('Failed to remove queued task: Try again');
+  expect(find).not.toHaveBeenCalled();
   expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
 });
@@ -348,6 +361,7 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
 it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
   async (height) => {
+    queueFeed.tasks = tasks(30);
     const queueClient = {
       io: { on: noop, off: noop },
       service: (path: string) => ({

@@ -1593,6 +1593,19 @@ describe('lean transcript POC hydration', () => {
     handle.dispose();
   });
 
+  it('hydrates the latest executing turn fully without an active-task query', async () => {
+    const opts = history();
+    opts.tasks.at(-1)!.status = TaskStatus.RUNNING;
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(mock.taskFindAll).not.toHaveBeenCalled();
+    expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
+    expect(JSON.stringify(handle.state.messagesByTask.get('task-023'))).toContain('TOOL_CANARY');
+    expect(handle.state.loadedTaskIds.has('task-022')).toBe(false);
+    handle.dispose();
+  });
+
   it('starts with ten lean tasks, loads older pages once, and coalesces explicit details', async () => {
     const opts = history();
     const mock = createMockClient(opts);
@@ -1600,14 +1613,7 @@ describe('lean transcript POC hydration', () => {
     await handle.ready();
     expect(handle.state.error).toBeNull();
     expect(handle.state.tasks).toHaveLength(10);
-    expect(mock.taskFindAll).toHaveBeenCalledTimes(1);
-    expect(mock.taskFindAll.mock.calls[0][0]?.query?.status?.$in).toEqual([
-      TaskStatus.DISPATCHING,
-      TaskStatus.RUNNING,
-      TaskStatus.STOPPING,
-      TaskStatus.AWAITING_PERMISSION,
-      TaskStatus.AWAITING_INPUT,
-    ]);
+    expect(mock.taskFindAll).not.toHaveBeenCalled();
     expect(mock.messageFindAll.mock.calls[0][0].query).toMatchObject({
       session_id: SESSION_ID,
       task_id: { $in: handle.state.tasks.map((task) => task.task_id) },
@@ -1626,7 +1632,13 @@ describe('lean transcript POC hydration', () => {
     expect(JSON.stringify(handle.state.messagesByTask.get('task-023'))).toContain('TOOL_CANARY');
     handle.unloadTaskMessages('task-023');
     expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
+    const sessionGet = mock.client.service('sessions').get;
+    const queueFind = mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find;
+    const sessionReads = vi.mocked(sessionGet).mock.calls.length;
+    const queueReads = vi.mocked(queueFind).mock.calls.length;
     await Promise.all([handle.loadOlderTasks(), handle.loadOlderTasks()]);
+    expect(vi.mocked(sessionGet).mock.calls).toHaveLength(sessionReads);
+    expect(vi.mocked(queueFind).mock.calls).toHaveLength(queueReads);
     expect(handle.state.tasks).toHaveLength(20);
     await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(24);

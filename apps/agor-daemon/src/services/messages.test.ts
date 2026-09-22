@@ -791,8 +791,8 @@ dbTest(
           if (mode === 'lean') {
             expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
             expect(handle.state.tasks).toHaveLength(10);
-            // Subscription + session + task page + queue + active set + one message batch.
-            expect(initial).toHaveLength(6);
+            // Subscription + session + task page + queue + one message batch.
+            expect(initial).toHaveLength(5);
             expect(initial.filter((receipt) => receipt.path === '/messages')).toHaveLength(1);
           }
           const detailStart = receipts.length;
