@@ -12,11 +12,7 @@ import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import {
-  OPENCODE_DAEMON_CONTRIBUTION,
-  OpenCodeUnsupportedError,
-  resolveOpenCodeCapabilities,
-} from '@agor/agentic-tool-opencode/daemon';
+import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
@@ -172,6 +168,7 @@ import {
   trackExecutorProcess,
 } from './executor-tracking.js';
 import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
+import { createDeploymentToolUnsupportedGate } from './integrations/opencode/deployment-capabilities.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
 import {
   inOpenCodeNativeStateMutationSlot,
@@ -551,13 +548,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     db,
     app,
     (tool) => isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy),
-    (tool) => {
-      if (tool !== 'opencode') return undefined;
-      const capabilities = resolveOpenCodeCapabilities(config);
-      return capabilities.mode === 'unsupported'
-        ? new OpenCodeUnsupportedError(capabilities.reason)
-        : undefined;
-    }
+    createDeploymentToolUnsupportedGate(config)
   ) as unknown as SessionsServiceImpl;
   const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {

@@ -352,7 +352,8 @@ operator opt-in `agentic_tools.opencode_hosted_native_state: 'checkpointed'`
 `templated_transport`, `persistent_user_home_required`, `hosted_native_state_disabled`).
 
 Consumers (all read the same resolver): `opencode-auth` find/create/remove,
-`opencode-models` find, session creation and tool switch (`sessions.ts`), task
+`opencode-models` find, session creation and tool switch (`sessions.ts`), scheduled occurrence admission
+(`scheduler.ts`, sharing the interactive deployment gate), task
 admission (`admitExecutor`), executor launch (`getExecutorLaunch`), the task
 completion publication gate (`tasks.ts`), the executor credential resolver
 (`config/resolve-api-key`, which serves a tool only its own reviewed

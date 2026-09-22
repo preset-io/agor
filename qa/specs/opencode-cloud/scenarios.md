@@ -78,6 +78,11 @@ verification and are re-run by QA only where noted.
 
 ### Credential-free composition and compatibility regressions
 
+- Scheduled OpenCode occurrences use the same deployment gate as interactive
+  creation. Manual and cron paths reject missing opt-in or persistent homes
+  before creating a row, preserve the structured reason in the refusal log,
+  and admit a properly configured hosted occurrence (fake prompt delivery).
+
 - Hosted execute-handler composition: real capability/admission/launch contributions
   with a fake templated launcher admit repeated turns and concurrent same-owner
   sessions without a daemon-local containment slot. Local native-file containment

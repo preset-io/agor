@@ -908,7 +908,14 @@ export class SchedulerService {
       throw new BadRequest(`${resolvedConfig.activeTool} is disabled for this workspace`);
     }
     const unsupported = this.config.deploymentToolUnsupported(resolvedConfig.activeTool);
-    if (unsupported) throw unsupported;
+    if (unsupported) {
+      this.logWorkEvent('warn', 'occurrence_tool_unsupported', {
+        schedule_id: schedule.schedule_id,
+        error_code:
+          typeof unsupported.data?.code === 'string' ? unsupported.data.code : 'operation_failed',
+      });
+      throw unsupported;
+    }
     // Native Codex auth cannot be projected safely into branch-owned state.
     // Resolve it before admission so a rejected scheduled run cannot leave an
     // otherwise-unused branch permanently adopted. Executor startup repeats

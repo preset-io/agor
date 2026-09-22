@@ -3,8 +3,10 @@
  * topology (hosted workspace without the hosted native-state contract). The
  * sessions service must refuse to create or switch to such a tool with the
  * same structured reason the settings and prompt paths report, before any
- * session row exists (scenarios OC-02 and OC-62; scheduled, fork, and spawn
- * creation all route through `create`).
+ * session row exists (scenarios OC-02 and OC-62; fork and spawn creation route
+ * through `create`). Scheduled occurrences are gated separately in
+ * SchedulerService.spawnScheduledSession; scheduler.test.ts covers that path
+ * in the "scheduler deployment capability admission" block.
  */
 import {
   BranchRepository,

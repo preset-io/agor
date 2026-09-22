@@ -6,7 +6,7 @@ import type { OpenCodeUnsupportedCode, OpenCodeUnsupportedReason } from '@agor/c
 /**
  * The single owner of "can this deployment run OpenCode, and how".
  *
- * Every consumer (provider settings, model catalog, session creation, tool
+ * Every consumer (provider settings, model catalog, session creation, scheduled occurrence admission, tool
  * switch, prompt admission, executor launch, and the UI) reads this resolver
  * instead of re-deriving a guard, so hosted workspaces report one truthful,
  * structured reason and fail closed the same way everywhere. See
