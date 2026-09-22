@@ -15,6 +15,7 @@ import type {
   MCPSlackRecoveryNotice,
   SdkFailure,
   SessionID,
+  SessionUsageSummary,
   Task,
   TaskID,
   TaskMetadata,
@@ -58,6 +59,7 @@ import {
   insert,
   isPostgresDatabase,
   isSQLiteDatabase,
+  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -326,6 +328,7 @@ export interface TaskRuntimeDiscoveryOptions {
 }
 
 export interface TaskFindPageOptions {
+  excludeQueued?: boolean;
   taskId?: TaskID;
   afterTaskId?: TaskID;
   throughTaskId?: TaskID;
@@ -706,6 +709,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
+    if (opts.excludeQueued) conditions.push(ne(tasks.status, TaskStatus.QUEUED));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
     if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
     if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
@@ -752,6 +756,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           }))
         : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
       total: Number(countRow?.count ?? 0),
+    };
+  }
+
+  /** Aggregate in SQL: no prompt, response or tool payload leaves the database. */
+  async getSessionUsage(sessionId: SessionID): Promise<SessionUsageSummary> {
+    const sum = (path: string) =>
+      sql<number>`COALESCE(SUM(CAST(${jsonExtract(this.db, tasks.data, `normalized_sdk_response.${path}`)} AS DOUBLE PRECISION)), 0)`;
+    const row = await select(this.db, {
+      total: sum('tokenUsage.totalTokens'),
+      input: sum('tokenUsage.inputTokens'),
+      output: sum('tokenUsage.outputTokens'),
+      cacheRead: sum('tokenUsage.cacheReadTokens'),
+      cacheCreation: sum('tokenUsage.cacheCreationTokens'),
+      cost: sum('costUsd'),
+    })
+      .from(tasks)
+      .where(eq(tasks.session_id, sessionId))
+      .one();
+    return {
+      total: Number(row?.total ?? 0),
+      input: Number(row?.input ?? 0),
+      output: Number(row?.output ?? 0),
+      cacheRead: Number(row?.cacheRead ?? 0),
+      cacheCreation: Number(row?.cacheCreation ?? 0),
+      cost: Number(row?.cost ?? 0),
     };
   }
 

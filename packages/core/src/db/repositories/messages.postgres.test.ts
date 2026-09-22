@@ -260,6 +260,17 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         created_by: owner.user_id,
       });
       countedTaskId = countedTask.task_id;
+      await taskRepo.update(countedTaskId, {
+        normalized_sdk_response: {
+          tokenUsage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
+          costUsd: 1.25,
+        },
+      });
+      expect(await taskRepo.getSessionUsage(visibleSession.session_id)).toMatchObject({
+        total: 30,
+        cost: 1.25,
+      });
+
       racingTaskId = (
         await taskRepo.create({ session_id: visibleSession.session_id, created_by: owner.user_id })
       ).task_id;
@@ -295,6 +306,15 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         skip: 0,
       });
       expect(page).toMatchObject({ total: 0, data: [] });
+      expect(await new TaskRepository(scoped).getSessionUsage(visibleSessionId!)).toEqual({
+        total: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: 0,
+      });
+
       await expect(
         new TaskRepository(scoped).update(countedTaskId!, { status: TaskStatus.COMPLETED })
       ).rejects.toThrow();

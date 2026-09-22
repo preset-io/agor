@@ -4,6 +4,7 @@ import {
   RepoRepository,
   SessionRepository,
   shortId,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
@@ -131,6 +132,35 @@ describe('sessions.get authorization loading', () => {
       expect(authFind).toHaveBeenCalledTimes(1);
       expect(after.wrappedGets()).toBe(1);
       expect(after.relationshipReads).toHaveBeenCalledTimes(1);
+      const taskRepo = new TaskRepository(db);
+      await taskRepo.create({
+        session_id: session.session_id,
+        created_by: user.user_id,
+        full_prompt: 'SECRET_PROMPT',
+        normalized_sdk_response: {
+          tokenUsage: { totalTokens: 30, inputTokens: 20, outputTokens: 10 },
+          costUsd: 1,
+        },
+      });
+      const usage = await after.app.service('sessions').get(shortSessionId, {
+        provider: 'rest',
+        user: { user_id: user.user_id, role: ROLES.MEMBER },
+        query: { include_usage: true },
+      });
+      expect(usage.usage_summary).toMatchObject({ total: 30, cost: 1 });
+      expect(JSON.stringify(usage.usage_summary)).not.toContain('SECRET_PROMPT');
+      expect(result.usage_summary).toBeUndefined();
+      const stranger = await new UsersRepository(db).create({
+        email: `stranger-${generateId()}@example.invalid`,
+        role: ROLES.MEMBER,
+      });
+      await expect(
+        after.app.service('sessions').get(shortSessionId, {
+          provider: 'rest',
+          user: { user_id: stranger.user_id, role: ROLES.MEMBER },
+          query: { include_usage: true },
+        })
+      ).rejects.toThrow();
     }
   );
 });

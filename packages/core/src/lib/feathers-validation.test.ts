@@ -300,3 +300,12 @@ describe('mcpCatalogQueryValidator', () => {
     expect(context.params.query).toEqual({});
   });
 });
+
+it('preserves transcript queue exclusion and opt-in session accounting', async () => {
+  const tasks = { params: { query: { session_id: '019e8e1c', status: { $ne: 'queued' } } } };
+  await typedValidateQuery(taskQueryValidator)(tasks);
+  expect(tasks.params.query.status).toEqual({ $ne: 'queued' });
+  const session = { params: { query: { include_usage: 'true' } } };
+  await typedValidateQuery(sessionQueryValidator)(session);
+  expect(session.params.query.include_usage).toBe(true);
+});

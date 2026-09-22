@@ -218,7 +218,19 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
 export const SESSION_SDK_HOME_SCOPES = ['execution_home', 'branch'] as const;
 export type SessionSdkHomeScope = (typeof SESSION_SDK_HOME_SCOPES)[number];
 
+export interface SessionUsageSummary {
+  total: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  cost: number;
+}
+
 export interface Session {
+  /** Read-only, opt-in aggregate over all tasks, independent of transcript paging. */
+  usage_summary?: SessionUsageSummary;
+
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
 

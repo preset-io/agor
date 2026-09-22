@@ -4052,3 +4052,63 @@ describe('TaskRepository MCP Slack recovery notice CAS', () => {
     );
   });
 });
+
+describe('transcript-independent task queries', () => {
+  dbTest(
+    'aggregates all twenty turns without prompt data and excludes queued rows before paging',
+    async ({ db }) => {
+      const sessionId = await createSessionWithDeps(db);
+      const repository = new TaskRepository(db);
+      const otherSessionId = await createSessionWithDeps(db);
+      for (let i = 0; i < 20; i++) {
+        await repository.create(
+          createTaskData({
+            session_id: sessionId,
+            status: TaskStatus.COMPLETED,
+            full_prompt: 'PROMPT_PAYLOAD_CANARY',
+            normalized_sdk_response: {
+              tokenUsage: {
+                totalTokens: 30,
+                inputTokens: 20,
+                outputTokens: 10,
+                cacheReadTokens: 2,
+                cacheCreationTokens: 1,
+              },
+              costUsd: 1,
+            },
+          })
+        );
+      }
+      await repository.create(
+        createTaskData({
+          session_id: otherSessionId,
+          normalized_sdk_response: {
+            tokenUsage: { totalTokens: 999, inputTokens: 999, outputTokens: 0 },
+            costUsd: 999,
+          },
+        })
+      );
+      for (let i = 0; i < 12; i++)
+        await repository.create(
+          createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED })
+        );
+      const page = await repository.findPage({
+        sessionId,
+        excludeQueued: true,
+        limit: 10,
+        sort: { task_id: -1 },
+      });
+      expect(page.data).toHaveLength(10);
+      expect(page.total).toBe(20);
+      expect(page.data.every((task) => task.status === TaskStatus.COMPLETED)).toBe(true);
+      expect(await repository.getSessionUsage(sessionId)).toEqual({
+        total: 600,
+        input: 400,
+        output: 200,
+        cacheRead: 40,
+        cacheCreation: 20,
+        cost: 20,
+      });
+    }
+  );
+});

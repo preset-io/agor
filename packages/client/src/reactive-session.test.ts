@@ -131,7 +131,10 @@ function createMockClient(opts: MockClientOptions) {
       findAll: taskFindAll,
       find: vi.fn(async ({ query }: { query: Record<string, unknown> }) => {
         let rows = [...opts.tasks].sort((a, b) => b.task_id.localeCompare(a.task_id));
-        if (query.status) rows = rows.filter((task) => task.status === query.status);
+        if (typeof query.status === 'string')
+          rows = rows.filter((task) => task.status === query.status);
+        if (query.status && typeof query.status === 'object' && '$ne' in query.status)
+          rows = rows.filter((task) => task.status !== (query.status as { $ne: string }).$ne);
         const cursor = query.task_id as { $lte?: string; $gt?: string } | undefined;
         if (cursor?.$gt) rows = rows.filter((task) => task.task_id > cursor.$gt!);
         if ((query.$sort as { task_id?: number })?.task_id === 1) rows.reverse();
@@ -1539,6 +1542,44 @@ describe('lean transcript POC hydration', () => {
       cacheScope: 'preview',
     });
     expect(preview.state.messagesByTask.size).toBe(0);
+  });
+
+  it('keeps history and preview reachable behind a full page of queued tasks', async () => {
+    const opts = history();
+    opts.tasks.slice(1).forEach((task) => {
+      task.status = TaskStatus.QUEUED;
+    });
+    for (const cacheScope of ['session', 'preview'] as const) {
+      const handle = new ReactiveSessionHandle(createMockClient(opts).client, SESSION_ID, {
+        taskHydration: 'lean',
+        cacheScope,
+      });
+      await handle.ready();
+      expect(handle.state.tasks.some((task) => task.task_id === 'task-000')).toBe(true);
+      expect(handle.state.messagesByTask.has('task-000')).toBe(true);
+      handle.dispose();
+    }
+  });
+
+  it('runs a fresh resync after reconnect invalidates an in-flight resync', async () => {
+    const opts: MockClientOptions = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    opts.deferTaskMessageFetch = 'task-023';
+    const old = handle.resync();
+    await vi.waitFor(() => expect(mock.messageFindAll.mock.calls.length).toBe(20));
+    mock.fireIo('disconnect');
+    opts.tasks.push(makeTask('task-024', TaskStatus.COMPLETED));
+    mock.fireIo('connect');
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await old;
+    await vi.waitFor(() =>
+      expect(handle.state.tasks.some((task) => task.task_id === 'task-024')).toBe(true)
+    );
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
   });
 
   it('starts with ten lean tasks, loads older pages once, and coalesces explicit details', async () => {

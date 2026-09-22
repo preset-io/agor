@@ -69,14 +69,7 @@ export interface SessionFooterProps {
   session: Session & { agentic_tool: AgenticToolName };
   currentUserId?: string;
   footerTimerTask: Task | null;
-  tokenBreakdown: {
-    total: number;
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheCreation: number;
-    cost: number;
-  };
+  tokenBreakdown: NonNullable<Session['usage_summary']>;
   latestContextWindow: { used: number; limit: number; taskMetadata: unknown } | null;
   footerGradient?: string;
   // MCP data for Tools chip

@@ -57,6 +57,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
+import { useSessionUsage } from '../../hooks/useSessionUsage';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -688,30 +689,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     };
   }, [client, session]);
 
-  // Token breakdown calculation
-  const tokenBreakdown = React.useMemo(() => {
-    if (!session?.agentic_tool) {
-      return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
-    }
-
-    return tasks.reduce(
-      (acc, task) => {
-        if (!task.normalized_sdk_response) return acc;
-
-        const { tokenUsage, costUsd } = task.normalized_sdk_response;
-
-        return {
-          total: acc.total + tokenUsage.totalTokens,
-          input: acc.input + tokenUsage.inputTokens,
-          output: acc.output + tokenUsage.outputTokens,
-          cacheRead: acc.cacheRead + (tokenUsage.cacheReadTokens || 0),
-          cacheCreation: acc.cacheCreation + (tokenUsage.cacheCreationTokens || 0),
-          cost: acc.cost + (costUsd || 0),
-        };
-      },
-      { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
-    );
-  }, [tasks, session?.agentic_tool]);
+  // Accounting spans the whole Session, never just the reached transcript pages.
+  const usage = useSessionUsage(client, reactiveSessionId, open, currentUserId);
+  const tokenBreakdown = usage ?? {
+    total: 0,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    cost: 0,
+  };
 
   // Get latest context window
   const latestContextWindow = React.useMemo(() => {

@@ -10,6 +10,9 @@ import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { MOBILE_SHELL_MAX_WIDTH } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
+// Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
+vi.mock('../../hooks/useSessionUsage', () => ({ useSessionUsage: () => undefined }));
+
 vi.mock('../AutocompleteTextarea', () => ({
   AutocompleteTextarea: () => <textarea aria-label="Prompt" />,
 }));

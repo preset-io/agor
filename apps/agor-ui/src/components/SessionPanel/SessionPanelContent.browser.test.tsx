@@ -24,6 +24,7 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
       messagesByTask: new Map(),
       loadedTaskIds: new Set(),
       streamingMessages: new Map(),
+      toolsByTask: new Map(),
     },
   }),
 }));
@@ -348,8 +349,10 @@ it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
   async (height) => {
     const queueClient = {
+      io: { on: noop, off: noop },
       service: (path: string) => ({
         find: async () => ({ data: path.endsWith('/tasks/queue') ? tasks(30) : [] }),
+        get: async () => session,
         on: noop,
         off: noop,
         remove,

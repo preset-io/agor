@@ -818,6 +818,7 @@ export class ReactiveSessionHandle {
           session_id: this.sessionId,
           $sort: { task_id: -1 },
           $limit: pageSize + 1,
+          status: { $ne: TaskStatus.QUEUED },
           ...(cursor ? { task_id: { $lte: cursor } } : {}),
         },
       });
@@ -845,6 +846,7 @@ export class ReactiveSessionHandle {
             query: {
               session_id: this.sessionId,
               task_id: { $gt: after, $lte: through },
+              status: { $ne: TaskStatus.QUEUED },
               $sort: { task_id: 1 },
               $limit: 100,
             },
@@ -1595,6 +1597,7 @@ export class ReactiveSessionHandle {
    * failure cannot stomp on a later success and re-stamp a stale error.
    */
   private resyncInflight: Promise<void> | null = null;
+  private resyncGeneration = -1;
 
   /**
    * Re-fetch session/tasks/queue (and loaded message buckets) from the daemon.
@@ -1616,7 +1619,12 @@ export class ReactiveSessionHandle {
    */
   async resync(): Promise<void> {
     if (this.disposed) return;
-    if (this.resyncInflight) return this.resyncInflight;
+    if (this.resyncInflight) {
+      if (this.resyncGeneration === this.leanConnectionGeneration) return this.resyncInflight;
+      await this.resyncInflight;
+      return this.resync();
+    }
+    this.resyncGeneration = this.leanConnectionGeneration;
     const promise = this.doResync();
     this.resyncInflight = promise;
     try {

@@ -283,6 +283,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       pageOptions.sessionIds = sessionId.$in as SessionID[];
     }
+    if (query.status && typeof query.status === 'object' && '$ne' in query.status) {
+      if (query.status.$ne !== TaskStatus.QUEUED)
+        throw new BadRequest('Only queued status exclusion is supported');
+      pageOptions.excludeQueued = true;
+    }
     if (typeof query.status === 'string') pageOptions.status = query.status as Task['status'];
     if (typeof query.created_at === 'number' && Number.isFinite(query.created_at)) {
       pageOptions.createdAt = new Date(query.created_at);

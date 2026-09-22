@@ -359,7 +359,9 @@ is the default experience, not a display preference or environment feature flag.
 No database migration is needed.
 
 The conversation opens the latest ten tasks with user and assistant text visible. Scroll
-up (or use **Load older history**) to fetch earlier tasks. Expanding **Tool calls** fetches
+up (or use **Load older history**) to fetch earlier tasks. Queued prompts do not consume
+transcript page slots. Session token/cost totals are aggregated separately across all tasks,
+so scrolling history does not change the totals. Expanding **Tool calls** fetches
 one task’s full messages, restores tool blocks in their original positions, and opens
 the first loaded group. Other groups remain collapsed. Inside an opened group, edit/write
 tools show their diffs by default; other tool details retain their existing collapsed defaults.
