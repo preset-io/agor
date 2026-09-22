@@ -221,3 +221,30 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
   );
   expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
 });
+
+it('uses only verified recorded counts, never legacy zero; streamed tools override snapshots', () => {
+  const load = vi.fn();
+  const { rerender } = render(view({ onLoadTaskMessages: load }));
+  expect(screen.getByRole('button', { name: 'Tool calls' })).toBeVisible();
+  rerender(view({ task: { ...task, recorded_tool_count: 0 }, onLoadTaskMessages: load }));
+  expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+  expect(screen.getByText('Retained prompt')).toBeVisible();
+  expect(screen.getByText('Visible answer')).toBeVisible();
+  expect(load).not.toHaveBeenCalled();
+  rerender(view({ task: { ...task, recorded_tool_count: 2 }, onLoadTaskMessages: load }));
+  fireEvent.click(screen.getByRole('button', { name: '2 tool calls' }));
+  expect(load).toHaveBeenCalledTimes(1);
+  rerender(
+    view({
+      task: { ...task, recorded_tool_count: 0, status: TaskStatus.RUNNING },
+      taskMessages: [
+        ...messages,
+        message(2, MessageRole.ASSISTANT, [
+          { type: 'tool_use', id: 'active', name: 'Read', input: {} },
+        ]),
+      ],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(screen.getByRole('button', { name: /Read/ })).toBeVisible();
+});

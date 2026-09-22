@@ -9,7 +9,11 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, isTaskExecuting } from '@agor/core/types';
+import {
+  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+  isTaskExecuting,
+  isTerminalTaskStatus,
+} from '@agor/core/types';
 import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   hasMinimumRole,
@@ -952,45 +956,51 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             (block) => block.type === 'tool_use' || block.type === 'tool_result'
           ))
     );
-    const toolDisclosure = leanTranscript && (
-      <div style={{ marginBottom: token.marginSM }}>
-        {!taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-          <ToolDisclosureHeader
-            label={
-              detailsLoading
-                ? 'Loading tool activity…'
-                : detailsError
-                  ? 'Couldn’t load tool activity · Retry'
-                  : 'Tool calls'
-            }
-            expanded={false}
-            loading={detailsLoading}
-            onClick={loadActivity}
-          />
-        ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
-          <>
+    const toolDisclosure = leanTranscript &&
+      (task.recorded_tool_count !== 0 ||
+        hasTools ||
+        latestActivity ||
+        !isTerminalTaskStatus(task.status)) && (
+        <div style={{ marginBottom: token.marginSM }}>
+          {!taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
             <ToolDisclosureHeader
-              label="Tool calls"
-              expanded={emptyActivityExpanded}
-              onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
+              label={
+                detailsLoading
+                  ? 'Loading tool activity…'
+                  : detailsError
+                    ? 'Couldn’t load tool activity · Retry'
+                    : task.recorded_tool_count != null && task.recorded_tool_count > 0
+                      ? `${task.recorded_tool_count} tool ${task.recorded_tool_count === 1 ? 'call' : 'calls'}`
+                      : 'Tool calls'
+              }
+              expanded={false}
+              loading={detailsLoading}
+              onClick={loadActivity}
             />
-            {emptyActivityExpanded && (
-              <div
-                style={{
-                  fontSize: token.fontSizeSM,
-                  color: token.colorTextSecondary,
-                  paddingInlineStart: token.marginSM,
-                }}
-              >
-                {latestActivity
-                  ? 'Tool activity was observed, but no details are recorded for this turn'
-                  : 'No tool calls'}
-              </div>
-            )}
-          </>
-        ) : null}
-      </div>
-    );
+          ) : taskMessagesLoaded && !hasTools && !isTaskExecuting(task) ? (
+            <>
+              <ToolDisclosureHeader
+                label="Tool calls"
+                expanded={emptyActivityExpanded}
+                onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
+              />
+              {emptyActivityExpanded && (
+                <div
+                  style={{
+                    fontSize: token.fontSizeSM,
+                    color: token.colorTextSecondary,
+                    paddingInlineStart: token.marginSM,
+                  }}
+                >
+                  {latestActivity
+                    ? 'Tool activity was observed, but no details are recorded for this turn'
+                    : 'No tool calls'}
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+      );
     const taskContent = (
       <div style={{ paddingTop: token.sizeUnit }}>
         {isVerifiedRuntimeInterruption(task, isLatestTask) && (

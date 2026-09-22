@@ -87,6 +87,7 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import { countRecordedTools } from './recorded-tool-count';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -565,6 +566,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // Filled in by the executor after the turn — don't substitute a default.
         ...(task.model ? { model: task.model } : {}),
         tool_use_count: task.tool_use_count ?? 0,
+        recorded_tool_count: task.recorded_tool_count,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
         error_message: task.error_message, // Human-readable failure reason when status='failed'
@@ -602,7 +604,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async create(data: Partial<Task>): Promise<Task> {
     try {
-      const insertData = this.taskToInsert(data);
+      const insertData = this.taskToInsert({ ...data, recorded_tool_count: null });
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
@@ -1789,6 +1791,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const failure = input.sdkFailure ?? current.sdk_failure;
       const data = {
         ...row.data,
+        recorded_tool_count: await countRecordedTools(txDb, fullId),
         duration_ms: terminal.duration_ms,
         message_range: terminal.message_range ?? current.message_range,
         ...(failure
@@ -1931,6 +1934,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         const merged = {
           ...deepMerge(current, withTerminalTiming(current, updates)),
+          recorded_tool_count:
+            updates.status !== undefined &&
+            isTerminalTaskStatus(updates.status) &&
+            !isTerminalTaskStatus(current.status)
+              ? await countRecordedTools(txDb, fullId)
+              : current.recorded_tool_count,
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,
@@ -2784,6 +2793,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       queue_position: undefined,
       completed_at: completedAt.toISOString(),
       error_message: MISSING_TASK_ACTOR_ERROR,
+      recorded_tool_count: await countRecordedTools(txDb, fullId),
     };
     const insertData = this.taskToInsert(failed);
     await update(txDb, tasks)

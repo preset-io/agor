@@ -363,7 +363,11 @@ up (or use **Load older history**) to fetch earlier tasks. Expanding **Tool call
 one task’s full messages, restores tool blocks in their original positions, and opens
 the first loaded group. Other groups remain collapsed. Inside an opened group, edit/write
 tools show their diffs by default; other tool details retain their existing collapsed defaults.
-Empty results retain the tool disclosure, with **No tool calls** inside its expanded body.
+For newly finished turns, a verified recorded count hides the disclosure when zero and
+labels it **N tool calls** when positive. Legacy or subsequently modified transcripts
+retain the generic disclosure because their count is unknown; no backfill is required.
+If expanding an unknown turn returns no tools, **No tool calls** appears in its expanded body.
+Counts describe persisted activity, not calls an agent adapter failed to record.
 Active tasks continue receiving full live activity and approvals; live events update
 the current tool header even before the corresponding message is persisted.
 The latest tool-group label shimmers while the turn remains active, including gaps between

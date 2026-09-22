@@ -24,6 +24,7 @@ import {
 } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages, sessions, tasks } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
+import { invalidateRecordedToolCount } from './recorded-tool-count';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
@@ -273,6 +274,7 @@ export class MessagesRepository {
           await this.assertSessionBelongsToTenant(tx, message.session_id);
           if (message.task_id) {
             await this.assertTaskBelongsToSession(tx, message.task_id, message.session_id);
+            await invalidateRecordedToolCount(tx, message.task_id);
           }
           const inserted = await insert(tx, messages).values(row).returning().one();
           const created = this.rowToMessage(inserted);
@@ -312,6 +314,12 @@ export class MessagesRepository {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          const parent = await select(txDb, { task_id: messages.task_id })
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (parent?.task_id)
+            await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, parent.task_id));
           await lockRowForUpdate(txDb, this.db, messages, eq(messages.message_id, messageId));
           const row = await select(txDb)
             .from(messages)
@@ -338,6 +346,7 @@ export class MessagesRepository {
             );
             sanitizedData = omittedMessageData(error.category);
           }
+          if (parent?.task_id) await invalidateRecordedToolCount(txDb, parent.task_id);
           const updatedRow = await update(txDb, messages)
             .set({ data: sanitizedData })
             .where(eq(messages.message_id, messageId))
@@ -596,6 +605,15 @@ export class MessagesRepository {
       runDatabaseTransaction(
         this.db,
         async (tx) => {
+          // Task before Message matches create/terminalization lock ordering.
+          const parent = await select(tx, { task_id: messages.task_id })
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (parent?.task_id) {
+            await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+            await invalidateRecordedToolCount(tx, parent.task_id);
+          }
           // PATCH reconstructs the JSON data column from the current logical
           // Message. Lock before reading it so concurrent patches to distinct
           // mutable fields cannot overwrite one another with stale data.
@@ -640,13 +658,42 @@ export class MessagesRepository {
    * Delete all messages for a session (cascades automatically via FK)
    */
   async deleteBySessionId(sessionId: SessionID): Promise<void> {
-    await deleteFrom(this.db, messages).where(eq(messages.session_id, sessionId)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const parents = await select(tx, { task_id: tasks.task_id })
+          .from(tasks)
+          .where(eq(tasks.session_id, sessionId))
+          .orderBy(asc(tasks.task_id))
+          .all();
+        for (const parent of parents) {
+          await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+          await invalidateRecordedToolCount(tx, parent.task_id);
+        }
+        await deleteFrom(tx, messages).where(eq(messages.session_id, sessionId)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
    * Delete a single message
    */
   async delete(messageId: MessageID): Promise<void> {
-    await deleteFrom(this.db, messages).where(eq(messages.message_id, messageId)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const parent = await select(tx, { task_id: messages.task_id })
+          .from(messages)
+          .where(eq(messages.message_id, messageId))
+          .one();
+        if (parent?.task_id) {
+          await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+          await invalidateRecordedToolCount(tx, parent.task_id);
+        }
+        await deleteFrom(tx, messages).where(eq(messages.message_id, messageId)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 }

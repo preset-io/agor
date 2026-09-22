@@ -527,3 +527,20 @@ it('loads an older page on upward wheel intent when short history cannot scroll'
   await waitFor(() => expect(screen.getByText('Prompt 14')).toBeInTheDocument());
   expect(loadOlderTasks).toHaveBeenCalledTimes(1);
 });
+
+it('hides only verified empty history and lazily opens known counts while legacy turns stay reachable', async () => {
+  state = {
+    ...state,
+    tasks: state.tasks.map((task, index) => ({
+      ...task,
+      recorded_tool_count: index === 0 ? 0 : index === 1 ? 2 : undefined,
+    })),
+  };
+  render(<ConversationView client={null} sessionId={sessionId} />);
+  expect(screen.getByText('Prompt 15')).toBeVisible();
+  expect(screen.getByText(/Answer 15\./)).toBeVisible();
+  expect(screen.getAllByRole('button', { name: 'Tool calls' })).toHaveLength(3);
+  expect(loadTaskMessages).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: '2 tool calls' }));
+  await waitFor(() => expect(loadTaskMessages).toHaveBeenCalledExactlyOnceWith(tasks[16].task_id));
+});

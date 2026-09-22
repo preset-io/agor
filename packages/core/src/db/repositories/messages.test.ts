@@ -6,13 +6,13 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
-import { MessageRole, PermissionStatus } from '@agor/core/types';
+import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { select, update } from '../database-wrapper';
-import { messages as messagesTable } from '../schema';
+import { messages as messagesTable, tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -1072,4 +1072,118 @@ describe('lean transcript POC', () => {
     },
     60_000
   );
+});
+
+describe('recorded tool count snapshots', () => {
+  dbTest(
+    'counts distinct persisted IDs at completion, not results, mirrors, or retries; late writes invalidate',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      const repository = new MessagesRepository(db);
+      const tasks = new TaskRepository(db);
+      const call = { id: 'call-1', name: 'Read', input: { canary: 'TOOL_INPUT_CANARY' } };
+      const first = await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          content: [{ type: 'tool_use', ...call }],
+          tool_uses: [call],
+        })
+      );
+      await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 1,
+          content: [
+            { type: 'tool_use', ...call },
+            { type: 'tool_result', tool_use_id: call.id, content: 'RESULT_CANARY' },
+          ],
+        })
+      );
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+      const completed = await tasks.update(taskId, { status: TaskStatus.COMPLETED });
+      expect(completed.recorded_tool_count).toBe(1);
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBe(1);
+      expect((await tasks.update(taskId, { recorded_tool_count: 0 })).recorded_tool_count).toBe(1);
+      await repository.update(first.message_id, { content: 'replaced' });
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+      await update(db, tasksTable)
+        .set({
+          data: {
+            ...(await select(db).from(tasksTable).where(eq(tasksTable.task_id, taskId)).one())!
+              .data,
+            recorded_tool_count: 1,
+          },
+        })
+        .where(eq(tasksTable.task_id, taskId))
+        .run();
+      await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 2,
+          content: 'late message',
+        })
+      );
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+    }
+  );
+
+  dbTest(
+    'leaves legacy zero unknown; verifies empty, failed, and result-only turns independently',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const tasks = new TaskRepository(db);
+      const legacyId = await createTestTask(db, sessionId);
+      const row = await select(db).from(tasksTable).where(eq(tasksTable.task_id, legacyId)).one();
+      const { recorded_tool_count: _count, ...legacyData } = row!.data;
+      await update(db, tasksTable)
+        .set({ status: TaskStatus.COMPLETED, data: legacyData })
+        .where(eq(tasksTable.task_id, legacyId))
+        .run();
+      expect((await tasks.findById(legacyId))?.recorded_tool_count).toBeUndefined();
+      expect(
+        (await tasks.update(legacyId, { duration_ms: 1 })).recorded_tool_count
+      ).toBeUndefined();
+      const emptyId = await createTestTask(db, sessionId);
+      expect((await tasks.update(emptyId, { status: TaskStatus.FAILED })).recorded_tool_count).toBe(
+        0
+      );
+      const resultId = await createTestTask(db, sessionId);
+      const repository = new MessagesRepository(db);
+      const result = await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: resultId,
+          content: [{ type: 'tool_result', tool_use_id: 'orphan', content: 'stored result' }],
+        })
+      );
+      expect(
+        (await tasks.update(resultId, { status: TaskStatus.COMPLETED })).recorded_tool_count
+      ).toBe(1);
+      await repository.delete(result.message_id);
+      expect((await tasks.findById(resultId))?.recorded_tool_count).toBeNull();
+      await repository.deleteBySessionId(sessionId);
+      expect((await tasks.findById(emptyId))?.recorded_tool_count).toBeNull();
+    }
+  );
+});
+
+dbTest('does not certify malformed recorded references as empty', async ({ db }) => {
+  const sessionId = await createTestSession(db);
+  const taskId = await createTestTask(db, sessionId);
+  const repository = new MessagesRepository(db);
+  await repository.create(
+    createMessageData({
+      session_id: sessionId,
+      task_id: taskId,
+      content: [{ type: 'tool_use', id: '', name: 'Read', input: {} }],
+    })
+  );
+  expect(
+    (await new TaskRepository(db).update(taskId, { status: TaskStatus.COMPLETED }))
+      .recorded_tool_count
+  ).toBeNull();
 });
