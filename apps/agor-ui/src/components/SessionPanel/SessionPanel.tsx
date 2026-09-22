@@ -338,6 +338,15 @@ PromptInput.displayName = 'PromptInput';
 // a fresh array — the memos deriving footer props from `tasks` (and through
 // them the memoized SessionFooter) key on its identity.
 const EMPTY_TASKS: Task[] = [];
+// Keep the memoized footer stable while session accounting is unavailable.
+const EMPTY_USAGE: NonNullable<Session['usage_summary']> = {
+  total: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheCreation: 0,
+  cost: 0,
+};
 
 export interface SessionPanelProps {
   client: AgorClient | null;
@@ -691,14 +700,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   // Accounting spans the whole Session, never just the reached transcript pages.
   const usage = useSessionUsage(client, reactiveSessionId, open, currentUserId);
-  const tokenBreakdown = usage ?? {
-    total: 0,
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheCreation: 0,
-    cost: 0,
-  };
+  const tokenBreakdown = usage ?? EMPTY_USAGE;
 
   // Get latest context window
   const latestContextWindow = React.useMemo(() => {
