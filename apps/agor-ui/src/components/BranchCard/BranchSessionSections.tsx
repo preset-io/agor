@@ -843,7 +843,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </>
   );
 
-  const renderAgentIcon = (session: Session, visible = true) => {
+  const renderAgentIcon = (session: Session, visible = true, keepSlot = true) => {
     if (!isPanel) {
       return isSessionExecuting(session) ? (
         <Spin size="small" />
@@ -852,14 +852,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       );
     }
     const icon = <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} />;
-    // A hidden icon keeps its exact slot so titles stay aligned with siblings.
-    return visible ? (
-      icon
-    ) : (
+    if (visible) return icon;
+    // A hidden icon keeps its exact slot only when a sibling's visible icon needs alignment.
+    return keepSlot ? (
       <span aria-hidden="true" style={{ display: 'flex', visibility: 'hidden' }}>
         {icon}
       </span>
-    );
+    ) : null;
   };
 
   const renderPanelStatusDot = (session: Session) => {
@@ -1115,7 +1114,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             flex={1}
             style={{ minWidth: 0 }}
           >
-            {renderAgentIcon(session, !isPanel || node.parentAgenticTool !== session.agentic_tool)}
+            {renderAgentIcon(
+              session,
+              !isPanel || node.parentAgenticTool !== session.agentic_tool,
+              Boolean(node.siblingShowsAgentIcon)
+            )}
             {isRemoteSurrogate ? (
               <Tooltip title="Remote session created from this session. Click to open it in its own branch.">
                 <ExportOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />

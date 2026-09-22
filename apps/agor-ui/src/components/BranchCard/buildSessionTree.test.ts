@@ -70,7 +70,11 @@ describe('session tree genealogy', () => {
     );
 
     expect(buildSessionTree([root, child, orphan])).toMatchObject([
-      { key: 'root', parentAgenticTool: undefined, children: [{ parentAgenticTool: 'codex' }] },
+      {
+        key: 'root',
+        parentAgenticTool: undefined,
+        children: [{ parentAgenticTool: 'codex', siblingShowsAgentIcon: true }],
+      },
       { key: 'orphan', parentAgenticTool: undefined },
     ]);
   });

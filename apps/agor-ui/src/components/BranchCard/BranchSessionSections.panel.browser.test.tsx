@@ -178,8 +178,10 @@ it('shows agent icons only where the agent changes and hides the implied spawn m
   const iconVisible = (title: string) =>
     getComputedStyle(row(title).querySelector('.tool-icon')!).visibility === 'visible';
   expect(iconVisible('Security agor')).toBe(true);
-  expect(iconVisible('Astra recheck — Abuse')).toBe(false);
   expect(iconVisible('Independent availability')).toBe(true);
+  // A hidden icon reserves space only when a sibling shows one.
+  expect(iconVisible('Availability fixes')).toBe(false);
+  expect(row('Astra recheck — Abuse').querySelector('.tool-icon')).toBeNull();
   expect(row('Astra recheck — Abuse').querySelector('[aria-label="subnode"]')).toBeNull();
   expect(
     row('Execution security — regression-safe').querySelector('[aria-label="fork"]')
