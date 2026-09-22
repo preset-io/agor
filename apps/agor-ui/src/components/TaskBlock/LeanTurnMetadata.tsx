@@ -99,9 +99,11 @@ export function LeanTurnMetadata({
           opacity: visible ? 1 : 0,
           transform: visible ? 'translateY(0)' : `translateY(${token.sizeUnit}px)`,
           pointerEvents: visible ? 'auto' : 'none',
+          // Delay visibility only on exit so the fade can finish. Pointer
+          // events stop immediately; interrupted hover reverses without timers.
           transition: reducedMotion
             ? 'none'
-            : `opacity ${token.motionDurationFast} ${token.motionEaseOut}, transform ${token.motionDurationFast} ${token.motionEaseOut}`,
+            : `opacity ${token.motionDurationFast} ${token.motionEaseOut}, transform ${token.motionDurationFast} ${token.motionEaseOut}, visibility 0s ${visible ? '0s' : token.motionDurationFast}`,
         }}
       >
         <section

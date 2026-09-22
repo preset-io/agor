@@ -280,7 +280,11 @@ it('reveals existing metadata pills without layout shift through focus, hover an
   );
   await userEvent.hover(screen.getByText('Prompt for metadata'));
   await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
+  const fadingOverlay = screen.getByRole('region', { name: 'Turn metadata' }).parentElement!;
+  expect(getComputedStyle(fadingOverlay).transitionProperty).toContain('visibility');
   await userEvent.unhover(screen.getByText('Prompt for metadata'));
+  expect(fadingOverlay.style.pointerEvents).toBe('none');
+  expect(getComputedStyle(fadingOverlay).transitionDelay.split(',').at(-1)?.trim()).not.toBe('0s');
   await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
 });
 
