@@ -54,11 +54,6 @@ interface ToolResultBlock {
   diff?: DiffEnrichment;
 }
 
-interface TextBlock {
-  type: 'text';
-  text: string;
-}
-
 interface AgentChainProps {
   /**
    * Messages containing thoughts and/or tool uses
@@ -178,7 +173,15 @@ export const AgentChain = React.memo<AgentChainProps>(
         // Collect blocks from this message
         for (const block of message.content) {
           if (block.type === 'text' || block.type === 'thinking') {
-            const text = (block as unknown as TextBlock).text.trim();
+            // Normalized blocks use text; Claude SDK thinking blocks use thinking.
+            // ContentBlock fields are unknown and may be absent in partial payloads.
+            const text = (
+              typeof block.text === 'string'
+                ? block.text
+                : block.type === 'thinking' && typeof block.thinking === 'string'
+                  ? block.thinking
+                  : ''
+            ).trim();
             if (text) {
               if (hasSeenTool) {
                 textBlocksAfterTools.push(text);
