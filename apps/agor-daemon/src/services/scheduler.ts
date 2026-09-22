@@ -911,8 +911,7 @@ export class SchedulerService {
     if (unsupported) {
       this.logWorkEvent('warn', 'occurrence_tool_unsupported', {
         schedule_id: schedule.schedule_id,
-        error_code:
-          typeof unsupported.data?.code === 'string' ? unsupported.data.code : 'operation_failed',
+        error_code: structuredLogErrorCode(unsupported.data),
       });
       throw unsupported;
     }

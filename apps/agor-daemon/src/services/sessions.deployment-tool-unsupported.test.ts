@@ -16,11 +16,11 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest } from '@agor/core/feathers';
-import type { AgenticToolName, Session, UUID } from '@agor/core/types';
+import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities.js';
 import { SessionsService } from './sessions';
 
 const STUB_APP = {} as unknown as Application;
@@ -56,12 +56,9 @@ async function createBranch(db: any): Promise<UUID> {
   return branch.branch_id as UUID;
 }
 
-function unsupportedOpenCode(tool: AgenticToolName): BadRequest | undefined {
-  if (tool !== 'opencode') return undefined;
-  return new BadRequest('OpenCode is not available in this workspace', {
-    code: UNSUPPORTED_CODE,
-  });
-}
+const unsupportedOpenCode = createDeploymentToolUnsupportedGate({
+  multi_tenancy: { mode: 'required_from_auth' },
+});
 
 describe('SessionsService deployment tool unsupported refusal', () => {
   dbTest('refuses to create an OpenCode session before any row is written', async ({ db }) => {
