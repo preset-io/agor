@@ -97,6 +97,8 @@ Knowledge is more than a folder of pages. Documents can link to each other, and 
 
 When a Knowledge document contains a resolvable link to another Knowledge document, Agor syncs a `references` edge in the graph. The Knowledge UI can show a namespace-wide document graph, and MCP tools can fetch neighbors around a document or create explicit graph links.
 
+Content saves replace the document's outgoing `references` set, including explicitly created edges of that type. Other edge types are left alone. Removing and restoring a reference preserves its edge identity and metadata. Graph maintenance is best-effort: if it fails, the document still saves and the previous graph remains intact until a later successful content save.
+
 Use links when you want agents to understand relationships such as:
 
 - A runbook references a decision record.

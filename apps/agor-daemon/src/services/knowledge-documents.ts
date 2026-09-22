@@ -16,6 +16,7 @@ import {
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
   KnowledgeSemanticSettingsRepository,
+  runDatabaseTransaction,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   type UpdateKnowledgeDocumentInput,
@@ -306,13 +307,6 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return this.repo.findByNamespaceAndPath(namespace.namespace_id, String(path));
   }
 
-  /**
-   * Keep the knowledge graph's outgoing `references` edges for a document in
-   * sync with the doc-to-doc links in its markdown. Only runs when content was
-   * (re)written; metadata-only saves leave existing edges untouched. Failures
-   * are swallowed so graph upkeep never blocks a save.
-   */
-
   private async isEmbeddingConfigured(): Promise<boolean> {
     if (!isPostgresDatabaseHandle(this.db)) return false;
     const settings = await this.semanticSettings.find();
@@ -345,6 +339,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     indexer?.wake?.();
   }
 
+  /** Best-effort graph upkeep must roll back its own SQL before a save continues. */
   private async syncGraphReferences(
     doc: KnowledgeDocument,
     content: string | null | undefined,
@@ -353,42 +348,58 @@ export class KnowledgeDocumentsService extends DrizzleService<
   ): Promise<void> {
     if (typeof content !== 'string') return;
     try {
-      const links = extractKnowledgeLinks(content);
-      // Key graph nodes by the rename-proof `agor://kb/document/<id>` URI rather
-      // than the path-based `doc.uri`, so renaming a document doesn't orphan its
-      // graph node (and its edges) behind a stale path.
-      const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
-      const seen = new Set<string>();
-      for (const link of links) {
-        const target = await this.resolveDocumentRef(
-          link.document_id
-            ? { document_id: link.document_id }
-            : { namespace_slug: link.namespace_slug, path: link.path }
-        );
-        if (!target || target.archived) continue;
-        if (target.document_id === doc.document_id) continue;
-        if (seen.has(target.document_id)) continue;
-        seen.add(target.document_id);
-        targets.push({
-          uri: buildKnowledgeDocumentUri(target.document_id),
-          document_id: target.document_id,
-          namespace_id: target.namespace_id,
-        });
-      }
-      await this.graph.syncOutgoingEdges({
-        source: {
-          uri: buildKnowledgeDocumentUri(doc.document_id),
-          document_id: doc.document_id,
-          namespace_id: doc.namespace_id,
-        },
-        edge_type: 'references',
-        targets,
-        created_by: userId,
+      await runDatabaseTransaction(this.db, async (tx) => {
+        const service = new KnowledgeDocumentsService(tx as TenantScopeAwareDatabase, this.app);
+        await service.writeGraphReferences(doc, content, userId);
       });
-    } catch (err) {
-      if (strict) throw err;
-      console.error('Failed to sync knowledge graph references:', err);
+    } catch (error) {
+      if (strict) throw error;
+      // Drizzle wraps the driver error. Never log SQL, parameters, or raw error
+      // messages; preserve the original SQLSTATE, not a later aborted SELECT.
+      const cause = error as { cause?: { code?: unknown }; code?: unknown };
+      const code = cause?.cause?.code ?? cause?.code;
+      const sqlstate = typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown';
+      console.error(`Knowledge graph sync rolled back: sqlstate=${sqlstate}`);
     }
+  }
+
+  private async writeGraphReferences(
+    doc: KnowledgeDocument,
+    content: string,
+    userId: UserID | null
+  ): Promise<void> {
+    const links = extractKnowledgeLinks(content);
+    // Key graph nodes by the rename-proof `agor://kb/document/<id>` URI rather
+    // than the path-based `doc.uri`, so renaming a document doesn't orphan its
+    // graph node (and its edges) behind a stale path.
+    const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
+    const seen = new Set<string>();
+    for (const link of links) {
+      const target = await this.resolveDocumentRef(
+        link.document_id
+          ? { document_id: link.document_id }
+          : { namespace_slug: link.namespace_slug, path: link.path }
+      );
+      if (!target || target.archived) continue;
+      if (target.document_id === doc.document_id) continue;
+      if (seen.has(target.document_id)) continue;
+      seen.add(target.document_id);
+      targets.push({
+        uri: buildKnowledgeDocumentUri(target.document_id),
+        document_id: target.document_id,
+        namespace_id: target.namespace_id,
+      });
+    }
+    await this.graph.syncOutgoingEdges({
+      source: {
+        uri: buildKnowledgeDocumentUri(doc.document_id),
+        document_id: doc.document_id,
+        namespace_id: doc.namespace_id,
+      },
+      edge_type: 'references',
+      targets,
+      created_by: userId,
+    });
   }
 
   /** Internal transfer finalization, deliberately not registered as a public method. */
