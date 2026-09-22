@@ -7,6 +7,8 @@ describe('getCodexContextWindowLimit', () => {
   it('returns expected limits for known Codex-compatible models', () => {
     const cases: Array<{ model: string; expected: number }> = [
       { model: 'gpt-6-astra', expected: 1_050_000 },
+      { model: 'gpt-6-sol', expected: 1_050_000 },
+      { model: 'gpt-6-luna', expected: 1_050_000 },
       { model: 'gpt-5.6-sol', expected: 1_050_000 },
       { model: 'gpt-5.6-terra', expected: 1_050_000 },
       { model: 'gpt-5.6-luna', expected: 1_050_000 },

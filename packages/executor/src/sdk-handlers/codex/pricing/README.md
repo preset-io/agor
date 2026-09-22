@@ -15,3 +15,11 @@ The `gpt-6-astra` entry is supplemented from OpenAI's
 and $50 output; requests above 272k input tokens use $20, $2, and $75 respectively.
 The estimator uses standard base rates because cumulative SDK usage does not
 identify individual requests crossing the long-context threshold.
+
+The `gpt-6-sol` and `gpt-6-luna` entries are supplemented from OpenAI's
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) model
+references, checked on 2026-09-22. Standard per-million-token rates are $2 input,
+$0.20 cached input, and $10 output for Sol, and $0.10 input, $0.01 cached input,
+and $0.50 output for Luna. Requests above 272k input tokens use 2x input and cache
+rates and 1.5x output; the estimator uses base rates for the same reason as Astra.
