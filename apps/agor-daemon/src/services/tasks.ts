@@ -19,9 +19,11 @@ import {
   assertTenantWritable,
   type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorLaunchAuthority,
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -83,6 +85,7 @@ import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
+import { promptAdmissionSqlState as databaseSqlState } from '../utils/prompt-database-error.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import type { SessionParams, SessionsService } from './sessions';
@@ -608,20 +611,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   private async runAfterTenantDatabaseCommit(
     label: string,
-    work: () => Promise<void>
+    work: () => Promise<void>,
+    scope: 'database' | 'identity' = 'database'
   ): Promise<void> {
+    const tenantId = getCurrentTenantId();
     const run = async () => {
       try {
-        await work();
+        if (scope === 'identity' && tenantId) await runWithTenantContext(tenantId, work);
+        else await work();
       } catch (error) {
         console.warn(
-          `⚠️  [TasksService] ${label} failed:`,
-          error instanceof Error ? error.message : String(error)
+          `[tasks.after_commit] operation=${label} sqlstate=${databaseSqlState(error) ?? 'unknown'} outcome=failed`
         );
       }
     };
 
-    if (enqueueTenantDatabasePostCommitCallback(run)) {
+    // Identity-only fanout must open separate short DB units, not inherit a
+    // fresh transaction spanning parent-message injection and Git I/O.
+    const queued =
+      scope === 'identity'
+        ? enqueueAfterTenantDatabaseCommit(run)
+        : enqueueTenantDatabasePostCommitCallback(run);
+    if (queued) {
       return;
     }
 
@@ -681,20 +692,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const session = await this.app.service('sessions').get(task.session_id, params);
 
       if (session.branch_id) {
-        this.app
-          .service('branches')
-          .get(session.branch_id, params)
-          .then((branch) => {
-            const repoId = branch?.repo_id;
-            if (!repoId) return;
-            return ensureRepoOriginAlignedById(this.app, repoId, params);
-          })
-          .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
+        // Preserve fire-and-forget behavior, but never let Git orchestration
+        // inherit a live (or already committed) completion transaction.
+        deferWithTenantContext(
+          params,
+          async () => {
+            const branch = await this.app.service('branches').get(session.branch_id!, params);
+            if (branch?.repo_id)
+              await ensureRepoOriginAlignedById(this.app, branch.repo_id, params);
+          },
+          (error) => {
             console.warn(
-              `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
+              `[tasks.origin_alignment] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`
             );
-          });
+          }
+        );
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];
@@ -742,6 +754,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       if (session.fork_origin === 'btw') {
+        // Keep archive atomic with completion: deferring it could re-archive
+        // a Session that a newer prompt has already restored.
         if (!suppressBtwCleanup) {
           try {
             const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
@@ -760,12 +774,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
             );
           } catch (error) {
-            console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+            console.warn(
+              `[tasks.btw_archive] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`
+            );
           }
         }
 
         if (!isStop && !isTermination) {
-          await this.injectBtwResultMessage(task, session, params);
+          // Parent transcript fanout must not inherit the child Task/Session
+          // locks: message admission takes Branch first. The original task,
+          // terminal projection and archive commit before this fresh unit.
+          await this.runAfterTenantDatabaseCommit(
+            'btw_result',
+            async () => {
+              const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+              if (!tenantId) throw new Error('Missing tenant context for BTW result injection');
+              await runWithTenantDatabaseScope(this.db, tenantId, () =>
+                this.injectBtwResultMessage(task, session, params)
+              );
+            },
+            'identity'
+          );
         }
       }
 
@@ -989,7 +1018,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
       );
     } catch (error) {
-      console.warn(`⚠️  [TasksService] Failed to inject btw result message:`, error);
+      console.warn(`[tasks.btw_result] failed sqlstate=${databaseSqlState(error) ?? 'unknown'}`);
       // Non-critical — don't break task completion
     }
   }

@@ -35,34 +35,27 @@ beforeEach(() => {
 });
 
 describe('prompt admission transaction', () => {
-  it.each(['40P01', '40001'])('restarts the whole unit, at most twice, for %s', async (code) => {
-    const work = vi.fn().mockRejectedValueOnce(wrapped(code)).mockResolvedValue('task');
-    await expect(runPromptAdmissionTransaction(db, 'tenant-a', work)).resolves.toBe('task');
-    expect(work).toHaveBeenCalledTimes(2);
-    expect(runWithTenantDatabaseTransaction).toHaveBeenCalledTimes(2);
-    expect(
-      vi.mocked(runWithTenantDatabaseTransaction).mock.calls.every((call) => call[1] === 'tenant-a')
-    ).toBe(true);
-    work.mockReset().mockRejectedValue(wrapped(code));
-    await expect(runPromptAdmissionTransaction(db, 'tenant-a', work)).rejects.toThrow(
-      'Could not confirm'
+  it.each([
+    '40P01',
+    '40001',
+    '55P03',
+    '57014',
+    '42501',
+    '25P02',
+    '25P03',
+    '08006',
+    '40003',
+    '23505',
+  ])('does not replay %s and does not expose raw diagnostics', async (code) => {
+    const original = wrapped(code);
+    const work = vi.fn().mockRejectedValue(original);
+    const failure = await runPromptAdmissionTransaction(db, 'tenant-a', work).catch(
+      (error: Error) => error
     );
-    expect(work).toHaveBeenCalledTimes(3);
+    expect(work).toHaveBeenCalledOnce();
+    expect(failure.cause).toBe(original);
+    expect(JSON.stringify(failure)).not.toMatch(/private|SQL|params|detail/);
   });
-
-  it.each(['55P03', '57014', '42501', '25P02', '25P03', '08006', '40003', '23505'])(
-    'does not replay %s and does not expose raw diagnostics',
-    async (code) => {
-      const original = wrapped(code);
-      const work = vi.fn().mockRejectedValue(original);
-      const failure = await runPromptAdmissionTransaction(db, 'tenant-a', work).catch(
-        (error: Error) => error
-      );
-      expect(work).toHaveBeenCalledOnce();
-      expect(failure.cause).toBe(original);
-      expect(JSON.stringify(failure)).not.toMatch(/private|SQL|params|detail/);
-    }
-  );
 
   it('does not retry uncertain commit or post-commit errors', async () => {
     vi.mocked(runWithTenantDatabaseTransaction).mockImplementation(async (_db, _tenant, work) => {

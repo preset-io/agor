@@ -42,16 +42,13 @@ client's earlier Session GET.
    executor or doing external work. The authenticated executor later claims
    `dispatching -> running`.
 
-Prompt-route enqueue retries at most twice for PostgreSQL statement SQLSTATE
-`40P01` or `40001`, after rollback of the entire owned admission transaction.
-Each attempt rechecks the tenant write gate and current authority; Branch →
-Session admission locks and queue sequencing are unchanged. A caller-owned
-transaction is never restarted locally. Timeouts/cancellation, permission/RLS,
-connection errors, and commit/post-commit failures are not replayed. Title work,
-transcript writes, dispatch, and provider calls remain outside this retry unit.
-This is transient-admission recovery, not a diagnosis of an arbitrary wrapped
-`SELECT ... FOR UPDATE` error. See `utils/prompt-admission-transaction.ts` in the
-daemon.
+Prompt-route enqueue executes once inside its existing owned admission
+transaction. No automatic replay is performed, including for `40P01` or
+`40001`: the incident cause is not established. Tenant write gating, current
+authority, Branch → Session admission locks and queue sequencing are unchanged.
+The diagnostic wrapper preserves caller-owned transaction errors so the owner
+can roll back. Title work, transcript writes, dispatch and provider calls remain
+outside this unit. See `utils/prompt-admission-transaction.ts` in the daemon.
 
 The outer prompt route sanitizes database failures even outside enqueue (and
 when a wrapped query has no SQLSTATE). Users receive a reference and a warning
@@ -63,6 +60,16 @@ time. Elapsed time is **not** a lock-hold measurement; acquisition/setup include
 pool wait and tenant setup. Raw SQL, parameters, driver detail and stacks are
 never serialized; the original cause stays non-enumerable internally. Existing
 PostgreSQL transaction tracing separates root acquisition/setup from body time.
+
+BTW completion keeps the terminal Task, Session projection and archival in the
+original transaction. Parent-result message insertion is scheduled only after
+commit and opens its own tenant transaction, avoiding a Branch lock request
+while retaining child Task/Session locks. Rollback discards the callback; there
+is no automatic retry or new durable outbox. Existing best-effort delivery can
+still be lost if the daemon exits after commit. Repository-origin maintenance
+also runs after commit with tenant identity but without a transaction spanning
+Git I/O. Completion callbacks/queue handoff retain their existing separate DB
+scopes; these changes are not a general lock-order redesign.
 
 `created` remains supported for the explicit `POST /tasks/:id` then
 `POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a

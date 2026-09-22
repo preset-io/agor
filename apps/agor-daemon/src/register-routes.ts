@@ -2256,8 +2256,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   status: TaskStatus.QUEUED,
                   metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
                 });
-              },
-              id as SessionID
+              }
             );
             await tasksService.autoTitleSession(task, params);
 
