@@ -33,7 +33,7 @@ describe('prompt and widget transaction scopes', () => {
     // The check must run before the durable Task admission — otherwise a
     // 'session'-tier collaborator prompting another user's session would be
     // admitted (and run under the owner's identity/home) instead of 403'd.
-    const transaction = prompt.indexOf('runWithTenantDatabaseTransaction(');
+    const transaction = prompt.indexOf('runPromptAdmissionTransaction(');
     const authorityLock = prompt.indexOf('lockTenantAuthorizationFence(operationDb, params)');
     const rbacCheck = prompt.lastIndexOf('assertCurrentPromptAuthority(');
     const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).createPending(');

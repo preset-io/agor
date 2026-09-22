@@ -42,6 +42,17 @@ client's earlier Session GET.
    executor or doing external work. The authenticated executor later claims
    `dispatching -> running`.
 
+Prompt-route enqueue retries at most twice for PostgreSQL statement SQLSTATE
+`40P01` or `40001`, after rollback of the entire owned admission transaction.
+Each attempt rechecks the tenant write gate and current authority; Branch →
+Session admission locks and queue sequencing are unchanged. A caller-owned
+transaction is never restarted locally. Timeouts/cancellation, permission/RLS,
+connection errors, and commit/post-commit failures are not replayed. Title work,
+transcript writes, dispatch, and provider calls remain outside this retry unit.
+This is transient-admission recovery, not a diagnosis of an arbitrary wrapped
+`SELECT ... FOR UPDATE` error. See `utils/prompt-admission-transaction.ts` in the
+daemon.
+
 `created` remains supported for the explicit `POST /tasks/:id` then
 `POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a
 different executing Task.

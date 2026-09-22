@@ -255,6 +255,7 @@ import {
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { authorizeMcpSessionConfigAccess } from './utils/mcp-session-config-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
+import { runPromptAdmissionTransaction } from './utils/prompt-admission-transaction.js';
 import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
@@ -2223,7 +2224,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
-            const task = await runWithTenantDatabaseTransaction(
+            const task = await runPromptAdmissionTransaction(
               db,
               promptTenantId,
               async (operationDb) => {
@@ -2246,7 +2247,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   status: TaskStatus.QUEUED,
                   metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
                 });
-              }
+              },
+              id as SessionID
             );
             await tasksService.autoTitleSession(task, params);
 
