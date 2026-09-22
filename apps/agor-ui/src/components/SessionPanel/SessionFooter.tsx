@@ -51,14 +51,13 @@ import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { EffortSelector } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
-import { TimerPill } from '../Pill';
+import { ContextWindowPill, TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
@@ -215,27 +214,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           : effectiveModel
       )
     : null;
-
-  // Context window usage percentage (for warning styling).
-  // Prefers the executor-supplied snapshot.percentage (0-100) when available
-  // so Codex baseline-adjusted display matches the agent's own indicator.
-  const contextPct = React.useMemo(() => {
-    if (!latestContextWindow) return 0;
-    const meta = latestContextWindow.taskMetadata as {
-      normalized_sdk_response?: {
-        contextUsageSnapshot?: { percentage: number; totalTokens: number; maxTokens: number };
-      };
-    } | null;
-    const snapshot = meta?.normalized_sdk_response?.contextUsageSnapshot;
-    return (
-      resolveContextWindowPercentage(
-        latestContextWindow.used,
-        latestContextWindow.limit,
-        snapshot
-      ) / 100
-    );
-  }, [latestContextWindow]);
-  const contextWarning = contextPct > 0.8;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -1532,19 +1510,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {latestContextWindow &&
               latestContextWindow.limit > 0 &&
               pinnedChips.includes('context') && (
-                <Tag
-                  color={contextWarning ? 'warning' : 'default'}
-                  style={{
-                    cursor: 'default',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="context-chip"
-                  data-warning={contextWarning ? 'true' : undefined}
-                >
-                  {Math.round(contextPct * 100)}%
-                </Tag>
+                <ContextWindowPill
+                  used={latestContextWindow.used}
+                  limit={latestContextWindow.limit}
+                  taskMetadata={
+                    latestContextWindow.taskMetadata as React.ComponentProps<
+                      typeof ContextWindowPill
+                    >['taskMetadata']
+                  }
+                />
               )}
 
             {/* Session IDs chip */}

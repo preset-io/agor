@@ -25,7 +25,8 @@ vi.mock('../EffortSelector', () => ({
 }));
 
 // TimerPill uses complex internal state not needed for footer layout tests
-vi.mock('../Pill', () => ({
+vi.mock('../Pill', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../Pill')>()),
   TimerPill: () => <span data-testid="timer-pill-stub" />,
 }));
 
@@ -195,11 +196,11 @@ describe('SessionFooter', () => {
       />,
       { wrapper: Wrapper }
     );
-    const chip = screen.getByTestId('context-chip');
+    const chip = screen.getByText('85%');
     expect(chip.querySelector('.anticon-percentage')).toBeNull();
     expect(chip).toHaveTextContent(/^85%$/);
     expect(chip).toBeInTheDocument();
-    expect(chip.getAttribute('data-warning')).toBe('true');
+    expect(chip.closest('.ant-tag')).toHaveClass('ant-tag-red');
   });
 
   it('Individual model chip renders when model is present', () => {
