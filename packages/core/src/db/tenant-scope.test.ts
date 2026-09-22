@@ -75,6 +75,58 @@ describe('tenant operation context', () => {
 });
 
 describe('tenant-scoped database proxy', () => {
+  it('shares scope and proxy identity across independently loaded core entrypoints', async () => {
+    // Production emits independently bundled db and OAuth entrypoints. A
+    // source-only import graph otherwise hides their duplicate module state.
+    vi.resetModules();
+    const other = await import('./tenant-scope');
+    const query = vi.fn();
+    const transaction = vi.fn(async (work: (db: Database) => Promise<unknown>) =>
+      work({ execute: query } as unknown as Database)
+    );
+    const postgres = createTenantScopedDatabaseProxy({ transaction } as unknown as Database);
+    const sqlite = createTenantScopedDatabaseProxy({ run: query } as unknown as Database);
+
+    expect(other.isPostgresDatabaseHandle(postgres)).toBe(true);
+    expect(other.isPostgresDatabaseHandle(sqlite)).toBe(false);
+    expect(() => 'run' in sqlite).toThrow('Missing tenant database scope');
+
+    await runWithTenantContext('tenant-a', async () => {
+      expect(other.getCurrentTenantId()).toBe('tenant-a');
+      await expect(
+        other.runWithTenantDatabaseScope(postgres, 'tenant-b', async () => undefined)
+      ).rejects.toThrow('active tenant context tenant-a');
+      expect(transaction).not.toHaveBeenCalled();
+      await other.runWithTenantDatabaseScope(postgres, 'tenant-a', async () => {
+        expect(getCurrentTenantDatabaseScope()).toBe(other.getCurrentTenantDatabaseScope());
+        expect(getCurrentTenantId()).toBe('tenant-a');
+        await expect(
+          runWithTenantDatabaseScope(postgres, 'tenant-b', async () => undefined)
+        ).rejects.toThrow('active tenant context tenant-a');
+      });
+      await other.runWithTenantDatabaseScope(sqlite, 'tenant-a', async () => {
+        expect('run' in sqlite).toBe(true);
+      });
+    });
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(1); // PostgreSQL set_config only.
+    await Promise.all(
+      ['tenant-a', 'tenant-b'].map((tenantId) =>
+        runWithTenantContext(tenantId, async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(other.getCurrentTenantId()).toBe(tenantId);
+          await other.runWithTenantDatabaseScope(sqlite, tenantId, async () => {
+            await Promise.resolve();
+            expect(getCurrentTenantDatabaseScope()).toMatchObject({ kind: 'tenant', tenantId });
+          });
+        })
+      )
+    );
+    expect(getCurrentTenantId()).toBeUndefined();
+    expect(other.getCurrentTenantDatabaseScope()).toBeUndefined();
+    expect(() => 'run' in sqlite).toThrow('Missing tenant database scope');
+  });
+
   it('inspects a guarded handle dialect without requiring tenant scope', () => {
     const sqlite = createTenantScopedDatabaseProxy({ run: vi.fn() } as unknown as Database, {
       requireScope: true,

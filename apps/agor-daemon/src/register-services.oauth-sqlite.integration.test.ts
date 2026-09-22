@@ -3,6 +3,7 @@ import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
   eq,
   GatewayChannelRepository,
   generateId,
@@ -10,6 +11,7 @@ import {
   mcpServers,
   RepoRepository,
   runMigrations,
+  runWithTenantContext,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
@@ -463,12 +465,15 @@ async function createHarness(
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
+    guardedDatabase?: boolean;
     deployment?: RegisterServicesContext['deployment'];
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   await runMigrations(rawDb);
-  const db = rawDb as unknown as TenantScopeAwareDatabase;
+  const db = options.guardedDatabase
+    ? createTenantScopedDatabaseProxy(rawDb)
+    : (rawDb as unknown as TenantScopeAwareDatabase);
   const user = await new UsersRepository(rawDb).create({
     email: `sqlite-oauth-${Math.random()}@example.com`,
     role: 'admin',
@@ -4096,7 +4101,7 @@ describe('SQLite saved-row OAuth authority', () => {
   it('coalesces concurrent GitLab refreshes and quarantines a dispatch left by a dead SQLite daemon', async () => {
     const provider = await createTestProvider({ gitlab: true, holdRefresh: true });
     providers.push(provider);
-    const harness = await createHarness(provider, 'per_user');
+    const harness = await createHarness(provider, 'per_user', { guardedDatabase: true });
     databases.push(harness.rawDb);
     await authorizeSavedServer(harness);
     const refresh = () =>
@@ -4125,6 +4130,73 @@ describe('SQLite saved-row OAuth authority', () => {
       )?.refresh_status
     ).toBe('ambiguous');
   });
+
+  it.each(['per_user', 'shared'] as const)(
+    'manually rotates a %s GitLab grant through the daemon guarded database',
+    async (mode) => {
+      const provider = await createTestProvider({ gitlab: true });
+      providers.push(provider);
+      const harness = await createHarness(provider, mode, { guardedDatabase: true });
+      databases.push(harness.rawDb);
+      await authorizeSavedServer(harness);
+      const requestsBefore = provider.requests.length;
+      const mismatched = await runWithTenantContext('another-tenant', () =>
+        harness.app
+          .service('mcp-servers/oauth-refresh')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+      );
+      expect(mismatched).toEqual({ success: false, error: 'token_refresh_failed' });
+      expect(provider.requests).toHaveLength(requestsBefore);
+      const result = await harness.app
+        .service('mcp-servers/oauth-refresh')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(result).toMatchObject({ success: true });
+      expect(provider.requests.filter((request) => request.path === '/token')).toHaveLength(2);
+      expect(
+        await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          mode === 'shared' ? null : (harness.user.user_id as UserID),
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).toMatchObject({
+        oauth_access_token: 'stale-refreshed-access-token',
+        oauth_refresh_token: 'stale-rotated-refresh-token',
+        refresh_status: 'idle',
+        refresh_generation: 1,
+        refresh_success_generation: 1,
+      });
+    }
+  );
+
+  it.each(['invalid', 'malformed'] as const)(
+    'settles a %s manual refresh through the guarded database without replay',
+    async (failure) => {
+      const provider = await createTestProvider({
+        gitlab: true,
+        invalidRefresh: failure === 'invalid',
+        malformedRefresh: failure === 'malformed',
+      });
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user', { guardedDatabase: true });
+      databases.push(harness.rawDb);
+      await authorizeSavedServer(harness);
+      const refresh = () =>
+        harness.app
+          .service('mcp-servers/oauth-refresh')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+      expect(await refresh()).toEqual({
+        success: false,
+        error: failure === 'invalid' ? 'needs_reauth' : 'token_refresh_failed',
+      });
+      const saved = await new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      );
+      if (failure === 'invalid') expect(saved).toBeNull();
+      else expect(saved?.refresh_status).toBe('ambiguous');
+      expect(await refresh()).toEqual({ success: false, error: 'needs_reauth' });
+      expect(provider.requests.filter((request) => request.path === '/token')).toHaveLength(2);
+    }
+  );
 
   it('does not resurrect a grant deleted by a Settings mutation during refresh', async () => {
     const provider = await createTestProvider({ holdRefresh: true });

@@ -376,9 +376,13 @@ async function tenantWork<T>(
   deps: RefreshAndPersistDeps,
   work: (db: Database) => Promise<T>
 ): Promise<T> {
-  return runWithTenantDatabaseScope(deps.db, resolveTenantId(deps), (scoped) =>
-    work(scoped as Database)
-  );
+  // Raw standalone integrations may have no tenant identity. Guarded daemon
+  // handles still require one; PostgreSQL always requires trusted identity.
+  const tenantId = isPostgresDatabaseHandle(deps.db)
+    ? resolveTenantId(deps)
+    : (deps.tenantId ?? getCurrentTenantId());
+  if (!tenantId) return work(deps.db as Database);
+  return runWithTenantDatabaseScope(deps.db, tenantId, (scoped) => work(scoped as Database));
 }
 
 function notifyInvalidGrant(deps: RefreshAndPersistDeps): void {
@@ -578,19 +582,19 @@ async function loadObservedStandaloneGrant(
   deps: RefreshAndPersistDeps,
   expected: Pick<MCPOAuthRefreshVersion, 'grantGeneration' | 'grantBindingFingerprint'>
 ): Promise<UserMCPOAuthToken> {
-  const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
-  const row = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
-  if (!row) throw new MissingRefreshTokenError();
-  if (!exactGrantMatches(row, expected)) throw new GrantConfigurationChangedError();
-  await assertGrantStillAuthorized(deps, row, deps.db);
-  return row;
+  return tenantWork(deps, async (db) => {
+    const row = await new UserMCPOAuthTokenRepository(db).getToken(deps.userId, deps.mcpServerId);
+    if (!row) throw new MissingRefreshTokenError();
+    if (!exactGrantMatches(row, expected)) throw new GrantConfigurationChangedError();
+    await assertGrantStillAuthorized(deps, row, db);
+    return row;
+  });
 }
 
 async function refreshStandalone(
   deps: RefreshAndPersistDeps,
   observedVersion: MCPOAuthRefreshVersion
 ): Promise<string> {
-  const userTokenRepo = new UserMCPOAuthTokenRepository(deps.db as Database);
   const exactGrantVersion = {
     grantGeneration: observedVersion.grantGeneration,
     grantBindingFingerprint: observedVersion.grantBindingFingerprint,
@@ -603,12 +607,14 @@ async function refreshStandalone(
   // No in-process owner exists here. A persisted dispatch from a previous
   // daemon may have consumed the rotating token; never replay it.
   if (row.refresh_status === 'refreshing') {
-    await userTokenRepo.setStandaloneRefreshState(
-      deps.userId,
-      deps.mcpServerId,
-      exactGrantVersion,
-      'refreshing',
-      'ambiguous'
+    await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).setStandaloneRefreshState(
+        deps.userId,
+        deps.mcpServerId,
+        exactGrantVersion,
+        'refreshing',
+        'ambiguous'
+      )
     );
     throw new AmbiguousRefreshError();
   }
@@ -617,19 +623,23 @@ async function refreshStandalone(
   }
 
   if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
-  const server = await new MCPServerRepository(deps.db as Database).findById(deps.mcpServerId);
+  const server = await tenantWork(deps, (db) =>
+    new MCPServerRepository(db).findById(deps.mcpServerId)
+  );
   const clientId = row.oauth_client_id ?? server?.auth?.oauth_client_id;
   if (!clientId) throw new MissingClientIdError();
   let tokenEndpoint = row.oauth_token_endpoint ?? server?.auth?.oauth_token_url;
   if (!tokenEndpoint && server?.url) tokenEndpoint = inferOAuthTokenUrl(server.url);
   if (!tokenEndpoint) throw new MissingTokenEndpointError();
   if (
-    !(await userTokenRepo.setStandaloneRefreshState(
-      deps.userId,
-      deps.mcpServerId,
-      exactGrantVersion,
-      'idle',
-      'refreshing'
+    !(await tenantWork(deps, (db) =>
+      new UserMCPOAuthTokenRepository(db).setStandaloneRefreshState(
+        deps.userId,
+        deps.mcpServerId,
+        exactGrantVersion,
+        'idle',
+        'refreshing'
+      )
     ))
   )
     throw new GrantConfigurationChangedError();
@@ -646,31 +656,37 @@ async function refreshStandalone(
       resolveDns: deps.resolveDns,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
-    await assertGrantSubjectForRefresh(deps, deps.db);
-    await assertGrantStillAuthorized(deps, row, deps.db);
-    const committed = await userTokenRepo.completeStandaloneRefresh(
-      deps.userId,
-      deps.mcpServerId,
-      exactGrantVersion,
-      {
-        accessToken: result.access_token,
-        refreshToken: result.refresh_token,
-        expiresAt: expiry.expiresAt,
-      }
-    );
-    if (!committed) throw new GrantConfigurationChangedError();
-    const current = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
-    if (!current) throw new InvalidGrantError();
-    if (!exactGrantMatches(current, exactGrantVersion)) throw new GrantConfigurationChangedError();
-    await assertGrantStillAuthorized(deps, current, deps.db);
-    return result.access_token;
-  } catch (error) {
-    if (error instanceof InvalidGrantError) {
-      const deleted = await userTokenRepo.deleteGrantVersion(
+    return await tenantWork(deps, async (db) => {
+      const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+      await assertGrantSubjectForRefresh(deps, db);
+      await assertGrantStillAuthorized(deps, row, db);
+      const committed = await userTokenRepo.completeStandaloneRefresh(
         deps.userId,
         deps.mcpServerId,
-        exactGrantVersion.grantGeneration,
-        exactGrantVersion.grantBindingFingerprint
+        exactGrantVersion,
+        {
+          accessToken: result.access_token,
+          refreshToken: result.refresh_token,
+          expiresAt: expiry.expiresAt,
+        }
+      );
+      if (!committed) throw new GrantConfigurationChangedError();
+      const current = await userTokenRepo.getToken(deps.userId, deps.mcpServerId);
+      if (!current) throw new InvalidGrantError();
+      if (!exactGrantMatches(current, exactGrantVersion))
+        throw new GrantConfigurationChangedError();
+      await assertGrantStillAuthorized(deps, current, db);
+      return result.access_token;
+    });
+  } catch (error) {
+    if (error instanceof InvalidGrantError) {
+      const deleted = await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
+          deps.userId,
+          deps.mcpServerId,
+          exactGrantVersion.grantGeneration,
+          exactGrantVersion.grantBindingFingerprint
+        )
       );
       if (deleted) notifyInvalidGrant(deps);
       else throw new GrantConfigurationChangedError();
@@ -679,12 +695,14 @@ async function refreshStandalone(
       const retrySafe =
         error instanceof OAuthRefreshAuthorityCancelledError ||
         (error instanceof OAuthRefreshExchangeError && !error.ambiguous);
-      await userTokenRepo.setStandaloneRefreshState(
-        deps.userId,
-        deps.mcpServerId,
-        exactGrantVersion,
-        'refreshing',
-        retrySafe ? 'idle' : 'ambiguous'
+      await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).setStandaloneRefreshState(
+          deps.userId,
+          deps.mcpServerId,
+          exactGrantVersion,
+          'refreshing',
+          retrySafe ? 'idle' : 'ambiguous'
+        )
       );
     }
     throw error;

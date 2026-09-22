@@ -6,6 +6,7 @@ import {
   type TenantDatabaseScope,
   tenantContextScope,
   tenantDatabaseScope,
+  tenantScopedProxyTargets,
 } from './tenant-context';
 
 export type { SystemDatabaseCapability } from './tenant-context';
@@ -31,8 +32,6 @@ import type {
   TenantScopedDatabase,
 } from './client';
 import { isPostgresDatabase, runDatabaseTransaction } from './database-wrapper';
-
-const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
 
 export interface TenantScopedDatabaseProxyOptions {
   /**

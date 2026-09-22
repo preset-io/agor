@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { TenantID } from '../types/tenant';
-import type { Database } from './client';
+import type { Database, RawDatabase } from './client';
 
 export interface TenantOwnedDatabaseScope {
   db: Database;
@@ -45,9 +45,30 @@ export interface TenantContextScope {
   tenantId: TenantID | string;
 }
 
+// Core publishes independent ESM/CJS entrypoint bundles with splitting disabled.
+// A daemon DB proxy must recognize the scope and unwrapping registry used by
+// OAuth (and vice versa), not create separate authority per imported bundle.
+// Only the stores/registry are process-global; tenant data remains ALS-local.
+const tenantRuntimeKey = Symbol.for('agor.db.tenant-runtime.v1');
+interface TenantRuntime {
+  context: AsyncLocalStorage<TenantContextScope>;
+  database: AsyncLocalStorage<TenantDatabaseScope>;
+  proxyTargets: WeakMap<object, RawDatabase | Database>;
+}
+const tenantRuntimeGlobal = globalThis as typeof globalThis & {
+  [tenantRuntimeKey]?: TenantRuntime;
+};
+tenantRuntimeGlobal[tenantRuntimeKey] ??= {
+  context: new AsyncLocalStorage<TenantContextScope>(),
+  database: new AsyncLocalStorage<TenantDatabaseScope>(),
+  proxyTargets: new WeakMap<object, RawDatabase | Database>(),
+};
+const tenantRuntime = tenantRuntimeGlobal[tenantRuntimeKey];
+
 /** Long-lived operation identity. This never owns a database transaction. */
-export const tenantContextScope = new AsyncLocalStorage<TenantContextScope>();
-export const tenantDatabaseScope = new AsyncLocalStorage<TenantDatabaseScope>();
+export const tenantContextScope = tenantRuntime.context;
+export const tenantDatabaseScope = tenantRuntime.database;
+export const tenantScopedProxyTargets = tenantRuntime.proxyTargets;
 
 export function getCurrentTenantDatabase(): Database | undefined {
   return tenantDatabaseScope.getStore()?.db;
