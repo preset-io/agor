@@ -109,7 +109,9 @@ export function LeanTurnMetadata({
             borderRadius: token.borderRadiusSM,
           }}
         >
-          {metadata}
+          {/* Auto margin right-aligns short rows but resolves to zero when
+              overflowing, so the first pill remains reachable on narrow screens. */}
+          <div style={{ marginInlineStart: 'auto', flexShrink: 0 }}>{metadata}</div>
         </section>
       </Flex>
     </section>

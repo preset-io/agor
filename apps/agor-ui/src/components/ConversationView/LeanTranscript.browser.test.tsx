@@ -244,6 +244,13 @@ it('reveals existing metadata pills without layout shift through focus, hover an
     prompt.getBoundingClientRect().bottom
   );
   expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
+  const pills = row.firstElementChild!;
+  if (row.scrollWidth > row.clientWidth) {
+    // Leftmost pills remain reachable rather than being clipped by end alignment.
+    expect(pills.getBoundingClientRect().left).toBe(row.getBoundingClientRect().left);
+  } else {
+    expect(pills.getBoundingClientRect().right).toBe(row.getBoundingClientRect().right);
+  }
   if (window.innerWidth === 320) expect(row.scrollWidth).toBeGreaterThan(row.clientWidth);
   await page.screenshot({ path: `./.vitest/lean-metadata-${window.innerWidth}.png` });
   cleanup();

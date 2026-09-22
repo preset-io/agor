@@ -1248,8 +1248,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     if (leanTranscript)
       return (
         <div data-task-block={task.task_id}>
-          <TaskStatusIcon status={task.status} size={16} />
-          {task.error_message && <Alert type="error" title={task.error_message} />}
+          {task.status !== TaskStatus.COMPLETED && task.status !== TaskStatus.FAILED && (
+            <TaskStatusIcon status={task.status} size={16} />
+          )}
+          {(task.error_message || task.status === TaskStatus.FAILED) && (
+            <Alert type="error" showIcon title={task.error_message || 'Turn failed'} />
+          )}
           {!firstPromptId && (
             <>
               {task.full_prompt && (

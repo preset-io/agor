@@ -78,6 +78,17 @@ describe('lean task presentation', () => {
     expect(screen.getByText('Visible answer')).toBeVisible();
   });
 
+  it('implies success without a standalone icon and keeps failure visible without hover', () => {
+    const { container, rerender } = render(view());
+    expect(container.querySelector('[data-task-block] > .anticon-check-circle')).toBeNull();
+    rerender(view({ task: { ...task, status: TaskStatus.FAILED } }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
+    rerender(
+      view({ task: { ...task, status: TaskStatus.FAILED, error_message: 'Request failed' } })
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Request failed');
+  });
+
   it('interleaves expanded activity between messages with tools initially collapsed', () => {
     const call = message(1, MessageRole.ASSISTANT, [
       { type: 'text', text: 'Before activity' },
