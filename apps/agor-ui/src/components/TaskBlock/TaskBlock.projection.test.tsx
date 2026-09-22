@@ -153,7 +153,7 @@ describe('TaskBlock persisted result projections (production grouping and render
       // The parent Task call is a MessageBlock; its correlated result is NOT.
       expect(groupMessagesIntoBlocks([call, result])).toEqual([
         { type: 'message', message: call },
-        { type: 'agent-chain', messages: [result] },
+        { type: 'agent-chain', messages: [result], parentToolUseId: 'task-call' },
       ]);
       if (kind === 'array') {
         expect((result.content as ContentBlock[])[0].content).toEqual([
@@ -256,7 +256,11 @@ describe('TaskBlock persisted result projections (production grouping and render
     });
     expect(groupMessagesIntoBlocks([call, nestedCall, nestedResult, result])).toEqual([
       { type: 'message', message: call },
-      { type: 'agent-chain', messages: [nestedCall, nestedResult, result] },
+      {
+        type: 'agent-chain',
+        messages: [nestedCall, nestedResult, result],
+        parentToolUseId: 'task-call',
+      },
     ]);
     render(<Harness task={task} messages={[call, nestedCall, nestedResult, result]} />);
     fireEvent.click(screen.getByRole('button', { name: /1 tool call/ }));

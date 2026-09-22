@@ -441,8 +441,9 @@ export const AgentChain = React.memo<AgentChainProps>(
         ? latestToolItem.content.toolUse.name
         : undefined;
 
-    // Early return if no items (prevents empty bordered boxes)
-    if (chainItems.length === 0) {
+    // Empty streamed text is not a boundary; its live tool event can own
+    // this disclosure until the corresponding payload arrives.
+    if (chainItems.length === 0 && !latestActivity) {
       return null;
     }
 

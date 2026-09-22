@@ -1826,3 +1826,47 @@ describe('lean transcript POC hydration', () => {
     expect(handle.state.loadedTaskIds.has('task-023')).toBe(false);
   });
 });
+
+it('retains consecutive tool activity across partial persistence, duplicate events and reconciliation', async () => {
+  const task = makeTask('tool-handoff', TaskStatus.RUNNING);
+  const first = makeMessage(task.task_id, 1);
+  const second = makeMessage(task.task_id, 2);
+  const opts: MockClientOptions = { tasks: [task], messagesByTask: { [task.task_id]: [first] } };
+  const mock = createMockClient(opts);
+  const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const event = (id: string) => ({
+    session_id: SESSION_ID,
+    task_id: task.task_id,
+    tool_use_id: id,
+    tool_name: 'Read',
+  });
+  try {
+    mock.emitServiceEvent('tasks', 'tool:start', event('first'));
+    mock.emitServiceEvent('tasks', 'tool:complete', event('first'));
+    mock.emitServiceEvent('tasks', 'tool:start', event('second'));
+    // This is a real public snapshot, not an atomic event/message handoff.
+    expect(handle.state.messagesByTask.get(task.task_id)).toEqual([first]);
+    expect(handle.getTaskTools(task.task_id).at(-1)?.toolUseId).toBe('second');
+    mock.emitServiceEvent('tasks', 'tool:start', event('second'));
+    mock.emitServiceEvent('tasks', 'tool:complete', event('first'));
+    expect(handle.getTaskTools(task.task_id)).toEqual([
+      { toolUseId: 'first', toolName: 'Read', status: 'complete' },
+      { toolUseId: 'second', toolName: 'Read', status: 'executing' },
+    ]);
+    mock.emitServiceEvent('messages', 'created', second);
+    mock.emitServiceEvent('messages', 'created', second);
+    mock.emitServiceEvent('messages', 'created', first);
+    mock.emitServiceEvent('tasks', 'tool:start', event('third'));
+    mock.emitServiceEvent('tasks', 'tool:complete', event('second'));
+    expect(handle.state.messagesByTask.get(task.task_id)).toEqual([first, second]);
+    expect(handle.getTaskTools(task.task_id).at(-1)?.toolUseId).toBe('third');
+    opts.messagesByTask[task.task_id] = [second, first];
+    await handle.resync();
+    expect(handle.state.messagesByTask.get(task.task_id)).toEqual([first, second]);
+    expect(handle.getTaskTools(task.task_id)).toHaveLength(3);
+    expect(handle.getTaskTools(task.task_id).at(-1)?.toolUseId).toBe('third');
+  } finally {
+    handle.dispose();
+  }
+});
