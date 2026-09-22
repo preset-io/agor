@@ -14,6 +14,7 @@ export function BranchSessionTree({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(BRANCH_SESSION_VIEWPORT_HEIGHT);
+  const measureRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -33,14 +34,25 @@ export function BranchSessionTree({
       }
     };
     measure();
+    measureRef.current = measure;
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     if (holder) {
       observer.observe(holder);
       if (holder.firstElementChild) observer.observe(holder.firstElementChild);
     }
-    return () => observer.disconnect();
+    return () => {
+      measureRef.current = null;
+      observer.disconnect();
+    };
   }, [fillAvailableHeight, onContentSizeChange]);
+
+  // Expand/collapse changes content height in this commit. Re-measuring here
+  // settles the section cap and viewport before paint; waiting for the
+  // ResizeObserver lands each step a frame later, which reads as flicker.
+  useLayoutEffect(() => {
+    measureRef.current?.();
+  });
 
   const tree = (
     <Tree

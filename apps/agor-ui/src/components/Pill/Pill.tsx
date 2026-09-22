@@ -1219,22 +1219,27 @@ interface ChannelPillProps extends BasePillProps {
   channelName: string;
 }
 
-export const ChannelPill: React.FC<ChannelPillProps> = ({ channelType, channelName, style }) => {
-  // Map channel type to icon
-  const getIcon = () => {
-    const type = (channelType || '').toLowerCase();
-    switch (type) {
-      case 'slack':
-        return <SlackOutlined />;
-      case 'discord':
-        return <MessageOutlined />; // TODO: Add DiscordOutlined when available
-      default:
-        return <MessageOutlined />;
-    }
-  };
+/** Icon for a gateway channel type, shared by the pill and inline channel labels. */
+export function getChannelIcon(channelType?: string): React.ReactNode {
+  switch ((channelType || '').toLowerCase()) {
+    case 'slack':
+      return <SlackOutlined />;
+    case 'discord':
+      return <MessageOutlined />; // TODO: Add DiscordOutlined when available
+    default:
+      return <MessageOutlined />;
+  }
+}
 
+export const ChannelPill: React.FC<ChannelPillProps> = ({ channelType, channelName, style }) => {
   return (
-    <Tag icon={getIcon()} color={PILL_COLORS.success} truncate title={channelName} style={style}>
+    <Tag
+      icon={getChannelIcon(channelType)}
+      color={PILL_COLORS.success}
+      truncate
+      title={channelName}
+      style={style}
+    >
       {channelName}
     </Tag>
   );

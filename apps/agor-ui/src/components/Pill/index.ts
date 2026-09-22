@@ -11,6 +11,7 @@ export {
   ForkPill,
   GitShaPill,
   GitStatePill,
+  getChannelIcon,
   IssuePill,
   KnowledgeNamespacePill,
   MessageCountPill,

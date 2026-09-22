@@ -52,30 +52,4 @@ describe('session tree genealogy', () => {
     expect(getSessionTreeParentId(forked)).toBe('root');
     expect(collectSessionSubtreeIds([forked], ['root'])).toEqual(new Set(['root', 'forked']));
   });
-
-  it('records the rendered parent agent, including after an ancestor is filtered out', () => {
-    const withTool = (session: Session, agentic_tool: string) =>
-      ({ ...session, agentic_tool }) as Session;
-    const root = withTool(makeSession('root'), 'codex');
-    const child = withTool(
-      makeSession('child', { parent_session_id: root.session_id, children: [] }),
-      'claude-code'
-    );
-    const orphan = withTool(
-      makeSession('orphan', {
-        parent_session_id: 'archived' as Session['session_id'],
-        children: [],
-      }),
-      'codex'
-    );
-
-    expect(buildSessionTree([root, child, orphan])).toMatchObject([
-      {
-        key: 'root',
-        parentAgenticTool: undefined,
-        children: [{ parentAgenticTool: 'codex', siblingShowsAgentIcon: true }],
-      },
-      { key: 'orphan', parentAgenticTool: undefined },
-    ]);
-  });
 });

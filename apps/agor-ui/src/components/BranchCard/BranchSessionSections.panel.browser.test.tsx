@@ -65,13 +65,17 @@ const config = { algorithm: theme.darkAlgorithm, token: { motion: false } };
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
-function mount(list: Session[] = sessions) {
+function mount(
+  list: Session[] = sessions,
+  options: { motion?: boolean; fillAvailableHeight?: boolean } = {}
+) {
+  const themeConfig = { ...config, token: { ...config.token, motion: options.motion ?? false } };
   const handlers = {
     onSessionClick: vi.fn(),
     onCreateSession: vi.fn(),
     onOpenSessionSettings: vi.fn(),
   };
-  render(
+  const ui = (rowHandlers: typeof handlers) => (
     <ConnectionProvider
       value={{
         connected: true,
@@ -81,24 +85,39 @@ function mount(list: Session[] = sessions) {
         currentSha: null,
       }}
     >
-      <ConfigProvider theme={config}>
+      <ConfigProvider theme={themeConfig}>
         <App style={{ background: theme.getDesignToken(config).colorBgContainer, minHeight: 600 }}>
-          <div data-testid="panel" style={{ width: 360, padding: 12 }}>
+          <div
+            data-testid="panel"
+            style={{
+              width: 360,
+              padding: 12,
+              // The teammate panel supplies a bounded flex column in fill mode.
+              ...(options.fillAvailableHeight
+                ? { height: 560, display: 'flex', flexDirection: 'column' as const }
+                : undefined),
+            }}
+          >
             <BranchSessionSections
+              fillAvailableHeight={options.fillAvailableHeight}
               branch={branch}
               sessions={list}
               userById={new Map()}
               selectedSessionId="review"
               mode="panel"
               client={null}
-              {...handlers}
+              {...rowHandlers}
             />
           </div>
         </App>
       </ConfigProvider>
     </ConnectionProvider>
   );
-  return handlers;
+  const view = render(ui(handlers));
+  return {
+    ...handlers,
+    rerenderWith: (next: Partial<typeof handlers>) => view.rerender(ui({ ...handlers, ...next })),
+  };
 }
 
 const row = (title: string) =>
@@ -135,11 +154,11 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     expect(dot.getBoundingClientRect().right).toBeLessThanOrEqual(panelRight);
   }
 
-  // Tree's own 4px node gap is the only spacing between borderless rows.
+  // Rows sit flush: their own hover/selection fill separates them, so pitch is the row height.
   expect(
     row('Astra recheck — Abuse').getBoundingClientRect().top -
       row('Security agor').getBoundingClientRect().top
-  ).toBeCloseTo(expectedHeight + 4, 0);
+  ).toBeCloseTo(expectedHeight, 0);
 
   expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
   expect(within(row('Availability fixes')).getByRole('img', { name: 'Running' })).toHaveClass(
@@ -172,27 +191,104 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
   await page.screenshot({ path: `./.vitest/panel-sessions-hover-${window.innerWidth}.png` });
 });
 
-it('shows agent icons only where the agent changes and hides the implied spawn marker', () => {
+it('omits agent logos and the implied spawn marker but keeps fork markers', () => {
   mount();
 
-  const iconVisible = (title: string) =>
-    getComputedStyle(row(title).querySelector('.tool-icon')!).visibility === 'visible';
-  expect(iconVisible('Security agor')).toBe(true);
-  expect(iconVisible('Independent availability')).toBe(true);
-  // A hidden icon reserves space only when a sibling shows one.
-  expect(iconVisible('Availability fixes')).toBe(false);
-  expect(row('Astra recheck — Abuse').querySelector('.tool-icon')).toBeNull();
+  for (const session of sessions) {
+    expect(row(session.title!).querySelector('.tool-icon')).toBeNull();
+  }
   expect(row('Astra recheck — Abuse').querySelector('[aria-label="subnode"]')).toBeNull();
   expect(
     row('Execution security — regression-safe').querySelector('[aria-label="fork"]')
   ).not.toBeNull();
 
-  // Hidden icons keep their slot so sibling titles stay aligned.
-  const siblingLeft = (title: string) =>
+  const titleLeft = (title: string) =>
     within(row(title))
       .getByText(new RegExp(`^${title}`))
       .getBoundingClientRect().left;
-  expect(siblingLeft('Availability fixes')).toBeCloseTo(siblingLeft('Independent availability'), 0);
+  expect(titleLeft('Availability fixes')).toBeCloseTo(titleLeft('Independent availability'), 0);
+});
+
+it('uses one chevron size, color and column for section headers and tree parents', () => {
+  mount();
+
+  const headerChevron = document.querySelector('.ant-collapse-expand-icon svg')!;
+  const treeChevron = screen
+    .getByRole('button', { name: 'Collapse Security agor' })
+    .querySelector('svg')!;
+  const header = headerChevron.getBoundingClientRect();
+  const tree = treeChevron.getBoundingClientRect();
+  expect(header.width).toBeCloseTo(tree.width, 1);
+  expect(header.left + header.width / 2).toBeCloseTo(tree.left + tree.width / 2, 0);
+  expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
+  // Section titles start where row titles do.
+  expect(screen.getByText('Sessions').getBoundingClientRect().left).toBeCloseTo(
+    within(row('Security agor')).getByText('Security agor').getBoundingClientRect().left,
+    0
+  );
+  // Tree's own first-line switcher backing is replaced by the button's hover surface.
+  const switcher = treeChevron.closest('.ant-tree-switcher')!;
+  expect(getComputedStyle(switcher, '::before').display).toBe('none');
+});
+
+it('toggles in one frame, animates only revealed rows, and defers hover toolbars', async () => {
+  mount(sessions, { motion: true, fillAvailableHeight: true });
+
+  // Nothing animates on first render. Toolbars skip the initial commit, then mount in idle
+  // time so browse-mode screen readers can still reach them.
+  expect(document.querySelector('.agor-session-row-enter')).toBeNull();
+  expect(document.querySelectorAll('[aria-label="setting"]')).toHaveLength(0);
+  await waitFor(() =>
+    expect(document.querySelectorAll('[aria-label="setting"]')).toHaveLength(sessions.length)
+  );
+
+  // The list is sized to its content in the same commit: no clipped row, no trailing gap.
+  const holder = document.querySelector<HTMLElement>('.ant-tree-list-holder')!;
+  const expectSettled = () => {
+    // The virtual spacer is the rows' total height; the viewport must match it exactly.
+    const viewport = holder.getBoundingClientRect();
+    expect(viewport.height).toBeCloseTo(
+      holder.firstElementChild!.getBoundingClientRect().height,
+      0
+    );
+    const rows = holder.querySelectorAll('[data-session-id]');
+    expect(rows[rows.length - 1]!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      viewport.bottom + 0.5
+    );
+  };
+
+  // Tree height motion is off: children leave in the same commit, with no motion holder.
+  await act(async () =>
+    page.getByRole('button', { name: 'Collapse Astra recheck — Abuse/availability' }).click()
+  );
+  expect(screen.queryByText(/^Availability fixes/)).toBeNull();
+  expect(document.querySelector('.ant-tree-treenode-motion')).toBeNull();
+  expectSettled();
+  expect(document.querySelector('.agor-session-row-enter')).toBeNull();
+
+  await act(async () =>
+    page.getByRole('button', { name: 'Expand Astra recheck — Abuse/availability' }).click()
+  );
+  expectSettled();
+  // Only the rows the expand revealed play the compositor-only enter animation.
+  expect(row('Availability fixes').closest('.agor-session-row-enter')).not.toBeNull();
+  expect(row('Astra recheck — Abuse').closest('.agor-session-row-enter')).toBeNull();
+  await waitFor(() => expect(document.querySelector('.agor-session-row-enter')).toBeNull(), {
+    timeout: 2000,
+  });
+});
+
+it('skips the reveal animation when the theme turns motion off', async () => {
+  mount();
+
+  await act(async () =>
+    page.getByRole('button', { name: 'Collapse Astra recheck — Abuse/availability' }).click()
+  );
+  await act(async () =>
+    page.getByRole('button', { name: 'Expand Astra recheck — Abuse/availability' }).click()
+  );
+  expect(row('Availability fixes')).toBeVisible();
+  expect(document.querySelector('.agor-session-row-enter')).toBeNull();
 });
 
 it('keeps hover actions and collapse behavior, and counts hidden children', async () => {
@@ -249,4 +345,94 @@ it('applies the same row treatment to scheduled runs and flat search results', a
   expect(getComputedStyle(wrapper).backgroundColor).toBe(TRANSPARENT);
   await act(async () => page.elementLocator(result).hover());
   await waitFor(() => expect(getComputedStyle(wrapper).backgroundColor).not.toBe(TRANSPARENT));
+});
+
+it('keeps gateway channels on the title line and scheduled runs on the title column', () => {
+  mount([
+    ...sessions,
+    makeSession('nightly', 'Nightly dependency audit', {
+      scheduled_from_branch: true,
+      scheduled_run_at: 1_780_527_200_000,
+    }),
+    makeSession('weekly', 'Weekly security digest', {
+      scheduled_from_branch: true,
+      scheduled_run_at: 1_780_440_800_000,
+    }),
+    makeSession('slack', 'Why is the staging deploy stuck?', {
+      custom_context: {
+        gateway_source: {
+          channel_id: 'channel-1',
+          channel_type: 'slack',
+          channel_name: '#eng-deploys',
+          thread_id: 'thread-1',
+        },
+      },
+    } as Partial<Session>),
+  ]);
+
+  const expectedHeight = isMobileViewport()
+    ? MOBILE_TOUCH_TARGET
+    : theme.getDesignToken(config).controlHeight;
+  const gateway = row('Why is the staging deploy stuck?');
+  expect(within(gateway).getByText('#eng-deploys')).toBeVisible();
+  expect(gateway.querySelector('.ant-tag')).toBeNull();
+  expect(gateway.getBoundingClientRect().height).toBeCloseTo(expectedHeight, 0);
+  // Paged scheduled rows keep the same flush rhythm as tree rows.
+  expect(
+    row('Weekly security digest').getBoundingClientRect().top -
+      row('Nightly dependency audit').getBoundingClientRect().top
+  ).toBeCloseTo(expectedHeight, 0);
+
+  // Every section shares one title column and the same read-state tone.
+  const title = (name: string) => within(row(name)).getByText(new RegExp(`^${name}`));
+  const sessionTitle = title('Astra recheck — Abuse');
+  for (const name of ['Nightly dependency audit', 'Why is the staging deploy stuck?']) {
+    expect(title(name).getBoundingClientRect().left).toBeCloseTo(
+      title('Security agor').getBoundingClientRect().left,
+      0
+    );
+    expect(getComputedStyle(title(name)).color).toBe(getComputedStyle(sessionTitle).color);
+  }
+});
+
+it('lets read sessions recede one step while sessions that need you stay full strength', () => {
+  mount();
+  const token = theme.getDesignToken(config);
+  const color = (name: string) =>
+    getComputedStyle(within(row(name)).getByText(new RegExp(`^${name}`))).color;
+  const probe = document.createElement('span');
+  document.body.append(probe);
+  const resolve = (value: string) => {
+    probe.style.color = value;
+    return getComputedStyle(probe).color;
+  };
+
+  // Ready, running, failed and selected rows keep the normal text color.
+  for (const name of [
+    'Security agor',
+    'Availability fixes',
+    'Execution security — implementation',
+    'Independent availability',
+  ]) {
+    expect(color(name)).not.toBe(resolve(token.colorTextSecondary));
+  }
+  // Read rows use the gentler secondary step, not the description grey.
+  expect(color('Astra recheck — Abuse')).toBe(resolve(token.colorTextSecondary));
+  expect(color('Execution security — regression-safe')).toBe(resolve(token.colorTextSecondary));
+  probe.remove();
+});
+
+it('re-renders memoized rows when a context-only input changes', async () => {
+  const { onOpenSessionSettings, rerenderWith } = mount();
+  const replacement = vi.fn();
+  rerenderWith({ onOpenSessionSettings: replacement });
+
+  await act(async () => page.elementLocator(row('Astra recheck — Abuse')).hover());
+  const actions = row('Astra recheck — Abuse').parentElement!.lastElementChild as HTMLElement;
+  await act(async () =>
+    page.elementLocator(within(actions).getByRole('button', { name: 'setting' })).click()
+  );
+  // A stale memoized row would still call the handler from the first render.
+  expect(replacement).toHaveBeenCalledWith('abuse');
+  expect(onOpenSessionSettings).not.toHaveBeenCalled();
 });

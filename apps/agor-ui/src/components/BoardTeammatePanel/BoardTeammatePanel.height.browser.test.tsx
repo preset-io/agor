@@ -120,7 +120,7 @@ it.each([false, true])(
     });
     await expectFillsPanel();
     const section = screen.getByText(gateway ? 'Gateway Sessions' : 'Sessions', {
-      selector: 'strong',
+      selector: '.ant-collapse-header .ant-typography',
     });
     fireEvent.click(section);
     await waitFor(() => expect(screen.queryByRole('tree')).toBeNull());
@@ -175,7 +175,9 @@ it('shares remaining space between trees and keeps scheduled runs and search rea
   fireEvent.click(within(manualSection).getByRole('button', { name: 'Expand Conversation 0' }));
   await waitFor(() => expect(scrollers()[0].clientHeight).toBeGreaterThan(300));
   const sharedHeight = scrollers()[1].clientHeight;
-  fireEvent.click(screen.getByText('Sessions', { selector: 'strong' }));
+  fireEvent.click(
+    screen.getByText('Sessions', { selector: '.ant-collapse-header .ant-typography' })
+  );
   await waitFor(() => {
     expect(scrollers()).toHaveLength(1);
     expect(scrollers()[0].clientHeight).toBeGreaterThan(sharedHeight + 200);
