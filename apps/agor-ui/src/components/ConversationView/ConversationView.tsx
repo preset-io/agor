@@ -563,6 +563,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
       <div
         ref={setScrollViewport}
         data-testid="conversation-scroll-container"
+        onWheel={(event) => {
+          // At the top (including an underfilled page), upward intent cannot
+          // produce a scroll event. Fetch one page; loadOlder coalesces bursts.
+          if (event.deltaY < 0 && event.currentTarget.scrollTop <= 0) void loadOlder();
+        }}
         onScroll={(event) => {
           const top = event.currentTarget.scrollTop;
           if (top < previousScrollTop.current && top < 80) void loadOlder();
@@ -579,7 +584,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
           {/* Genealogy Banner */}
           <GenealogyBanner />
 
-          <Text type="secondary">Older history loads above · search covers loaded content</Text>
           {error && <Alert type="error" title={error} />}
           {currentReactiveState?.hasOlderTasks && (
             <Button loading={loadingOlder} onClick={() => void loadOlder()}>

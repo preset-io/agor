@@ -106,7 +106,9 @@ function update(next: ReactiveSessionState) {
 }
 const loadOlderTasks = vi.fn(async () => {
   await new Promise((resolve) => setTimeout(resolve, 40));
-  update({ ...state, tasks, hasOlderTasks: false });
+  const start = tasks.findIndex((task) => task.task_id === state.tasks[0]?.task_id);
+  const next = Math.max(0, start - 5);
+  update({ ...state, tasks: tasks.slice(next), hasOlderTasks: next > 0 });
 });
 const loadTaskMessages = vi.fn(async () => []);
 const handle = {
@@ -121,7 +123,7 @@ beforeEach(() => {
   state = {
     sessionId,
     session: null,
-    tasks: tasks.slice(10),
+    tasks: tasks.slice(15),
     messagesByTask: messages,
     loadedTaskIds: new Set(),
     streamingMessages: new Map(),
@@ -147,8 +149,8 @@ it('renders continuous history without detail fetching and anchors an upward pag
   await waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(100));
   expect(loadTaskMessages).not.toHaveBeenCalled();
   expect(viewport.querySelector('.ant-collapse')).toBeNull();
-  expect(screen.getByText('Prompt 10')).toBeInTheDocument();
-  expect(screen.getByText(/Answer 10\./)).toBeInTheDocument();
+  expect(screen.getByText('Prompt 15')).toBeInTheDocument();
+  expect(screen.getByText(/Answer 15\./)).toBeInTheDocument();
   // Establish an upward reader scroll, then cross the older-page threshold.
   act(() => {
     viewport.scrollTop = 150;
@@ -164,7 +166,7 @@ it('renders continuous history without detail fetching and anchors an upward pag
     top = anchor!.getBoundingClientRect().top;
     fireEvent.scroll(viewport);
   });
-  await waitFor(() => expect(screen.getByText('Prompt 0')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText('Prompt 10')).toBeInTheDocument());
   await waitFor(() => expect(Math.abs(anchor!.getBoundingClientRect().top - top)).toBeLessThan(3));
   expect(loadOlderTasks).toHaveBeenCalledTimes(1);
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
@@ -385,6 +387,30 @@ it('shows live tool events before persistence and preserves the group through co
   act(() => {
     state = {
       ...state,
+      messagesByTask: new Map([
+        [
+          task.task_id,
+          [
+            ...state.messagesByTask.get(task.task_id)!,
+            {
+              ...tool,
+              message_id: generateId(),
+              index: 100,
+              content: 'Following assistant response',
+            },
+          ],
+        ],
+      ]),
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toHaveAttribute(
+    'aria-busy',
+    'false'
+  );
+  act(() => {
+    state = {
+      ...state,
       tasks: [{ ...task, status: TaskStatus.COMPLETED }],
       loadedTaskIds: new Set(),
     };
@@ -458,4 +484,42 @@ it('keeps the full Bash command and ellipsizes only at the tool row boundary', a
   );
   // A long command should use the available row, not stop at a character cap.
   expect(tool.getBoundingClientRect().right - text.getBoundingClientRect().right).toBeLessThan(16);
+});
+
+it('pages upward in five-turn batches to the beginning without flooding or detail fetches', async () => {
+  render(
+    <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
+      <ConversationView client={null} sessionId={sessionId} />
+    </div>
+  );
+  expect(document.querySelectorAll('[data-task-block]')).toHaveLength(5);
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  for (const count of [10, 15, 20]) {
+    act(() => {
+      viewport.scrollTop = 0;
+      for (let i = 0; i < 5; i++) fireEvent.wheel(viewport, { deltaY: -40 });
+    });
+    await waitFor(() => expect(document.querySelectorAll('[data-task-block]')).toHaveLength(count));
+    expect(loadOlderTasks).toHaveBeenCalledTimes(count / 5 - 1);
+  }
+  expect(screen.queryByRole('button', { name: 'Load older history' })).toBeNull();
+  expect(screen.queryByText(/Older history loads above/)).toBeNull();
+  fireEvent.wheel(viewport, { deltaY: -40 });
+  expect(loadOlderTasks).toHaveBeenCalledTimes(3);
+  expect(loadTaskMessages).not.toHaveBeenCalled();
+});
+
+it('loads an older page on upward wheel intent when short history cannot scroll', async () => {
+  state = { ...state, tasks: [tasks[19]], messagesByTask: new Map([[tasks[19].task_id, []]]) };
+  render(
+    <div style={{ height: 900, display: 'flex', flexDirection: 'column' }}>
+      <ConversationView client={null} sessionId={sessionId} />
+    </div>
+  );
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.clientHeight);
+  expect(loadOlderTasks).not.toHaveBeenCalled();
+  fireEvent.wheel(viewport, { deltaY: -40 });
+  await waitFor(() => expect(screen.getByText('Prompt 14')).toBeInTheDocument());
+  expect(loadOlderTasks).toHaveBeenCalledTimes(1);
 });

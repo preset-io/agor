@@ -73,3 +73,29 @@ it.each(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'edit_files'])(
     expect(screen.getByTestId('tool-body')).toBeVisible();
   }
 );
+
+it('hands activity to a following assistant response unless the latest tool is explicitly running', () => {
+  const message = activity('Read', 0, true);
+  const view = (following: boolean, status: 'executing' | 'complete' = 'complete') => (
+    <AgentChain
+      messages={[message]}
+      isTaskRunning
+      isLatest
+      leanTranscript
+      hasFollowingResponse={following}
+      latestActivity={{ toolUseId: 'call-0', toolName: 'Read', status }}
+    />
+  );
+  const { rerender } = render(view(false));
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toHaveAttribute('aria-busy', 'true');
+  rerender(view(true));
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toHaveAttribute(
+    'aria-busy',
+    'false'
+  );
+  rerender(view(true, 'executing'));
+  expect(screen.getByRole('button', { name: 'Running: Read' })).toHaveAttribute(
+    'aria-busy',
+    'true'
+  );
+});

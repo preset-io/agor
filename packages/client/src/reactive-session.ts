@@ -10,7 +10,7 @@ import {
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
-export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
+export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 5;
 const LEAN_ACTIVE_STATUSES = EXECUTING_TASK_STATUSES;
 const isLeanActive = isTaskExecuting;
 

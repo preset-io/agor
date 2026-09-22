@@ -1143,6 +1143,22 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     }
                     isTaskRunning={runtimeLive && !hasPendingApproval}
                     isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                    hasFollowingResponse={blocks
+                      .slice(blockIndex + 1)
+                      .some(
+                        (next) =>
+                          next.type === 'message' &&
+                          next.message.role === MessageRole.ASSISTANT &&
+                          (typeof next.message.content === 'string'
+                            ? !!next.message.content.trim()
+                            : Array.isArray(next.message.content) &&
+                              next.message.content.some(
+                                (content) =>
+                                  content.type === 'text' &&
+                                  typeof content.text === 'string' &&
+                                  !!content.text.trim()
+                              ))
+                      )}
                     compact={compact}
                   />
                 </div>

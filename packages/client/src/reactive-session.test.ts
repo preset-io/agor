@@ -1502,22 +1502,22 @@ describe('lean transcript POC hydration', () => {
     return { tasks, messagesByTask };
   };
 
-  it('starts with ten lean tasks, loads older pages once, and coalesces explicit details', async () => {
+  it('starts with five lean tasks, loads older pages once, and coalesces explicit details', async () => {
     const opts = history();
     const mock = createMockClient(opts);
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
     await handle.ready();
     expect(handle.state.error).toBeNull();
-    expect(handle.state.tasks).toHaveLength(10);
+    expect(handle.state.tasks).toHaveLength(5);
     expect(mock.taskFindAll).not.toHaveBeenCalled();
-    expect(mock.messageFindAll).toHaveBeenCalledTimes(10);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(5);
     expect(
       mock.messageFindAll.mock.calls.every(([params]) => params.query.transcript === 'lean')
     ).toBe(true);
     expect(JSON.stringify([...handle.state.messagesByTask])).not.toContain('TOOL_CANARY');
     expect(handle.state.loadedTaskIds.size).toBe(0);
     await Promise.all([handle.loadTaskMessages('task-023'), handle.loadTaskMessages('task-023')]);
-    expect(mock.messageFindAll).toHaveBeenCalledTimes(11);
+    expect(mock.messageFindAll).toHaveBeenCalledTimes(6);
     expect(handle.state.messagesByTask.get('task-023')?.map((message) => message.index)).toEqual([
       0, 1, 2,
     ]);
@@ -1525,6 +1525,10 @@ describe('lean transcript POC hydration', () => {
     handle.unloadTaskMessages('task-023');
     expect(handle.state.loadedTaskIds.has('task-023')).toBe(true);
     await Promise.all([handle.loadOlderTasks(), handle.loadOlderTasks()]);
+    expect(handle.state.tasks).toHaveLength(10);
+    await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(15);
+    await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(20);
     await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(24);
@@ -1599,9 +1603,11 @@ describe('lean transcript POC hydration', () => {
     }
     await handle.resync();
     expect(handle.state.error).toBeNull();
-    expect(handle.state.tasks).toHaveLength(35);
+    expect(handle.state.tasks).toHaveLength(30);
     expect(handle.state.tasks.some((task) => task.task_id === 'task-032')).toBe(true);
     expect(handle.state.loadedTaskIds.size).toBe(0);
+    await handle.loadOlderTasks();
+    await handle.loadOlderTasks();
     await handle.loadOlderTasks();
     await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(49);

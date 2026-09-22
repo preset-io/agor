@@ -358,7 +358,7 @@ Conversations show user and assistant messages without task-level accordions. Th
 is the default experience, not a display preference or environment feature flag.
 No database migration is needed.
 
-The conversation opens the latest ten tasks with user and assistant text visible. Scroll
+The conversation opens the latest five tasks with user and assistant text visible. Scroll
 up (or use **Load older history**) to fetch earlier tasks. Expanding **Tool calls** fetches
 one task’s full messages, restores tool blocks in their original positions, and opens
 the first loaded group. Other groups remain collapsed. Inside an opened group, edit/write
@@ -367,7 +367,7 @@ Empty results retain the tool disclosure, with **No tool calls** inside its expa
 Active tasks continue receiving full live activity and approvals; live events update
 the current tool header even before the corresponding message is persisted.
 The latest tool-group label shimmers while the turn remains active, including gaps between
-calls; “Latest” means the last call finished, not that another call is guaranteed. Approval
+calls, until a following assistant message takes over (unless a tool is still executing); “Latest” means the last call finished, not that another call is guaranteed. Approval
 waits and completed turns do not shimmer, and reduced-motion settings disable it. Response loading remains visible without a standalone task spinner.
 Successful turns have no standalone status icon; failures remain visible as error notices.
 Turn metadata reuses the existing pills in a right-aligned, bottom-anchored floating strip below the prompt.
@@ -380,7 +380,7 @@ scrolls horizontally on narrow screens and retains the context-window usage back
 Search covers only loaded content, including tool details only after expansion.
 
 Historical tool data is projected out in SQL before transfer, but the database still
-reads/parses the stored message JSON. Ten tasks is not a byte cap, and loading more
+reads/parses the stored message JSON. Five tasks is not a byte cap, and loading more
 history retains it in memory. Reconnecting refreshes reached history and missed new
 turns; it does not reset the reader to ten tasks.
 

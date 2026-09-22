@@ -95,6 +95,7 @@ interface AgentChainProps {
   leanTranscript?: boolean;
   revealRequested?: boolean;
   latestActivity?: ToolExecutionState;
+  hasFollowingResponse?: boolean;
 }
 
 interface ChainItem {
@@ -158,6 +159,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     leanTranscript = false,
     revealRequested = false,
     latestActivity,
+    hasFollowingResponse = false,
   }) => {
     const { token } = theme.useToken();
     const [expanded, setExpanded] = useState(!leanTranscript || revealRequested);
@@ -643,7 +645,19 @@ export const AgentChain = React.memo<AgentChainProps>(
                     : 'Reasoning'
             }${hasErrors ? ' · Errors' : ''}`}
             expanded={expanded}
-            executing={!!(isTaskRunning && isLatest)}
+            executing={
+              !!(
+                isTaskRunning &&
+                isLatest &&
+                (!hasFollowingResponse ||
+                  latestActivity?.status === 'executing' ||
+                  (!latestActivity &&
+                    latestToolItem &&
+                    typeof latestToolItem.content !== 'string' &&
+                    !latestToolItem.content.toolResult &&
+                    !IMPLICIT_RESULT_TOOLS.has(latestToolItem.content.toolUse.name)))
+              )
+            }
             onClick={() => setExpanded(!expanded)}
           />
         ) : (
