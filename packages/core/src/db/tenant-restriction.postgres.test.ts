@@ -55,6 +55,28 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     if (db) await close(db);
   });
 
+  it('prepares missing history closed and fences delayed restriction and mismatched activation', async () => {
+    const tenant = `restriction-missing-${generateId()}`;
+    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release-two' });
+    expect((await applyTenantRestrictionIntent(db, tenant, release)).changed).toBe(true);
+    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
+      TenantRestrictedError
+    );
+    await expect(applyTenantRestrictionIntent(db, tenant, command())).rejects.toThrow();
+    await expect(
+      applyTenantRestrictionIntent(db, tenant, {
+        ...release,
+        action: 'activate',
+        operationId: 'different-release',
+      })
+    ).rejects.toThrow();
+    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
+      TenantRestrictedError
+    );
+    await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
+    await expect(assertTenantUnrestricted(db, tenant)).resolves.toBeUndefined();
+  });
+
   it('persists through connection replacement; prepares closed, retains release watermark and rejects stale replay', async () => {
     const tenant = `restriction-${generateId()}`;
     await expect(assertTenantUnrestricted(db, tenant)).resolves.toBeUndefined();

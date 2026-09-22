@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
-  type Database,
   isPostgresDatabaseHandle,
   readTenantRestrictionIntents,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import { TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
@@ -31,7 +32,7 @@ const CREDENTIAL_REJECTION = 'Tenant credential cannot be verified';
  * is the whole disclosure — no controller, placement, revision or phase.
  */
 export async function readTenantCredentialEpoch(
-  db: Database,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string
 ): Promise<string | undefined> {
   if (!isPostgresDatabaseHandle(db)) return undefined;
@@ -64,7 +65,7 @@ export function tenantCredentialEpochClaims(epoch: string | undefined): Record<s
 
 /** Only call with a verified signed payload or immutable authenticated projection. */
 export async function assertTenantCredentialEpoch(
-  db: Database,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string,
   payload: unknown
 ): Promise<string | undefined> {

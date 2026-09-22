@@ -57,7 +57,7 @@ export class TenantRestrictionConflictError extends Error {
 }
 
 /**
- * Pure transition policy. Only restrict can create a CLOSED row. A new release
+ * Pure transition policy. Restrict and prepare_release can create a CLOSED row. A new release
  * uses a higher revision and stays closed until a separate activation of that
  * exact operation. Active records remain as revision watermarks; never delete
  * them as a release operation. Controller and placement identities cannot be
@@ -150,9 +150,11 @@ export function transitionTenantRestriction(
       throw new TenantRestrictionConflictError('revision_conflict');
     }
   }
-  if (command.action === 'activate' || (!current && command.action === 'prepare_release')) {
+  if (command.action === 'activate') {
     throw new TenantRestrictionConflictError('release_not_prepared');
   }
+  // Empty history may be prepared CLOSED when a prior restriction never arrived.
+  // This installs the newer fence before any activation; a delayed restrict is stale.
   // A higher revision may restrict again or supersede a pending suspension with
   // a prepared release. Both remain closed. Only exact-revision activate opens.
   const { action, ...binding } = command;

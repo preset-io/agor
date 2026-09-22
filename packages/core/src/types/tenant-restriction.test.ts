@@ -41,9 +41,19 @@ describe('tenant restriction intent protocol', () => {
     ).toBe('restricted');
   });
 
+  it('prepares empty history closed and fences a delayed first suspension', () => {
+    const prepared = apply(null, release);
+    expect(prepared.record.phase).toBe('release_prepared');
+    expect(isTenantRestrictionClosed(prepared.record)).toBe(true);
+    expect(() => apply(prepared.record, restrict)).toThrow('stale_revision');
+    expect(() =>
+      apply(prepared.record, { ...release, action: 'activate', operationId: 'other' })
+    ).toThrow('revision_conflict');
+    expect(apply(prepared.record, { ...release, action: 'activate' }).record.phase).toBe('active');
+  });
+
   it('refuses activation without the exact prepared operation', () => {
     const current = apply(null, restrict).record;
-    expect(() => apply(null, release)).toThrow('release_not_prepared');
     expect(() => apply(null, { ...restrict, action: 'activate' })).toThrow('release_not_prepared');
     expect(() => apply(current, { ...restrict, action: 'activate' })).toThrow('revision_conflict');
     expect(() => apply(current, { ...release, action: 'activate' })).toThrow(

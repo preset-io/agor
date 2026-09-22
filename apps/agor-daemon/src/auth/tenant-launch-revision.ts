@@ -1,7 +1,8 @@
 import {
-  type Database,
   isPostgresDatabaseHandle,
   readTenantRestrictionIntents,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import { z } from 'zod';
@@ -24,7 +25,7 @@ const launchRestrictionClaim = z
  * chooses the controller whose revision the issuer is allowed to attest.
  */
 export async function assertTenantLaunchRevision(
-  db: Database,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string,
   claim: unknown,
   configuredController?: string

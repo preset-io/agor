@@ -1,4 +1,4 @@
-import { Flex, Result, theme } from 'antd';
+import { Button, Flex, Result, theme } from 'antd';
 
 /**
  * Full-page state for a workspace the daemon has closed to ordinary access.
@@ -14,7 +14,11 @@ import { Flex, Result, theme } from 'antd';
  * the restriction record knows — why, who, which placement or revision — is
  * operator state and belongs on the operator's side of the boundary.
  */
-export function WorkspaceSuspended() {
+export function WorkspaceSuspended({
+  onRetry = () => window.location.reload(),
+}: {
+  onRetry?: () => void;
+}) {
   const { token } = theme.useToken();
 
   return (
@@ -28,6 +32,7 @@ export function WorkspaceSuspended() {
         status="warning"
         title="This workspace is suspended"
         subTitle="Contact your administrator"
+        extra={<Button onClick={onRetry}>Try again</Button>}
       />
     </Flex>
   );
