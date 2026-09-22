@@ -1,9 +1,15 @@
 import { generateId } from '@agor/core/ids/browser';
 import { type Message, MessageRole } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { MessageBlock } from '../MessageBlock';
 import { AgentChain } from './AgentChain';
 
+vi.mock('../ToolUseRenderer', () => ({
+  ToolUseRenderer: ({ toolUse }: { toolUse: { name: string } }) => (
+    <div data-testid="tool-body">{toolUse.name} body</div>
+  ),
+}));
 afterEach(cleanup);
 const sessionId = generateId();
 function activity(name: string, index: number, complete = false): Message {
@@ -52,3 +58,17 @@ it('updates a quiet collapsed header from live activity to a known count without
     'false'
   );
 });
+
+it.each(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'edit_files'])(
+  'restores %s body defaults inside the closed outer group and direct message renderer',
+  (name) => {
+    const message = activity(name, 0, true);
+    const { unmount } = render(<AgentChain messages={[message]} leanTranscript />);
+    expect(screen.queryByTestId('tool-body')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '1 tool call', expanded: false }));
+    expect(screen.getByTestId('tool-body')).toBeVisible();
+    unmount();
+    render(<MessageBlock message={message} leanTranscript />);
+    expect(screen.getByTestId('tool-body')).toBeVisible();
+  }
+);

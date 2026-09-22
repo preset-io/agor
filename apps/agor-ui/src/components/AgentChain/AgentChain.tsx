@@ -528,7 +528,7 @@ export const AgentChain = React.memo<AgentChainProps>(
           description={description ?? undefined}
           descriptionNode={descriptionNode}
           status={status}
-          expandedByDefault={!leanTranscript && shouldExpandToolByDefault(toolUse.name)}
+          expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
         >
           <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
         </ToolBlock>

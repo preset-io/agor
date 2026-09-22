@@ -848,7 +848,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   description={bashNode ? undefined : getToolDescription(toolUse)}
                   descriptionNode={bashNode}
                   status={status}
-                  expandedByDefault={!leanTranscript && shouldExpandToolByDefault(toolUse.name)}
+                  expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>

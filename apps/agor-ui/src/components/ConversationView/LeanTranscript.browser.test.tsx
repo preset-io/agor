@@ -395,3 +395,42 @@ it('shows live tool events before persistence and preserves the group through co
   expect(screen.queryByText(/No tool calls/)).not.toBeInTheDocument();
   expect(loadTaskMessages).not.toHaveBeenCalled();
 });
+
+it('shows edit diffs on the first outer expansion without changing other tool defaults', async () => {
+  const patch = [
+    {
+      oldStart: 1,
+      oldLines: 1,
+      newStart: 1,
+      newLines: 1,
+      lines: ['-before_restore', '+after_restore'],
+    },
+  ];
+  const activity: Message = {
+    ...messages.get(tasks[19].task_id)![1],
+    content: [
+      {
+        type: 'tool_use',
+        id: 'edit',
+        name: 'edit_files',
+        input: {
+          changes: [{ path: 'synthetic.ts', kind: 'update' }],
+        },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'edit',
+        content: '[completed]',
+        diff: {
+          structuredPatch: patch,
+          files: [{ path: 'synthetic.ts', kind: 'update', structuredPatch: patch }],
+        },
+      },
+    ],
+  };
+  render(<AgentChain messages={[activity]} leanTranscript />);
+  expect(screen.queryByText('after_restore')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: '1 tool call', expanded: false }));
+  await waitFor(() => expect(screen.getByText('after_restore')).toBeVisible());
+  expect(screen.getByText('before_restore')).toBeVisible();
+});
