@@ -2374,6 +2374,12 @@ function AppContent() {
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
                   onExecuteScheduleNow={handleExecuteScheduleNow}
+                  availableAgents={AVAILABLE_AGENTS}
+                  branchStorageConfig={featuresConfig?.branchStorage}
+                  onCreateBranch={handleCreateBranch}
+                  onCreateBoard={handleCreateBoard}
+                  onCreateRepo={handleCreateRepo}
+                  onCreateLocalRepo={handleCreateLocalRepo}
                 />
               }
             />

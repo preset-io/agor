@@ -1,9 +1,17 @@
 import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
-import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
-import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
-import { useTheme } from '../../contexts/ThemeContext';
+import {
+  BgColorsOutlined,
+  BulbOutlined,
+  DesktopOutlined,
+  EditOutlined,
+  MoonOutlined,
+} from '@ant-design/icons';
+import { Button, Drawer, Flex, Segmented, Typography, theme } from 'antd';
+import { useState } from 'react';
+import { type ThemeMode, useTheme } from '../../contexts/ThemeContext';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { ThemeEditorModal } from '../ThemeEditorModal/ThemeEditorModal';
 import { MobileNavTree } from './MobileNavTree';
 
 interface MobileMoreSheetProps {
@@ -21,7 +29,9 @@ interface MobileMoreSheetProps {
 /**
  * "More" bottom sheet: board switcher + Knowledge base + Settings (incl. MCP
  * servers) + account/sign out via the reused nav tree, with an Appearance
- * (light/dark) control on top. Opened from the tab bar's More destination.
+ * (light/dark/system/custom) control on top that matches the desktop theme
+ * menu and reuses the shared ThemeEditorModal. Opened from the tab bar's More
+ * destination.
  */
 export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   open,
@@ -37,52 +47,69 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
   const reduced = usePrefersReducedMotion();
+  const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 
   return (
-    <Drawer
-      open={open}
-      onClose={onClose}
-      placement="bottom"
-      height="80%"
-      title="More"
-      {...reducedMotionSurface(reduced)}
-      styles={{
-        content: glassSurfaceStyle(token, 0.85),
-        body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
-      }}
-    >
-      <Flex
-        align="center"
-        justify="space-between"
-        gap={token.margin}
-        style={{ padding: `${token.paddingSM}px ${token.padding}px` }}
+    <>
+      <Drawer
+        open={open}
+        onClose={onClose}
+        placement="bottom"
+        height="80%"
+        title="More"
+        {...reducedMotionSurface(reduced)}
+        styles={{
+          content: glassSurfaceStyle(token, 0.85),
+          body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+        }}
       >
-        <Typography.Text strong>Appearance</Typography.Text>
-        <Segmented
-          value={themeMode === 'light' ? 'light' : 'dark'}
-          onChange={(value) => setThemeMode(value === 'light' ? 'light' : 'dark')}
-          options={[
-            { value: 'light', label: 'Light', icon: <BulbOutlined /> },
-            { value: 'dark', label: 'Dark', icon: <MoonOutlined /> },
-          ]}
+        <Flex
+          vertical
+          gap={token.marginXS}
+          style={{ padding: `${token.paddingSM}px ${token.padding}px` }}
+        >
+          <Flex align="center" justify="space-between" gap={token.margin}>
+            <Typography.Text strong>Appearance</Typography.Text>
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              style={{ paddingInline: 0 }}
+              onClick={() => setThemeEditorOpen(true)}
+            >
+              Edit theme
+            </Button>
+          </Flex>
+          <Segmented
+            block
+            value={themeMode}
+            onChange={(value) => setThemeMode(value as ThemeMode)}
+            options={[
+              { value: 'light', label: 'Light', icon: <BulbOutlined /> },
+              { value: 'dark', label: 'Dark', icon: <MoonOutlined /> },
+              { value: 'system', label: 'System', icon: <DesktopOutlined /> },
+              { value: 'custom', label: 'Custom', icon: <BgColorsOutlined /> },
+            ]}
+          />
+        </Flex>
+        <MobileNavTree
+          boardById={boardById}
+          branchById={branchById}
+          sessionsByBranch={sessionsByBranch}
+          commentById={commentById}
+          onNavigate={onClose}
+          onOpenWorkspaceSettings={(section) => {
+            onClose();
+            onOpenWorkspaceSettings(section);
+          }}
+          onOpenUserSettings={() => {
+            onClose();
+            onOpenUserSettings();
+          }}
+          onLogout={onLogout}
         />
-      </Flex>
-      <MobileNavTree
-        boardById={boardById}
-        branchById={branchById}
-        sessionsByBranch={sessionsByBranch}
-        commentById={commentById}
-        onNavigate={onClose}
-        onOpenWorkspaceSettings={(section) => {
-          onClose();
-          onOpenWorkspaceSettings(section);
-        }}
-        onOpenUserSettings={() => {
-          onClose();
-          onOpenUserSettings();
-        }}
-        onLogout={onLogout}
-      />
-    </Drawer>
+      </Drawer>
+      <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
+    </>
   );
 };

@@ -61,6 +61,11 @@ const sessionHandlers = {
   onSpawnSession: vi.fn(async () => {}),
   onUpdateSession: vi.fn(),
   onDeleteSession: vi.fn(),
+  availableAgents: [],
+  onCreateBranch: vi.fn(async () => null),
+  onCreateBoard: vi.fn(async () => null),
+  onCreateRepo: vi.fn(),
+  onCreateLocalRepo: vi.fn(),
 };
 
 // Mount exactly as production does: MobileApp lives under a `/m/*` parent route,

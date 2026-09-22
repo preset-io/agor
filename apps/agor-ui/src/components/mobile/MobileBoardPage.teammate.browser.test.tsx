@@ -71,6 +71,7 @@ function tree(
                   artifactById={new Map()}
                   onOpenBranch={vi.fn()}
                   onNewSession={onNewSession}
+                  onNewBranch={vi.fn()}
                   onGiveFirstTask={vi.fn()}
                 />
               </Layout>
