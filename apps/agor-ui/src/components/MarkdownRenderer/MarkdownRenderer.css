@@ -75,6 +75,12 @@
   max-height: 150px;
 }
 
+/* Typography adds a 1em paragraph margin below Streamdown content. The host
+ * (e.g. a message bubble) owns outer padding; retain only inter-paragraph spacing. */
+.ant-typography :is(.markdown-content, .inline-markdown) > p:last-child {
+  margin-bottom: 0;
+}
+
 .markdown-content h1,
 .markdown-content h2,
 .markdown-content h3,
