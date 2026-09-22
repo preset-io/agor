@@ -184,6 +184,7 @@ import {
   slackDeliveryClaim,
   slackDeliveryClaimIsLive,
   slackDeliveryRepairAt,
+  withSlackDeliveryDeadline,
 } from './mcp-slack-delivery-engine.js';
 import type { SessionParams } from './sessions.js';
 
@@ -2634,10 +2635,16 @@ export class GatewayService {
         new Date().toISOString()
       );
       if (!claimed) return;
-      await connector.sendMessage({
-        threadId: slack.threadId,
-        text: mcpSlackConnectSharedThreadWarning(),
-      });
+      // Bounded: this runs INSIDE the card delivery's 30s claim, one call
+      // before the card itself. An unanswered notice used to hold the whole
+      // delivery — and then the card, which is the part that matters, missed
+      // its own lease.
+      await withSlackDeliveryDeadline(
+        connector.sendMessage({
+          threadId: slack.threadId,
+          text: mcpSlackConnectSharedThreadWarning(),
+        })
+      );
     } catch {
       console.warn('[gateway] MCP connect shared-thread notice failed');
     }

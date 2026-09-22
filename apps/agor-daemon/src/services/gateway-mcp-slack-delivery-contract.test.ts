@@ -61,7 +61,11 @@ vi.mock('@agor/core/gateway', async () => {
 });
 
 import { GatewayService } from './gateway.js';
-import type { SlackDeliveryRecord } from './mcp-slack-delivery-engine.js';
+import {
+  MCP_SLACK_DELIVERY_CLAIM_MS,
+  MCP_SLACK_SEND_TIMEOUT_MS,
+  type SlackDeliveryRecord,
+} from './mcp-slack-delivery-engine.js';
 
 const THREAD = 'C1-1700000000.000001';
 const OWNED_TS = '1700000000.000009';
@@ -110,6 +114,17 @@ interface LaneOptions {
    * 2026-09-16 incident and wrote nothing durable at all.
    */
   failAfterClaim?: boolean;
+  /**
+   * Slack accepts the call and never answers.
+   *
+   * Every other stub in this file resolves immediately, which is why nothing
+   * here could express a HANG — and a hang is not the same failure as a
+   * rejection. `.catch()` does not fire, the 30s claim keeps running, and the
+   * caller waits for as long as the provider wants. That was the real shape
+   * of the connect lane's `new WebClient(bot_token)`: `timeout: 0` and a
+   * thirty-minute retry ladder, with no Agor-side deadline over either.
+   */
+  stallSlack?: boolean;
   /**
    * Runs during the Slack call: a second claimant took the expired lease,
    * rendered the row that counts, and released it.
@@ -261,6 +276,7 @@ function connectLane(options: LaneOptions): LaneHarness {
           findMessageByMetadata: async () => undefined,
           sendMessage: async (request: SentMessage) => {
             sends.push(request);
+            if (options.stallSlack) await new Promise<never>(() => {});
             if (sends.length === 1) options.winner?.();
             return OUR_TS;
           },
@@ -410,6 +426,7 @@ function recoveryLane(options: LaneOptions): LaneHarness {
           findMessageByMetadata: async () => undefined,
           sendMessage: async (request: SentMessage) => {
             sends.push(request);
+            if (options.stallSlack) await new Promise<never>(() => {});
             if (sends.length === 1) options.winner?.();
             return OUR_TS;
           },
@@ -577,6 +594,64 @@ describe.each(LANES)(
         ).toBe(true);
         await harness.stop();
       } finally {
+        warn.mockRestore();
+      }
+    });
+
+    /**
+     * Slack never answers.
+     *
+     * The case no fake in this suite could previously express, because every
+     * stub resolves immediately — and a hang is a different failure from a
+     * rejection. Nothing catches it, the claim keeps running, and the caller
+     * waits for as long as the provider does.
+     *
+     * Nothing bounded that. `new WebClient(bot_token)` takes v7's defaults:
+     * `timeout: 0`, meaning no per-request deadline at all, and
+     * `tenRetriesInAboutThirtyMinutes`. Agor imposed no deadline of its own
+     * over the composition, so one unanswered `chat.postMessage` could hold a
+     * delivery — and, through `markConnectStartFailed`, a whole `oauth-start`
+     * request — indefinitely.
+     *
+     * The contract is the one property that matters from outside: a delivery
+     * SETTLES whether or not Slack does, inside the 30s lease it is holding,
+     * and the ending is the already-tested `slack_write_failed` one rather
+     * than a novel state. Stated over both lanes because the deadline lives
+     * in the shared engine: a lane that stops going through `sendSlackCard`
+     * loses it silently otherwise.
+     */
+    it('settles inside its own claim when Slack never answers', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.useFakeTimers();
+      try {
+        const harness = build({ start: 'post', stallSlack: true });
+        const settled = harness.deliver();
+
+        // Nothing resolves this but the deadline — the send stub never does.
+        await vi.advanceTimersByTimeAsync(MCP_SLACK_SEND_TIMEOUT_MS + 1_000);
+        await settled;
+
+        // The deadline is below the lease on purpose: a delivery that outlives
+        // its own claim can have its receipt orphaned by the next claimant.
+        expect(MCP_SLACK_SEND_TIMEOUT_MS).toBeLessThan(MCP_SLACK_DELIVERY_CLAIM_MS);
+        // It was attempted, and that is all Slack ever told us.
+        expect(harness.sends).toHaveLength(1);
+        const record = harness.record();
+        // From here it is the ordinary write-failure ending: the claim is
+        // released, the attempt is counted, and the backoff owns the retry.
+        expect(record?.delivery_claim).toBeUndefined();
+        expect(record?.delivery_attempt_count).toBe(1);
+        expect(record?.delivery_next_retry_at).toEqual(expect.any(String));
+        // A hang that used to be invisible is now an accounted line, under the
+        // category both lanes already use for a refused write.
+        expect(
+          warn.mock.calls.some(
+            (call) => typeof call[0] === 'string' && call[0].includes('reason=slack_write_failed')
+          )
+        ).toBe(true);
+        await harness.stop();
+      } finally {
+        vi.useRealTimers();
         warn.mockRestore();
       }
     });

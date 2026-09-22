@@ -25,7 +25,7 @@
 
 import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
-import { WebClient } from '@slack/web-api';
+import { retryPolicies, WebClient, type WebClientOptions } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
 import type {
@@ -863,6 +863,35 @@ export function isSlackFileSourceAllowed(
   return sourceConversationIds.some((id) => isSlackWriteTargetAllowed(config, id));
 }
 
+/**
+ * Every Slack Web API call this connector makes, bounded.
+ *
+ * `new WebClient(token)` takes the v7 defaults, and both of them are
+ * unbounded in the ways that matter here: `timeout: 0` is an INFINITE
+ * per-request deadline, and `tenRetriesInAboutThirtyMinutes` gives every
+ * failure its own half-hour ladder. Between them a single unanswered
+ * `chat.update` could hold a caller for thirty minutes, and nothing in Agor
+ * imposed a deadline of its own — so a Slack call that never came back was
+ * indistinguishable, from the outside, from a caller that had simply stopped.
+ *
+ * The calls this connector makes are small JSON requests, so 15s is generous
+ * for one of them and `fiveRetriesInFiveMinutes` is a real ladder rather than
+ * an outage. Neither is a substitute for an Agor-side operation deadline on
+ * work that holds a lease — see `MCP_SLACK_SEND_TIMEOUT_MS` — because five
+ * retries still take five minutes. This is the floor under everything else.
+ *
+ * Deliberately NOT applied to `SocketModeClient`: its internal client's
+ * `{retries: 100, factor: 1.3}` is a RECONNECT policy for a long-lived
+ * listener, not a request deadline, and its liveness is already bounded by
+ * `clientPingTimeout` (5s) and `serverPingTimeout` (30s). Capping its retries
+ * would turn a recoverable disconnect into a permanently dead listener.
+ */
+const SLACK_WEB_API_TIMEOUT_MS = 15_000;
+const SLACK_WEB_CLIENT_OPTIONS: WebClientOptions = {
+  timeout: SLACK_WEB_API_TIMEOUT_MS,
+  retryConfig: retryPolicies.fiveRetriesInFiveMinutes,
+};
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 
@@ -909,7 +938,7 @@ export class SlackConnector implements GatewayConnector {
     // Debug: Log token status (not the actual token!)
     // Initialization - tokens validated during startListening
 
-    this.web = new WebClient(this.config.bot_token);
+    this.web = new WebClient(this.config.bot_token, SLACK_WEB_CLIENT_OPTIONS);
   }
 
   /**
@@ -918,7 +947,7 @@ export class SlackConnector implements GatewayConnector {
    * tests can stub the app-token client independently of `this.web`.
    */
   protected createWebClient(token: string): WebClient {
-    return new WebClient(token);
+    return new WebClient(token, SLACK_WEB_CLIENT_OPTIONS);
   }
 
   /**

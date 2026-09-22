@@ -68,6 +68,54 @@ export const MCP_SLACK_DELIVERY_BACKOFF_MS = [
 /** In-process repaints of a card whose render lost its claim. See §7.1.5. */
 export const MCP_SLACK_REPAINT_ATTEMPTS = 2;
 
+/**
+ * How long either lane will wait on Slack for one card before giving up.
+ *
+ * Deliberately BELOW {@link MCP_SLACK_DELIVERY_CLAIM_MS}. A delivery that
+ * outlives its own claim is not merely slow: another claimant may take the
+ * expired lease, post the row that counts and release it, at which point this
+ * one's receipt names a message nothing durable owns. The settlement CAS
+ * already refuses to record that, and `retireOrphanedSlackCard` cleans it up —
+ * but both are repairs for a race this deadline mostly prevents.
+ *
+ * The connector's own `timeout`/`retryConfig` bound one REQUEST and its
+ * ladder (15s, then five retries over five minutes). This bounds the
+ * OPERATION, which is what a 30s lease actually needs. A send that trips it
+ * raises, which lands in each lane's existing `catch` as
+ * `slack_write_failed` and consumes one rung of the D1 ladder — a hang
+ * becomes an already-tested failure rather than a caller that never returns.
+ */
+export const MCP_SLACK_SEND_TIMEOUT_MS = 15_000;
+
+/**
+ * Bound one outbound Slack operation.
+ *
+ * `Promise.race` cannot cancel the underlying request — the connector's own
+ * `timeout` is what eventually frees the socket. What this guarantees is that
+ * the CALLER stops waiting, which is the property every holder of a 30s lease
+ * needs and the one nothing in either lane had.
+ */
+export async function withSlackDeliveryDeadline<T>(
+  operation: Promise<T>,
+  timeoutMs: number = MCP_SLACK_SEND_TIMEOUT_MS
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Slack card delivery exceeded its deadline')),
+          timeoutMs
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Durable ownership of one post/update attempt, across daemons. */
 export interface SlackDeliveryClaim {
   claim_id: string;
@@ -416,7 +464,13 @@ export async function acquireSlackDeliveryConnector(
 
   let currentApp: Awaited<ReturnType<NonNullable<GatewayConnector['getAppInfo']>>> | undefined;
   try {
-    currentApp = connector.getAppInfo ? await connector.getAppInfo() : undefined;
+    // `getAppInfo` is an `auth.test` — a Slack call, made under the same 30s
+    // claim the send below needs, and it is on the delivery path of BOTH
+    // lanes. Bounded like the send: an identity check that does not answer in
+    // time is `app_identity_unavailable`, a refusal both lanes already handle.
+    currentApp = connector.getAppInfo
+      ? await withSlackDeliveryDeadline(connector.getAppInfo())
+      : undefined;
   } catch {
     return { outcome: 'failed', reason: 'app_identity_unavailable' };
   }
@@ -454,34 +508,45 @@ export async function sendSlackCard(
     recordedTs?: string;
   }
 ): Promise<{ receipt: GatewaySendReceipt; reconciledMessageTs?: string }> {
+  // One budget over the whole card, not one per call: the reconciliation
+  // lookup and the post/edit are two round-trips, and a deadline each would
+  // let the pair outlast the 30s claim the caller is holding.
+  const deadline = Date.now() + MCP_SLACK_SEND_TIMEOUT_MS;
+  const remaining = (): number => Math.max(1, deadline - Date.now());
   let reconciledMessageTs = params.recordedTs;
   if (!reconciledMessageTs && connector.findMessageByMetadata) {
-    reconciledMessageTs = await connector
-      .findMessageByMetadata({
+    // Already best-effort: a reconciliation that does not answer in time is
+    // the same as one that failed, and the send below posts fresh.
+    reconciledMessageTs = await withSlackDeliveryDeadline(
+      connector.findMessageByMetadata({
         threadId: params.threadId,
         eventType: params.eventType,
         payloadKey: 'delivery_id',
         payloadValue: params.deliveryId,
         limit: 100,
-      })
-      .catch(() => undefined);
+      }),
+      remaining()
+    ).catch(() => undefined);
   }
-  const sent = await connector.sendMessage({
-    threadId: params.threadId,
-    text: params.text,
-    blocks: params.blocks,
-    metadata: {
-      ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
-      ...(!reconciledMessageTs
-        ? {
-            slack_message_metadata: {
-              event_type: params.eventType,
-              event_payload: { delivery_id: params.deliveryId },
-            },
-          }
-        : {}),
-    },
-  });
+  const sent = await withSlackDeliveryDeadline(
+    connector.sendMessage({
+      threadId: params.threadId,
+      text: params.text,
+      blocks: params.blocks,
+      metadata: {
+        ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
+        ...(!reconciledMessageTs
+          ? {
+              slack_message_metadata: {
+                event_type: params.eventType,
+                event_payload: { delivery_id: params.deliveryId },
+              },
+            }
+          : {}),
+      },
+    }),
+    remaining()
+  );
   return {
     receipt: normalizeSendReceipt(sent),
     ...(reconciledMessageTs ? { reconciledMessageTs } : {}),
@@ -515,17 +580,22 @@ export async function retireOrphanedSlackCard(
 ): Promise<void> {
   const { orphanTs, ownedTs, text } = orphan;
   if (!orphanTs || orphanTs === ownedTs) return;
+  // Bounded like every other outbound card. This runs after a send that
+  // already lost its claim, so the caller is past its lease and the owned card
+  // is already correct — waiting here can only delay the next pass.
   try {
     if (connector.deleteMessage) {
-      await connector.deleteMessage({ threadId, messageId: orphanTs });
+      await withSlackDeliveryDeadline(connector.deleteMessage({ threadId, messageId: orphanTs }));
       return;
     }
-    await connector.sendMessage({
-      threadId,
-      text,
-      blocks: mcpSlackConnectBlocks({ text }),
-      metadata: { slack_update_ts: orphanTs },
-    });
+    await withSlackDeliveryDeadline(
+      connector.sendMessage({
+        threadId,
+        text,
+        blocks: mcpSlackConnectBlocks({ text }),
+        metadata: { slack_update_ts: orphanTs },
+      })
+    );
   } catch {
     console.warn(`[gateway] MCP ${orphan.lane} duplicate Slack card could not be retired`);
   }
