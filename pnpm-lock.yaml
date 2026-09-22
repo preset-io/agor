@@ -1094,6 +1094,9 @@ importers:
       js-yaml:
         specifier: '>=4.3.2 <5'
         version: 4.3.2
+      mdast-util-from-markdown:
+        specifier: ^2.0.2
+        version: 2.0.2(supports-color@8.1.1)
       postgres:
         specifier: ^3.4.9
         version: 3.4.9

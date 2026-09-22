@@ -331,7 +331,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
   private async syncGraphReferences(
     doc: KnowledgeDocument,
     content: string | null | undefined,
-    userId: UserID | null
+    userId: UserID | null,
+    strict = false
   ): Promise<void> {
     if (typeof content !== 'string') return;
     try {
@@ -368,8 +369,25 @@ export class KnowledgeDocumentsService extends DrizzleService<
         created_by: userId,
       });
     } catch (err) {
+      if (strict) throw err;
       console.error('Failed to sync knowledge graph references:', err);
     }
+  }
+
+  /** Internal transfer finalization, deliberately not registered as a public method. */
+  async reconcileReferences(id: string, params?: KnowledgeDocumentParams): Promise<void> {
+    const doc = await this.repo.findById(id);
+    if (!doc) throw new NotFound('Knowledge document not found');
+    await this.assertActiveDocument(doc);
+    if (!(await this.canEdit(doc, params?.user as User | undefined)))
+      throw new Forbidden('Cannot reconcile this document');
+    const version = await this.versionFor(doc);
+    await this.syncGraphReferences(
+      doc,
+      version?.content_text,
+      (params?.user as User | undefined)?.user_id ?? null,
+      true
+    );
   }
 
   private async versionFor(
