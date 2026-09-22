@@ -3,6 +3,7 @@ import { DollarOutlined } from '@ant-design/icons';
 import { Alert, Button, Descriptions, Popover, Space, Spin, Typography } from 'antd';
 import { useState } from 'react';
 import { useSessionUsage } from '../../hooks/useSessionUsage';
+import { Tag } from '../Tag';
 
 export function SessionUsagePopover({
   client,
@@ -58,15 +59,23 @@ export function SessionUsagePopover({
         ) : null
       }
     >
-      <Button
-        size="small"
-        type="text"
-        icon={<DollarOutlined />}
+      <Tag
+        color="default"
+        role="button"
+        tabIndex={0}
         aria-label="Show session usage"
         aria-expanded={open}
+        title="Session usage"
+        style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setOpen((value) => !value);
+          }
+        }}
       >
-        Usage
-      </Button>
+        <DollarOutlined />
+      </Tag>
     </Popover>
   );
 }

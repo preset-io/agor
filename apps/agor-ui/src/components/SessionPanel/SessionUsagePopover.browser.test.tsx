@@ -26,4 +26,7 @@ it('opens with keyboard or click, never hover, and fetches fresh on reopening', 
   await waitFor(() => expect(button).toHaveAttribute('aria-expanded', 'false'));
   await userEvent.click(button);
   await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  await userEvent.keyboard(' ');
+  await waitFor(() => expect(button).toHaveAttribute('aria-expanded', 'false'));
+  expect(button.textContent?.trim()).toBe('');
 });
