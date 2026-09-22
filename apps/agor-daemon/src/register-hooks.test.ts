@@ -418,23 +418,28 @@ describe('protectServerManagedTaskWrites', () => {
     ).rejects.toThrow('executor token scoped to this task');
   });
 
-  it.each(['task_id', 'session_id', 'created_by', 'queue_position', 'sdk_failure'])(
-    'rejects executor patch field %s outside the result allowlist',
-    async (field) => {
-      await expect(
-        protectServerManagedTaskWrites(
-          externalContext(
-            'patch',
-            { [field]: 'forged' },
-            {
-              taskId: 'task-1',
-              executorTaskId: 'task-1',
-            }
-          )
+  it.each([
+    'task_id',
+    'session_id',
+    'created_by',
+    'queue_position',
+    'sdk_failure',
+    'recorded_tool_count',
+    'tool_use_count',
+  ])('rejects executor patch field %s outside the result allowlist', async (field) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { [field]: 'forged' },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+          }
         )
-      ).rejects.toThrow('not executor-managed');
-    }
-  );
+      )
+    ).rejects.toThrow('not executor-managed');
+  });
 
   it('allows a task-scoped executor to publish bounded result fields', async () => {
     await expect(

@@ -42,6 +42,35 @@ client's earlier Session GET.
    executor or doing external work. The authenticated executor later claims
    `dispatching -> running`.
 
+Prompt-route enqueue executes once inside its existing owned admission
+transaction. No automatic replay is performed, including for `40P01` or
+`40001`: the incident cause is not established. Tenant write gating, current
+authority, Branch → Session admission locks and queue sequencing are unchanged.
+The diagnostic wrapper preserves caller-owned transaction errors so the owner
+can roll back. Title work, transcript writes, dispatch and provider calls remain
+outside this unit. See `utils/prompt-admission-transaction.ts` in the daemon.
+
+The outer prompt route sanitizes database failures even outside enqueue (and
+when a wrapped query has no SQLSTATE). Users receive a reference and a warning
+to inspect the session before resending: dispatch may already have committed.
+`prompt.database` logs that reference, nested SQLSTATE/allowlisted driver code,
+known row-lock table, numeric deadlock wait edges when available, and elapsed
+time. Admission failures also record attempt, failure phase and acquisition/setup
+time. Elapsed time is **not** a lock-hold measurement; acquisition/setup includes
+pool wait and tenant setup. Raw SQL, parameters, driver detail and stacks are
+never serialized; the original cause stays non-enumerable internally. Existing
+PostgreSQL transaction tracing separates root acquisition/setup from body time.
+
+BTW completion keeps the terminal Task, Session projection and archival in the
+original transaction. Parent-result message insertion is scheduled only after
+commit and opens its own tenant transaction, avoiding a Branch lock request
+while retaining child Task/Session locks. Rollback discards the callback; there
+is no automatic retry or new durable outbox. Existing best-effort delivery can
+still be lost if the daemon exits after commit. Repository-origin maintenance
+also runs after commit with tenant identity but without a transaction spanning
+Git I/O. Completion callbacks/queue handoff retain their existing separate DB
+scopes; these changes are not a general lock-order redesign.
+
 `created` remains supported for the explicit `POST /tasks/:id` then
 `POST /tasks/:id/run` workflow. It cannot jump an existing queued prompt or a
 different executing Task.

@@ -178,6 +178,7 @@ export type SessionParams = QueryParams<{
   status?: Session['status'];
   agentic_tool?: Session['agentic_tool'];
   board_id?: string;
+  include_usage?: boolean | 'true' | 'false';
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
   /** Marks a `remove` as the delete half of a "switch tool" swap (see `remove`). */
@@ -1869,6 +1870,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const session = await super.get(id, params);
     const [enrichedSession] = await this.enrichRemoteRelationships([session]);
     const sessionWithRelationships = enrichedSession ?? session;
+    if (params?.query?.include_usage === true || params?.query?.include_usage === 'true') {
+      sessionWithRelationships.usage_summary = await this.taskRepo.getSessionUsage(
+        session.session_id
+      );
+    }
 
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {

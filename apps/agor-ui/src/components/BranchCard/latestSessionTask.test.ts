@@ -12,7 +12,6 @@ function task(overrides: Partial<Task> & Pick<Task, 'task_id' | 'session_id' | '
       end_index: 0,
       start_timestamp: createdAt,
     },
-    tool_use_count: 0,
     git_state: {
       ref_at_start: 'main',
       sha_at_start: 'abc',

@@ -7,10 +7,83 @@
  * Used by AgentChain for every tool call and thinking block.
  */
 
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Typography, theme } from 'antd';
+import {
+  DownOutlined,
+  LoadingOutlined,
+  RightOutlined,
+  ToolOutlined,
+  UpOutlined,
+} from '@ant-design/icons';
+import { ThoughtChain } from '@ant-design/x';
+import { Button, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+
+/** Shared disclosure for both lazy task hydration and already-loaded tool groups.
+ * A button keeps keyboard semantics without requiring a fixed Collapse body:
+ * hydration can replace the trigger with multiple chronological groups. */
+export function ToolDisclosureHeader({
+  label,
+  expanded,
+  onClick,
+  loading = false,
+  executing = false,
+}: {
+  label: string;
+  expanded: boolean;
+  onClick: () => void;
+  loading?: boolean;
+  executing?: boolean;
+}) {
+  const { token } = theme.useToken();
+  const reducedMotion = usePrefersReducedMotion();
+  return (
+    <Button
+      type="text"
+      block
+      disabled={loading}
+      aria-busy={loading || executing}
+      icon={loading ? <LoadingOutlined spin /> : <ToolOutlined />}
+      aria-expanded={expanded}
+      aria-label={label}
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        justifyContent: 'flex-start',
+        fontSize: token.fontSizeSM,
+        gap: token.marginXS,
+        paddingInline: 0,
+        color: token.colorTextSecondary,
+      }}
+    >
+      <span
+        style={{
+          flex: '0 1 auto',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          textAlign: 'left',
+        }}
+      >
+        <ThoughtChain.Item
+          title={label}
+          variant="text"
+          blink={executing && !reducedMotion}
+          style={{ padding: 0, fontSize: token.fontSizeSM, color: 'inherit' }}
+          styles={{
+            title: { fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit' },
+          }}
+        />
+      </span>
+      {expanded ? (
+        <UpOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
+      ) : (
+        <DownOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
+      )}
+    </Button>
+  );
+}
 
 export interface ToolBlockProps {
   /** Tool/block icon (Ant Design icon element) */
@@ -53,9 +126,16 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
           : token.colorTextSecondary;
 
   const header = (
-    <div
+    <Button
+      type="text"
+      disabled={!hasBody}
+      aria-expanded={hasBody ? expanded : undefined}
       onClick={hasBody ? () => setExpanded(!expanded) : undefined}
       style={{
+        padding: 0,
+        height: 'auto',
+        width: '100%',
+        textAlign: 'left',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
@@ -102,7 +182,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
             </Typography.Text>
           ))}
       </span>
-    </div>
+    </Button>
   );
 
   return (

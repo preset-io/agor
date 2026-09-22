@@ -882,7 +882,6 @@ async function seedSlackRecoveryAction(harness: SQLiteHarness): Promise<{
       start_timestamp: issued.toISOString(),
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'slack-recovery' },
-    tool_use_count: 0,
     metadata: {
       gateway_task_source: {
         gateway_channel_id: channel.id,

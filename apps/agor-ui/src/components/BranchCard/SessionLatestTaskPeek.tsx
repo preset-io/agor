@@ -45,7 +45,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       sessionId,
       {
         enabled,
-        reactiveOptions: { taskHydration: 'lazy' },
+        reactiveOptions: { taskHydration: 'lean', cacheScope: 'preview' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
@@ -157,11 +157,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       };
     }, [enabled, isNearBottom]);
 
-    const handleExpandChange = useCallback(() => {
-      // Peek panels intentionally show exactly one expanded latest task.
-      // Keep it open even if the TaskBlock header is clicked.
-    }, []);
-
     const handleLoadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
@@ -175,26 +170,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       },
       [reactiveSession]
     );
-
-    const safeUnloadTaskMessages = useCallback(
-      (taskId: string) => {
-        if (!reactiveSession) return;
-        try {
-          reactiveSession.unloadTaskMessages(taskId);
-        } catch (error) {
-          if (isDisposedReactiveSessionError(error)) return;
-          throw error;
-        }
-      },
-      [reactiveSession]
-    );
-
-    useEffect(() => {
-      if (!taskId) return;
-      return () => {
-        safeUnloadTaskMessages(taskId);
-      };
-    }, [safeUnloadTaskMessages, taskId]);
 
     const loading = enabled && (!currentReactiveState || (currentReactiveState.loading && !task));
     const error = currentReactiveState?.error || null;
@@ -286,8 +261,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               sessionModel={currentSession.model_config?.model}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={true}
-              onExpandChange={handleExpandChange}
+              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
               sessionId={currentSession.session_id}
               onPermissionDecision={onPermissionDecision}
               branchName={branchName}
@@ -299,7 +273,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               }
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={safeUnloadTaskMessages}
               teammateEmoji={undefined}
               isLatestTask={true}
               client={client}

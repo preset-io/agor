@@ -125,7 +125,6 @@ async function seedTask(
     message_range: { start_index: 0, end_index: 0, start_timestamp: opts.createdAt.toISOString() },
     git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
     model: opts.model,
-    tool_use_count: 0,
     duration_ms: opts.durationMs,
     normalized_sdk_response: {
       tokenUsage: {
@@ -588,7 +587,6 @@ describe('LeaderboardService legacy rows', () => {
           },
           git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
           model: 'claude-sonnet-4-6',
-          tool_use_count: 0,
           duration_ms: 1500,
           // normalized_sdk_response intentionally absent
         },

@@ -15,6 +15,7 @@ import type {
   MCPSlackRecoveryNotice,
   SdkFailure,
   SessionID,
+  SessionUsageSummary,
   Task,
   TaskID,
   TaskMetadata,
@@ -58,6 +59,7 @@ import {
   insert,
   isPostgresDatabase,
   isSQLiteDatabase,
+  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -87,6 +89,7 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import { countRecordedTools } from './recorded-tool-count';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -325,6 +328,7 @@ export interface TaskRuntimeDiscoveryOptions {
 }
 
 export interface TaskFindPageOptions {
+  excludeQueued?: boolean;
   taskId?: TaskID;
   afterTaskId?: TaskID;
   throughTaskId?: TaskID;
@@ -455,8 +459,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   private rowToTask(row: TaskRow): Task {
     const storedTerminationRequest = row.data.termination_request;
-    const { executor_launch_fs_access_floor: _executorLaunchFsAccessFloor, ...publicData } =
-      row.data;
+    // Strip the retired JSON key without migrating historical blobs.
+    const {
+      executor_launch_fs_access_floor: _executorLaunchFsAccessFloor,
+      tool_use_count: _retiredToolCount,
+      ...publicData
+    } = row.data as TaskRow['data'] & { tool_use_count?: unknown };
     const coordination: TerminationCoordinationClaim | undefined =
       row.termination_coordination_token &&
       row.termination_coordination_claimed_at &&
@@ -564,7 +572,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         git_state,
         // Filled in by the executor after the turn — don't substitute a default.
         ...(task.model ? { model: task.model } : {}),
-        tool_use_count: task.tool_use_count ?? 0,
+        recorded_tool_count: task.recorded_tool_count,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
         error_message: task.error_message, // Human-readable failure reason when status='failed'
@@ -602,7 +610,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async create(data: Partial<Task>): Promise<Task> {
     try {
-      const insertData = this.taskToInsert(data);
+      const insertData = this.taskToInsert({ ...data, recorded_tool_count: null });
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
@@ -701,6 +709,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
+    if (opts.excludeQueued) conditions.push(ne(tasks.status, TaskStatus.QUEUED));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
     if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
     if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
@@ -748,6 +757,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           }))
         : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
       total: Number(countRow?.count ?? 0),
+    };
+  }
+
+  /** Aggregate in SQL: no prompt, response or tool payload leaves the database. */
+  async getSessionUsage(sessionId: SessionID): Promise<SessionUsageSummary> {
+    const sum = (path: string) =>
+      sql<number>`COALESCE(SUM(CAST(${jsonExtract(this.db, tasks.data, `normalized_sdk_response.${path}`)} AS DOUBLE PRECISION)), 0)`;
+    const row = await select(this.db, {
+      total: sum('tokenUsage.totalTokens'),
+      input: sum('tokenUsage.inputTokens'),
+      output: sum('tokenUsage.outputTokens'),
+      cacheRead: sum('tokenUsage.cacheReadTokens'),
+      cacheCreation: sum('tokenUsage.cacheCreationTokens'),
+      cost: sum('costUsd'),
+    })
+      .from(tasks)
+      .where(eq(tasks.session_id, sessionId))
+      .one();
+    return {
+      total: Number(row?.total ?? 0),
+      input: Number(row?.input ?? 0),
+      output: Number(row?.output ?? 0),
+      cacheRead: Number(row?.cacheRead ?? 0),
+      cacheCreation: Number(row?.cacheCreation ?? 0),
+      cost: Number(row?.cost ?? 0),
     };
   }
 
@@ -1790,6 +1824,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const failure = input.sdkFailure ?? current.sdk_failure;
       const data = {
         ...row.data,
+        recorded_tool_count: await countRecordedTools(txDb, fullId),
         duration_ms: terminal.duration_ms,
         message_range: terminal.message_range ?? current.message_range,
         ...(failure
@@ -1932,6 +1967,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         const merged = {
           ...deepMerge(current, withTerminalTiming(current, updates)),
+          recorded_tool_count:
+            updates.status !== undefined &&
+            isTerminalTaskStatus(updates.status) &&
+            !isTerminalTaskStatus(current.status)
+              ? await countRecordedTools(txDb, fullId)
+              : current.recorded_tool_count,
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,
@@ -2561,7 +2602,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ref_at_start: '',
         sha_at_start: '',
       },
-      tool_use_count: 0,
     };
 
     if (input.status === TaskStatus.CREATED && !input.task_id) {
@@ -2859,6 +2899,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       queue_position: undefined,
       completed_at: completedAt.toISOString(),
       error_message: MISSING_TASK_ACTOR_ERROR,
+      recorded_tool_count: await countRecordedTools(txDb, fullId),
     };
     const insertData = this.taskToInsert(failed);
     await update(txDb, tasks)

@@ -94,7 +94,7 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
-  isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
+  isLatestMessage?: boolean; // Whether this is the most recent message (for pending tool status)
   teammateEmoji?: string; // Emoji override for teammate avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
@@ -750,7 +750,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                             {shouldTruncate ? (
                               <CollapsibleMarkdown
                                 maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                                defaultExpanded
                                 isStreaming={isStreaming}
                               >
                                 {text}
@@ -773,6 +773,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
                   root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  // Bubble reserves 32px by default, but desktop user avatars
+                  // are 40px. Reserve their actual width instead of overflowing
+                  // the conversation and introducing a horizontal scrollbar.
+                  avatar: isUser ? { width: compact ? 32 : 40, flexShrink: 0 } : undefined,
                   body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
                     padding: compact && isUser ? '4px 10px' : undefined,
@@ -889,7 +893,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         return shouldTruncate ? (
                           <CollapsibleMarkdown
                             maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                            defaultExpanded
                             isStreaming={isStreaming}
                           >
                             {combinedText}

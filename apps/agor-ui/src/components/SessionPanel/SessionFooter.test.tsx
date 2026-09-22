@@ -25,7 +25,8 @@ vi.mock('../EffortSelector', () => ({
 }));
 
 // TimerPill uses complex internal state not needed for footer layout tests
-vi.mock('../Pill', () => ({
+vi.mock('../Pill', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../Pill')>()),
   TimerPill: () => <span data-testid="timer-pill-stub" />,
 }));
 
@@ -42,19 +43,9 @@ const baseSession: Session = {
   model_config: undefined,
 } as unknown as Session;
 
-const baseTokenBreakdown = {
-  total: 0,
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheCreation: 0,
-  cost: 0,
-};
-
 const baseProps = {
   session: baseSession,
   footerTimerTask: null,
-  tokenBreakdown: baseTokenBreakdown,
   latestContextWindow: null,
   footerGradient: undefined,
   sessionMcpServerIds: [] as string[],
@@ -162,12 +153,11 @@ describe('SessionFooter', () => {
             model_config: undefined,
           } as unknown as Session
         }
-        tokenBreakdown={{ ...baseTokenBreakdown, total: 0 }}
       />,
       { wrapper: Wrapper }
     );
     expect(screen.queryByTestId('model-chip')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('tokens-chip')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show session usage' })).toBeInTheDocument();
     expect(screen.queryByTestId('stats-chip')).not.toBeInTheDocument();
   });
 
@@ -206,9 +196,11 @@ describe('SessionFooter', () => {
       />,
       { wrapper: Wrapper }
     );
-    const chip = screen.getByTestId('context-chip');
+    const chip = screen.getByText('85%');
+    expect(chip.querySelector('.anticon-percentage')).toBeNull();
+    expect(chip).toHaveTextContent(/^85%$/);
     expect(chip).toBeInTheDocument();
-    expect(chip.getAttribute('data-warning')).toBe('true');
+    expect(chip.closest('.ant-tag')).toHaveClass('ant-tag-red');
   });
 
   it('Individual model chip renders when model is present', () => {

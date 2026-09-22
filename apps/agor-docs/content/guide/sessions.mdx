@@ -263,6 +263,12 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
+**Tool counts in custom callbacks and API clients.** Use `recordedToolCount` in
+callback templates and nullable `recorded_tool_count` in task API responses. These
+replace `toolUseCount` and `tool_use_count`. A missing count means unknown, not zero.
+To include a verified zero while omitting unknown counts, use
+`{{#if recordedToolCount includeZero=true}}{{recordedToolCount}} tool calls{{/if}}`.
+
 **Use the current caller for self callbacks.** With `agor_sessions_create`, set `enableCallback: true` and omit `callbackSessionId` to receive completion in the calling session—even from a fork, nested coordinator, or across branches. Only supply `callbackSessionId` for an intentional authorized alternate destination. Inherited conversation examples and shared workspace IDs may refer to an earlier session; the runtime-supplied Agor session identity is distinct from fork ancestry and the provider SDK thread ID.
 
 **Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
@@ -351,6 +357,24 @@ supported-tool selection before saving. Due cron schedules advance to their next
 without creating a session, avoiding repeated retries while their configuration awaits migration.
 
 ---
+
+## Conversation history
+
+Conversations open with the latest ten turns, showing user and assistant messages.
+Scroll up or select **Load older history** to read earlier turns.
+
+Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
+collapsed by default; inside an open group, file edits show their diffs. Expand
+**Reasoning** where available to read the agent's reasoning. Active turns show
+live activity, and approval requests remain available in the conversation.
+
+Hover over or focus a user prompt to see its metadata, such as model, duration,
+and token usage. On touch screens, tap the prompt to toggle the metadata; press
+Escape to dismiss it. Stopped and failed turns show a notice below their content,
+with an error explanation when available.
+
+Search covers loaded history only. Load earlier turns to include them in search;
+tool details become searchable after expansion.
 
 ## Related
 

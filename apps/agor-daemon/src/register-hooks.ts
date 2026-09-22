@@ -687,7 +687,6 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'raw_sdk_response',
   'normalized_sdk_response',
   'computed_context_window',
-  'tool_use_count',
   'duration_ms',
   'agent_session_id',
   'error_message',

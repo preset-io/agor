@@ -7,7 +7,6 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import {
   attachGeneratedDiff,
@@ -29,7 +28,6 @@ function fixture(content: string | ContentBlock[], extra: Partial<ContentBlock> 
     full_prompt: 'Synthetic projection task',
     status: TaskStatus.COMPLETED,
     created_at: timestamp,
-    tool_use_count: 1,
     message_range: { start_index: 0, end_index: 2, start_timestamp: timestamp },
     git_state: { ref_at_start: 'synthetic', sha_at_start: 'unknown' },
   };
@@ -59,25 +57,13 @@ function fixture(content: string | ContentBlock[], extra: Partial<ContentBlock> 
   return { task, call, result };
 }
 
-function Harness({
-  task,
-  messages,
-  initiallyExpanded = true,
-}: {
-  task: Task;
-  messages: Message[];
-  initiallyExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(initiallyExpanded);
+function Harness({ task, messages }: { task: Task; messages: Message[] }) {
   return (
     <TaskBlock
       task={task}
       taskMessages={messages}
       taskMessagesLoaded
-      isExpanded={expanded}
-      onExpandChange={(_, value) => setExpanded(value)}
       onLoadTaskMessages={() => {}}
-      onUnloadTaskMessages={() => {}}
     />
   );
 }
@@ -118,6 +104,7 @@ describe('TaskBlock persisted result projections (production grouping and render
     });
     expect(Buffer.byteLength(JSON.stringify(saved))).toBeLessThanOrEqual(800_000);
     render(<Harness task={task} messages={[saved]} />);
+    fireEvent.click(screen.getByRole('button', { name: /1 tool call/ }));
     // Write opens by default; the omission must be visible without another toggle.
     expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: diff');
     expect(screen.getByRole('note')).toHaveTextContent('Diff too large to preview');
@@ -174,12 +161,9 @@ describe('TaskBlock persisted result projections (production grouping and render
           expect.stringContaining('more items truncated'),
         ]);
       }
-      render(<Harness task={task} messages={[call, result]} initiallyExpanded={false} />);
+      render(<Harness task={task} messages={[call, result]} />);
       expect(screen.queryByRole('note')).not.toBeInTheDocument();
-      fireEvent.keyDown(screen.getByRole('button', { expanded: false }), {
-        key: 'Enter',
-        keyCode: 13,
-      });
+      fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
       expect(screen.getByText(/Task \(Task\)/)).toBeVisible();
       const chain = screen.getByRole('note').closest('[data-conversation-block]')! as HTMLElement;
       const assertNotice = () => {
@@ -203,9 +187,9 @@ describe('TaskBlock persisted result projections (production grouping and render
       fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
       assertNotice();
       // Closing the whole chain hides both its result and notice; reopening restores one.
-      fireEvent.click(within(chain).getByText('1 thoughts'));
+      fireEvent.click(within(chain).getByRole('button', { name: 'Reasoning' }));
       expect(screen.queryByRole('note')).not.toBeInTheDocument();
-      fireEvent.click(within(chain).getByText('1 thoughts'));
+      fireEvent.click(within(chain).getByRole('button', { name: 'Reasoning' }));
       assertNotice();
     }
   );
@@ -218,6 +202,7 @@ describe('TaskBlock persisted result projections (production grouping and render
     };
     const { task, call, result } = fixture('', { diff });
     render(<Harness task={task} messages={[call, result]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
     expect(screen.getByRole('note')).toHaveTextContent(
       `diff (originally ${Buffer.byteLength(JSON.stringify(diff)).toLocaleString()} serialized bytes)`
     );
@@ -228,6 +213,7 @@ describe('TaskBlock persisted result projections (production grouping and render
   it('does not disclose shortening for an intact Task result', () => {
     const { task, call, result } = fixture([{ type: 'text', text: summary }]);
     render(<Harness task={task} messages={[call, result]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
     fireEvent.click(screen.getByText('Thinking', { exact: true }));
     expect(screen.getAllByText(summary).length).toBeGreaterThan(0);
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
@@ -273,6 +259,7 @@ describe('TaskBlock persisted result projections (production grouping and render
       { type: 'agent-chain', messages: [nestedCall, nestedResult, result] },
     ]);
     render(<Harness task={task} messages={[call, nestedCall, nestedResult, result]} />);
+    fireEvent.click(screen.getByRole('button', { name: /1 tool call/ }));
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
     // Do not expose a second shortened result preview while its owning tool
     // (and notice) is collapsed. The intact outer Task thought remains.

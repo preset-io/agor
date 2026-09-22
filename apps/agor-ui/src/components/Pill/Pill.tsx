@@ -17,7 +17,6 @@ import {
   IdcardOutlined,
   LinkOutlined,
   MessageOutlined,
-  PercentageOutlined,
   RobotOutlined,
   SlackOutlined,
   ThunderboltOutlined,
@@ -449,7 +448,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   };
 
   const pill = (
-    <Tag icon={<PercentageOutlined />} color={getColor()} style={style}>
+    <Tag color={getColor()} style={style}>
       {hasLimit ? `${percentage}%` : '?'}
     </Tag>
   );

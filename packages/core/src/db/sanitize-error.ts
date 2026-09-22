@@ -22,6 +22,26 @@ function asRecord(value: unknown): ErrorRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as ErrorRecord) : undefined;
 }
 
+/** Bounded internal traversal; never expose raw driver records to logging callers. */
+function* databaseErrorRecords(error: unknown): Generator<ErrorRecord> {
+  const seen = new Set<object>();
+  for (let depth = 0; depth < 8; depth++) {
+    const record = asRecord(error);
+    if (!record || seen.has(record)) return;
+    seen.add(record);
+    yield record;
+    error = record.cause;
+  }
+}
+
+/** Recover a nested PostgreSQL SQLSTATE without inspecting SQL-bearing messages. */
+export function getPostgresSqlState(error: unknown): string | undefined {
+  for (const record of databaseErrorRecords(error)) {
+    if (typeof record.code === 'string' && POSTGRES_SQLSTATE.test(record.code)) return record.code;
+  }
+  return undefined;
+}
+
 /** Detect a PostgreSQL or SQLite unique/primary-key violation through wrappers. */
 export function isDatabaseUniqueConstraintError(error: unknown): boolean {
   let current: unknown = error;
@@ -63,12 +83,7 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
   let code: string | undefined;
   let constraint: string | undefined;
   let routine: string | undefined;
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-
-  while (current !== undefined && current !== null && !seen.has(current)) {
-    seen.add(current);
-    const record = asRecord(current);
+  for (const record of databaseErrorRecords(error)) {
     if (
       !code &&
       typeof record?.code === 'string' &&
@@ -91,8 +106,6 @@ export function sanitizeDbError(error: unknown): SanitizedDbError {
     ) {
       routine = record.routine;
     }
-
-    current = record?.cause;
   }
 
   // Driver messages are not safe metadata. PostgreSQL commonly embeds rejected

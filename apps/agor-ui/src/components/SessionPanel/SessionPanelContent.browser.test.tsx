@@ -11,11 +11,13 @@ import { SessionPanelContent } from './SessionPanelContent';
 
 // Keep the actual ConversationView scroll owner and split/queue UI. Only its
 // data feed and expensive transcript rows are replaced with deterministic data.
+const queueFeed = vi.hoisted(() => ({ tasks: [] as Task[] }));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({
     handle: null,
     state: {
       sessionId: 'session-1',
+      queuedTasks: queueFeed.tasks,
       tasks: Array.from({ length: 20 }, (_, i) => ({
         task_id: `history-${i}`,
         status: 'completed',
@@ -24,6 +26,7 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
       messagesByTask: new Map(),
       loadedTaskIds: new Set(),
       streamingMessages: new Map(),
+      toolsByTask: new Map(),
     },
   }),
 }));
@@ -44,7 +47,10 @@ const session = {
   status: 'running',
 } as Session;
 const noop = () => {};
-const remove = vi.fn().mockResolvedValue(undefined);
+const removedListeners = new Set<(id: string) => void>();
+const remove = vi.fn(async (id: string) => {
+  for (const listener of removedListeners) listener(id);
+});
 const patch = vi.fn().mockResolvedValue(undefined);
 const find = vi.fn();
 const client = { service: () => ({ remove, patch, find }) } as unknown as AgorClient;
@@ -74,6 +80,14 @@ function Harness({
 }) {
   const [queue, setQueue] = useState(() => tasks(count));
   useEffect(() => setQueue(tasks(count)), [count]);
+  useEffect(() => {
+    const onRemoved = (id: string) =>
+      setQueue((prev) => prev.filter((task) => task.task_id !== id));
+    removedListeners.add(onRemoved);
+    return () => {
+      removedListeners.delete(onRemoved);
+    };
+  }, []);
   return (
     <App>
       <AppActionsProvider value={{}}>
@@ -99,7 +113,6 @@ function Harness({
                 client={client}
                 session={failed ? { ...session, status: 'failed' } : session}
                 queuedTasks={queue}
-                setQueuedTasks={setQueue}
                 scrollToBottom={null}
                 scrollToTop={null}
                 setScrollToBottom={noop}
@@ -161,6 +174,7 @@ async function expectBounded() {
 
 afterEach(() => {
   cleanup();
+  queueFeed.tasks = [];
   vi.clearAllMocks();
 });
 
@@ -228,96 +242,6 @@ it('supports keyboard and pointer resizing without sacrificing the conversation 
 });
 
 const queueHeight = () => screen.getByRole('region', { name: 'Queued tasks' }).clientHeight;
-
-it.each(['running', 'failed'] as const)(
-  'updates the actual SessionPanel %s queue on reordered patches without releasing it',
-  async (status) => {
-    const [a, b, c] = tasks(3).map((task, i) => ({
-      ...task,
-      full_prompt: `Queue ${String.fromCharCode(65 + i)}`,
-    }));
-    const listeners = new Map<string, Set<(task: Task) => void>>();
-    const queueClient = {
-      service: (path: string) => ({
-        find: async () => ({ data: path.endsWith('/tasks/queue') ? [a, b] : [] }),
-        on: (event: string, listener: (task: Task) => void) => {
-          if (!listeners.has(event)) listeners.set(event, new Set());
-          listeners.get(event)!.add(listener);
-        },
-        off: (event: string, listener: (task: Task) => void) => {
-          listeners.get(event)?.delete(listener);
-        },
-        remove,
-        patch,
-      }),
-    } as unknown as AgorClient;
-    const emit = (event: string, task: Task) =>
-      act(() => {
-        listeners.get(event)?.forEach((listener) => {
-          listener(task);
-        });
-      });
-    const { unmount } = render(
-      <App>
-        <AppActionsProvider value={{}}>
-          <div style={{ height: 700 }}>
-            <SessionPanel
-              client={queueClient}
-              session={{ ...session, status }}
-              open
-              onClose={noop}
-            />
-          </div>
-        </AppActionsProvider>
-      </App>
-    );
-    const order = () =>
-      Array.from(queueList().querySelectorAll('.ant-typography')).map((label) => label.textContent);
-    await screen.findByText('Queued Tasks (2)');
-    expect(order()).toEqual([
-      expect.stringContaining('Queue A'),
-      expect.stringContaining('Queue B'),
-    ]);
-    const reorderedB = { ...b, queue_position: 0 };
-    const reorderedA = { ...a, queue_position: 1 };
-    emit('patched', reorderedB);
-    emit('patched', reorderedA);
-    await waitFor(() =>
-      expect(order()).toEqual([
-        expect.stringContaining('Queue B'),
-        expect.stringContaining('Queue A'),
-      ])
-    );
-    // Duplicate/no-op delivery and another Session's event must not corrupt this queue.
-    emit('patched', reorderedB);
-    emit('queued', reorderedB);
-    emit('patched', { ...a, session_id: 'foreign-session' as Task['session_id'] });
-    emit('removed', { ...b, session_id: 'foreign-session' as Task['session_id'] });
-    expect(order()).toHaveLength(2);
-    expect(patch).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: 'Copy queued task 1' }));
-    expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B');
-    if (status === 'failed') {
-      const runNext = screen.getByRole('button', { name: 'Run next' });
-      expect(runNext.parentElement?.parentElement?.parentElement).toHaveTextContent('Queue B');
-      expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
-      await userEvent.click(runNext);
-      expect(patch).toHaveBeenCalledExactlyOnceWith(session.session_id, { ready_for_prompt: true });
-    } else {
-      expect(screen.queryByRole('button', { name: 'Run next' })).toBeNull();
-    }
-    emit('queued', c);
-    emit('queued', c);
-    emit('updated', { ...c, queue_position: -1 });
-    expect(order()[0]).toContain('Queue C');
-    emit('patched', { ...b, status: 'dispatching', queue_position: undefined });
-    emit('removed', a);
-    emit('removed', a);
-    expect(order()).toEqual([expect.stringContaining('Queue C')]);
-    unmount();
-    expect([...listeners.values()].every((handlers) => handlers.size === 0)).toBe(true);
-  }
-);
 
 // A restored percentage can produce the expected height before ResizeObserver
 // has committed the new pixel-derived constraints. Do not send the next resize
@@ -427,9 +351,9 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
   await userEvent.click(await screen.findByRole('button', { name: 'Run next' }));
   expect(patch).toHaveBeenCalledTimes(2);
   remove.mockRejectedValueOnce(new Error('Try again'));
-  find.mockResolvedValueOnce({ data: tasks(25) });
   await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-  await waitFor(() => expect(find).toHaveBeenCalled());
+  await screen.findByText('Failed to remove queued task: Try again');
+  expect(find).not.toHaveBeenCalled();
   expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
 });
@@ -437,9 +361,12 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
 it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
   async (height) => {
+    queueFeed.tasks = tasks(30);
     const queueClient = {
+      io: { on: noop, off: noop },
       service: (path: string) => ({
         find: async () => ({ data: path.endsWith('/tasks/queue') ? tasks(30) : [] }),
+        get: async () => session,
         on: noop,
         off: noop,
         remove,

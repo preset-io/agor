@@ -173,6 +173,35 @@ describe('sessionQueryValidator', () => {
 });
 
 describe('messageQueryValidator', () => {
+  it('preserves bounded task batches and rejects oversized sets', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          task_id: { $in: ['019e8e1d', '019e8e1e'] },
+          transcript: 'lean',
+        },
+      },
+    };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.task_id.$in).toHaveLength(2);
+    await expect(
+      typedValidateQuery(messageQueryValidator)({
+        params: {
+          query: { session_id: '019e8e1c', task_id: { $in: Array(101).fill('019e8e1d') } },
+        },
+      })
+    ).rejects.toThrow();
+  });
+
+  it('preserves the explicit lean transcript projection', async () => {
+    const context = { params: { query: { session_id: '019e8e1c', transcript: 'lean' } } };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.transcript).toBe('lean');
+    await expect(
+      typedValidateQuery(messageQueryValidator)({ params: { query: { transcript: 'anything' } } })
+    ).rejects.toThrow();
+  });
   it('coerces supported pagination and preserves a bounded session set', async () => {
     const context = {
       params: {
@@ -291,4 +320,13 @@ describe('mcpCatalogQueryValidator', () => {
     await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).resolves.not.toThrow();
     expect(context.params.query).toEqual({});
   });
+});
+
+it('preserves transcript queue exclusion and opt-in session accounting', async () => {
+  const tasks = { params: { query: { session_id: '019e8e1c', status: { $ne: 'queued' } } } };
+  await typedValidateQuery(taskQueryValidator)(tasks);
+  expect(tasks.params.query.status).toEqual({ $ne: 'queued' });
+  const session = { params: { query: { include_usage: 'true' } } };
+  await typedValidateQuery(sessionQueryValidator)(session);
+  expect(session.params.query.include_usage).toBe(true);
 });

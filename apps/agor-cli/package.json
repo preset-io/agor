@@ -31,7 +31,7 @@
     "@types/node": "^24.6.0",
     "@types/proper-lockfile": "4.1.4",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "glob": "^11.1.0",
+    "glob": "^13.0.6",
     "oclif": "^6.0.0",
     "tsup": "^8.5.1",
     "tsx": "4.23.13",

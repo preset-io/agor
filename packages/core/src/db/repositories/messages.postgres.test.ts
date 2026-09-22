@@ -1,4 +1,4 @@
-import { type Message, MessageRole, type UserID, type UUID } from '@agor/core/types';
+import { type Message, MessageRole, TaskStatus, type UserID, type UUID } from '@agor/core/types';
 import { eq, sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -18,6 +18,7 @@ import {
 } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -130,6 +131,20 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
           provider_payload: { 'bad�key': 'value�' },
         },
       ]);
+      const reasoning = await repository.create({
+        ...message(2, ''),
+        content: [{ type: 'thinking', text: 'REASONING_CANARY' }],
+      });
+      const lean = await repository.findPage({ sessionId: session.session_id, lean: true });
+      expect(
+        lean.data.find((item) => item.message_id === reasoning.message_id)?.has_deferred_reasoning
+      ).toBe(true);
+      expect(JSON.stringify(lean)).not.toContain('REASONING_CANARY');
+      expect(lean.data.find((item) => item.message_id === first.message_id)?.content).toEqual([]);
+      expect(JSON.stringify(lean)).not.toContain('read-binary');
+      expect(lean.data.find((item) => item.message_id === second.message_id)?.content).toBe(
+        'second�'
+      );
       expect(finalized.content_preview).toBe('updated�');
       expect(finalized.tool_uses).toEqual([
         { id: 'read-binary', name: 'read', input: { 'path�': 'file�' } },
@@ -160,6 +175,9 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     const tenantA = `messages-page-a-${generateId()}`;
     const tenantB = `messages-page-b-${generateId()}`;
     let visibleSessionId: Message['session_id'] | undefined;
+    let countedTaskId: Message['task_id'];
+    let racingTaskId: Message['task_id'];
+    let countedMessageId: Message['message_id'];
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const users = new UsersRepository(scoped);
@@ -227,19 +245,124 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
       await messages.create(createMessage(visibleSession.session_id, 0));
       await messages.create(createMessage(hiddenSession.session_id, 1));
 
-      const page = await messages.findPage({ visibleToUserId: viewerId, limit: 10, skip: 0 });
+      const page = await messages.findPage({
+        visibleToUserId: viewerId,
+        limit: 10,
+        skip: 0,
+        lean: true,
+      });
       expect(page.total).toBe(1);
       expect(page.data.map((message) => message.session_id)).toEqual([visibleSession.session_id]);
       visibleSessionId = visibleSession.session_id;
+      const taskRepo = new TaskRepository(scoped);
+      const countedTask = await taskRepo.create({
+        session_id: visibleSession.session_id,
+        created_by: owner.user_id,
+      });
+      countedTaskId = countedTask.task_id;
+      await taskRepo.update(countedTaskId, {
+        normalized_sdk_response: {
+          tokenUsage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
+          costUsd: 1.25,
+        },
+      });
+      expect(await taskRepo.getSessionUsage(visibleSession.session_id)).toMatchObject({
+        total: 30,
+        cost: 1.25,
+      });
+
+      racingTaskId = (
+        await taskRepo.create({ session_id: visibleSession.session_id, created_by: owner.user_id })
+      ).task_id;
+      const call = { id: 'pg-call', name: 'Read', input: { canary: 'PRIVATE_TOOL_CANARY' } };
+      const countedMessage = await messages.create({
+        ...createMessage(visibleSession.session_id, 2),
+        task_id: countedTaskId,
+        content: [
+          { type: 'tool_use', ...call },
+          { type: 'tool_result', tool_use_id: call.id, content: 'PRIVATE_RESULT_CANARY' },
+        ],
+        tool_uses: [call],
+      });
+      countedMessageId = countedMessage.message_id;
+      const batch = await messages.findPage({
+        sessionId: visibleSession.session_id,
+        taskIds: [countedTaskId],
+        lean: true,
+        visibleToUserId: viewerId,
+      });
+      expect(batch.data.map((item) => item.message_id)).toEqual([countedMessageId]);
+      expect(JSON.stringify(batch)).not.toContain('PRIVATE_RESULT_CANARY');
+
+      expect(
+        (await taskRepo.update(countedTaskId, { status: TaskStatus.COMPLETED })).recorded_tool_count
+      ).toBe(1);
+      const emptyTask = await taskRepo.create({
+        session_id: visibleSession.session_id,
+        created_by: owner.user_id,
+      });
+      expect(
+        (await taskRepo.update(emptyTask.task_id, { status: TaskStatus.FAILED }))
+          .recorded_tool_count
+      ).toBe(0);
     });
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
       const page = await new MessagesRepository(scoped).findPage({
+        lean: true,
         sessionId: visibleSessionId!,
+        taskIds: [countedTaskId!],
         limit: 10,
         skip: 0,
       });
       expect(page).toMatchObject({ total: 0, data: [] });
+      expect(await new TaskRepository(scoped).getSessionUsage(visibleSessionId!)).toEqual({
+        total: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: 0,
+      });
+
+      await expect(
+        new TaskRepository(scoped).update(countedTaskId!, { status: TaskStatus.COMPLETED })
+      ).rejects.toThrow();
+      await expect(
+        new MessagesRepository(scoped).update(countedMessageId!, { content: 'foreign overwrite' })
+      ).rejects.toThrow();
+      await new MessagesRepository(scoped).delete(countedMessageId!);
+    });
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      expect((await new TaskRepository(scoped).findById(countedTaskId!))?.recorded_tool_count).toBe(
+        1
+      );
+      expect(await new MessagesRepository(scoped).findById(countedMessageId!)).not.toBeNull();
+    });
+    // Separate tenant-scoped connections race terminalization against a late
+    // write. The Task lock must yield an accurate one or unknown, never zero.
+    await Promise.all([
+      runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        await new TaskRepository(scoped).update(racingTaskId!, { status: TaskStatus.COMPLETED });
+      }),
+      runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        await new MessagesRepository(scoped).create({
+          message_id: generateId(),
+          session_id: visibleSessionId!,
+          task_id: racingTaskId,
+          type: 'assistant',
+          role: MessageRole.ASSISTANT,
+          index: 3,
+          timestamp: new Date().toISOString(),
+          content_preview: '',
+          content: [{ type: 'tool_use', id: 'raced-call', name: 'Read', input: {} }],
+        });
+      }),
+    ]);
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      expect([1, null]).toContain(
+        (await new TaskRepository(scoped).findById(racingTaskId!))?.recorded_tool_count
+      );
     });
   });
 

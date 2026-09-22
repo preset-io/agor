@@ -23,7 +23,6 @@ const fakeTask = (overrides: Partial<Task> = {}): Task =>
     created_by: 'user-1',
     full_prompt: 'do the thing',
     status: TaskStatus.CREATED,
-    tool_use_count: 0,
     message_range: {
       start_index: -1,
       end_index: -1,

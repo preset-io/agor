@@ -374,7 +374,7 @@ export const tasks = pgTable(
 
         /** Filled by the executor after the turn. */
         model?: string;
-        tool_use_count: number;
+        recorded_tool_count?: number | null;
 
         duration_ms?: number;
         agent_session_id?: string;
@@ -889,6 +889,7 @@ export const branches = pgTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_source?: import('../types/branch').Branch['base_source'];
         base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
