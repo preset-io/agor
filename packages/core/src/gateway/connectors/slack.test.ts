@@ -31,6 +31,7 @@ import {
   markdownToMrkdwn,
   markdownToSlackPayload,
   SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
+  SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   SlackConnector,
   wrapTablesInCodeBlocks,
 } from './slack';
@@ -511,6 +512,78 @@ describe('markdownToSlackPayload', () => {
       column_settings?: unknown;
     };
     expect(table.column_settings).toBeUndefined();
+  });
+});
+
+describe('SlackConnector card writes: one attempt, bounded by the caller', () => {
+  const posted = () => ({ ok: true, ts: '1700000000.000001' });
+  const refusingShared = {
+    chat: {
+      postMessage: async () => {
+        throw new Error('a card write must not use the shared retrying client');
+      },
+      update: async () => {
+        throw new Error('a card write must not use the shared retrying client');
+      },
+    },
+  };
+
+  it('sends a card write through a fresh single-attempt client, not the shared one', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = refusingShared;
+    const update = vi.fn(async () => posted());
+    const build = vi
+      .spyOn(
+        connector as unknown as { createSingleAttemptWebClient(ms: number): unknown },
+        'createSingleAttemptWebClient'
+      )
+      .mockReturnValue({ chat: { update } });
+
+    await connector.sendMessage({
+      threadId: 'C123-1700000000.000000',
+      text: 'card',
+      metadata: {
+        [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: 4_200.4,
+        slack_update_ts: '1700000000.000001',
+      },
+    });
+
+    expect(build).toHaveBeenCalledWith(4_201);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds that client with no retries and at most the connector deadline', () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const create = (ms: number) =>
+      (
+        connector as unknown as {
+          createSingleAttemptWebClient(ms: number): {
+            retryConfig: { retries?: number };
+            axios: { defaults: { timeout?: number } };
+          };
+        }
+      ).createSingleAttemptWebClient(ms);
+
+    const short = create(4_200);
+    expect(short.retryConfig).toEqual({ retries: 0 });
+    expect(short.axios.defaults.timeout).toBe(4_200);
+    // Never longer than an ordinary request is allowed to take.
+    expect(create(60_000).axios.defaults.timeout).toBe(15_000);
+  });
+
+  it('keeps every other send on the shared client and its retry ladder', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const postMessage = vi.fn(async () => posted());
+    (connector as unknown as { web: unknown }).web = { chat: { postMessage } };
+    const build = vi.spyOn(
+      connector as unknown as { createSingleAttemptWebClient(ms: number): unknown },
+      'createSingleAttemptWebClient'
+    );
+
+    await connector.sendMessage({ threadId: 'C123-1700000000.000000', text: 'relay' });
+
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(build).not.toHaveBeenCalled();
   });
 });
 

@@ -2120,6 +2120,21 @@ their own suites.
 `withGatewayTimeout` exists and is used only for `stopListening` — and the
 `setThreadStatus` guard. Separate ticket.
 
+_Since closed for the card lanes._ Every MCP Slack card call is bounded by
+`MCP_SLACK_SEND_TIMEOUT_MS`, and the shared web client carries a 15s request
+timeout and `fiveRetriesInFiveMinutes`. The deadline stops the caller waiting
+but cannot cancel the request, and that ladder kept an abandoned card write
+retrying for about five minutes: it could land after a later attempt settled
+the card and paint the older state back, and a terminal state schedules no
+repair. (`@slack/web-api` v7 takes no `AbortSignal` per call, so cancellation
+was not an option.) Card writes therefore ask the connector for one attempt
+whose request timeout is the remaining budget
+(`SLACK_REQUEST_TIMEOUT_METADATA_KEY`); everything else keeps the ladder. A
+write that still lands after its deadline is handed back to its lane and
+reconciled like one that lost its claim — an edit of the owned row is repainted
+from the authority, a post beside it is retired, and a post onto a record with
+no row is left for the next attempt's metadata lookup to adopt.
+
 ### 7.1.16 Datadog's redirect-URI mismatch, and one client name for the whole fleet
 
 The next live failure was not in this lane either, and not in the Slack

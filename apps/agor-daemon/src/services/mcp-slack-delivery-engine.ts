@@ -49,6 +49,7 @@ import {
   getConnector,
   isSlackWriteTargetAllowed,
   normalizeSendReceipt,
+  SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   type SlackAgorMessageMetadataEventType,
 } from '@agor/core/gateway';
 import type { GatewayChannel } from '@agor/core/types';
@@ -78,9 +79,11 @@ export const MCP_SLACK_REPAINT_ATTEMPTS = 2;
  * already refuses to record that, and `retireOrphanedSlackCard` cleans it up —
  * but both are repairs for a race this deadline mostly prevents.
  *
- * The connector's own `timeout`/`retryConfig` bound one REQUEST and its
- * ladder (15s, then five retries over five minutes). This bounds the
- * OPERATION, which is what a 30s lease actually needs. A send that trips it
+ * A card write asks the connector for ONE attempt whose request timeout is
+ * what is left of this budget (`SLACK_REQUEST_TIMEOUT_METADATA_KEY`), not the
+ * shared client's five-retries-over-five-minutes ladder — a retried write
+ * could otherwise land long after a later attempt settled the card. This
+ * bounds the OPERATION, which is what a 30s lease actually needs. A send that trips it
  * raises, which lands in each lane's existing `catch` as
  * `slack_write_failed` and consumes one rung of the D1 ladder — a hang
  * becomes an already-tested failure rather than a caller that never returns.
@@ -90,30 +93,78 @@ export const MCP_SLACK_SEND_TIMEOUT_MS = 15_000;
 /**
  * Bound one outbound Slack operation.
  *
- * `Promise.race` cannot cancel the underlying request — the connector's own
- * `timeout` is what eventually frees the socket. What this guarantees is that
- * the CALLER stops waiting, which is the property every holder of a 30s lease
- * needs and the one nothing in either lane had.
+ * `Promise.race` cannot cancel the underlying request. What this guarantees is
+ * that the CALLER stops waiting, which is the property every holder of a 30s
+ * lease needs and the one nothing in either lane had.
+ *
+ * What it cannot guarantee is that the abandoned request does nothing. A
+ * write Agor stopped waiting for can still land — and the shared web client's
+ * `fiveRetriesInFiveMinutes` would keep retrying it for about five minutes,
+ * long after a later attempt settled the card, which is why card writes do
+ * not use that client (`SLACK_REQUEST_TIMEOUT_METADATA_KEY`). `onLate` is the handle on
+ * that request: it runs with the value only if the operation resolves AFTER
+ * the deadline won, so the caller can reconcile a receipt it had already
+ * written off. A rejection after the deadline is dropped; it wrote nothing.
  */
 export async function withSlackDeliveryDeadline<T>(
   operation: Promise<T>,
-  timeoutMs: number = MCP_SLACK_SEND_TIMEOUT_MS
+  timeoutMs: number = MCP_SLACK_SEND_TIMEOUT_MS,
+  onLate?: (value: T) => void
 ): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
   try {
     return await Promise.race([
       operation,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('Slack card delivery exceeded its deadline')),
-          timeoutMs
-        );
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('Slack card delivery exceeded its deadline'));
+        }, timeoutMs);
         timer.unref?.();
       }),
     ]);
+  } catch (error) {
+    if (timedOut && onLate) void operation.then(onLate, () => undefined);
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** A card send that resolved after its deadline had already written it off. */
+export interface LateSlackCardReceipt {
+  receipt: GatewaySendReceipt;
+  /** Set when the late send was an EDIT of this row; absent for a POST. */
+  reconciledMessageTs?: string;
+}
+
+/**
+ * What a lane does about a card write that landed after its deadline.
+ *
+ * The same two repairs a lost claim gets, because a timed-out send IS a send
+ * whose claim was released: the lane recorded `slack_write_failed` and a later
+ * attempt may already have settled the card.
+ *
+ *  - `repaint`: it EDITED the row the record owns, possibly over a newer state.
+ *    Clearing `rendered_state` makes the next render repaint from the
+ *    authority — a no-op when nothing newer had been rendered.
+ *  - `retire`: it wrote a row the record does not own (a POST beside the owned
+ *    one, or an edit of a row that is no longer this delivery's).
+ *  - `adopt`: a POST and the record owns no row yet. Deleting it could race
+ *    the next attempt, whose metadata lookup is what finds and adopts it.
+ *  - `none`: the record already names the row it posted.
+ */
+export function lateSlackCardDisposition(
+  late: LateSlackCardReceipt,
+  current: { isThisDelivery: boolean; ownedTs?: string }
+): 'repaint' | 'retire' | 'adopt' | 'none' {
+  if (!current.isThisDelivery) return 'retire';
+  if (late.reconciledMessageTs) {
+    return late.reconciledMessageTs === current.ownedTs ? 'repaint' : 'retire';
+  }
+  if (!current.ownedTs) return 'adopt';
+  return late.receipt.messageId === current.ownedTs ? 'none' : 'retire';
 }
 
 /** Durable ownership of one post/update attempt, across daemons. */
@@ -506,6 +557,8 @@ export async function sendSlackCard(
     eventType: SlackAgorMessageMetadataEventType;
     deliveryId: string;
     recordedTs?: string;
+    /** Runs if the send lands after its deadline; see {@link lateSlackCardDisposition}. */
+    onLateReceipt?: (late: LateSlackCardReceipt) => void;
   }
 ): Promise<{ receipt: GatewaySendReceipt; reconciledMessageTs?: string }> {
   // One budget over the whole card, not one per call: the reconciliation
@@ -528,12 +581,16 @@ export async function sendSlackCard(
       remaining()
     ).catch(() => undefined);
   }
+  // One attempt, bounded by what is left of the budget, so the request is
+  // dropped when Agor stops waiting rather than retried behind its back.
+  const sendBudget = remaining();
   const sent = await withSlackDeliveryDeadline(
     connector.sendMessage({
       threadId: params.threadId,
       text: params.text,
       blocks: params.blocks,
       metadata: {
+        [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: sendBudget,
         ...(reconciledMessageTs ? { slack_update_ts: reconciledMessageTs } : {}),
         ...(!reconciledMessageTs
           ? {
@@ -545,7 +602,14 @@ export async function sendSlackCard(
           : {}),
       },
     }),
-    remaining()
+    sendBudget,
+    params.onLateReceipt
+      ? (late) =>
+          params.onLateReceipt!({
+            receipt: normalizeSendReceipt(late),
+            ...(reconciledMessageTs ? { reconciledMessageTs } : {}),
+          })
+      : undefined
   );
   return {
     receipt: normalizeSendReceipt(sent),
@@ -593,7 +657,10 @@ export async function retireOrphanedSlackCard(
         threadId,
         text,
         blocks: mcpSlackConnectBlocks({ text }),
-        metadata: { slack_update_ts: orphanTs },
+        metadata: {
+          [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: MCP_SLACK_SEND_TIMEOUT_MS,
+          slack_update_ts: orphanTs,
+        },
       })
     );
   } catch {

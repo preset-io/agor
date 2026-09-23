@@ -173,6 +173,8 @@ import {
 import {
   acquireSlackDeliveryConnector,
   clearLostSlackRender,
+  type LateSlackCardReceipt,
+  lateSlackCardDisposition,
   MCP_SLACK_REPAINT_ATTEMPTS,
   type MCPSlackDeliveryFailureReason,
   type MCPSlackLane,
@@ -1950,6 +1952,11 @@ export class GatewayService {
         eventType: MCP_SLACK_RECOVERY_EVENT_TYPE,
         deliveryId: notice.delivery_id,
         ...(notice.slack_message_ts ? { recordedTs: notice.slack_message_ts } : {}),
+        onLateReceipt: (late) =>
+          this.reconcileLateMcpSlackRecoverySend(task.task_id, notice.notice_id, state, late, {
+            connector,
+            threadId: notice.slack_thread_id,
+          }),
       });
       const renderedAt = new Date();
       const settled = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
@@ -2006,6 +2013,54 @@ export class GatewayService {
         'slack_write_failed'
       );
     }
+  }
+
+  /**
+   * A recovery notice write that landed after its deadline had written it off.
+   *
+   * By then this lane has recorded `slack_write_failed` and released the claim,
+   * and a later attempt may already have settled the notice — so the late
+   * write is reconciled exactly like one that lost its claim. See
+   * `lateSlackCardDisposition`. Detached from the pass that sent it: that pass
+   * returned long ago.
+   */
+  private reconcileLateMcpSlackRecoverySend(
+    taskId: string,
+    noticeId: string,
+    renderedState: MCPSlackRecoveryRenderedState,
+    late: LateSlackCardReceipt,
+    retire: { connector: GatewayConnector; threadId: string }
+  ): void {
+    const tenantId = requireCurrentTenantId();
+    void runWithTenantContext(tenantId, async () => {
+      const task = await this.taskRepo.findById(taskId);
+      const latest = task?.metadata?.mcp_slack_recovery_notice;
+      const isThisDelivery = latest?.notice_id === noticeId;
+      const ownedTs = isThisDelivery ? latest?.slack_message_ts : undefined;
+      const disposition = lateSlackCardDisposition(late, { isThisDelivery, ownedTs });
+      if (disposition === 'repaint') {
+        const cleared = await clearLostSlackRender(
+          this.mcpSlackRecoveryStore(taskId, noticeId),
+          late.reconciledMessageTs as string,
+          renderedState
+        );
+        if (cleared?.changed) await this.deliverMcpSlackRecoveryNotice(cleared.task);
+      } else if (disposition === 'retire') {
+        await retireOrphanedSlackCard(retire.connector, retire.threadId, {
+          lane: 'recovery',
+          orphanTs: late.reconciledMessageTs ?? late.receipt.messageId,
+          ownedTs,
+          text: mcpSlackRecoveryDuplicateNoticeText(),
+        });
+      }
+    }).catch((error: unknown) =>
+      this.logMcpSlackOperationFailure(
+        'mcp_slack_late_receipt_failed',
+        'recovery',
+        { task_id: taskId, notice_id: noticeId },
+        error
+      )
+    );
   }
 
   /**
@@ -3042,6 +3097,12 @@ export class GatewayService {
         eventType: MCP_SLACK_CONNECT_EVENT_TYPE,
         deliveryId: current.delivery_id,
         ...(current.slack_message_ts ? { recordedTs: current.slack_message_ts } : {}),
+        onLateReceipt: (late) =>
+          this.reconcileLateMcpSlackConnectSend(widgetId, fence, state, late, {
+            connector,
+            threadId: slack.threadId,
+            text: mcpSlackConnectDuplicateCardText(binding.params?.serverName ?? 'this MCP server'),
+          }),
       });
       const renderedAt = new Date();
       const settled = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
@@ -3104,6 +3165,55 @@ export class GatewayService {
       claimRef.claimId = undefined;
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'slack_write_failed');
     }
+  }
+
+  /**
+   * A connect card write that landed after its deadline had written it off.
+   *
+   * The connect lane's counterpart of `reconcileLateMcpSlackRecoverySend`, and
+   * for the same reason: a timed-out write is one whose claim was released,
+   * so a later attempt may already have settled the card to a newer state —
+   * and a terminal state schedules no repair, so without this the thread would
+   * keep whatever the late write painted. Fenced on the delivery this pass was
+   * sending for, like settlement.
+   */
+  private reconcileLateMcpSlackConnectSend(
+    widgetId: MessageID,
+    fence: { deliveryId: string; generation: number | undefined },
+    renderedState: MCPSlackConnectRenderedState,
+    late: LateSlackCardReceipt,
+    retire: { connector: GatewayConnector; threadId: string; text: string }
+  ): void {
+    const tenantId = requireCurrentTenantId();
+    void runWithTenantContext(tenantId, async () => {
+      const latest = (await this.messagesRepo.findById(widgetId))?.metadata?.widget?.slack_connect;
+      const isThisDelivery =
+        latest?.delivery_id === fence.deliveryId && latest.delivery_generation === fence.generation;
+      const ownedTs = isThisDelivery ? latest?.slack_message_ts : undefined;
+      const disposition = lateSlackCardDisposition(late, { isThisDelivery, ownedTs });
+      if (disposition === 'repaint') {
+        const cleared = await clearLostSlackRender(
+          this.mcpSlackConnectStore(widgetId),
+          late.reconciledMessageTs as string,
+          renderedState
+        );
+        if (cleared?.changed) await this.deliverMcpSlackConnectCard(widgetId);
+      } else if (disposition === 'retire') {
+        await retireOrphanedSlackCard(retire.connector, retire.threadId, {
+          lane: 'connect',
+          orphanTs: late.reconciledMessageTs ?? late.receipt.messageId,
+          ownedTs,
+          text: retire.text,
+        });
+      }
+    }).catch((error: unknown) =>
+      this.logMcpSlackOperationFailure(
+        'mcp_slack_late_receipt_failed',
+        'connect',
+        { widget_id: widgetId },
+        error
+      )
+    );
   }
 
   /**

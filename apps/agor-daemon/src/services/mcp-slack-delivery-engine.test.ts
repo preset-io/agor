@@ -10,6 +10,7 @@
  * that reason.
  */
 
+import { SLACK_REQUEST_TIMEOUT_METADATA_KEY } from '@agor/core/gateway';
 import type { GatewayChannel } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,9 +28,11 @@ import {
   applySlackDeliveryFailure,
   clearLostSlackRender,
   clearSlackRenderedState,
+  lateSlackCardDisposition,
   MCP_SLACK_DELIVERY_BACKOFF_MS,
   MCP_SLACK_DELIVERY_CLAIM_MS,
   MCP_SLACK_DELIVERY_MAX_ATTEMPTS,
+  MCP_SLACK_SEND_TIMEOUT_MS,
   recordSlackDeliveryFailure,
   type SlackDeliveryRecord,
   type SlackDeliveryStore,
@@ -40,6 +43,7 @@ import {
   slackDeliveryRepairAt,
   slackDeliveryRetryDisposition,
   slackRenderWasLost,
+  withSlackDeliveryDeadline,
 } from './mcp-slack-delivery-engine.js';
 
 const CHANNEL = {
@@ -303,6 +307,96 @@ describe('acquireSlackDeliveryConnector', () => {
 // Send and reconcile
 // ---------------------------------------------------------------------------
 
+describe('withSlackDeliveryDeadline', () => {
+  it('hands a late resolution to onLate, and only a late one', async () => {
+    vi.useFakeTimers();
+    try {
+      const onLate = vi.fn();
+      let resolveLate!: (value: string) => void;
+      const late = withSlackDeliveryDeadline(
+        new Promise<string>((resolve) => {
+          resolveLate = resolve;
+        }),
+        1_000,
+        onLate
+      );
+      const rejected = expect(late).rejects.toThrow('exceeded its deadline');
+      await vi.advanceTimersByTimeAsync(1_001);
+      await rejected;
+      expect(onLate).not.toHaveBeenCalled();
+
+      resolveLate('ts-late');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onLate).toHaveBeenCalledWith('ts-late');
+
+      // In time: the caller gets the value and there is nothing late about it.
+      const inTime = vi.fn();
+      await expect(withSlackDeliveryDeadline(Promise.resolve('ts'), 1_000, inTime)).resolves.toBe(
+        'ts'
+      );
+      expect(inTime).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a rejection that arrives after the deadline; it wrote nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      const onLate = vi.fn();
+      let rejectLate!: (error: Error) => void;
+      const late = withSlackDeliveryDeadline(
+        new Promise<string>((_resolve, reject) => {
+          rejectLate = reject;
+        }),
+        1_000,
+        onLate
+      );
+      const rejected = expect(late).rejects.toThrow('exceeded its deadline');
+      await vi.advanceTimersByTimeAsync(1_001);
+      await rejected;
+      rejectLate(new Error('socket hang up'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onLate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('lateSlackCardDisposition', () => {
+  const posted = { receipt: { messageId: 'ts-late' } };
+  const edited = { receipt: { messageId: 'ts-owned' }, reconciledMessageTs: 'ts-owned' };
+
+  it('repaints a late edit of the row the record owns', () => {
+    expect(lateSlackCardDisposition(edited, { isThisDelivery: true, ownedTs: 'ts-owned' })).toBe(
+      'repaint'
+    );
+  });
+
+  it('retires a late write the record does not own', () => {
+    expect(lateSlackCardDisposition(posted, { isThisDelivery: true, ownedTs: 'ts-owned' })).toBe(
+      'retire'
+    );
+    expect(lateSlackCardDisposition(edited, { isThisDelivery: true, ownedTs: 'ts-other' })).toBe(
+      'retire'
+    );
+    expect(lateSlackCardDisposition(edited, { isThisDelivery: false })).toBe('retire');
+  });
+
+  it('leaves a late post the record has not named yet for the next attempt to adopt', () => {
+    // Deleting it could race that attempt's metadata lookup, which finds this
+    // exact row by its delivery id and edits it.
+    expect(lateSlackCardDisposition(posted, { isThisDelivery: true })).toBe('adopt');
+  });
+
+  it('does nothing once the record already names the row it posted', () => {
+    expect(lateSlackCardDisposition(posted, { isThisDelivery: true, ownedTs: 'ts-late' })).toBe(
+      'none'
+    );
+  });
+});
+
 describe('sendSlackCard', () => {
   function connector(found?: string) {
     const sends: Record<string, unknown>[] = [];
@@ -341,6 +435,7 @@ describe('sendSlackCard', () => {
       payloadValue: 'delivery-1',
     });
     expect(harness.sends[0]!.metadata).toEqual({
+      [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: expect.any(Number),
       slack_message_metadata: {
         event_type: 'agor_mcp_connect',
         event_payload: { delivery_id: 'delivery-1' },
@@ -353,7 +448,10 @@ describe('sendSlackCard', () => {
   it('edits the row a crash lost the receipt for instead of posting a second', async () => {
     const harness = connector('ts-reconciled');
     const result = await sendSlackCard(harness.connector, params);
-    expect(harness.sends[0]!.metadata).toEqual({ slack_update_ts: 'ts-reconciled' });
+    expect(harness.sends[0]!.metadata).toEqual({
+      [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: expect.any(Number),
+      slack_update_ts: 'ts-reconciled',
+    });
     // The caller needs this to know it EDITED: a lost claim on a post orphans
     // a row, a lost claim on an edit repaints one. Different repairs.
     expect(result.reconciledMessageTs).toBe('ts-reconciled');
@@ -363,8 +461,51 @@ describe('sendSlackCard', () => {
     const harness = connector('ts-reconciled');
     const result = await sendSlackCard(harness.connector, { ...params, recordedTs: 'ts-1' });
     expect(harness.lookups).toHaveLength(0);
-    expect(harness.sends[0]!.metadata).toEqual({ slack_update_ts: 'ts-1' });
+    expect(harness.sends[0]!.metadata).toEqual({
+      [SLACK_REQUEST_TIMEOUT_METADATA_KEY]: expect.any(Number),
+      slack_update_ts: 'ts-1',
+    });
     expect(result.reconciledMessageTs).toBe('ts-1');
+  });
+
+  it('asks for one attempt bounded by the card budget, never the shared retry ladder', async () => {
+    const harness = connector(undefined);
+    await sendSlackCard(harness.connector, params);
+    const budget = harness.sends[0]!.metadata as Record<string, number>;
+    expect(budget[SLACK_REQUEST_TIMEOUT_METADATA_KEY]).toBeGreaterThan(0);
+    expect(budget[SLACK_REQUEST_TIMEOUT_METADATA_KEY]).toBeLessThanOrEqual(
+      MCP_SLACK_SEND_TIMEOUT_MS
+    );
+  });
+
+  it('hands a send that lands after its deadline to onLateReceipt, edit or post', async () => {
+    vi.useFakeTimers();
+    try {
+      let land!: (ts: string) => void;
+      const onLateReceipt = vi.fn();
+      const pending = sendSlackCard(
+        {
+          channelType: 'slack',
+          sendMessage: () =>
+            new Promise<string>((resolve) => {
+              land = resolve;
+            }),
+        } as never,
+        { ...params, recordedTs: 'ts-owned', onLateReceipt }
+      );
+      const rejected = expect(pending).rejects.toThrow('exceeded its deadline');
+      await vi.advanceTimersByTimeAsync(MCP_SLACK_SEND_TIMEOUT_MS + 1);
+      await rejected;
+
+      land('ts-owned');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onLateReceipt).toHaveBeenCalledWith({
+        receipt: { messageId: 'ts-owned' },
+        reconciledMessageTs: 'ts-owned',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('posts without reconciling against a connector that cannot search', async () => {

@@ -126,6 +126,11 @@ interface LaneOptions {
    */
   stallSlack?: boolean;
   /**
+   * Slack answers the FIRST send only when this settles — after the deadline
+   * has written it off, and after whatever the test does in between.
+   */
+  lateSlack?: Promise<void>;
+  /**
    * Runs during the Slack call: a second claimant took the expired lease,
    * rendered the row that counts, and released it.
    */
@@ -277,6 +282,7 @@ function connectLane(options: LaneOptions): LaneHarness {
           sendMessage: async (request: SentMessage) => {
             sends.push(request);
             if (options.stallSlack) await new Promise<never>(() => {});
+            if (options.lateSlack && sends.length === 1) await options.lateSlack;
             if (sends.length === 1) options.winner?.();
             return OUR_TS;
           },
@@ -427,6 +433,7 @@ function recoveryLane(options: LaneOptions): LaneHarness {
           sendMessage: async (request: SentMessage) => {
             sends.push(request);
             if (options.stallSlack) await new Promise<never>(() => {});
+            if (options.lateSlack && sends.length === 1) await options.lateSlack;
             if (sends.length === 1) options.winner?.();
             return OUR_TS;
           },
@@ -655,6 +662,76 @@ describe.each(LANES)(
         warn.mockRestore();
       }
     });
+
+    /**
+     * Slack answers AFTER the deadline, and after a later attempt settled.
+     *
+     * The stalled-send case above only shows the caller stops waiting. It says
+     * nothing about the request it abandoned, which can still land: the shared
+     * web client used to retry a timed-out write for about five minutes. The
+     * sequence that matters is the one below — the first write times out, a
+     * later attempt settles the card, and only then does the first write land
+     * and paint its older state back over the settled one. A terminal state
+     * schedules no repair, so nothing would ever correct it.
+     *
+     * The abandoned write is reconciled like a write that lost its claim: an
+     * edit of the owned row is repainted from the authority, and a post beside
+     * it is retired.
+     */
+    it.each([
+      { start: 'edit' as const, write: 'an edit' },
+      { start: 'post' as const, write: 'a post' },
+    ])(
+      'reconciles $write that lands after its deadline and after a later settle',
+      async ({ start }) => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.useFakeTimers();
+        try {
+          let land!: () => void;
+          let patch: ((ts: string, state: string) => void) | undefined;
+          const harness = build({
+            start,
+            lateSlack: new Promise<void>((resolve) => {
+              land = resolve;
+            }),
+            onReady: (apply) => {
+              patch = apply;
+            },
+          });
+
+          const first = harness.deliver();
+          await vi.advanceTimersByTimeAsync(MCP_SLACK_SEND_TIMEOUT_MS + 1_000);
+          await first;
+          expect(harness.record()?.delivery_attempt_count).toBe(1);
+
+          // A later attempt settles the card to a newer state, on the row the
+          // record owns...
+          patch?.(OWNED_TS, winnerState);
+          expect(harness.renderedState()).toBe(winnerState);
+
+          // ...and only now does Slack answer the write that was given up on.
+          land();
+          for (let i = 0; i < 20; i += 1) await vi.advanceTimersByTimeAsync(0);
+
+          expect(harness.recordedTs()).toBe(OWNED_TS);
+          if (start === 'edit') {
+            // The late edit painted the older state over OWNED_TS. It is
+            // repainted from the authority, on the same row.
+            expect(harness.sends.length).toBeGreaterThan(1);
+            expect(harness.sends.at(-1)?.metadata).toMatchObject({ slack_update_ts: OWNED_TS });
+            expect(harness.renderedState()).toBe(repaintedState);
+            expect(harness.deleted).toEqual([]);
+          } else {
+            // The late post is a second card beside the settled one: retired.
+            expect(harness.deleted).toContainEqual({ threadId: THREAD, messageId: OUR_TS });
+          }
+          await harness.stop();
+        } finally {
+          vi.useRealTimers();
+          warn.mockRestore();
+        }
+      }
+    );
 
     /**
      * Send/commit ambiguity in the other direction: the send landed and the

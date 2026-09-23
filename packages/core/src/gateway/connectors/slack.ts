@@ -92,6 +92,21 @@ const SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET: ReadonlySet<string> = new Set(
   SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES
 );
 
+/**
+ * `sendMessage` metadata asking for ONE attempt bounded by this many
+ * milliseconds, instead of the shared client's retry ladder.
+ *
+ * Only Agor's MCP Slack cards set it. The shared client keeps
+ * `fiveRetriesInFiveMinutes`, which message relay and every other gateway call
+ * rely on. For a card write that ladder is the hazard: a write the caller has
+ * already given up on keeps being retried for minutes, and can land over a card
+ * a later attempt has settled. The card lanes run their own backoff ladder and
+ * reconcile a late receipt themselves, so one attempt is all they want from
+ * here — and the request timeout matching the caller's remaining budget means
+ * the socket is dropped when the caller stops waiting.
+ */
+export const SLACK_REQUEST_TIMEOUT_METADATA_KEY = 'slack_request_timeout_ms';
+
 // Slack error codes that indicate the `blocks` payload was malformed/rejected,
 // where retrying with text-only is the right fallback.
 const BLOCK_PAYLOAD_ERRORS = new Set([
@@ -880,6 +895,11 @@ export function isSlackFileSourceAllowed(
  * work that holds a lease — see `MCP_SLACK_SEND_TIMEOUT_MS` — because five
  * retries still take five minutes. This is the floor under everything else.
  *
+ * Agor's MCP Slack card writes opt out of the ladder per call (see
+ * {@link SLACK_REQUEST_TIMEOUT_METADATA_KEY}): for a write the caller has
+ * already abandoned, a retry is a chance to repaint a card someone else has
+ * since settled.
+ *
  * Deliberately NOT applied to `SocketModeClient`: its internal client's
  * `{retries: 100, factor: 1.3}` is a RECONNECT policy for a long-lived
  * listener, not a request deadline, and its liveness is already bounded by
@@ -958,6 +978,19 @@ export class SlackConnector implements GatewayConnector {
    */
   protected createWebClient(token: string): WebClient {
     return new WebClient(token, SLACK_WEB_CLIENT_OPTIONS);
+  }
+
+  /**
+   * A client for one card write: no retries, and a request deadline no longer
+   * than the caller's. See {@link SLACK_REQUEST_TIMEOUT_METADATA_KEY}. Built per
+   * send because `WebClient` takes both only at construction; cards are rare
+   * enough that this costs nothing that matters.
+   */
+  protected createSingleAttemptWebClient(timeoutMs: number): WebClient {
+    return new WebClient(this.config.bot_token, {
+      timeout: Math.min(timeoutMs, SLACK_WEB_API_TIMEOUT_MS),
+      retryConfig: { retries: 0 },
+    });
   }
 
   /**
@@ -1467,6 +1500,13 @@ export class SlackConnector implements GatewayConnector {
       | { event_type?: unknown; event_payload?: { delivery_id?: unknown } }
       | undefined;
     const requestedEventType = requestedMessageMetadata?.event_type;
+    const requestTimeoutMs = req.metadata?.[SLACK_REQUEST_TIMEOUT_METADATA_KEY];
+    const web =
+      typeof requestTimeoutMs === 'number' &&
+      Number.isFinite(requestTimeoutMs) &&
+      requestTimeoutMs > 0
+        ? this.createSingleAttemptWebClient(Math.ceil(requestTimeoutMs))
+        : this.web;
     const messageMetadata =
       typeof requestedEventType === 'string' &&
       SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET.has(requestedEventType) &&
@@ -1490,13 +1530,13 @@ export class SlackConnector implements GatewayConnector {
       };
 
       if (updateTs) {
-        return this.web.chat.update({
+        return web.chat.update({
           ...base,
           ts: updateTs,
         });
       }
 
-      return this.web.chat.postMessage({
+      return web.chat.postMessage({
         ...base,
         thread_ts,
         ...(messageMetadata ? { metadata: messageMetadata } : {}),
