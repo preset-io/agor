@@ -1259,10 +1259,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     : undefined;
   // Section chevrons share the top-level tree chevron column.
   const sectionHeaderStyle: React.CSSProperties = { paddingInline: 0 };
-  // Section bodies nest one level under their header, with a guide under its chevron.
+  // Section bodies hang off a guide under the header's chevron; rows' own chevron
+  // column starts right at the guide, so the indent doesn't stack with it.
   const sectionBodyGuide: React.CSSProperties = {
     marginInlineStart: token.controlHeightSM / 2,
-    paddingInlineStart: token.controlHeightSM / 2 - token.lineWidth,
+    paddingInlineStart: 0,
     borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
   };
   // The chevron slot supplies the one standard step before the title.

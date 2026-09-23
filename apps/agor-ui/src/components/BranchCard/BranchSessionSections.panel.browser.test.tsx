@@ -222,15 +222,20 @@ it('nests rows one level inside their section with one chevron style', () => {
   const tree = treeChevron.getBoundingClientRect();
   expect(header.width).toBeCloseTo(tree.width, 1);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
-  // Sections are containers: top-level rows sit exactly one indent step inside the header.
-  expect(tree.left + tree.width / 2 - (header.left + header.width / 2)).toBeCloseTo(step, 0);
-  expect(
-    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left -
-      screen.getByText('Sessions').getBoundingClientRect().left
-  ).toBeCloseTo(step, 0);
-
-  // A guide runs under the section chevron, and every nested level draws its own guide.
+  // Sections are containers: a guide runs under the section chevron and top-level rows'
+  // chevron column starts right at it, so the section indent doesn't stack with it.
   const body = treeChevron.closest('.ant-collapse-body')!;
+  const guideX = body.getBoundingClientRect().left;
+  expect(guideX).toBeCloseTo(header.left + header.width / 2, 0);
+  const rootSwitcher = treeChevron.closest('.ant-tree-switcher')!.getBoundingClientRect();
+  expect(rootSwitcher.left - guideX).toBeLessThanOrEqual(1);
+  expect(tree.left + tree.width / 2 - rootSwitcher.left).toBeCloseTo(step / 2, 0);
+  // Rows stay visibly nested inside the section label.
+  expect(
+    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left
+  ).toBeGreaterThan(screen.getByText('Sessions').getBoundingClientRect().left);
+
+  // Every nested level draws its own guide.
   expect(getComputedStyle(body).borderInlineStartWidth).not.toBe('0px');
   const childUnit = row('Astra recheck — Abuse')
     .closest('.ant-tree-treenode')!
