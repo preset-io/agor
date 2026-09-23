@@ -37,6 +37,32 @@ function operationFor(service: object) {
 }
 
 describe('OpenCodeCleanupOperation', () => {
+  it('uses an idle worker slot again within the bounded launch budget', async () => {
+    deleteWorker.mockReset().mockResolvedValue({ outcome: 'deleted' });
+    const third = deferred<{ kind: 'none' }>();
+    const service = {
+      prepareCleanup: vi
+        .fn()
+        .mockResolvedValueOnce({
+          kind: 'delete' as const,
+          object: { storeId: layout.storeId, taskId: 'old-checkpoint' },
+        })
+        .mockResolvedValueOnce({ kind: 'observe' as const, attemptId: 'old-holder' })
+        .mockImplementationOnce(() => third.promise),
+      observe: vi.fn().mockResolvedValue(undefined),
+      acknowledgeDelete: vi.fn().mockResolvedValue(undefined),
+    };
+    const operation = operationFor(service);
+    operation.start();
+    await vi.waitFor(() => expect(service.prepareCleanup).toHaveBeenCalledTimes(3));
+    const drained = operation.stopAndDrain();
+    third.resolve({ kind: 'none' });
+    await drained;
+    expect(deleteWorker).toHaveBeenCalledOnce();
+    expect(service.acknowledgeDelete).toHaveBeenCalledOnce();
+    expect(service.observe).toHaveBeenCalledOnce();
+  });
+
   it('dispatches one committed reservation even when the reservation reply is delayed', async () => {
     deleteWorker.mockReset();
     const service = {

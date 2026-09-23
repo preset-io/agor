@@ -226,7 +226,8 @@ async function runObserver(
       }
     });
     child.on('error', () => finish(new Conflict('Trusted Cloud observer helper could not start')));
-    child.on('exit', (code) => {
+    // `exit` may precede the last stdout chunk; `close` follows stream closure.
+    child.on('close', (code) => {
       if (timedOut) return finish(new Conflict('Trusted Cloud observer helper timed out'));
       if (code !== 0)
         return finish(new Conflict('Trusted Cloud observer helper rejected the request'));

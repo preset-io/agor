@@ -524,6 +524,105 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         .one();
       expect(afterRecheckReservation?.retired_at).not.toBeNull();
       expect(afterRecheckReservation?.delete_observed_at).not.toBeNull();
+      await attempts.acknowledgeDelete(
+        collector.task_id,
+        collectorHolder,
+        tombstone.object,
+        { outcome: 'deleted' },
+        new Date(now.getTime() + 24 * 60 * 60 * 1_000 + 2_000)
+      );
+      const afterRecheck = await select(db)
+        .from(opencodeCheckpointAttempts)
+        .where(eq(opencodeCheckpointAttempts.task_id, firstTask.task_id))
+        .one();
+      expect(afterRecheck?.retired_at).not.toBeNull();
+      expect(afterRecheck?.delete_retry_at).toBeNull();
+    }
+  );
+
+  dbTest(
+    'reclaims healthy hourly turns across four days without a growing backlog',
+    async ({ db }) => {
+      const { ownerId, sessionId, task: firstTask } = await newTask(db);
+      const taskRepo = new TaskRepository(db);
+      const attempts = new OpenCodeCheckpointAttemptRepository(db);
+      const storeId = generateId();
+      const epoch = Date.parse('2026-09-01T00:00:00.000Z');
+      let currentTask = firstTask;
+      for (let hour = 0; hour < 96; hour += 1) {
+        const now = new Date(epoch + hour * 60 * 60 * 1_000);
+        const holderId = generateId();
+        const grant = await attempts.begin({
+          taskId: currentTask.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: binding(sessionId, currentTask.task_id, storeId, holderId, ownerId),
+        });
+        if (grant.outcome !== 'admitted') throw new Error('hourly holder was not admitted');
+        if (grant.input?.version === 3) {
+          await attempts.closeRead(currentTask.task_id, holderId, {
+            storeId,
+            taskId: grant.input.attemptTaskId,
+          });
+        }
+        // A healthy worker slot can reserve again after each fast completed
+        // operation, but never reserves a batch ahead of the filesystem worker.
+        for (let slot = 0; slot < 4; slot += 1) {
+          const work = await attempts.prepareCleanup(currentTask.task_id, holderId, now);
+          if (work.kind === 'delete') {
+            await attempts.acknowledgeDelete(
+              currentTask.task_id,
+              holderId,
+              work.object,
+              { outcome: 'deleted' },
+              now
+            );
+          } else if (work.kind === 'observe') {
+            throw new Error('healthy finished holders have closure evidence');
+          }
+        }
+        const published = {
+          ...manifest(currentTask.task_id, storeId),
+          publishedAt: now.toISOString(),
+        };
+        await attempts.seal(currentTask.task_id, holderId, published);
+        await taskRepo.completeWithNativeStatePublication(
+          currentTask.task_id,
+          { status: TaskStatus.COMPLETED, native_state_attempt: published },
+          holderId
+        );
+        await update(db, opencodeCheckpointAttempts)
+          .set({ holder_closed_observed_at: now })
+          .where(eq(opencodeCheckpointAttempts.task_id, currentTask.task_id))
+          .run();
+        if (hour === 47 || hour === 95) {
+          const rows = await select(db)
+            .from(opencodeCheckpointAttempts)
+            .where(eq(opencodeCheckpointAttempts.session_id, sessionId))
+            .all();
+          const neverDeleted = rows.filter(
+            (row: typeof opencodeCheckpointAttempts.$inferSelect) =>
+              !row.delete_observed_at && row.task_id !== currentTask.task_id
+          );
+          expect(neverDeleted.length).toBeLessThanOrEqual(4);
+        }
+        if (hour < 95) {
+          const created = await taskRepo.create({
+            task_id: generateId(),
+            session_id: sessionId,
+            created_by: ownerId,
+            full_prompt: 'hourly turn',
+            status: TaskStatus.DISPATCHING,
+            message_range: { start_index: 0, end_index: 0, start_timestamp: now.toISOString() },
+            tool_use_count: 0,
+            git_state: { ref_at_start: 'main', sha_at_start: 'hourly-cleanup' },
+          });
+          const connected = await taskRepo.connectExecutor(created.task_id);
+          if (!connected) throw new Error('hourly task did not connect');
+          await taskRepo.stampManagedOpenCodeProtocol(created.task_id);
+          currentTask = connected.task;
+        }
+      }
     }
   );
 

@@ -35,9 +35,8 @@ interface OpenCodeNativeStateService {
 }
 
 /**
- * One launch issues at most one cleanup operation. A successful reservation is
- * dispatched even if its RPC consumed the selection budget; no batch is
- * prefetched past the first unstarted eligible item.
+ * A launch may issue another operation while the one worker slot is idle and
+ * the short selection budget remains. Nothing is reserved ahead of dispatch.
  */
 export class OpenCodeCleanupOperation {
   private operation: Promise<void> | undefined;
@@ -77,41 +76,42 @@ export class OpenCodeCleanupOperation {
 
   private async reserveAndDispatch(): Promise<void> {
     const deadline = Date.now() + 250;
-    if (this.stopped || Date.now() >= deadline) return;
     const service = this.service();
-    const work = await service.prepareCleanup({
-      task_id: this.taskId,
-      holder_instance_id: this.holderId,
-    });
-    if (work.kind === 'none') return;
-    // A committed work item is dispatched even if the reservation reply was
-    // delayed beyond the selection budget.
-    if (work.kind === 'observe') {
-      await service.observe({
+    for (let issued = 0; issued < 4 && !this.stopped && Date.now() < deadline; issued += 1) {
+      const work = await service.prepareCleanup({
         task_id: this.taskId,
         holder_instance_id: this.holderId,
-        attempt_id: work.attemptId,
       });
-      return;
-    }
-    if (work.object.storeId !== this.layout.storeId) {
-      console.error('[opencode.cleanup] event=delete_skipped reason=store_mismatch');
-      return;
-    }
-    const deleteWorker = (
-      NativeOpenCodeRuntime as unknown as {
-        deleteRetiredOpenCodeAttemptInWorker(
-          layout: ManagedOpenCodeNativeStateLayout,
-          object: { storeId: string; taskId: string }
-        ): Promise<{ outcome: 'deleted' } | { outcome: 'failed'; errorCode: string }>;
+      // A committed work item is dispatched even if its reservation reply was
+      // delayed beyond the selection budget.
+      if (work.kind === 'none') continue;
+      if (work.kind === 'observe') {
+        await service.observe({
+          task_id: this.taskId,
+          holder_instance_id: this.holderId,
+          attempt_id: work.attemptId,
+        });
+        continue;
       }
-    ).deleteRetiredOpenCodeAttemptInWorker;
-    const result = await deleteWorker(this.layout, work.object);
-    await service.acknowledgeDelete({
-      task_id: this.taskId,
-      holder_instance_id: this.holderId,
-      object: work.object,
-      result,
-    });
+      if (work.object.storeId !== this.layout.storeId) {
+        console.error('[opencode.cleanup] event=delete_skipped reason=store_mismatch');
+        return;
+      }
+      const deleteWorker = (
+        NativeOpenCodeRuntime as unknown as {
+          deleteRetiredOpenCodeAttemptInWorker(
+            layout: ManagedOpenCodeNativeStateLayout,
+            object: { storeId: string; taskId: string }
+          ): Promise<{ outcome: 'deleted' } | { outcome: 'failed'; errorCode: string }>;
+        }
+      ).deleteRetiredOpenCodeAttemptInWorker;
+      const result = await deleteWorker(this.layout, work.object);
+      await service.acknowledgeDelete({
+        task_id: this.taskId,
+        holder_instance_id: this.holderId,
+        object: work.object,
+        result,
+      });
+    }
   }
 }

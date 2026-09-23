@@ -907,7 +907,11 @@ export class OpenCodeCheckpointAttemptRepository {
           await update(tx, opencodeCheckpointAttempts)
             .set({
               delete_observed_at: now,
-              delete_retry_at: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+              // Recheck an acknowledged absence once, not on every healthy
+              // launch forever. The irreversible tombstone remains in the ledger.
+              delete_retry_at: lockedTarget.delete_observed_at
+                ? null
+                : new Date(now.getTime() + 24 * 60 * 60 * 1_000),
               delete_last_error: null,
               updated_at: now,
             })

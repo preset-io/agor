@@ -24,6 +24,7 @@ export type TenantPortabilityErrorCategory =
   | 'filesystem_deletion_pending'
   | 'filesystem_error'
   | 'invalid_input'
+  | 'native_state_handoff_required'
   | 'unknown'
   | 'unsafe_archive_path'
   | 'unsupported_runtime'
@@ -43,6 +44,7 @@ export interface TenantPortabilityErrorMarkerV1 {
 
 const CATEGORY_BY_ERROR_NAME: Readonly<Record<string, TenantPortabilityErrorCategory>> = {
   InvalidTenantIdError: 'invalid_input',
+  TenantNativeStateHandoffRequiredError: 'native_state_handoff_required',
   MalformedArchiveError: 'archive_invalid',
   TenantCatalogError: 'catalog_invariant',
   TenantDeletionCatalogError: 'catalog_invariant',

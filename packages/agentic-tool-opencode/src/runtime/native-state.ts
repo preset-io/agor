@@ -690,7 +690,8 @@ export async function deleteRetiredOpenCodeAttemptInWorker(
       if (Buffer.byteLength(stdout) > 4096) child.kill('SIGKILL');
     });
     child.on('error', () => finish({ outcome: 'failed', errorCode: 'WORKER_START_FAILED' }));
-    child.on('exit', (code) => {
+    // Parse only after stdout has closed, not merely after the process exits.
+    child.on('close', (code) => {
       try {
         const result = JSON.parse(stdout) as Record<string, unknown>;
         const exact = (keys: string[]) =>
