@@ -906,8 +906,8 @@ importers:
         specifier: '>=4.7.9 <5'
         version: 4.7.9
       hot-shots:
-        specifier: ^17.1.0
-        version: 17.1.0
+        specifier: ^17.1.1
+        version: 17.1.1
       inquirer:
         specifier: ^12.10.0
         version: 12.10.0(@types/node@26.1.1)
@@ -7383,10 +7383,6 @@ packages:
   hosted-git-info@7.0.2:
     resolution: {integrity: sha512-puUZAUKT5m8Zzvs72XWy3HtvVbTWljRE66cP60bxJzAqf2DgICo7lYTY2IHUmLnNpjYvw5bvmoHvPc0QO2a62w==}
     engines: {node: ^16.14.0 || >=18.0.0}
-
-  hot-shots@17.1.0:
-    resolution: {integrity: sha512-F7hnyBtBq7UE1amiWFRF8uEIzb29+FKW2otG9KbgPG+DwALavjwn/Vzc9GWp6EU6T1JW5sik7qnPecainwpIQA==}
-    engines: {node: '>=18.0.0'}
 
   hot-shots@17.1.1:
     resolution: {integrity: sha512-NqQjc677dry0av5lxAC2JmiPqq85spE0eXR2HjQD/QFVz8zEgu3eeMnKgj8kfb9zFrS+uB/iz9/V57TefG1HuQ==}
@@ -18274,10 +18270,6 @@ snapshots:
   hosted-git-info@7.0.2:
     dependencies:
       lru-cache: 10.4.3
-
-  hot-shots@17.1.0:
-    optionalDependencies:
-      unix-dgram: 2.0.7
 
   hot-shots@17.1.1:
     optionalDependencies:

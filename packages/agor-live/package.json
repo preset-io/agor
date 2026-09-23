@@ -111,7 +111,7 @@
     "@lydell/node-pty": "1.2.0-beta.15"
   },
   "peerDependencies": {
-    "hot-shots": "^17.1.0"
+    "hot-shots": "^17.1.1"
   },
   "peerDependenciesMeta": {
     "hot-shots": {
