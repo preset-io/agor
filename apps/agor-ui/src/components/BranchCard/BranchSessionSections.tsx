@@ -85,6 +85,7 @@ import { PagedSessions } from './PagedSessions';
 const NO_MOTION_THEME = { token: { motion: false } };
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
+const PANEL_AGENT_ICON_SIZE = 16;
 const PANEL_STATUS_DOT_SIZE = 6;
 /** Revealed rows animate in with a short stagger; later rows share the last delay. */
 const ROW_ENTER_STAGGER_MS = 15;
@@ -867,7 +868,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         border: 0,
         borderRadius: token.borderRadiusSM,
         paddingBlock: 0,
-        paddingInline: token.paddingXS,
+        // A tight lead-in keeps the logo close to the chevron; the trailing mark keeps room.
+        paddingInlineStart: token.paddingXXS,
+        paddingInlineEnd: token.paddingXS,
         minHeight: panelRowHeight,
         background: isSessionSelected ? token.colorFillSecondary : 'transparent',
         display: 'flex',
@@ -985,9 +988,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </>
   );
 
-  // Panel rows omit the agent logo; the title and status mark carry the row.
+  // Panel rows show the agent logo on every row, as one steady brand column.
   const renderAgentIcon = (session: Session) => {
-    if (isPanel) return null;
+    if (isPanel) return <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} />;
     return isSessionExecuting(session) ? (
       <Spin size="small" />
     ) : (
@@ -1469,13 +1472,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const panelSectionHeaderStyle: React.CSSProperties | undefined = isPanel
     ? { paddingInline: 0 }
     : undefined;
+  // The chevron slot supplies the one standard step before the title.
+  const panelSectionIconStyle: React.CSSProperties | undefined = isPanel
+    ? { marginInlineEnd: 0 }
+    : undefined;
   const panelExpandIcon = isPanel
     ? ({ isActive }: { isActive?: boolean }) => (
-        // The extra inset lines the section title up with row titles (row padding).
+        // The inset matches row padding, so section titles share the row title column.
         <Flex
           align="center"
           justify="center"
-          style={{ width: token.controlHeightSM, marginInlineEnd: token.paddingXS }}
+          style={{ width: token.controlHeightSM, marginInlineEnd: token.paddingXXS }}
         >
           {renderPanelChevron(Boolean(isActive))}
         </Flex>
@@ -1483,6 +1490,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     : undefined;
   const treeBodyStyles = {
     header: { flexShrink: 0, ...panelSectionHeaderStyle },
+    icon: panelSectionIconStyle,
     body: {
       ...panelFlexStyle,
       background: 'transparent',
@@ -1569,12 +1577,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </Flex>
   );
 
-  // Panel scheduled rows keep their paging but sit in the tree's title column:
-  // AntD Tree's switcher (controlHeightSM), its end margin, and the title's inline padding.
-  const panelFlatRowInset =
-    token.controlHeightSM +
-    (token.controlHeightSM - token.controlInteractiveSize) / 2 +
-    token.paddingXS;
+  // Panel scheduled rows keep their paging but sit in the tree's title column,
+  // after the chevron column (Tree's switcher, whose margin/padding the panel drops).
+  const panelFlatRowInset = token.controlHeightSM;
   const scheduledRunsContent = isScheduledRunsOpen ? (
     <PagedSessions
       key={branch.branch_id}
@@ -1835,6 +1840,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                   children: scheduledRunsContent,
                   styles: {
                     header: panelSectionHeaderStyle,
+                    icon: panelSectionIconStyle,
                     body: {
                       background: 'transparent',
                       paddingInline: isPanel ? 0 : undefined,

@@ -167,9 +167,15 @@
 }
 
 /* Panel session titles are single-line; Tree exposes no semantic slot for the
-   content wrapper, so let it shrink below its content for the ellipsis. */
+   content wrapper, so let it shrink below its content for the ellipsis. Rows
+   carry their own inline padding, so the chevron is followed by one standard
+   step instead of Tree's switcher margin plus title padding. */
 .agor-flat-tree.agor-panel-session-tree .ant-tree-node-content-wrapper {
   min-width: 0;
+  padding-inline: 0;
+}
+.agor-flat-tree.agor-panel-session-tree .ant-tree-switcher {
+  margin-inline-end: 0;
 }
 
 /* Rows revealed by expanding a panel session fade and settle in. Tree's own

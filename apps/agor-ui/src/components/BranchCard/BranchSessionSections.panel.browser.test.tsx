@@ -191,11 +191,12 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
   await page.screenshot({ path: `./.vitest/panel-sessions-hover-${window.innerWidth}.png` });
 });
 
-it('omits agent logos and the implied spawn marker but keeps fork markers', () => {
+it('shows the agent logo on every row and hides only the implied spawn marker', () => {
   mount();
 
+  // One steady brand column: every row shows its agent, so titles stay aligned.
   for (const session of sessions) {
-    expect(row(session.title!).querySelector('.tool-icon')).toBeNull();
+    expect(row(session.title!).querySelector('.tool-icon')).not.toBeNull();
   }
   expect(row('Astra recheck — Abuse').querySelector('[aria-label="subnode"]')).toBeNull();
   expect(
@@ -221,9 +222,9 @@ it('uses one chevron size, color and column for section headers and tree parents
   expect(header.width).toBeCloseTo(tree.width, 1);
   expect(header.left + header.width / 2).toBeCloseTo(tree.left + tree.width / 2, 0);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
-  // Section titles start where row titles do.
+  // Section labels start where row content (the agent logo) starts.
   expect(screen.getByText('Sessions').getBoundingClientRect().left).toBeCloseTo(
-    within(row('Security agor')).getByText('Security agor').getBoundingClientRect().left,
+    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left,
     0
   );
   // Tree's own first-line switcher backing is replaced by the button's hover surface.
@@ -266,13 +267,27 @@ it('toggles in one frame, animates only revealed rows, and defers hover toolbars
   expectSettled();
   expect(document.querySelector('.agor-session-row-enter')).toBeNull();
 
+  // Record which rows receive the reveal class; the class clears after the animation,
+  // so checking it after a slow (CI) click round-trip would race.
+  const animated = new Set<string>();
+  const recordAnimated = () =>
+    document.querySelectorAll('.agor-session-row-enter [data-session-id]').forEach((el) => {
+      animated.add(el.getAttribute('data-session-id')!);
+    });
+  const observer = new MutationObserver(recordAnimated);
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['class'],
+  });
   await act(async () =>
     page.getByRole('button', { name: 'Expand Astra recheck — Abuse/availability' }).click()
   );
+  observer.disconnect();
   expectSettled();
   // Only the rows the expand revealed play the compositor-only enter animation.
-  expect(row('Availability fixes').closest('.agor-session-row-enter')).not.toBeNull();
-  expect(row('Astra recheck — Abuse').closest('.agor-session-row-enter')).toBeNull();
+  expect([...animated].sort()).toEqual(['fixes', 'review']);
   await waitFor(() => expect(document.querySelector('.agor-session-row-enter')).toBeNull(), {
     timeout: 2000,
   });
