@@ -354,9 +354,7 @@ function activeBranchGroupEntryExists(
             and(
               effectiveConfigCondition(),
               eq(branchPermissionConfigs.sharing_mode, 'shared'),
-              isPostgresDatabase(db)
-                ? sql`${branchPermissionConfigs.config_id} = ANY(ARRAY(${matchingConfigs}))`
-                : sql`${branchPermissionConfigs.config_id} IN (${matchingConfigs})`
+              inConfigurationSet(db, branchPermissionConfigs.config_id, matchingConfigs)
             )
           )
       );
@@ -552,9 +550,7 @@ function visibleBranchInventoryCondition(db: Database, userId: UUID): SQL {
           .where(
             and(
               effectiveConfigCondition(),
-              isPostgresDatabase(db)
-                ? sql`${branchPermissionConfigs.config_id} = ANY(ARRAY(${eligible}))`
-                : sql`${branchPermissionConfigs.config_id} IN (${eligible})`
+              inConfigurationSet(db, branchPermissionConfigs.config_id, eligible)
             )
           )
       )
