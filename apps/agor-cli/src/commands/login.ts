@@ -25,6 +25,8 @@ export default class Login extends Command {
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --email user@example.com',
+    '<%= config.bin %> <%= command.id %> --url https://my-workspace.example.com --api-key',
+    'pbpaste | <%= config.bin %> <%= command.id %> --url https://my-workspace.example.com --api-key',
   ];
 
   static flags = {
@@ -38,6 +40,11 @@ export default class Login extends Command {
     }),
     url: Flags.string({ description: 'Daemon URL to authenticate with' }),
     local: Flags.boolean({ description: 'Use the daemon from the local effective config' }),
+    'api-key': Flags.boolean({
+      description:
+        'Authenticate with a personal API key (prompted, or read from stdin). Use this for deployments that sign in with Google/SSO.',
+      exclusive: ['email', 'password'],
+    }),
   };
 
   async run(): Promise<void> {
@@ -93,6 +100,12 @@ export default class Login extends Command {
     }
     if (flags.local && !hasLocalConfig) this.error(`No local config found at ${getConfigPath()}.`);
 
+    if (flags['api-key'] && !isLoopbackOrHttps(daemonUrl)) {
+      this.error(
+        `${chalk.red('✗ Refusing to send an API key over plain HTTP')}\n\nUse an https:// URL (or a localhost daemon).`
+      );
+    }
+
     // Check if daemon is running
     const probe = await probeAgorDaemon(daemonUrl);
     if (!probe.running) {
@@ -114,6 +127,11 @@ export default class Login extends Command {
           `The daemon at ${daemonUrl} is deployment ${probe.deploymentId}, but the local config is ${localDeploymentId}. Refusing to log in as local.`
         );
       }
+    }
+
+    if (flags['api-key']) {
+      await this.loginWithApiKey(daemonUrl, probe.deploymentId);
+      return;
     }
 
     // Get credentials (prompt if not provided)
@@ -226,4 +244,107 @@ export default class Login extends Command {
       this.error(chalk.red(`✗ Authentication failed: ${errorMessage}`));
     }
   }
+
+  /**
+   * Validate a personal API key against the selected deployment and store it.
+   *
+   * The key is never exchanged for browser tokens: it is sent as a bearer on
+   * every request, so deleting it in the UI revokes this CLI immediately. The
+   * server binds the key to the workspace URL it was created in; the tenant
+   * returned here is recorded for display only.
+   */
+  private async loginWithApiKey(daemonUrl: string, deploymentId: string): Promise<void> {
+    const apiKey = await readApiKey();
+    if (!apiKey.startsWith(API_KEY_PREFIX)) {
+      this.error(
+        `${chalk.red('✗ Invalid API key format')}\n\nPersonal API keys start with ${API_KEY_PREFIX}.`
+      );
+    }
+
+    const client = await createRestClient(daemonUrl, apiKey);
+    let me: ApiKeyIdentity;
+    try {
+      this.log(chalk.dim('Verifying API key...'));
+      me = (await client.service('api/v1/user/me').find()) as unknown as ApiKeyIdentity;
+    } catch (error) {
+      const status = (error as { code?: unknown }).code;
+      if (status === 401 || status === 403) {
+        this.error(
+          `${chalk.red('✗ API key rejected')}\n\nCheck that the key was created in the workspace at ${daemonUrl} and has not been deleted.`
+        );
+      }
+      this.error(
+        `${chalk.red('✗ Could not verify API key')}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    if (!me?.user_id || !me.email) {
+      this.error('Authentication failed - the daemon did not return the key owner');
+    }
+
+    const target = normalizeHttpBaseUrl(daemonUrl, 'Daemon URL');
+    await saveToken({
+      version: 3,
+      kind: 'api-key',
+      target: {
+        url: target,
+        origin: new URL(target).origin,
+        deploymentId,
+        ...(me.tenant_id ? { tenantId: me.tenant_id } : {}),
+      },
+      apiKey,
+      user: {
+        user_id: me.user_id,
+        email: me.email,
+        ...(me.name ? { name: me.name } : {}),
+        role: me.role || 'viewer',
+      },
+    });
+
+    this.log('');
+    this.log(chalk.green('✓ Logged in with API key'));
+    this.log('');
+    this.log(chalk.dim('User:'), chalk.cyan(me.email));
+    if (me.name) this.log(chalk.dim('Name:'), me.name);
+    this.log(chalk.dim('Role:'), me.role || 'viewer');
+    if (me.tenant_id) this.log(chalk.dim('Workspace:'), me.tenant_id);
+    this.log('');
+    this.log(chalk.dim('API key saved to ~/.agor/cli-token (mode 0600)'));
+    this.log(chalk.dim('Delete the key in Settings → API Keys to revoke this login.'));
+    this.log('');
+  }
+}
+
+const API_KEY_PREFIX = 'agor_sk_';
+
+interface ApiKeyIdentity {
+  user_id: string;
+  email: string;
+  name?: string;
+  role?: string;
+  tenant_id?: string;
+}
+
+function isLoopbackOrHttps(url: string): boolean {
+  const parsed = new URL(url);
+  if (parsed.protocol === 'https:') return true;
+  return ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+}
+
+/** Masked prompt on a TTY; otherwise the whole of stdin (never argv). */
+async function readApiKey(): Promise<string> {
+  if (process.stdin.isTTY) {
+    const { apiKey } = await inquirer.prompt<{ apiKey: string }>([
+      {
+        type: 'password',
+        name: 'apiKey',
+        message: 'API key',
+        mask: '*',
+        validate: (input: string) => (input.trim() ? true : 'API key is required'),
+      },
+    ]);
+    return apiKey.trim();
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8').trim();
 }

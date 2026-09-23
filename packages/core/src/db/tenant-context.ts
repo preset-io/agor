@@ -43,6 +43,7 @@ export type TenantDatabaseScope = TenantOwnedDatabaseScope | SystemDatabaseScope
 
 /** Narrow RLS capabilities available to explicit system database work. */
 export type SystemDatabaseCapability =
+  | 'api_key_host_tenant_discovery'
   | 'environment_health_discovery'
   | 'gateway_listener_discovery'
   | 'discord_message_delivery_discovery'

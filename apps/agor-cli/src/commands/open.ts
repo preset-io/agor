@@ -60,7 +60,7 @@ export default class Open extends Command {
       this.log('');
       this.exit(1);
     }
-    if (probe.deploymentId !== target.deploymentId) {
+    if (target.pinDeployment && probe.deploymentId !== target.deploymentId) {
       this.error(
         isLocalTarget
           ? `The local daemon identity at ${daemonUrl} does not match config.yaml.`

@@ -55,6 +55,29 @@ describe('deployment target resolution', () => {
     });
   });
 
+  it('uses a stored API-key login without pinning the Cell-derived deployment', async () => {
+    vi.mocked(loadToken).mockResolvedValue({
+      version: 3,
+      kind: 'api-key',
+      target: {
+        url: 'https://ws.cloud.example.com',
+        origin: 'https://ws.cloud.example.com',
+        deploymentId,
+        tenantId: 'ws-1',
+      },
+      apiKey: 'agor_sk_stored',
+      user: { user_id: 'u1', email: 'max@example.com', role: 'member' },
+    });
+
+    await expect(resolveConnectedDeploymentTarget()).resolves.toEqual({
+      url: 'https://ws.cloud.example.com',
+      deploymentId,
+      source: 'login',
+      apiKey: 'agor_sk_stored',
+      pinDeployment: false,
+    });
+  });
+
   it('gives a complete API-key environment target precedence and normalizes it', async () => {
     vi.stubEnv('AGOR_API_KEY', 'agor_sk_test');
     vi.stubEnv('AGOR_DEPLOYMENT_ID', deploymentId);
@@ -64,6 +87,7 @@ describe('deployment target resolution', () => {
       url: 'https://agor.example.com/base',
       deploymentId,
       source: 'environment',
+      pinDeployment: true,
     });
     expect(loadToken).not.toHaveBeenCalled();
   });
@@ -85,6 +109,7 @@ describe('deployment target resolution', () => {
       url: 'http://127.0.0.1:4040',
       deploymentId,
       source: 'local',
+      pinDeployment: true,
     });
     expect(resolveDaemonUrl).toHaveBeenCalledWith(config);
     expect(requireDeploymentId).toHaveBeenCalledWith(config);

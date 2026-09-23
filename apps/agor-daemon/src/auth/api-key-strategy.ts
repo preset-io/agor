@@ -38,6 +38,14 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       throw new NotAuthenticated('Invalid API key');
     }
 
+    // Tenant RLS already confines verifyKey to the request tenant; also refuse
+    // explicitly so key/tenant agreement never rests on a policy alone.
+    const requestTenantId = params?.tenant?.tenant_id as string | undefined;
+    const keyTenantId = (keyRow as { tenant_id?: unknown }).tenant_id;
+    if (requestTenantId && typeof keyTenantId === 'string' && keyTenantId !== requestTenantId) {
+      throw new NotAuthenticated('Invalid API key');
+    }
+
     // Update last_used_at (non-blocking)
     this.apiKeysRepo.updateLastUsed(keyRow.id).catch((err: unknown) => {
       console.warn('Failed to update API key last_used_at:', err);
@@ -50,6 +58,10 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     const user = await this.usersService.get(keyRow.user_id, params);
     if (!user) {
       throw new NotAuthenticated('User not found for API key');
+    }
+    const userTenantId = (user as { tenant_id?: unknown }).tenant_id;
+    if (requestTenantId && typeof userTenantId === 'string' && userTenantId !== requestTenantId) {
+      throw new NotAuthenticated('Invalid API key');
     }
 
     return {

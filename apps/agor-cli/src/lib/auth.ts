@@ -11,22 +11,43 @@ import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 const AGOR_DIR = getAgorHome();
 const TOKEN_FILE = join(AGOR_DIR, 'cli-token');
 
-export interface StoredAuth {
+export interface StoredAuthTarget {
+  url: string;
+  origin: string;
+  deploymentId: string;
+}
+
+export interface StoredAuthUser {
+  user_id: string;
+  email: string;
+  name?: string;
+  role: string;
+}
+
+/** Password login: a short-lived access JWT bound to one deployment. */
+export interface StoredJwtAuth {
   version: 2;
-  target: {
-    url: string;
-    origin: string;
-    deploymentId: string;
-  };
+  target: StoredAuthTarget;
   accessToken: string;
-  user: {
-    user_id: string;
-    email: string;
-    name?: string;
-    role: string;
-  };
+  user: StoredAuthUser;
   expiresAt: number;
 }
+
+/**
+ * Personal API key login. The key is sent on every request and is bound
+ * server-side to the workspace URL it was created in, so the pin here is the
+ * origin (+ the tenant reported at login), not the Cell-derived deployment ID,
+ * which changes when a hosted workspace moves between Cells.
+ */
+export interface StoredApiKeyAuth {
+  version: 3;
+  kind: 'api-key';
+  target: StoredAuthTarget & { tenantId?: string };
+  apiKey: string;
+  user: StoredAuthUser;
+}
+
+export type StoredAuth = StoredJwtAuth | StoredApiKeyAuth;
 
 /**
  * Save authentication token to disk
@@ -49,7 +70,27 @@ export async function saveToken(auth: StoredAuth): Promise<void> {
 export async function loadToken(): Promise<StoredAuth | null> {
   try {
     const data = await readFile(TOKEN_FILE, 'utf-8');
-    const auth = JSON.parse(data) as Partial<StoredAuth>;
+    const auth = JSON.parse(data) as {
+      version?: unknown;
+      kind?: unknown;
+      target?: Partial<StoredApiKeyAuth['target']>;
+      accessToken?: unknown;
+      apiKey?: unknown;
+      user?: unknown;
+      expiresAt?: unknown;
+    };
+
+    if (
+      auth.version === 3 &&
+      auth.kind === 'api-key' &&
+      auth.target?.url &&
+      auth.target?.origin &&
+      typeof auth.apiKey === 'string' &&
+      auth.apiKey.startsWith('agor_sk_') &&
+      auth.user
+    ) {
+      return auth as unknown as StoredApiKeyAuth;
+    }
 
     // Legacy tokens were not bound to an origin or deployment and must never
     // be sent speculatively to the currently configured URL.
@@ -65,13 +106,13 @@ export async function loadToken(): Promise<StoredAuth | null> {
     }
 
     // Check if token is expired
-    if (auth.expiresAt && Date.now() > auth.expiresAt) {
+    if (typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt) {
       // Token expired, remove it
       await clearToken();
       return null;
     }
 
-    return auth as StoredAuth;
+    return auth as unknown as StoredJwtAuth;
   } catch {
     // File doesn't exist or is invalid
     return null;

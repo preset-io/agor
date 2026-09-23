@@ -306,6 +306,12 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         >
           Copy to Clipboard
         </Button>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>
+          To use it with the Agor CLI, run this and paste the key when prompted:
+        </Typography.Paragraph>
+        <Typography.Text code copyable style={{ fontSize: 12 }}>
+          {`agor login --url ${window.location.origin} --api-key`}
+        </Typography.Text>
       </AdaptiveSettingsModal>
     </div>
   );

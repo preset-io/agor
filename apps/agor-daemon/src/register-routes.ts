@@ -4043,6 +4043,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // Credential self-check for non-browser clients (`agor login --api-key`).
+  // Returns only the caller's own identity and the tenant the request was
+  // authenticated in, so a raw key can be validated without exchanging it for
+  // refresh-capable browser tokens.
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/me',
+    {
+      async find(params: AuthenticatedParams) {
+        const user = params.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+        return {
+          user_id: user.user_id,
+          email: user.email,
+          name: (user as { name?: string }).name,
+          role: user.role,
+          tenant_id: params.tenant?.tenant_id,
+          auth_strategy: (params.authentication as { strategy?: string } | undefined)?.strategy,
+        };
+      },
+    },
+    { find: { role: ROLES.VIEWER, action: 'read own identity' } },
+    requireAuth
+  );
+
   // ============================================================================
   // Board comments custom routes (threading + reactions)
   // ============================================================================
