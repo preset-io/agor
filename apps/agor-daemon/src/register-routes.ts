@@ -2971,7 +2971,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           route: '/sessions/:sessionId/upload',
           session_id: uuidOrUndefined(req.params?.sessionId),
           // Verified identity once authentication succeeded; otherwise the
-          // the rejected token's claimed (unverified) subject and expiry.
+          // rejected token's claimed (unverified) subject and expiry.
           user_id: (req as { feathers?: AuthenticatedParams }).feathers?.user?.user_id,
           auth_reason: res.locals.uploadAuthFailure?.reason,
           token_sub_unverified: res.locals.uploadAuthFailure?.claimedSubject,
