@@ -6,6 +6,7 @@ import type {
   TenantInspectionResult,
   TenantVerificationResult,
 } from '@agor/core/tenant-portability';
+import { TenantNativeStateHandoffRequiredError } from '@agor/core/tenant-portability';
 import { describe, expect, it } from 'vitest';
 import {
   formatPortabilityError,
@@ -17,11 +18,7 @@ import {
 describe('formatPortabilityError', () => {
   it('publishes a value-free typed handoff marker through a wrapped error', () => {
     const formatted = formatPortabilityError(
-      new Error('wrapper', {
-        cause: Object.assign(new Error('tenant path and identity must stay private'), {
-          name: 'TenantNativeStateHandoffRequiredError',
-        }),
-      })
+      new Error('wrapper', { cause: new TenantNativeStateHandoffRequiredError() })
     );
     expect(JSON.parse(formatted)).toEqual({
       marker: TENANT_PORTABILITY_ERROR_MARKER,

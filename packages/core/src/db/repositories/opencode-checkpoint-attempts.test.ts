@@ -53,7 +53,6 @@ async function newTask(db: Database) {
     full_prompt: 'continue',
     status: TaskStatus.DISPATCHING,
     message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
-    tool_use_count: 0,
     git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
   });
   const connected = await tasks.connectExecutor(created.task_id);
@@ -267,7 +266,6 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
             end_index: 0,
             start_timestamp: new Date().toISOString(),
           },
-          tool_use_count: 0,
           git_state: { ref_at_start: 'main', sha_at_start: 'cleanup-fairness' },
         });
         const connected = await taskRepo.connectExecutor(created.task_id);
@@ -412,7 +410,6 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
             end_index: 0,
             start_timestamp: new Date().toISOString(),
           },
-          tool_use_count: 0,
           git_state: { ref_at_start: 'main', sha_at_start: 'delete-retry' },
         });
         const connected = await taskRepo.connectExecutor(created.task_id);
@@ -614,7 +611,6 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
             full_prompt: 'hourly turn',
             status: TaskStatus.DISPATCHING,
             message_range: { start_index: 0, end_index: 0, start_timestamp: now.toISOString() },
-            tool_use_count: 0,
             git_state: { ref_at_start: 'main', sha_at_start: 'hourly-cleanup' },
           });
           const connected = await taskRepo.connectExecutor(created.task_id);
@@ -698,7 +694,6 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
             end_index: 0,
             start_timestamp: new Date().toISOString(),
           },
-          tool_use_count: 0,
           git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
         });
         const connected = await taskRepo.connectExecutor(created.task_id);
