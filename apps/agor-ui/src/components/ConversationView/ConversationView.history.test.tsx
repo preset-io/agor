@@ -10,11 +10,12 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationView } from './ConversationView';
 
+const scrollToBottom = vi.hoisted(() => vi.fn());
 vi.mock('use-stick-to-bottom', () => ({
   useStickToBottom: () => ({
     scrollRef: () => {},
     contentRef: () => {},
-    scrollToBottom: () => {},
+    scrollToBottom,
     stopScroll: () => {},
     state: {},
   }),
@@ -90,6 +91,7 @@ function tail(index: number) {
   return screen.queryByText(`Message ${index} line 19`);
 }
 beforeEach(() => {
+  scrollToBottom.mockClear();
   state = {
     sessionId,
     session: null,
@@ -112,6 +114,7 @@ afterEach(cleanup);
 describe('conversation history text defaults', () => {
   it('collapses nine older turns but protects all three messages of the latest turn on first paint', () => {
     render(<ConversationView client={null} sessionId={sessionId} />);
+    expect(scrollToBottom).toHaveBeenCalledWith({ animation: 'instant' });
     expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(27);
     for (const index of [27, 28, 29]) expect(tail(index)).toBeInTheDocument();
     expect(tail(0)).not.toBeInTheDocument();

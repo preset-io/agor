@@ -229,7 +229,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       // Clearing the escape on an explicit go-to-bottom intent lets the pin
       // survive until the round-tripped/streamed content actually arrives.
       state.escapedFromLock = false;
-      scrollToBottom();
+      // initial/resize options do not apply to this explicit call: without
+      // animation it springs through history. Late code-block shrinkage can
+      // then look like upward user scrolling and cancel the initial bottom lock.
+      scrollToBottom({ animation: 'instant' });
     }, [state, scrollToBottom]);
 
     // Scroll to top. While content is still streaming/growing, the library's
