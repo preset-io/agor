@@ -5,6 +5,7 @@ export type RouteSurfaceId =
   | 'workspace'
   | 'knowledge'
   | 'mcp-recovery'
+  | 'mcp-connect'
   | 'artifact-fullscreen'
   | 'demo';
 
@@ -84,6 +85,18 @@ export const MCP_RECOVERY_SURFACE = defineSurface({
   branding: surfaceTitle('MCP recovery'),
 });
 
+export const MCP_CONNECT_ROUTE_PATHS = ['/connect/mcp'] as const;
+
+export const MCP_CONNECT_SURFACE = defineSurface({
+  id: 'mcp-connect',
+  label: 'MCP connect',
+  routePaths: MCP_CONNECT_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+  branding: surfaceTitle('Connect MCP'),
+});
+
 export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   id: 'artifact-fullscreen',
   label: 'Artifact fullscreen',
@@ -135,6 +148,7 @@ export const WORKSPACE_SURFACE = defineSurface({
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
   MCP_RECOVERY_SURFACE,
+  MCP_CONNECT_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

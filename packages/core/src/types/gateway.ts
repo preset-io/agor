@@ -58,6 +58,32 @@ export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
   'discord',
 ] as const satisfies readonly ChannelType[];
 
+/**
+ * Per-platform channel-config flag that makes an inbound prompt carry its REAL
+ * sender instead of the channel's "Post messages as" account.
+ *
+ * This is an ALLOWLIST, and the polarity matters. `GatewayService.emitMessage`
+ * falls back to `channel.agor_user_id` for every platform whose flag is absent
+ * or off, so a platform that is missing from this map has no proven per-user
+ * attribution — not "no shared-account problem". Anything that mints a
+ * credential on behalf of "the user who asked" must therefore treat an absent
+ * entry as unaligned.
+ *
+ * `GatewayService.emitMessage` reads its flags through this map and
+ * `resolveGatewayPromptIdentity` derives its allowlist from the same keys, so
+ * adding a platform's alignment support is one edit in one place. A new
+ * `ChannelType` is refused by both until it is listed here.
+ */
+export const GATEWAY_USER_ALIGNMENT_CONFIG_KEYS = {
+  slack: 'align_slack_users',
+  github: 'align_github_users',
+  discord: 'align_discord_users',
+  shortcut: 'align_shortcut_users',
+} as const satisfies Partial<Record<ChannelType, string>>;
+
+/** A `ChannelType` that has a user-alignment switch. */
+export type AlignableChannelType = keyof typeof GATEWAY_USER_ALIGNMENT_CONFIG_KEYS;
+
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
 
@@ -181,7 +207,8 @@ export interface DiscordGatewayConfig {
   align_discord_users?: boolean;
   user_map?: Record<string, string>;
   catch_up?: DiscordCatchUpConfig;
-  files?: false;
+  /** Opt-in bounded PNG/JPEG ingestion for live Discord messages. */
+  files?: boolean;
   agent_tools?: never[];
   outbound_enabled?: boolean;
   default_outbound_target?: string | null;
@@ -416,8 +443,8 @@ export function validateDiscordConfig(
   }
 
   validateCatchUpConfig(raw.catch_up, errors);
-  if (raw.files !== undefined && raw.files !== false) {
-    errors.push('files must be false');
+  if (raw.files !== undefined && typeof raw.files !== 'boolean') {
+    errors.push('files must be a boolean');
   }
   if (
     raw.agent_tools !== undefined &&

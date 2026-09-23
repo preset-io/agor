@@ -102,7 +102,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
-      tool_use_count: 0,
     });
     const secondTask = await tasks.create({
       task_id: generateId(),
@@ -116,7 +115,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
-      tool_use_count: 0,
     });
     const taskPage = await tasks.findPage({
       sessionId: session.session_id,
@@ -307,7 +305,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
-      tool_use_count: 0,
       metadata: {
         mcp_slack_recovery_notice: {
           notice_id: 'notice-postgres',

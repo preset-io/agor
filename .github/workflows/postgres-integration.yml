@@ -1,7 +1,7 @@
 # Focused PostgreSQL/RLS integration lane.
 #
-# Expected cost on an ubuntu-latest hosted runner: about 2-4 minutes per
-# path-matched change (roughly 1 minute of test runtime). The pinned pgvector
+# The suite runs in disposable databases with bounded worker concurrency.
+# Allow headroom for suite growth and hosted-runner variance. The pinned pgvector
 # image is ~154 MiB compressed / ~433 MiB unpacked on amd64; layer caching makes
 # warm starts cheaper. This intentionally stays separate from the all-purpose
 # CI workflow so UI/docs-only changes never pay the database startup cost.
@@ -66,7 +66,7 @@ jobs:
   postgres-integration:
     name: PostgreSQL integration (non-superuser RLS)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -134,5 +134,7 @@ jobs:
           echo 'Verified test role: agor_app (NOSUPERUSER, NOBYPASSRLS).'
 
       - name: Run PostgreSQL-gated suites
-        timeout-minutes: 6
+        # The 83-file suite can reach six minutes even with all tests passing.
+        # Keep per-file runner timeouts; allow the full lane room to finish.
+        timeout-minutes: 10
         run: pnpm test:postgres:integration

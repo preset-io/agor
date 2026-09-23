@@ -67,7 +67,10 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
   const restrictionMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0112_tenant_restrictions.sql'
+    'packages/core/drizzle/postgres/0115_tenant_restrictions.sql'
+  );
+  const transferMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -88,6 +91,7 @@ function migrationTenantTables(): string[] {
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
@@ -99,7 +103,7 @@ function migrationTenantTables(): string[] {
 function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0112_tenant_restrictions.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0115_tenant_restrictions.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
@@ -113,6 +117,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

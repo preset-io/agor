@@ -110,6 +110,8 @@ export interface DiscordSetupDecisions {
   agorUserId?: string | null;
   alignUsers?: boolean;
   userMap?: Record<string, string>;
+  /** Opt in to bounded PNG/JPEG ingestion for live Discord messages. */
+  files?: boolean;
   outboundEnabled?: boolean;
   defaultOutboundTarget?: string | null;
   catchUp?: Record<string, unknown>;
@@ -173,6 +175,7 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     thread_auto_archive_minutes: decisions.threadAutoArchiveMinutes ?? 1440,
     align_discord_users: decisions.alignUsers ?? false,
     ...(decisions.userMap ? { user_map: decisions.userMap } : {}),
+    files: decisions.files ?? false,
     outbound_enabled: decisions.outboundEnabled ?? false,
     default_outbound_target: decisions.defaultOutboundTarget ?? null,
     catch_up: { ...DEFAULT_DISCORD_CATCH_UP, ...(decisions.catchUp ?? {}) },

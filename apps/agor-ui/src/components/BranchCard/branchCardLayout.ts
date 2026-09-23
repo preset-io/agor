@@ -6,7 +6,8 @@ export const BRANCH_SESSION_VIEWPORT_HEIGHT = 400;
 
 const EMPTY_SESSIONS_SHELL_HEIGHT = 72;
 const SECTION_HEADER_HEIGHT = 46;
-const SESSION_ROW_HEIGHT = 42;
+// Flush single-line rows at AntD's default controlHeight (see sessionRowStyle).
+const SESSION_ROW_HEIGHT = 32;
 const SECTION_GAP_HEIGHT = 8;
 
 export function estimateBranchSessionSectionsHeight(

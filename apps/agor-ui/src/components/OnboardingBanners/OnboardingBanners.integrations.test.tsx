@@ -1,5 +1,5 @@
 import type { User } from '@agor-live/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
@@ -31,31 +31,43 @@ beforeEach(() => {
   agorStore.getState().setAgenticToolSettings([]);
 });
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-it('snoozes for 24 hours across mobile-style unmount/remount and still honors integration eligibility', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  vi.setSystemTime(new Date('2026-09-20T12:00:00Z'));
-  const first = render(<OnboardingBanners {...props} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
-  expect(JSON.parse(localStorage.getItem(key)!)).toBe(Date.now() + DAY);
-  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  first.unmount();
-  const second = render(<OnboardingBanners {...props} />);
-  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  await act(() => vi.advanceTimersByTimeAsync(DAY - 1));
-  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  await act(() => vi.advanceTimersByTimeAsync(1));
-  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
-  fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
-  second.rerender(<OnboardingBanners {...props} gatewayChannelCount={1} />);
-  await act(() => vi.advanceTimersByTimeAsync(DAY));
-  expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
-  second.rerender(<OnboardingBanners {...props} />);
-  expect(await screen.findByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
-});
+it.each([0, DAY / 2])(
+  'snoozes for 24 hours across mobile-style unmount/remount after %i ms and still honors integration eligibility',
+  async (elapsedBeforeRemount) => {
+    // Auto-advancing timers add wall time to manual advances and can cross the
+    // one-millisecond expiry boundary on a busy runner. Settle probes with act,
+    // not findBy's timer-based polling, so only explicit advances move the clock.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T12:00:00Z'));
+    const first = await act(async () => render(<OnboardingBanners {...props} />));
+    const snoozedUntil = Date.now() + DAY;
+    fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+    expect(JSON.parse(localStorage.getItem(key)!)).toBe(snoozedUntil);
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+    first.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(elapsedBeforeRemount));
+    const second = await act(async () => render(<OnboardingBanners {...props} />));
+    expect(JSON.parse(localStorage.getItem(key)!)).toBe(snoozedUntil);
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(DAY - elapsedBeforeRemount - 1));
+    expect(Date.now()).toBe(snoozedUntil - 1);
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(Date.now()).toBe(snoozedUntil);
+    expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Maybe later' }));
+    second.rerender(<OnboardingBanners {...props} gatewayChannelCount={1} />);
+    await act(() => vi.advanceTimersByTimeAsync(DAY));
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+    second.rerender(<OnboardingBanners {...props} />);
+    expect(screen.getByRole('button', { name: 'Maybe later' })).toBeInTheDocument();
+  }
+);
 
 it('does not transfer a user snooze across logout or a different user/workspace identity', async () => {
   const view = render(<OnboardingBanners {...props} />);

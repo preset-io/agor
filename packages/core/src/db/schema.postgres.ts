@@ -68,7 +68,8 @@ export const sessions = pgTable(
     // Primary identity
     session_id: varchar('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
@@ -374,7 +375,7 @@ export const tasks = pgTable(
 
         /** Filled by the executor after the turn. */
         model?: string;
-        tool_use_count: number;
+        recorded_tool_count?: number | null;
 
         duration_ms?: number;
         agent_session_id?: string;
@@ -562,6 +563,14 @@ export const messages = pgTable(
     // Parent tool use ID (for nested tool calls - e.g., Task tool spawning Read/Grep)
     parent_tool_use_id: text('parent_tool_use_id'),
 
+    // Indexed due-work projection for the bounded Slack MCP connect-card
+    // repair sweep. Mirrors `metadata.widget.slack_connect.next_repair_at` and
+    // is written by the same locked mutation, so it cannot drift from the JSON
+    // it projects. Null for every message that is not a Slack-delivered
+    // `oauth` widget — which is all but a handful — so the partial index stays
+    // tiny on a table this large.
+    mcp_slack_connect_due_at: t.timestamp('mcp_slack_connect_due_at'),
+
     // NOTE: queueing moved off `messages` and onto `tasks.status='queued'` as
     // of migration sqlite/0040 (postgres/0030). The legacy `status` and
     // `queue_position` columns are gone — see `tasks.queue_position` instead.
@@ -593,6 +602,9 @@ export const messages = pgTable(
       table.session_id,
       table.timestamp
     ),
+    mcpSlackConnectDueIdx: index('messages_mcp_slack_connect_due_idx')
+      .on(table.tenant_id, table.mcp_slack_connect_due_at, table.message_id)
+      .where(sql`${table.mcp_slack_connect_due_at} IS NOT NULL`),
   })
 );
 
@@ -890,6 +902,7 @@ export const branches = pgTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_source?: import('../types/branch').Branch['base_source'];
         base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
@@ -2669,7 +2682,7 @@ export const uploads = pgTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -3404,6 +3417,9 @@ export const kbGraphNodes = pgTable(
   },
   (table) => ({
     tenantIdx: index('kb_graph_nodes_tenant_id_idx').on(table.tenant_id),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Deployed identity includes archived rows; repositories must
+    // restore them. Do not infer active-only uniqueness from this declaration.
     uriIdx: uniqueIndex('kb_graph_nodes_tenant_uri_unique')
       .on(table.tenant_id, table.uri)
       .where(sql`${table.archived} = false`),
@@ -3473,6 +3489,9 @@ export const kbGraphEdges = pgTable(
       table.target_node_id,
       table.edge_type
     ),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Archived edge identities remain unique and must be restored.
+    // Keep the deployed constraint intact when reconciling migration metadata.
     sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_tenant_source_target_type_unique')
       .on(table.tenant_id, table.source_node_id, table.target_node_id, table.edge_type)
       .where(sql`${table.archived} = false`),
@@ -3625,3 +3644,33 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Durable create receipts survive target archive/deletion; never grant access by themselves. */
+export const kbImportReceipts = pgTable(
+  'kb_import_receipts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    receipt_id: text('receipt_id').primaryKey(),
+    owner_user_id: varchar('owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    bundle: text('bundle').notNull(),
+    slug: text('slug').notNull(),
+    entry_key: text('entry_key').notNull(),
+    target_id: text('target_id').notNull(),
+    digest: text('digest').notNull(),
+    request_bytes: integer('request_bytes').notNull().default(0),
+    reconciled_count: integer('reconciled_count').notNull().default(-1),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    tenantIdx: index('kb_import_receipts_tenant_idx').on(table.tenant_id),
+    identityIdx: uniqueIndex('kb_import_receipts_identity_unique').on(
+      table.tenant_id,
+      table.owner_user_id,
+      table.bundle,
+      table.slug,
+      table.entry_key
+    ),
+  })
+);

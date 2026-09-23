@@ -15,6 +15,8 @@ describe('ClaudeCodeNormalizer context-window precedence', () => {
     ['claude-opus-4-8[1m]', 1_000_000],
     ['claude-opus-5', 200_000],
     ['claude-opus-5[1m]', 1_000_000],
+    ['claude-opus-5-5', 200_000],
+    ['claude-opus-5-5[1m]', 1_000_000],
   ] as const)('uses the selected %s registry capacity for legacy result shapes', (model, limit) => {
     const normalized = new ClaudeCodeNormalizer().normalize(
       { type: 'result', usage: topLevelUsage } as SDKResultMessage,

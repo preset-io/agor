@@ -51,32 +51,24 @@ import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { EffortSelector } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
-import { TimerPill } from '../Pill';
+import { ContextWindowPill, TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
+import { SessionUsagePopover } from './SessionUsagePopover';
 
 export interface SessionFooterProps {
   // Session data for chips
   session: Session & { agentic_tool: AgenticToolName };
   currentUserId?: string;
   footerTimerTask: Task | null;
-  tokenBreakdown: {
-    total: number;
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheCreation: number;
-    cost: number;
-  };
   latestContextWindow: { used: number; limit: number; taskMetadata: unknown } | null;
   footerGradient?: string;
   // MCP data for Tools chip
@@ -131,7 +123,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   session,
   currentUserId,
   footerTimerTask,
-  tokenBreakdown,
   latestContextWindow,
   footerGradient,
   sessionMcpServerIds,
@@ -223,33 +214,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           : effectiveModel
       )
     : null;
-  const tokenDisplay =
-    tokenBreakdown.total >= 1000
-      ? `${Math.round(tokenBreakdown.total / 1000)}k`
-      : tokenBreakdown.total > 0
-        ? String(tokenBreakdown.total)
-        : null;
-
-  // Context window usage percentage (for warning styling).
-  // Prefers the executor-supplied snapshot.percentage (0-100) when available
-  // so Codex baseline-adjusted display matches the agent's own indicator.
-  const contextPct = React.useMemo(() => {
-    if (!latestContextWindow) return 0;
-    const meta = latestContextWindow.taskMetadata as {
-      normalized_sdk_response?: {
-        contextUsageSnapshot?: { percentage: number; totalTokens: number; maxTokens: number };
-      };
-    } | null;
-    const snapshot = meta?.normalized_sdk_response?.contextUsageSnapshot;
-    return (
-      resolveContextWindowPercentage(
-        latestContextWindow.used,
-        latestContextWindow.limit,
-        snapshot
-      ) / 100
-    );
-  }, [latestContextWindow]);
-  const contextWarning = contextPct > 0.8;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -1136,7 +1100,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       )}
 
-      {tokenDisplay !== null && (
+      {
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <NumberOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -1151,7 +1115,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               minWidth: 0,
             }}
           >
-            Tokens
+            Usage
           </Typography.Text>
           <Tooltip
             title={pinnedChips.includes('tokens') ? 'Hide from info bar' : 'Show in info bar'}
@@ -1159,7 +1123,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           >
             <button
               type="button"
-              aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
+              aria-label={pinnedChips.includes('tokens') ? 'Hide usage' : 'Show usage'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1185,7 +1149,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             </button>
           </Tooltip>
         </div>
-      )}
+      }
 
       {latestContextWindow && latestContextWindow.limit > 0 && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
@@ -1404,7 +1368,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
           (modelName && pinnedChips.includes('model')) ||
-          (tokenDisplay !== null && pinnedChips.includes('tokens')) ||
+          pinnedChips.includes('tokens') ||
           (latestContextWindow &&
             latestContextWindow.limit > 0 &&
             pinnedChips.includes('context')) ||
@@ -1533,67 +1497,28 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 )
               ))}
 
-            {/* Tokens chip */}
-            {tokenDisplay !== null && pinnedChips.includes('tokens') && (
-              <Tooltip
-                title={
-                  tokenBreakdown.total > 0 ? (
-                    <div style={{ fontSize: 12 }}>
-                      <div>Total: {tokenBreakdown.total.toLocaleString()}</div>
-                      {tokenBreakdown.input > 0 && (
-                        <div>Input: {tokenBreakdown.input.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.output > 0 && (
-                        <div>Output: {tokenBreakdown.output.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.cacheRead > 0 && (
-                        <div>Cache read: {tokenBreakdown.cacheRead.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.cost > 0 && (
-                        <div>Est. cost: ${tokenBreakdown.cost.toFixed(4)}</div>
-                      )}
-                    </div>
-                  ) : undefined
-                }
-                placement="top"
-              >
-                <Tag
-                  color="default"
-                  style={{
-                    cursor: 'default',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="tokens-chip"
-                >
-                  {tokenDisplay} tokens
-                </Tag>
-              </Tooltip>
+            {pinnedChips.includes('tokens') && (
+              <SessionUsagePopover
+                key={`${session.session_id}:${currentUserId}`}
+                client={client ?? null}
+                sessionId={session.session_id}
+                userId={currentUserId}
+              />
             )}
 
             {/* Context % chip */}
             {latestContextWindow &&
               latestContextWindow.limit > 0 &&
               pinnedChips.includes('context') && (
-                <Tag
-                  icon={
-                    <PercentageOutlined
-                      style={{ color: contextWarning ? token.colorWarning : undefined }}
-                    />
+                <ContextWindowPill
+                  used={latestContextWindow.used}
+                  limit={latestContextWindow.limit}
+                  taskMetadata={
+                    latestContextWindow.taskMetadata as React.ComponentProps<
+                      typeof ContextWindowPill
+                    >['taskMetadata']
                   }
-                  color={contextWarning ? 'warning' : 'default'}
-                  style={{
-                    cursor: 'default',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="context-chip"
-                  data-warning={contextWarning ? 'true' : undefined}
-                >
-                  {Math.round(contextPct * 100)}%
-                </Tag>
+                />
               )}
 
             {/* Session IDs chip */}

@@ -14,6 +14,8 @@ const uploadMockState = vi.hoisted(() => ({
   uploadFilesToSession: vi.fn(),
 }));
 
+// Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
+
 vi.mock('../FileUpload/upload', () => ({
   uploadFilesToSession: uploadMockState.uploadFilesToSession,
 }));

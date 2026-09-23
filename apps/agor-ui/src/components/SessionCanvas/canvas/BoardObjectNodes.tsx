@@ -689,9 +689,14 @@ const CommentNodeComponent = ({ data }: { data: CommentNodeData }) => {
   const { comment, replyCount, user, parentLabel, parentColor, onClick, onHover, onLeave } = data;
   const [isHovered, setIsHovered] = useState(false);
 
-  // Show first line of content as preview
-  const preview = comment.content.split('\n')[0].slice(0, 80);
-  const hasMore = comment.content.length > 80 || comment.content.includes('\n');
+  // Show first line of content as preview. Guard against a comment whose
+  // content has not populated yet: on reconnect/rehydration a comment node can
+  // render from a partial payload before `content` arrives, and a bare
+  // `.split()`/`.includes()` on `undefined` would throw and take down the whole
+  // SessionPanel via the error boundary.
+  const content = comment.content ?? '';
+  const preview = content.split('\n')[0].slice(0, 80);
+  const hasMore = content.length > 80 || content.includes('\n');
 
   const pinColor = comment.resolved ? token.colorSuccess : token.colorPrimary;
   const totalCount = 1 + replyCount; // Thread root + replies

@@ -139,7 +139,6 @@ function taskInput(seed: TenantSeed, status: TaskStatus, overrides: Record<strin
       start_timestamp: new Date().toISOString(),
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'ha-probe' },
-    tool_use_count: 0,
     ...overrides,
   };
 }

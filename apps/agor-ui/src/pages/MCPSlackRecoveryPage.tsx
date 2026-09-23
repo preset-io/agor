@@ -1,20 +1,11 @@
-import type { AgorClient, MCPOAuthStartFailure } from '@agor-live/client';
-import { Alert, Button, Card, Flex, Spin, Typography, theme } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AgorClient } from '@agor-live/client';
+import { Alert, Button, Spin } from 'antd';
 import {
-  type MarketplaceOAuthPopup,
-  openMarketplaceOAuthPopup,
-} from '@/components/Marketplace/marketplaceOAuthPopup';
-import { waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
-
-type PageState =
-  | 'checking'
-  | 'ready'
-  | 'starting'
-  | 'pending'
-  | 'recovered'
-  | 'failed'
-  | 'unavailable';
+  SlackOAuthActionShell,
+  type SlackOAuthActionState,
+  slackOAuthActionIsStartable,
+  useSlackOAuthAction,
+} from './slackOAuthActionPage';
 
 interface RecoveryPreflight {
   state: 'reconnect_required' | 'sign_in_pending' | 'failed';
@@ -27,106 +18,19 @@ interface Props {
   client: AgorClient | null;
 }
 
-function fragmentToken(): string | null {
-  const value = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token');
-  return value?.trim() || null;
+function openingState(preflight: RecoveryPreflight): SlackOAuthActionState {
+  if (preflight.state === 'sign_in_pending') return 'pending';
+  if (preflight.state === 'failed') return 'failed';
+  return 'ready';
 }
 
 export function MCPSlackRecoveryPage({ client }: Props) {
-  const token = useMemo(fragmentToken, []);
-  const [state, setState] = useState<PageState>('checking');
-  const [preflight, setPreflight] = useState<RecoveryPreflight | null>(null);
-  const operationOwner = useRef(0);
-  const activePopup = useRef<MarketplaceOAuthPopup | null>(null);
-  const pollAbort = useRef<AbortController | null>(null);
-  const titleRef = useRef<HTMLHeadingElement | null>(null);
-  const { token: designToken } = theme.useToken();
-
-  useEffect(() => {
-    titleRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (token && window.location.hash) {
-      window.history.replaceState(
-        window.history.state,
-        '',
-        `${window.location.pathname}${window.location.search}`
-      );
-    }
-  }, [token]);
-  useEffect(() => {
-    const owner = ++operationOwner.current;
-    setPreflight(null);
-    setState('checking');
-    if (!client || !token) {
-      setState('unavailable');
-      return;
-    }
-    let cancelled = false;
-    client
-      .service('mcp-slack-recovery')
-      .create({ token })
-      .then((result) => {
-        if (cancelled) return;
-        setPreflight(result as RecoveryPreflight);
-        setState(
-          (result as RecoveryPreflight).state === 'sign_in_pending'
-            ? 'pending'
-            : (result as RecoveryPreflight).state === 'failed'
-              ? 'failed'
-              : 'ready'
-        );
-      })
-      .catch(() => !cancelled && setState('unavailable'));
-    return () => {
-      cancelled = true;
-      if (operationOwner.current === owner) operationOwner.current++;
-      pollAbort.current?.abort();
-      activePopup.current?.close();
-      activePopup.current = null;
-    };
-  }, [client, token]);
-
-  const start = async () => {
-    if (!client || !token || state !== 'ready') return;
-    // Reserve a popup synchronously while the click still has user activation.
-    const popup = openMarketplaceOAuthPopup();
-    if (!popup) {
-      setState('failed');
-      return;
-    }
-    const owner = operationOwner.current;
-    const isCurrent = () => operationOwner.current === owner;
-    activePopup.current = popup;
-    setState('starting');
-    try {
-      const result = (await client.service('mcp-servers/oauth-start').create({
-        slack_recovery_token: token,
-      })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
-      if (!isCurrent()) return;
-      if (!result.success || !result.authorizationUrl || !result.attempt_id) {
-        popup.close();
-        setState('failed');
-        return;
-      }
-      if (!popup.navigate(result.authorizationUrl, isCurrent)) {
-        setState('failed');
-        return;
-      }
-      setState('pending');
-      pollAbort.current?.abort();
-      pollAbort.current = new AbortController();
-      const attempt = await waitForMCPOAuthAttempt(client, result.attempt_id, {
-        signal: pollAbort.current.signal,
-      });
-      if (!isCurrent()) return;
-      setState(attempt.status === 'succeeded' ? 'recovered' : 'failed');
-    } catch {
-      popup.close();
-      if (isCurrent()) setState('failed');
-    }
-  };
+  const { state, preflight, start } = useSlackOAuthAction<RecoveryPreflight>({
+    client,
+    preflightService: 'mcp-slack-recovery',
+    startTokenField: 'slack_recovery_token',
+    initialState: openingState,
+  });
 
   const ambiguous = preflight?.provider_dispatch === 'ambiguous';
   const status = (() => {
@@ -147,6 +51,16 @@ export function MCPSlackRecoveryPage({ client }: Props) {
         />
       );
     }
+    if (state === 'blocked') {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          title="Your browser blocked the sign-in window"
+          description="Allow pop-ups for Agor and tap Continue to sign-in again. If you opened this link inside Slack, opening it in your usual browser also works."
+        />
+      );
+    }
     if (state === 'failed') {
       return (
         <Alert
@@ -157,7 +71,7 @@ export function MCPSlackRecoveryPage({ client }: Props) {
         />
       );
     }
-    if (state === 'recovered') {
+    if (state === 'succeeded') {
       return (
         <Alert
           type="success"
@@ -186,54 +100,20 @@ export function MCPSlackRecoveryPage({ client }: Props) {
   })();
 
   return (
-    <main
-      style={{
-        minHeight: '100dvh',
-        width: '100%',
-        padding: `max(${designToken.padding}px, env(safe-area-inset-top)) max(${designToken.padding}px, env(safe-area-inset-right)) max(${designToken.padding}px, env(safe-area-inset-bottom)) max(${designToken.padding}px, env(safe-area-inset-left))`,
-        boxSizing: 'border-box',
-        overflowX: 'hidden',
-        display: 'grid',
-        placeItems: 'center',
-        background: designToken.colorBgLayout,
-      }}
-      aria-labelledby="mcp-recovery-title"
-    >
-      <Card style={{ width: '100%', maxWidth: 560, overflowWrap: 'anywhere' }}>
-        <Flex vertical gap={20} aria-live="polite">
-          <div>
-            <Typography.Title
-              ref={titleRef}
-              id="mcp-recovery-title"
-              level={2}
-              tabIndex={-1}
-              style={{ marginBottom: designToken.marginXS, outline: 'none' }}
-            >
-              Reconnect MCP
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              Sign in with your current Agor account, then return to the originating Slack thread.
-            </Typography.Text>
-          </div>
-          {status}
-          <Flex gap={12} wrap>
-            {state === 'ready' && (
-              <Button type="primary" size="large" onClick={start}>
-                Continue to sign-in
-              </Button>
-            )}
-            {preflight?.return_to_slack_url && (
-              <Button size="large" href={preflight.return_to_slack_url}>
-                Return to Slack
-              </Button>
-            )}
-          </Flex>
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            Slack app tokens and MCP authorization are separate. Agor will never ask you to paste a
-            broad Slack token here.
-          </Typography.Paragraph>
-        </Flex>
-      </Card>
-    </main>
+    <SlackOAuthActionShell
+      titleId="mcp-recovery-title"
+      title="Reconnect MCP"
+      subtitle="Sign in with your current Agor account, then return to the originating Slack thread."
+      status={status}
+      primaryAction={
+        slackOAuthActionIsStartable(state) ? (
+          <Button type="primary" size="large" onClick={start}>
+            Continue to sign-in
+          </Button>
+        ) : undefined
+      }
+      returnToSlackUrl={preflight?.return_to_slack_url}
+      footnote="Slack app tokens and MCP authorization are separate. Agor will never ask you to paste a broad Slack token here."
+    />
   );
 }

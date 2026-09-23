@@ -432,7 +432,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
     const codexSession = {
       ...makeSession('s-codex', 'completed', '2026-06-20T00:00:00.000Z', 'Codex session'),
       agentic_tool: 'codex',
-      model_config: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+      model_config: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
       permission_config: { mode: 'allow-all' },
     } as unknown as Session;
     const onExecute = vi.fn().mockResolvedValue(undefined);
@@ -461,7 +461,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
       expect(onExecute).toHaveBeenCalledWith(
         expect.objectContaining({
           agent: 'codex',
-          modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+          modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
           permissionMode: 'allow-all',
         })
       )
@@ -486,7 +486,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
           {
             default_agentic_config: {
               codex: {
-                modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+                modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
               },
             },
           } as never
@@ -506,7 +506,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
       expect(onExecute).toHaveBeenCalledWith(
         expect.objectContaining({
           agent: 'codex',
-          modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+          modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'xhigh' },
         })
       )
     );
@@ -518,7 +518,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
       const session = {
         ...makeSession('s-codex', 'completed', '2026-06-20T00:00:00.000Z', 'Codex session'),
         agentic_tool: 'codex',
-        model_config: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        model_config: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
         permission_config: { mode: 'allow-all' },
       } as unknown as Session;
       const onExecute = vi.fn().mockResolvedValue(undefined);
@@ -551,7 +551,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
           expect.objectContaining({
             sessionId: 's-codex',
             action,
-            modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+            modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'xhigh' },
           })
         )
       );

@@ -356,11 +356,21 @@ export async function isMcpGrantOwnerEntitled(
  * The role floor for the endpoints above.
  *
  * Shares {@link isAtLeastMemberRole} with the write path rather than reaching
- * for the generic `requireMinimumRole(ROLES.MEMBER)` hook: that one normalizes
- * through `normalizeRole`, which answers MEMBER for an absent or empty role, so
- * it admits precisely the caller carrying no role at all. The MCP floor is
- * decided on the raw role for that reason, and having two floors that disagree
- * on the same question is how the first one was lost.
+ * for the generic `requireMinimumRole(ROLES.MEMBER)` hook. When this was
+ * written the generic hook normalized through `normalizeRole`, which answers
+ * MEMBER for an absent or empty role, so it admitted precisely the caller
+ * carrying no role at all. That is no longer so: #2496 put
+ * `if (!userRole) return false` ahead of the normalization in `hasMinimumRole`,
+ * and the two floors now agree on every input — absent, empty, and unranked
+ * roles are refused by both, and both bypass a provider-less internal call and
+ * an explicit service account.
+ *
+ * The separate floor stays. `isAtLeastMemberRole` additionally requires a
+ * non-empty string before ranking, so a non-string role value cannot reach the
+ * comparison at all; and a floor on the credential-issuing endpoints that is
+ * decided here cannot be loosened by a change made for some unrelated route.
+ * Having two floors that disagree on the same question is how the first one was
+ * lost, so if they are ever deliberately made to differ again, say so here.
  *
  * The bypasses match `ensureMinimumRole`: an internal daemon call carries no
  * provider, and an explicit daemon service account carries no role to floor.

@@ -54,7 +54,8 @@ export const sessions = sqliteTable(
     // Primary identity
     session_id: text('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
@@ -352,7 +353,7 @@ export const tasks = sqliteTable(
 
         /** Filled by the executor after the turn. */
         model?: string;
-        tool_use_count: number;
+        recorded_tool_count?: number | null;
 
         duration_ms?: number;
         agent_session_id?: string;
@@ -526,6 +527,14 @@ export const messages = sqliteTable(
     // Parent tool use ID (for nested tool calls - e.g., Task tool spawning Read/Grep)
     parent_tool_use_id: text('parent_tool_use_id'),
 
+    // Indexed due-work projection for the bounded Slack MCP connect-card
+    // repair sweep. Mirrors `metadata.widget.slack_connect.next_repair_at` and
+    // is written by the same locked mutation, so it cannot drift from the JSON
+    // it projects. Null for every message that is not a Slack-delivered
+    // `oauth` widget — which is all but a handful — so the partial index stays
+    // tiny on a table this large.
+    mcp_slack_connect_due_at: t.timestamp('mcp_slack_connect_due_at'),
+
     // NOTE: queueing moved off `messages` and onto `tasks.status='queued'` as
     // of migration sqlite/0040 (postgres/0030). The legacy `status` and
     // `queue_position` columns are gone — see `tasks.queue_position` instead.
@@ -555,6 +564,9 @@ export const messages = sqliteTable(
       table.session_id,
       table.timestamp
     ),
+    mcpSlackConnectDueIdx: index('messages_mcp_slack_connect_due_idx')
+      .on(table.mcp_slack_connect_due_at, table.message_id)
+      .where(sql`${table.mcp_slack_connect_due_at} IS NOT NULL`),
   })
 );
 
@@ -845,6 +857,7 @@ export const branches = sqliteTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_source?: import('../types/branch').Branch['base_source'];
         base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
@@ -2313,7 +2326,7 @@ export const uploads = sqliteTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -3205,3 +3218,30 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Durable create receipts survive target archive/deletion; never grant access by themselves. */
+export const kbImportReceipts = sqliteTable(
+  'kb_import_receipts',
+  {
+    receipt_id: text('receipt_id').primaryKey(),
+    owner_user_id: text('owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    bundle: text('bundle').notNull(),
+    slug: text('slug').notNull(),
+    entry_key: text('entry_key').notNull(),
+    target_id: text('target_id').notNull(),
+    digest: text('digest').notNull(),
+    request_bytes: integer('request_bytes').notNull().default(0),
+    reconciled_count: integer('reconciled_count').notNull().default(-1),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    identityIdx: uniqueIndex('kb_import_receipts_identity_unique').on(
+      table.owner_user_id,
+      table.bundle,
+      table.slug,
+      table.entry_key
+    ),
+  })
+);

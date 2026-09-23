@@ -18,7 +18,7 @@ export const groups = {
     filterArgs: ['--filter=@agor/core...'],
     run: [['--filter', '@agor/core', 'exec', 'vitest', 'run']],
   },
-  daemon: {
+  'daemon-1': {
     packages: ['@agor/daemon'],
     // Daemon integration tests import executor source directly; a full
     // workspace install is required so that source file's @agor/core link is
@@ -27,17 +27,33 @@ export const groups = {
     // Daemon tests import executor source, which in turn resolves @agor/core's
     // published exports. Build that package explicitly in this filtered lane.
     buildFilter: '@agor/core',
-    run: [['--filter', '@agor/daemon', 'exec', 'vitest', 'run']],
+    run: [['--filter', '@agor/daemon', 'exec', 'vitest', 'run', '--shard=1/2']],
+  },
+  'daemon-2': {
+    packages: ['@agor/daemon'],
+    filterArgs: [],
+    buildFilter: '@agor/core',
+    run: [['--filter', '@agor/daemon', 'exec', 'vitest', 'run', '--shard=2/2']],
   },
   'ui-1': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/4']],
   },
   'ui-2': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/4']],
+  },
+  'ui-3': {
+    packages: ['agor-ui'],
+    filterArgs: ['--filter=agor-ui...'],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=3/4']],
+  },
+  'ui-4': {
+    packages: ['agor-ui'],
+    filterArgs: ['--filter=agor-ui...'],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=4/4']],
   },
   executor: {
     packages: ['@agor/executor'],
@@ -106,12 +122,27 @@ for (const group of Object.values(groups)) {
 const listed = new Set(assignmentCounts.keys());
 const missing = [...testBearingPackages.keys()].filter((name) => !listed.has(name));
 const stale = [...listed].filter((name) => !testBearingPackages.has(name));
+// Validate commands, not just assignment counts: four entries can still
+// silently omit files if an index is duplicated or a denominator drifts.
+const shardedPackages = new Map([
+  ['agor-ui', 4],
+  ['@agor/daemon', 2],
+]);
 const duplicateAssignments = [...assignmentCounts.entries()]
-  .filter(([name, count]) => count > 1 && name !== 'agor-ui')
+  .filter(([name, count]) => count > 1 && !shardedPackages.has(name))
   .map(([name, count]) => `${name} (${count} groups)`);
-const uiAssignmentCount = assignmentCounts.get('agor-ui') ?? 0;
-if (uiAssignmentCount !== 2)
-  duplicateAssignments.push(`agor-ui (${uiAssignmentCount} groups; expected 2 shards)`);
+for (const [packageName, count] of shardedPackages) {
+  const assigned = Object.values(groups).filter((group) => group.packages.includes(packageName));
+  const actual = assigned.map((group) => JSON.stringify(group.run)).sort();
+  const expected = Array.from({ length: count }, (_, index) =>
+    JSON.stringify([
+      ['--filter', packageName, 'exec', 'vitest', 'run', `--shard=${index + 1}/${count}`],
+    ])
+  ).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${packageName} must run each of its ${count} native shards exactly once`);
+  }
+}
 if (missing.length || stale.length || duplicateAssignments.length) {
   if (missing.length)
     console.error(`Test-bearing workspaces missing from CI matrix: ${missing.join(', ')}`);
@@ -160,6 +191,32 @@ if (!workflowText.includes('pnpm --filter @agor/executor exec vitest run'))
   throw new Error('Build-owned executor Vitest checks are missing from ci.yml');
 if (!workflowText.includes('pnpm --filter @agor/executor test:runtime'))
   throw new Error('Build-owned executor runtime checks are missing from ci.yml');
+
+// Browser sharding must use the full config, not select individual viewports.
+const browserJob = workflowText.split('\n  browser:\n')[1]?.split('\n  gate:\n')[0];
+if (
+  !browserJob ||
+  !/^ {6}fail-fast: false$/m.test(browserJob) ||
+  !/^ {8}shard: \[1, 2\]$/m.test(browserJob) ||
+  !browserJob
+    .split('\n')
+    .includes(`      - run: pnpm --filter agor-ui test:browser --shard=\${{ matrix.shard }}/2`)
+) {
+  throw new Error('Browser lane must run both native shards with every configured viewport');
+}
+
+// Fixed matrices must not hide a missing shard behind a successful sibling.
+// Aggregate needs results are sufficient only when no cell/step can opt out.
+for (const lane of ['unit', 'browser']) {
+  const job = workflowText.split(`\n  ${lane}:\n`)[1]?.split(/\n {2}[\w-]+:\n/)[0];
+  if (
+    !job ||
+    !/^ {6}fail-fast: false$/m.test(job) ||
+    /^\s+(?:- )?(?:if|continue-on-error):/m.test(job)
+  ) {
+    throw new Error(`${lane} shards must be unconditional and failures must propagate`);
+  }
+}
 
 const browserTests = [];
 async function collectBrowserTests(directory) {

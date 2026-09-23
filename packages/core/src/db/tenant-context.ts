@@ -1,9 +1,27 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { TenantID } from '../types/tenant';
-import type { Database } from './client';
+import type { Database, RawDatabase } from './client';
+
+/**
+ * Which database a scope was opened on.
+ *
+ * The scope stores are the PROCESS's (see `processScopeStore`), so an ambient
+ * scope is visible to every guarded proxy in the process — including proxies
+ * over other databases. Without this, "is a scope active?" and "is a scope
+ * active *for this database*?" were the same question, and the answer to the
+ * second was taken from the first: a proxy over database B, asked inside a
+ * scope opened for database A, returned A's handle and therefore A's rows.
+ *
+ * This is the fully unwrapped base handle (`databaseRootHandle` in
+ * `tenant-scope.ts`), not the scoped one: on PostgreSQL `db` is a transaction
+ * handle that shares no identity with the base a proxy closes over.
+ */
+export type TenantDatabaseIdentity = RawDatabase | Database;
 
 export interface TenantOwnedDatabaseScope {
   db: Database;
+  /** The database this scope may serve. See {@link TenantDatabaseIdentity}. */
+  rootDb: TenantDatabaseIdentity;
   kind: 'tenant';
   /** Whether `db` is a native transaction handle rather than an identity-only scope. */
   transactionActive: boolean;
@@ -14,6 +32,8 @@ export interface TenantOwnedDatabaseScope {
 
 export interface SystemDatabaseScope {
   db: Database;
+  /** The database this scope may serve. See {@link TenantDatabaseIdentity}. */
+  rootDb: TenantDatabaseIdentity;
   kind: 'system';
   systemReason: string;
   systemCapability?: SystemDatabaseCapability;
@@ -45,9 +65,35 @@ export interface TenantContextScope {
   tenantId: TenantID | string;
 }
 
+/**
+ * One scope store per process, not per bundled copy of this module.
+ *
+ * `@agor/core` ships with `splitting: false`, so every tsup entry point inlines
+ * its own copy of this file. `@agor/core/db` and
+ * `@agor/core/tools/mcp/oauth-refresh` are separate entries, and the daemon
+ * loads both: without this, each would own a private `AsyncLocalStorage`, a
+ * scope armed through one would be invisible to a guarded proxy built by the
+ * other, and the guard would reject work that had correctly declared its
+ * tenant. Keying on `Symbol.for` makes the store the process's, which is what
+ * an ambient scope has to be to mean anything.
+ */
+function processScopeStore<T>(key: string): AsyncLocalStorage<T> {
+  const registry = globalThis as typeof globalThis & Record<symbol, unknown>;
+  const symbol = Symbol.for(key);
+  const existing = registry[symbol];
+  if (existing) return existing as AsyncLocalStorage<T>;
+  const created = new AsyncLocalStorage<T>();
+  registry[symbol] = created;
+  return created;
+}
+
 /** Long-lived operation identity. This never owns a database transaction. */
-export const tenantContextScope = new AsyncLocalStorage<TenantContextScope>();
-export const tenantDatabaseScope = new AsyncLocalStorage<TenantDatabaseScope>();
+export const tenantContextScope = processScopeStore<TenantContextScope>(
+  'agor.db.tenant-context-scope'
+);
+export const tenantDatabaseScope = processScopeStore<TenantDatabaseScope>(
+  'agor.db.tenant-database-scope'
+);
 
 export function getCurrentTenantDatabase(): Database | undefined {
   return tenantDatabaseScope.getStore()?.db;

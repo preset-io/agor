@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Database } from '../db/client';
 import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
@@ -1582,6 +1583,23 @@ describe('unixUserModeRequiresExecutionHomeKey', () => {
   });
 });
 
+/**
+ * The handle every static/local `getBaseUrl` assertion below passes.
+ *
+ * `getBaseUrl` requires one so no caller can forget it in hosted mode, but the
+ * static path resolves entirely from env and config. Handing it a proxy that
+ * throws on any access turns "the handle is unused here" from a claim in this
+ * comment into something these tests would fail on.
+ */
+const UNTOUCHED_DB = new Proxy(
+  {},
+  {
+    get() {
+      throw new Error('static base URL resolution must not touch the database');
+    },
+  }
+) as unknown as Database;
+
 describe('base URL resolution', () => {
   let tempDir: string;
   let originalBaseUrl: string | undefined;
@@ -1605,7 +1623,7 @@ describe('base URL resolution', () => {
 
   it('returns AGOR_BASE_URL env when set', async () => {
     process.env.AGOR_BASE_URL = 'https://agor.example.com';
-    await expect(getBaseUrl()).resolves.toBe('https://agor.example.com');
+    await expect(getBaseUrl(UNTOUCHED_DB)).resolves.toBe('https://agor.example.com');
     await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.example.com');
   });
@@ -1619,7 +1637,7 @@ describe('base URL resolution', () => {
       'utf-8'
     );
 
-    await expect(getBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+    await expect(getBaseUrl(UNTOUCHED_DB)).resolves.toBe('https://agor.sandbox.example.com');
     await expect(getDaemonBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
@@ -1654,7 +1672,7 @@ describe('base URL resolution', () => {
       'utf-8'
     );
 
-    await expect(getBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
+    await expect(getBaseUrl(UNTOUCHED_DB)).resolves.toBe('https://agor-ui.sandbox.example.com');
     await expect(getDaemonBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
   });
@@ -1671,13 +1689,13 @@ describe('base URL resolution', () => {
       'utf-8'
     );
 
-    await expect(getBaseUrl()).resolves.toBe('http://localhost:5173');
+    await expect(getBaseUrl(UNTOUCHED_DB)).resolves.toBe('http://localhost:5173');
     await expect(getDaemonBaseUrl()).resolves.toBe('http://[::1]:3030');
     await expect(requirePublicBaseUrl()).resolves.toBe('http://[::1]:3030');
   });
 
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {
-    await expect(getBaseUrl()).resolves.toBe('http://localhost:3030');
+    await expect(getBaseUrl(UNTOUCHED_DB)).resolves.toBe('http://localhost:3030');
     await expect(getDaemonBaseUrl()).resolves.toBe('http://localhost:3030');
     await expect(requirePublicBaseUrl()).rejects.toBeInstanceOf(PublicBaseUrlNotConfiguredError);
   });

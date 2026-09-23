@@ -652,6 +652,15 @@ export interface KnowledgeDocument {
   indexing_status?: KnowledgeDocumentIndexingStatus | null;
 }
 
+/** Permission-checked document with its selected version and Markdown content. */
+export type HydratedKnowledgeDocument = KnowledgeDocument & {
+  document: KnowledgeDocument;
+  current_version: KnowledgeDocumentVersion | null;
+  content: string | null;
+  first_line_is_title: boolean;
+  links?: unknown[];
+};
+
 export interface KnowledgeDocumentVersion {
   version_id: KnowledgeDocumentVersionID;
   document_id: KnowledgeDocumentID;

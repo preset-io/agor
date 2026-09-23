@@ -28,6 +28,7 @@ for (const format of ['esm', 'cjs']) {
     try {
       const {
         createDatabase,
+        getCurrentTenantDatabase,
         initializeDatabase,
         runWithTenantContext,
         runWithTenantDatabaseTransaction,
@@ -78,8 +79,15 @@ execution:
         ),
         ['https://tenant-a.example.test', 'https://tenant-b.example.test', '']
       );
+      // A caller already inside an open scope still names its handle. Since
+      // `getBaseUrl` requires one, "resolve from the ambient scope" is written
+      // at the call site rather than expressed by omitting an argument — the
+      // shape that shipped the hosted-mode Slack connect failure. The
+      // cross-entrypoint assertion is unchanged: the tenant IDENTITY this
+      // resolves against is still read inside config's own lazily loaded copy
+      // of `@agor/core/db`.
       await runWithTenantDatabaseTransaction(databases.get('tenant-a'), 'tenant-a', async () => {
-        assert.equal(await getBaseUrl(), 'https://tenant-a.example.test');
+        assert.equal(await getBaseUrl(getCurrentTenantDatabase()), 'https://tenant-a.example.test');
       });
       await assert.rejects(getBaseUrl(databases.get('tenant-a')), /trusted tenant identity/);
       await writeFile(configPath, '{}\n');

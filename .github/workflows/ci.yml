@@ -4,7 +4,7 @@
 # small aggregate gate over independent lanes.  The old single job started
 # five Vitest processes (each with its own worker pool) on one hosted runner;
 # that oversubscribed the runner and made the unit-test step take 10-16
-# minutes.  One package (and two UI shards) per runner keeps each pool within
+# minutes.  One package shard per runner keeps each pool within
 # the runner's CPU budget while retaining every test and boundary guard.
 #
 # Slow / cross-Node-version / publish-path checks stay in the release and
@@ -64,12 +64,18 @@ jobs:
 
       # This fails if a workspace gains a test script without being assigned
       # to a matrix group below. It also records browser-only ownership.
+      - run: node --test scripts/ci-test-matrix.test.mjs
       - run: pnpm check:ci-test-coverage
 
       - run: pnpm check:agor-live-deps
       - run: pnpm check:agentic-tool-packages
+      - run: node --test scripts/verify-npm-release.test.mjs
       - run: pnpm check:shortid
       - run: pnpm check:multitenancy-boundaries
+      # The ratchet's own unit test: the baseline is a named inventory, and a
+      # replacement (one classified out, one new name in) must fail even though
+      # the count is unchanged.
+      - run: pnpm test:multitenancy-boundaries
       - run: pnpm check:daemon-filesystem-boundaries
       - run: pnpm check:realtime-boundaries
       - run: pnpm lint
@@ -107,6 +113,14 @@ jobs:
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
 
+      # Every @agor/core dist entry imported by plain Node, then the tenant
+      # scope stores driven across those entries. Vitest resolves this package
+      # to source with its own CJS interop, so it can see neither a named import
+      # Node's CJS lexer rejects (a daemon that cannot boot) nor the
+      # duplicated-module packaging contract — which is what hid F4 and what
+      # found B1 on built modules.
+      - run: pnpm --filter @agor/core test:packaged
+
   unit:
     name: Unit tests (${{ matrix.group }})
     runs-on: ubuntu-latest
@@ -116,8 +130,8 @@ jobs:
       matrix:
         # Keep this list in sync with scripts/ci-test-matrix.mjs. The lint lane
         # checks that every package test script is represented exactly once;
-        # UI's two entries are intentional file shards of the same package.
-        group: [core, daemon, ui-1, ui-2, cli, support]
+        # UI and daemon entries are complete native file-shard partitions.
+        group: [core, daemon-1, daemon-2, ui-1, ui-2, ui-3, ui-4, cli, support]
     steps:
       - uses: actions/checkout@v7
 
@@ -168,7 +182,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
-      - run: node scripts/ci-test-matrix.mjs install daemon
+      - run: node scripts/ci-test-matrix.mjs install daemon-1
       - name: Run Redis tenant-isolation test
         run: >-
           pnpm --filter @agor/daemon exec vitest run
@@ -178,9 +192,14 @@ jobs:
           AGOR_TEST_REDIS_URL: redis://127.0.0.1:6379
 
   browser:
-    name: Browser layout tests
+    name: Browser layout tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Native shards partition files/projects without dropping any viewport coverage.
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v7
 
@@ -195,7 +214,7 @@ jobs:
 
       - run: node scripts/ci-test-matrix.mjs install ui-1
       - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
-      - run: pnpm --filter agor-ui test:browser
+      - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
 
   # Do not rename this job: branch protection currently requires the generated
   # context `CI / Lint, typecheck, build, test (pull_request)`. `always()` makes

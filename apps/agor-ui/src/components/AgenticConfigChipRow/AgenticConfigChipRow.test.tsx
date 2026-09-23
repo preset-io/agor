@@ -348,7 +348,7 @@ describe('AgenticConfigChipRow', () => {
       user_id: 'codex-user',
       default_agentic_config: {
         codex: {
-          modelConfig: { model: 'gpt-5.6-sol' },
+          modelConfig: { model: 'gpt-6-sol' },
           permissionMode: 'allow-all',
         },
       },

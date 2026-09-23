@@ -6,7 +6,7 @@
 //
 // See: apps/agor-docs/pages/guide/internal-mcp.mdx for the user-facing reference
 
-import type { SessionID, UserID, UUID } from './id';
+import type { MessageID, SessionID, UserID, UUID } from './id';
 
 /**
  * MCP Server ID (branded UUID)
@@ -135,6 +135,14 @@ export const MCP_OAUTH_FAILURE_REASONS = [
   'pkce_required',
   'profile_rejected',
   'endpoint_override_mismatch',
+  /**
+   * The redirect URI Agor was about to authorize with is not the one its OAuth
+   * client is registered under. Both values are Agor's, so this is an internal
+   * invariant, not a provider verdict — it is named because the provider-side
+   * version of the same disagreement is rejected front-channel and can never
+   * reach Agor. See {@link MCP_AUTH_RECOVERY_CATEGORIES}.
+   */
+  'redirect_uri_mismatch',
 ] as const;
 export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 
@@ -169,6 +177,17 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'authorization_denied',
   'configuration_changed',
   'permission_changed',
+  /**
+   * A one-use link was not admitted.
+   *
+   * Distinct from `permission_changed` because the two send the user to
+   * different places. An authority change means the access itself moved and is
+   * worth inspecting; a link that is expired, superseded, altered, or opened by
+   * the wrong account means only that THIS link is spent — nothing about the
+   * user's access has to change for a fresh one to work. The refusal that
+   * produces it stays deliberately silent about which binding moved.
+   */
+  'link_not_admitted',
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
@@ -187,6 +206,8 @@ export const MCP_AUTH_RECOVERY_ACTIONS = [
   'retry',
   'review_configuration',
   'contact_admin',
+  /** Ask the agent (or the surface that sent it) for a replacement link. */
+  'request_new_link',
 ] as const;
 export type MCPAuthRecoveryAction = (typeof MCP_AUTH_RECOVERY_ACTIONS)[number];
 
@@ -223,7 +244,21 @@ export function isMCPOAuthGrantBindingVersion(
  * attempts, users, tenants, or MCP servers.
  */
 export interface MCPOAuthPendingFlowSealedMaterial {
-  version: 2;
+  /**
+   * Envelope contract version.
+   *
+   * New envelopes are always sealed at the current version. An older version
+   * is accepted on read ONLY while every field it lacks is optional-and-absent
+   * by construction, which is what lets a rolling upgrade finish the attempts
+   * an older daemon already started. The reverse never holds: a daemon that
+   * predates a version refuses the newer envelope rather than silently
+   * ignoring a binding it does not know about — that is the whole reason the
+   * number moves when a context sibling is added.
+   *
+   * v2 → v3 added {@link slackConnect}. A v2 envelope therefore carries no
+   * Slack connect binding, so reading one under v3 rules loses nothing.
+   */
+  version: 2 | 3;
   attemptId: MCPOAuthAttemptID;
   tenantId: string;
   userId: UserID;
@@ -249,6 +284,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   allowLocalhostHttp: boolean;
   /** Non-secret durable routing back to an exact Slack recovery notice. */
   slackRecovery?: MCPSlackOAuthRecoveryContext;
+  /** Non-secret durable routing back to an exact Slack connect delivery. */
+  slackConnect?: MCPSlackOAuthConnectContext;
 }
 
 /**
@@ -1023,6 +1060,209 @@ export interface MCPSlackOAuthRecoveryContext {
   mcp_server_id: MCPServerID;
   recovery_generation: number;
   recovery_request_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Agent-initiated MCP OAuth connect, delivered into Slack
+//
+// The reactive recovery lane above fires after a mediated MCP call has already
+// failed, and binds to the Task that failed. This lane is its intent-initiated
+// counterpart: the user asked an agent to "connect me to Notion", the agent
+// minted an `oauth` widget, and the widget needs a Slack-tappable face. Nothing
+// has failed, so the binding target is the WIDGET rather than a recovery state
+// machine — which is why this is a separate token type, audience, and durable
+// record rather than a reuse of the recovery one.
+//
+// See docs/internal/slack-mcp-oauth-connect-2026-09-16.md §7.
+// ---------------------------------------------------------------------------
+
+/**
+ * Authenticated, encrypted browser-entry claims for a Slack-delivered MCP
+ * connect link. Every field is compared against durable state at redemption.
+ *
+ * The claims are a *pin*, never an authority: the token proves which widget,
+ * server, channel, thread, and Slack person Agor issued this link for, and the
+ * redeemer must separately be signed into Agor as both `sub` and
+ * `credential_user_id`. A chat-delivered link is not an authentication bearer.
+ */
+export interface MCPOAuthConnectTokenClaims {
+  type: 'mcp-oauth-connect';
+  tid: string;
+  /** Principal the prompt was attributed to. */
+  sub: UserID;
+  /** Whose MCP grant this sign-in will mint. Equal to `sub`; no delegation. */
+  credential_user_id: UserID;
+  /**
+   * Slack sender recorded on the originating Task.
+   *
+   * Alignment at mint time proves the channel resolves senders to real Agor
+   * accounts. It does NOT prove the person who tapped the button is the person
+   * who asked, so this is re-compared at redemption against the durable
+   * `gateway_task_source` of the Task that minted the widget.
+   */
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  /** Gateway Task that minted the widget; carries the Slack sender identity. */
+  task_id: string;
+  session_id: SessionID;
+  /** Session owner at issue time. A transfer invalidates the link. */
+  session_owner_user_id: UserID;
+  /** The exact widget card this link resolves. */
+  widget_id: MessageID;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  oauth_mode: MCPOAuthMode;
+  delivery_id: string;
+  /** Monotonic per-widget issue counter; only the latest link is redeemable. */
+  delivery_generation: number;
+  jti: string;
+  iat: number;
+  exp: number;
+  aud: 'agor:mcp-oauth-connect';
+  iss: 'agor';
+}
+
+/**
+ * Durable, daemon-owned delivery state for one Slack-delivered connect link.
+ *
+ * Lives on the widget message's own metadata (`metadata.widget.slack_connect`)
+ * so it is covered by the widget write boundary — external callers cannot
+ * patch a widget message at all — and so the one-use consume is a
+ * compare-and-set on the same row the widget lifecycle already locks.
+ *
+ * Deliberately holds NO Slack routing or principal identity. Every binding the
+ * redemption checks is re-read from its own authority (the channel row, the
+ * thread map, the Task's gateway source, the server row, the user rows) and
+ * compared against the token's claims. A copy kept here would be one more
+ * thing that can go stale without anything noticing.
+ */
+export interface MCPSlackConnectDelivery {
+  delivery_id: string;
+  /** Incremented on every re-issue; the token must match the current value. */
+  delivery_generation: number;
+  token_jti: string;
+  issued_at: string;
+  expires_at: string;
+  /** Set by the one-use consume CAS at redemption. */
+  token_consumed_at?: string;
+  oauth_attempt_id?: MCPOAuthAttemptID;
+  /** Short lease between one-use consumption and canonical flow creation. */
+  oauth_start_claimed_at?: string;
+  oauth_start_claim_expires_at?: string;
+  oauth_started_at?: string;
+  oauth_succeeded_at?: string;
+  oauth_failed_at?: string;
+
+  // -------------------------------------------------------------------------
+  // Block Kit projection
+  //
+  // The fields above describe the *link*; these describe the one Slack row
+  // that offers it. They live on the same record — and therefore under the
+  // same row lock — because the card and the link share a lifecycle: a
+  // re-issue must repost, a consume must redraw, and a resolution must
+  // retire. A second record would be a second thing to keep in step.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The channel's `provider_config_generation` at the moment this link was
+   * sealed. The token pins the same value and redemption compares it, so a
+   * card whose channel has been reconfigured since must stop offering a button
+   * that would be refused — and this is the only place the delivery path can
+   * learn that, since re-reading the channel would only compare it to itself.
+   */
+  gateway_config_generation?: number;
+  /** Slack `ts` of the posted card. Set once; every later render edits it. */
+  slack_message_ts?: string;
+  /** Last state actually rendered into Slack. A no-op re-render is skipped. */
+  rendered_state?: MCPSlackConnectRenderedState;
+  rendered_at?: string;
+  /** Durable ownership of one post/update attempt, across daemons. */
+  delivery_claim?: {
+    claim_id: string;
+    claimed_at: string;
+    expires_at: string;
+  };
+  delivery_attempt_count?: number;
+  delivery_last_failed_at?: string;
+  delivery_retry_until?: string;
+  delivery_next_retry_at?: string;
+  /**
+   * When the bounded repair sweep should look at this card again. Mirrored
+   * into the indexed `messages.mcp_slack_connect_due_at` column so the sweep
+   * is a range scan rather than a scan of every message ever written.
+   */
+  next_repair_at?: string;
+  /**
+   * The workspace moved under a live card: the channel was reconfigured or
+   * disabled, alignment was switched off, the server changed, or the
+   * redeemer lost the role floor. Terminal for this delivery — a tap would be
+   * refused at `/oauth-resolve` anyway, so the card says so instead.
+   */
+  binding_invalidated_at?: string;
+}
+
+/**
+ * What one Slack connect card currently says.
+ *
+ * Derived, never stored as authority: every render recomputes it from the
+ * widget row's own status plus the delivery record. `rendered_state` persists
+ * only the last value actually sent, so an unchanged state skips the edit.
+ */
+export type MCPSlackConnectRenderedState =
+  /** Pending widget, live unconsumed link — the first state carrying a button. */
+  | 'connect_required'
+  /** The link was consumed and a provider round-trip is in flight. */
+  | 'sign_in_pending'
+  /**
+   * The grant landed but the widget is not resolved, and a live link can carry
+   * the user back to finish it. The second, and last, state with a button.
+   *
+   * This exists because the provider callback completes only the first of the
+   * lane's three milestones. Until this state, a sign-in that succeeded while
+   * its browser went away rendered as `sign_in_pending` forever — a card
+   * truthfully describing a round-trip that had in fact finished, with nothing
+   * to press.
+   */
+  | 'finish_required'
+  /** As `finish_required`, but the link lapsed: asking again costs no sign-in. */
+  | 'finish_stalled'
+  /** Resolved: the grant landed and the server is attached to the session. */
+  | 'connected'
+  /** Resolved: the grant landed, but the resolver may not attach to this session. */
+  | 'connected_not_attached'
+  /** Pending widget, but the link expired or its sign-in did not complete. */
+  | 'expired'
+  /** The widget was dismissed or superseded by a newer request. */
+  | 'cancelled'
+  /** The binding moved under the card; no link can be offered here. */
+  | 'unavailable';
+
+/** Optional connect context sealed into the canonical OAuth pending flow. */
+export interface MCPSlackOAuthConnectContext {
+  delivery_id: string;
+  delivery_generation: number;
+  widget_id: MessageID;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  gateway_channel_id: string;
+  /**
+   * The channel and server versions that AUTHORIZED this flow, carried from
+   * the sealed connect token at redemption.
+   *
+   * They are here rather than re-read at callback time because the authority
+   * re-read compares an expected version against the stored one: handing it
+   * whatever is stored now compares the channel to itself and can never
+   * refuse, so a token rotation or a server edit mid-flow would complete and
+   * persist a grant against a configuration nobody authorized. The recovery
+   * lane carries the same two values on its durable notice for the same
+   * reason.
+   */
+  gateway_config_generation: number;
+  mcp_server_config_version: number;
 }
 
 // ============================================================================

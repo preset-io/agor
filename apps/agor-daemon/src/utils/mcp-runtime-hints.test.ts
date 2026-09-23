@@ -66,7 +66,6 @@ async function seedRunningTask(db: Database) {
       start_timestamp: new Date().toISOString(),
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'test' },
-    tool_use_count: 0,
   });
   await taskRepository.recordMCPRecovery(task.task_id, () => ({
     generation: 7,

@@ -125,6 +125,10 @@ When a todo list shows up half-done at the end of a turn, that's a strong signal
 
 **Type follow-ups while the agent is still working.** Queued messages stack visually below the input and dispatch in order as soon as the agent finishes.
 
+When the session is idle with no pending work, a new prompt goes directly into
+starting execution without briefly appearing in the queue. Concurrent submissions
+are still ordered by the server; a new prompt never jumps existing queued work.
+
 <img
   src="/screenshots/queued messages.png"
   alt="Queued messages in conversation"

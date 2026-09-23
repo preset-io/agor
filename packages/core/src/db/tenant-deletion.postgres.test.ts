@@ -430,12 +430,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     }
   });
 
-  it.each([
-    "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
-    "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
-  ])('rejects a weakened provider grant policy: %s', async (predicate) => {
-    const policy = sql`tenant_isolation_user_provider_oauth_grants`;
-    const table = sql`public.user_provider_oauth_grants`;
+  it.each(
+    ['user_provider_oauth_grants', 'kb_import_receipts'].flatMap((tableName) =>
+      [
+        "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
+        "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
+      ].map((predicate) => ({ tableName, predicate }))
+    )
+  )('rejects a weakened $tableName policy: $predicate', async ({ tableName, predicate }) => {
+    const policy = sql.identifier(`tenant_isolation_${tableName}`);
+    const table = sql`public.${sql.identifier(tableName)}`;
     const install = async (expression: string) => {
       await executeRaw(db, sql`DROP POLICY ${policy} ON ${table}`);
       await executeRaw(
@@ -448,7 +452,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
       await install(predicate);
       await expect(
         deleteTenantData(db, `td-grant-${generateId()}`, { dryRun: true })
-      ).rejects.toThrow(/user_provider_oauth_grants.*canonical tenant_id equality/);
+      ).rejects.toThrow(new RegExp(`${tableName}.*canonical tenant_id equality`));
     } finally {
       await install(
         "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')"

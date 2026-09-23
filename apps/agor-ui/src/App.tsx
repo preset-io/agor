@@ -92,6 +92,7 @@ import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MCP_CONNECT_ROUTE_PATHS,
   MCP_RECOVERY_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
 } from './surfaces/surfaceRegistry';
@@ -219,6 +220,11 @@ const loadMcpRecoveryPage = cacheRouteLoader(
   () => import('./pages/MCPSlackRecoveryPage'),
   (module) => ({ default: module.MCPSlackRecoveryPage })
 );
+const loadMcpConnectPage = cacheRouteLoader(
+  'mcp-connect',
+  () => import('./pages/MCPOAuthConnectPage'),
+  (module) => ({ default: module.MCPOAuthConnectPage })
+);
 const loadMobileApp = cacheRouteLoader(
   'mobile',
   () => import('./components/mobile/MobileApp'),
@@ -251,6 +257,7 @@ const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MCPSlackRecoveryPage = lazy(loadMcpRecoveryPage);
+const MCPOAuthConnectPage = lazy(loadMcpConnectPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 
@@ -259,6 +266,7 @@ const routeModuleLoaders = {
   knowledge: loadKnowledgePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   'mcp-recovery': loadMcpRecoveryPage,
+  'mcp-connect': loadMcpConnectPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
@@ -2096,6 +2104,8 @@ function AppContent() {
 
   const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
 
+  const mcpConnectElement = <MCPOAuthConnectPage client={client} />;
+
   // The post-onboarding connect-AI / integrations banners. Shared verbatim by
   // both shells so the mobile Home surfaces "AI not connected" proactively
   // (desktop already shows it above its app content).
@@ -2354,6 +2364,10 @@ function AppContent() {
 
             {MCP_RECOVERY_ROUTE_PATHS.map((path) => (
               <Route key={path} path={path} element={mcpRecoveryElement} />
+            ))}
+
+            {MCP_CONNECT_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={mcpConnectElement} />
             ))}
 
             {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,

@@ -342,7 +342,9 @@ $ agor session list | grep running | wc -l
 **Task Tools:**
 | Tool | Description | Example |
 |------|-------------|---------|
-| `agor_tasks_list` | List tasks in session | `{ sessionId: '...' }` |
+| `agor_tasks_list` | List tasks or pending queue in dispatch order | `{ sessionId: '...', status: 'queued' }` |
+| `agor_tasks_cancel_queued` | Atomically remove selected queued tasks | `{ sessionId: '...', taskIds: [...] }` |
+| `agor_tasks_reorder_queued` | Reorder the exact pending queue with stale-order protection | `{ sessionId: '...', expectedTaskIds: [...], taskIds: [...] }` |
 | `agor_tasks_get` | Get specific task | `{ taskId: '...' }` |
 
 **User Tools:**

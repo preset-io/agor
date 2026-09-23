@@ -1,5 +1,5 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
-import { isPostgresDatabaseHandle } from '@agor/core/db';
+import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import { assertRuntimeTenantAccess } from './auth/tenant-access.js';
 import {
   assertTenantCredentialEpoch,
@@ -107,6 +107,7 @@ import type {
   StreamingEventType,
   Task,
   TaskID,
+  TaskLaunchFields,
   TaskMetadata,
   TenantID,
   User,
@@ -191,6 +192,7 @@ import { createMCPEgressHttpHandler } from './mcp-egress/http-handler.js';
 import { validateMCPEgressRolloutChange } from './mcp-egress/rollout.js';
 import { createFeathersMetricsHook } from './metrics/feathers.js';
 import { getDaemonMetrics, getDaemonOperationalMetrics } from './metrics/index.js';
+import { recordDispatchClaim } from './metrics/task-lifecycle.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import {
   deliverPermissionDecision,
@@ -201,6 +203,8 @@ import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
+import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
+import { createMCPSlackConnectCardControl } from './services/mcp-slack-connect-control.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -263,6 +267,8 @@ import {
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { authorizeMcpSessionConfigAccess } from './utils/mcp-session-config-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
+import { runPromptAdmissionTransaction } from './utils/prompt-admission-transaction.js';
+import { promptDatabaseErrorAround } from './utils/prompt-database-error.js';
 import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
@@ -304,7 +310,7 @@ import {
 } from './utils/upload.js';
 import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
-import { WidgetResolutionStore } from './widgets/resolution-store.js';
+import { WIDGET_RESOLUTION_STORE_KEY, WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 export function appendResponseHeaderValue(
@@ -1074,7 +1080,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   ) =>
     registerAuthenticatedRouteUnscoped(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
-      around: [tenantIdentityAround, tenantWriteAdmissionAround, ...(options.around ?? [])],
+      around: [
+        ...(path === '/sessions/:id/prompt' ? [promptDatabaseErrorAround] : []),
+        tenantIdentityAround,
+        tenantWriteAdmissionAround,
+        ...(options.around ?? []),
+      ],
     });
 
   // Long routes carry tenant identity without holding a route-wide database
@@ -1780,85 +1791,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     });
   }
 
-  /**
-   * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `dispatching`.
-   *
-   * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
-   * queued-task drainer call this helper. Centralising the transition
-   * guarantees that:
-   *
-   *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
-   *     `started_at` are recomputed against fresh state right before the
-   *     executor is spawned (sentinels on the stored row are only ever
-   *     visible while `status='queued'`).
-   *   - The initial user-message row is written by the daemon synchronously,
-   *     before the executor process is forked. Without this, any crash
-   *     during executor startup loses the prompt from the chat transcript
-   *     even though `tasks.full_prompt` still has the text. Gated by
-   *     `config.execution.daemon_writes_user_message` (kill switch — see
-   *     §5.E of `docs/never-lose-prompt-design.md`).
-   *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
-   *     re-stamped onto the new message so the UI's callback styling
-   *     (`MessageBlock.tsx`) survives the queue → run transition.
-   *   - Spawn failures synthesise a `type:'system'` error message so the
-   *     chat surfaces *why* the assistant didn't respond, instead of silently
-   *     leaving a ghost task in FAILED with no transcript trace.
-   *
-   * The session.tasks list is appended here too, so callers don't have to
-   * remember to do it themselves.
-   */
-  async function spawnTaskExecutor(
-    task: Task,
-    options: {
-      permissionMode?: import('@agor/core/types').PermissionMode;
-      stream?: boolean;
-      messageSource?: MessageSource;
-      stableInitialMessageId?: MessageID;
-    },
+  interface PreparedTaskDispatch {
+    session: Session;
+    messageStartIndex: number;
+    startTimestamp: string;
+    updates: TaskLaunchFields;
+  }
+
+  // Preparation may materialize configuration; never run it under admission locks.
+  async function prepareTaskDispatch(
+    sessionId: SessionID,
     params: RouteParams
-  ): Promise<Task> {
+  ): Promise<PreparedTaskDispatch> {
     const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
-    const stableInitialMessageId = stableInitialMessageIdForTask(
-      task,
-      options.stableInitialMessageId
-    );
-    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
-    const runtimeMessageSource =
-      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
-        ? persistedMessageSource
-        : undefined;
-
-    // A stable scheduled Task that has crossed the dispatch fence needs only
-    // deterministic projection repair. Do not make that reconciliation depend
-    // on mutable launch-time state (tool enablement, preset validity, or user
-    // defaults): no new executor launch will occur on this path.
-    if (shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
-      await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
-        messageSource: runtimeMessageSource,
-      });
-      return task;
-    }
-
-    // The token minted below authenticates the executor as params.user, while
-    // credential services resolve secrets from Task.created_by. Those must be
-    // the same durable actor; Session/branch prompt authority alone must never
-    // authorize consuming somebody else's provider credential.
-    assertTaskExecutorPrincipal(task, params);
-
+    if (!tenantId) throw new Error('Missing tenant context for dispatch preparation');
     const {
       agenticToolEnabled,
       messageStartIndex,
       session: loadedSession,
     } = await runWithTenantDatabaseScope(db, tenantId, async () => {
-      const session = await sessionsService.get(task.session_id, params);
+      const session = await sessionsService.get(sessionId, params);
       const agenticTool = requireActiveAgenticTool(session.agentic_tool);
       return {
         session,
         agenticToolEnabled: await isAgenticToolEnabledForTenant(db, tenantId, agenticTool),
         // Recompute message_range.start_index against the live message count.
-        messageStartIndex: await sessionsRepository.countMessages(task.session_id),
+        messageStartIndex: await sessionsRepository.countMessages(sessionId),
       };
     });
     if (!agenticToolEnabled) {
@@ -1880,37 +1838,122 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    if (!isTaskPendingDispatch(task)) return task;
+    const updates: TaskLaunchFields = {
+      ...launchState,
+      ...(launchState.executor_mode
+        ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+        : {}),
+      message_range: {
+        start_index: messageStartIndex,
+        end_index: messageStartIndex + 1,
+        start_timestamp: startTimestamp,
+        end_timestamp: startTimestamp,
+      },
+      git_state: {
+        ref_at_start: refAtStart,
+        sha_at_start: gitStateAtStart,
+      },
+    };
+    return { session, messageStartIndex, startTimestamp, updates };
+  }
+
+  /**
+   * spawnTaskExecutor — shared post-commit launch path. Claims pending work,
+   * or consumes the fresh prompt admission's already-committed dispatch claim.
+   *
+   * Both POST /sessions/:id/prompt and the queued-task drainer call this
+   * helper. Sharing preparation and post-commit launch guarantees that:
+   *
+   *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
+   *     `started_at` are prepared before the durable dispatch decision, then
+   *     consumed by its winner (queued/created rows retain sentinels until claimed).
+   *   - The initial user-message row is written by the daemon synchronously,
+   *     before the executor process is forked. Without this, any crash
+   *     during executor startup loses the prompt from the chat transcript
+   *     even though `tasks.full_prompt` still has the text. Gated by
+   *     `config.execution.daemon_writes_user_message` (kill switch — see
+   *     §5.E of `docs/never-lose-prompt-design.md`).
+   *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
+   *     re-stamped onto the new message so the UI's callback styling
+   *     (`MessageBlock.tsx`) survives the queue → run transition.
+   *   - Spawn failures synthesise a `type:'system'` error message so the
+   *     chat surfaces *why* the assistant didn't respond, instead of silently
+   *     leaving a ghost task in FAILED with no transcript trace.
+   *
+   * Both repository admission paths append session.tasks atomically before
+   * entering this post-commit launch path.
+   */
+  async function spawnTaskExecutor(
+    task: Task,
+    options: {
+      permissionMode?: import('@agor/core/types').PermissionMode;
+      stream?: boolean;
+      messageSource?: MessageSource;
+      stableInitialMessageId?: MessageID;
+      /** Prepared metadata alone is not ownership: name the fresh admission winner. */
+      dispatch?:
+        | { kind: 'claim' }
+        | { kind: 'admitted'; taskId: Task['task_id']; preparation: PreparedTaskDispatch };
+    },
+    params: RouteParams
+  ): Promise<Task> {
+    const admittedLaunch = options.dispatch?.kind === 'admitted' ? options.dispatch : undefined;
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const stableInitialMessageId = stableInitialMessageIdForTask(
+      task,
+      options.stableInitialMessageId
+    );
+    const persistedMessageSource = task.metadata?.source ?? options.messageSource;
+    const runtimeMessageSource =
+      persistedMessageSource === 'gateway' || persistedMessageSource === 'agor'
+        ? persistedMessageSource
+        : undefined;
+
+    // A stable scheduled Task that has crossed the dispatch fence needs only
+    // deterministic projection repair. Do not make that reconciliation depend
+    // on mutable launch-time state (tool enablement, preset validity, or user
+    // defaults): no new executor launch will occur on this path.
+    if (!admittedLaunch && shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
+      await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
+        messageSource: runtimeMessageSource,
+      });
+      return task;
+    }
+
+    // The token minted below authenticates the executor as params.user, while
+    // credential services resolve secrets from Task.created_by. Those must be
+    // the same durable actor; Session/branch prompt authority alone must never
+    // authorize consuming somebody else's provider credential.
+    assertTaskExecutorPrincipal(task, params);
+
+    const prepared =
+      admittedLaunch?.preparation ?? (await prepareTaskDispatch(task.session_id, params));
+    const { session, messageStartIndex, startTimestamp } = prepared;
+
+    if (
+      admittedLaunch &&
+      (task.status !== TaskStatus.DISPATCHING || admittedLaunch.taskId !== task.task_id)
+    ) {
+      throw new Error('Direct launch requires a freshly admitted dispatching task');
+    }
+    if (!admittedLaunch && !isTaskPendingDispatch(task)) return task;
 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
-      await lockTenantAuthorizationFence(tenantDb, params);
-      await assertTenantWritable(tenantDb, tenantId);
-      return tasksService.claimDispatchAndProjectSession(
-        task.task_id,
-        task.status,
-        {
-          ...launchState,
-          ...(launchState.executor_mode
-            ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
-            : {}),
-          queue_position: undefined,
-          message_range: {
-            start_index: messageStartIndex,
-            end_index: messageStartIndex + 1,
-            start_timestamp: startTimestamp,
-            end_timestamp: startTimestamp,
-          },
-          git_state: {
-            ref_at_start: refAtStart,
-            sha_at_start: gitStateAtStart,
-          },
-        },
-        { ...params, provider: undefined }
-      );
-    });
+    const dispatchClaim = admittedLaunch
+      ? { outcome: 'claimed' as const, task }
+      : await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
+          await lockTenantAuthorizationFence(tenantDb, params);
+          await assertTenantWritable(tenantDb, tenantId);
+          return tasksService.claimDispatchAndProjectSession(
+            task.task_id,
+            task.status as import('@agor/core/types').TaskPendingDispatchStatus,
+            prepared.updates,
+            { ...params, provider: undefined }
+          );
+        });
     if (dispatchClaim.outcome !== 'claimed') {
       const workIdentity = app.get('distributedWorkIdentity');
       console.info(
@@ -1939,6 +1982,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return dispatchClaim.task;
     }
     const updatedTask = dispatchClaim.task;
+    if (admittedLaunch) recordDispatchClaim(getDaemonMetrics(app), dispatchClaim);
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1959,26 +2003,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
     }
 
-    // Re-apply the Session projection through Feathers so hooks/realtime see
-    // the transition. TaskRepository.claimDispatchAndProjectSession already
-    // committed the same projection atomically with the Task fence; this
-    // service patch is no longer correctness-critical on SQLite and is
-    // intentionally idempotent.
-    //
-    // The session-status flip used to fall out of `TasksService.create` when
-    // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch the task here, which
-    // `TasksService.patch` does NOT mirror onto the session. Without this
-    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
-    // causing the queue gate in the prompt route to wave subsequent prompts
-    // through instead of queuing them.
+    // Both admission paths have committed the Session projection. Re-apply
+    // status through Feathers for existing hooks/realtime, but never overwrite
+    // its authoritative task list from a preflight snapshot.
     await runWithTenantDatabaseScope(db, tenantId, () =>
       app.service('sessions').patch(
         task.session_id,
         {
           status: SessionStatus.RUNNING,
           ready_for_prompt: false,
-          tasks: [...session.tasks, task.task_id],
         },
         params
       )
@@ -2277,11 +2310,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // Every prompt first takes one durable queue position. The subsequent
-        // Session+Task database claim decides whether this Task leaves the
-        // queue immediately or remains queued. This avoids a split
-        // read-session/create-CREATED race: two daemons can admit concurrently,
-        // but only the durable head can claim the idle Session.
+        // Admission decides direct dispatch vs durable queueing under one
+        // Branch/Session fence. Preflight reads never authorize a launch.
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
@@ -2322,7 +2352,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (params._taskCompletionCallback) {
               taskMetadata.completion_callback = params._taskCompletionCallback;
             }
-            const task = await runWithTenantDatabaseTransaction(
+            // A preflight hint avoids preparation for known-busy sessions. The
+            // repository rechecks queue/active work under its durable locks.
+            // Stable-ID callback/widget producers keep their existing protocol.
+            const preparedLaunch =
+              !data.idempotencyTaskId &&
+              sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)
+                ? await prepareTaskDispatch(id as SessionID, params)
+                : undefined;
+            const task = await runPromptAdmissionTransaction(
               db,
               promptTenantId,
               async (operationDb) => {
@@ -2344,6 +2382,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   created_by: createdBy,
                   status: TaskStatus.QUEUED,
                   metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
+                  dispatchIfIdle: preparedLaunch?.updates,
                 });
               }
             );
@@ -2368,6 +2407,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 permissionMode: data.permissionMode,
                 stream: data.stream !== false,
                 messageSource,
+                ...(task.status === TaskStatus.DISPATCHING && preparedLaunch
+                  ? {
+                      dispatch: {
+                        kind: 'admitted' as const,
+                        taskId: task.task_id,
+                        preparation: preparedLaunch,
+                      },
+                    }
+                  : {}),
                 ...(data.idempotencyTaskId
                   ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
                   : {}),
@@ -2389,7 +2437,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 try {
                   await sessionsService.triggerQueueProcessing(id as SessionID, params);
                 } catch (error) {
-                  console.error(`❌ [Prompt] Failed to trigger queued Task processing:`, error);
+                  console.error(
+                    `[prompt.queue_trigger] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'} recovery=durable_queue_discovery`
+                  );
                 }
               });
             }
@@ -3681,18 +3731,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
   const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+  const widgetResolutionStore = new WidgetResolutionStore(widgetResolutionMessages, (message) => {
+    emitServiceEvent(app, {
+      path: 'messages',
+      event: 'patched',
+      data: message,
+      id: message.message_id,
+    });
+    // A widget that also has a Slack card must retire, redraw, or complete it
+    // in the same breath. This is the one writer of widget lifecycle state, so
+    // hooking it here means no transition — resolve, fail, supersede — can
+    // leave a live Connect button in a thread behind a settled row.
+    notifyMcpSlackConnectCard(app, message);
+  });
+  // Every writer of widget lifecycle state goes through this one store, so it
+  // is published where an in-process caller that is not a route can reach it —
+  // notably the MCP tool that supersedes a replaced Connect button. The
+  // repository is bound to the tenant unit of work, so it resolves its tenant
+  // from the caller's ambient scope rather than from whoever constructed it.
+  app.set(WIDGET_RESOLUTION_STORE_KEY, widgetResolutionStore);
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
     runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
-    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
-      emitServiceEvent(app, {
-        path: 'messages',
-        event: 'patched',
-        data: message,
-        id: message.message_id,
-      })
-    ),
+    resolutionStore: widgetResolutionStore,
     publishResolved: (payload: Record<string, unknown>) =>
       emitServiceEvent(app, {
         path: 'messages',
@@ -3735,6 +3797,36 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.MEMBER, action: 'submit widgets' },
+    },
+    requireAuth
+  );
+
+  // The OAuth lane. The browser has finished the provider flow and is asking
+  // the daemon to check; it supplies no server id and no payload worth
+  // trusting, so everything that decides the outcome is read server-side from
+  // the pinned widget params and the persisted grant. See
+  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  registerLongAuthenticatedRoute(
+    app,
+    '/widgets/:id/oauth-resolve',
+    {
+      async create(data: { attempt_id?: unknown } | undefined, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to resolve a widget');
+        }
+        const attemptId = typeof data?.attempt_id === 'string' ? data.attempt_id : undefined;
+        return resolveWidget(
+          widgetId,
+          { kind: 'oauth_callback', evidence: { attempt_id: attemptId } },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'resolve OAuth widgets' },
     },
     requireAuth
   );
@@ -6189,6 +6281,44 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       find: { role: ROLES.MEMBER, action: 'view MCP gateway status' },
       patch: { role: ROLES.ADMIN, action: 'configure MCP gateway rollout' },
+    },
+    requireAuth
+  );
+
+  /**
+   * The Slack MCP connect card's kill switch, as something an operator can
+   * actually reach.
+   *
+   * It was a setting with a setter and no caller: `setMCPSlackConnectCardEnabled`
+   * is plumbing, and "write an app variable by hand" is not an incident
+   * procedure. This is the narrow control surface that makes the switch
+   * operable — read it, change it, and read back what took effect, for the
+   * caller's tenant and no other.
+   *
+   * Narrow on purpose:
+   *
+   *  - Admin for BOTH methods. Unlike `/mcp-egress/status`, nothing here is a
+   *    statement about the caller's own capabilities, so there is no answer a
+   *    non-admin needs. A member who cannot see the switch is not shown a
+   *    control that fails.
+   *  - One tenant per call, because the setting is one app variable per tenant
+   *    and a deployment-wide incident is one write per tenant — exactly as
+   *    `mcp_egress_gateway.mode` is. The response names the tenant it acted on
+   *    so an operator working through several can prove which.
+   *  - No third state. `enabled` is a boolean; an unreadable or mistyped value
+   *    leaves the card ON (`isMCPSlackConnectCardEnabled`), deliberately, and
+   *    this route never writes one.
+   *
+   * The runbook — including what happens to work stranded while it is off — is
+   * §7.1.4 of `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+   */
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-slack-connect/card',
+    createMCPSlackConnectCardControl(db),
+    {
+      find: { role: ROLES.ADMIN, action: 'read the Slack MCP connect card switch' },
+      patch: { role: ROLES.ADMIN, action: 'change the Slack MCP connect card switch' },
     },
     requireAuth
   );

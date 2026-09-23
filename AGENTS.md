@@ -485,6 +485,18 @@ Connect action, and Connect sends the exact text shown as
 Technical details may remain collapsed because they are not the connect-time
 consent contract.
 
+There is now a second `acknowledged_disclosure` caller where no human read the
+text at send time: `agor_widgets_request_oauth` installs from a catalog entry on
+an agent's say-so, satisfying the check with the entry's own text. The row that
+install creates is inert — `scope: 'session'`, private to the caller,
+unattached, and unauthorized — and the disclosure travels onto the widget and is
+rendered above the Connect button, so the user reads it before the only moment
+anything is granted. That holds for a later request naming the installed server
+by id too: the tool re-reads the entry's disclosure, and refuses to mint a
+Connect button if the entry has left the catalog. If a catalog install ever stops being inert, revisit that
+first: see §5.4 of
+`docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+
 Both probes go through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
 refuses it unless every resolved address is public, connects to the address it

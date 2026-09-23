@@ -72,8 +72,11 @@ return unsupported rather than claiming a hosted tenant boundary exists.
 
 ## Persistence and portability
 
-Migration `0112_tenant_restrictions` adds dialect-parity tables and PostgreSQL
-FORCE RLS. No broad cross-tenant operator policy is added. The table is included
+Migration `0115_tenant_restrictions` adds dialect-parity tables and PostgreSQL
+FORCE RLS. On databases that ran the earlier feature's `0112_tenant_restrictions`,
+the old ledger timestamp collides with main's `0112_kb_import_receipts`; the
+idempotent `0115` also reconciles that skipped main table, indexes, and FORCE RLS
+without replacing existing rows. No broad cross-tenant operator policy is added. The table is included
 in the runtime-derived tenant erasure manifest but excluded from portable data
 archives: placement/controller authority belongs to the deployment, not to
 customer content. A destination must receive its own authoritative restriction
