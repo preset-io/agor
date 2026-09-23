@@ -33,6 +33,20 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.6 (2026-09-23)
+
+Release preparation includes merged changes from `v0.26.5` through `2c1b86ef`, plus the Claude runtime compatibility fix below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.5...2c1b86eff8f9a2e2f83f57cfb2e9c5543090d2b2).
+
+### Fixes
+
+- **Opus 5.5 uses a compatible Claude runtime** — upgrades the pinned Claude Agent SDK to 0.3.280, which bundles Claude Code 2.1.280, resolving the older-runtime model rejection. Packaged installations must upgrade Agor and synchronize their managed integrations with `agor install --sync` before restarting; updating a global `claude` executable does not update Agor's runtime.
+- **Older conversation text expands again** — restores **See more** for historical messages, bounds previews by characters or source lines, and stabilizes initial history hydration and explicit bottom scrolling. ([#2828](https://github.com/preset-io/agor/pull/2828))
+- **Session and board inventories do less work** — reuses configuration grant sets, enforces session recency, and skips optional inventory counts when they are not requested. ([#2829](https://github.com/preset-io/agor/pull/2829))
+
+### Chores
+
+- **Release verification tolerates registry propagation** — bounds npm visibility verification by an elapsed deadline rather than a misleading retry budget. ([#2826](https://github.com/preset-io/agor/pull/2826))
+
 ## 0.26.5 (2026-09-23)
 
 Release preparation covers merged changes from `v0.26.4` (`15c779d5`) through `e4a88198`: [compare changes](https://github.com/preset-io/agor/compare/v0.26.4...e4a88198ab2090c563c2a239be0cb464cd5c43ed).
