@@ -185,6 +185,8 @@ export type ExecutorSpawnMode = 'local' | 'templated';
 
 export interface ExecutorSpawnContext {
   mode: ExecutorSpawnMode;
+  /** Terminating signal reported by the OS, when the process was signaled. */
+  signal?: NodeJS.Signals | null;
 }
 
 export interface SpawnExecutorOptions {
@@ -681,10 +683,10 @@ function spawnExecutorLocalPrepared(
   console.log(`${logPrefix} Command: ${payload.command}`);
 
   let reportedExit = false;
-  const reportExit = (code: number | null): void => {
+  const reportExit = (code: number | null, signal?: NodeJS.Signals | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
+    observeExitCallback(options.onExit, code, { mode: 'local', signal }, logPrefix);
   };
 
   let executorProcess: ChildProcess;
@@ -709,13 +711,15 @@ function spawnExecutorLocalPrepared(
     reportExit(127);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(`${logPrefix} Executor completed successfully`);
     } else {
-      console.error(`${logPrefix} Executor exited with code ${code}`);
+      console.error(
+        `${logPrefix} Executor exited with code ${code}${signal ? ` signal ${signal}` : ''}`
+      );
     }
-    reportExit(code);
+    reportExit(code, signal);
   });
 
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
@@ -739,10 +743,10 @@ function spawnExecutorWithTemplate(
   console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
 
   let reportedExit = false;
-  const reportExit = (code: number | null): void => {
+  const reportExit = (code: number | null, signal?: NodeJS.Signals | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    observeExitCallback(options.onExit, code, { mode: 'templated' }, logPrefix);
+    observeExitCallback(options.onExit, code, { mode: 'templated', signal }, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
@@ -761,17 +765,17 @@ function spawnExecutorWithTemplate(
     reportExit(127);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(
         `${logPrefix} Executor completed successfully (task: ${templateVariables.task_id})`
       );
     } else {
       console.error(
-        `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
+        `${logPrefix} Executor exited with code ${code}${signal ? ` signal ${signal}` : ''} (task: ${templateVariables.task_id})`
       );
     }
-    reportExit(code);
+    reportExit(code, signal);
   });
 
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);

@@ -163,6 +163,7 @@ import type {
 } from './declarations.js';
 import {
   containExecutorProcess,
+  isShutdownContainmentActive,
   markExecutorProcessExited,
   retainExecutorContainmentFence,
   trackExecutorProcess,
@@ -1860,7 +1861,16 @@ function createExecuteHandler(
           mode: spawnContext.mode,
           outcome: code === 0 ? 'success' : code === null ? 'unknown' : 'failure',
         });
-        console.log(`${logPrefix} Exited with code ${code}`);
+        // One structured line per prompt-executor exit. A matching
+        // `[task.termination] event=request_committed cause=heartbeat_lost`
+        // for the same task means this exit interrupted an active turn.
+        console.log(
+          `[executor.exit] event=process_exited task_id=${shortId(taskId)} ` +
+            `session_id=${shortId(sessionId)} mode=${spawnContext.mode} ` +
+            `pid=${localExecutorPid ?? 'none'} code=${code ?? 'none'} ` +
+            `signal=${spawnContext.signal ?? 'none'} ` +
+            `daemon_shutdown=${isShutdownContainmentActive(app)}`
+        );
 
         if (spawnContext.mode === 'local') {
           markExecutorProcessExited(sessionId, localExecutorPid, app);
