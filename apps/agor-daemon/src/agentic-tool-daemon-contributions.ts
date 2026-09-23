@@ -8,9 +8,9 @@ import type { AgenticToolName, Session } from '@agor/core/types';
  * payload to merge into the spawn. Hosted Job-local state skips local fences. Shaped from
  * OpenCode's hook — the only real implementation today.
  */
-export type ExecutorLaunchContribution = ReturnType<
-  typeof OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch
->;
+export type ExecutorLaunchContribution = NonNullable<
+  ReturnType<typeof OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch>
+> & { managedProtocolVersion?: 3 };
 
 /**
  * Per-tool daemon-side contribution.

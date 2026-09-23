@@ -973,6 +973,8 @@ export class SchedulerService {
         const sdkHomeAdmission = resolveNewSessionSdkHomeScope({
           branchSdkHomeIntent: currentBranch.sdk_home ?? null,
           enabledForNewSessions: this.config.sdkHomeMode === 'per_branch',
+          tool: resolvedConfig.activeTool,
+          delegated: this.config.unixUserMode === 'delegated',
         });
         if (sdkHomeAdmission.scope === 'branch') {
           const unsupportedReason = branchSdkHomeIncompatibility;

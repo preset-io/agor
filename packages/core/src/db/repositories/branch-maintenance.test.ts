@@ -2,7 +2,9 @@ import { afterEach, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { UserID } from '../../types';
 import { lockBranchForAdmission } from '../branch-admission';
+import type { Database } from '../client';
 import { runDatabaseTransaction } from '../database-wrapper';
+import { runWithTenantContext } from '../tenant-context';
 import { ownedDbTest } from '../test-helpers';
 import {
   BranchMaintenanceDiscoveryRepository,
@@ -15,7 +17,8 @@ import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
 
-const test = ownedDbTest;
+const test = (title: string, work: (fixtures: { db: Database }) => Promise<void>) =>
+  ownedDbTest(title, async ({ db }) => runWithTenantContext('default', () => work({ db })));
 afterEach(() => vi.useRealTimers());
 
 test('a stale deletion becomes visible as failed without releasing the original invocation', async ({

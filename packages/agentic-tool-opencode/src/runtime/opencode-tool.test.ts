@@ -6,7 +6,7 @@ import type { EffortLevel, SessionID } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
-import { OpenCodeTool } from './opencode-tool.js';
+import { type OpenCodeInvocationConfig, OpenCodeTool } from './opencode-tool.js';
 
 type AbortResponse = { data: boolean; error: undefined } | { data: undefined; error: unknown };
 
@@ -300,7 +300,10 @@ vi.mock('./native-state.js', () => ({
   })),
 }));
 
-async function managedTurn(behavior: 'prompt-fails' | 'completes') {
+async function managedTurn(
+  behavior: 'prompt-fails' | 'completes',
+  config: OpenCodeInvocationConfig = { mcp: {} }
+) {
   const { EventEmitter } = await import('node:events');
   const { PassThrough } = await import('node:stream');
   const { publishOpenCodeCheckpoint } = await import('./native-state.js');
@@ -403,7 +406,7 @@ async function managedTurn(behavior: 'prompt-fails' | 'completes') {
     spawn,
     fetch: vi.fn(async () => new Response('{}', { status: 200 })),
     createClient: (() => client) as never,
-    resolveInvocationConfig: async () => ({ mcp: {} }),
+    resolveInvocationConfig: async () => config,
     eventDrainMs: 0,
   });
   const nativeState = {
@@ -443,6 +446,17 @@ async function managedTurn(behavior: 'prompt-fails' | 'completes') {
 }
 
 describe('OpenCodeTool managed projection', () => {
+  it('refuses attached local MCP commands and config overrides before spawning', async () => {
+    for (const config of [
+      { mcp: { local: { type: 'local', command: ['true'] } } },
+      { mcp: {}, plugin: ['file:///untrusted.mjs'] },
+      { mcp: {}, provider: { openai: { options: { baseURL: 'https://example.invalid' } } } },
+    ]) {
+      const { run, spawn } = await managedTurn('completes', config);
+      await expect(run).rejects.toThrow(/Hosted OpenCode/);
+      expect(spawn).not.toHaveBeenCalled();
+    }
+  });
   it('projects credentials and scratch roots onto the child only and publishes after a completed turn', async () => {
     const {
       run,
@@ -463,6 +477,9 @@ describe('OpenCodeTool managed projection', () => {
       XDG_STATE_HOME: nativeState.xdg.state,
       OPENCODE_DB: nativeState.liveDbPath,
       OPENCODE_AUTH_CONTENT: authContent,
+      OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
+      OPENCODE_PURE: 'true',
+      OPENCODE_TEST_HOME: nativeState.scratchRoot,
     });
     expect(process.env.OPENCODE_AUTH_CONTENT).toBeUndefined();
     expect(persistOpenCodeSessionId).not.toHaveBeenCalled();

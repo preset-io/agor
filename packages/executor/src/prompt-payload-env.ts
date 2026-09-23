@@ -14,11 +14,19 @@ const PAYLOAD_IDENTITY_DENY = new Set([
   // variable of this name must not relocate live OpenCode native state onto
   // the persistent home.
   'AGOR_OPENCODE_SCRATCH_ROOT',
+  // Cloud runtime identity is injected by the Pod template and snapshotted by
+  // the CLI before payload variables are applied. Treat the whole reserved
+  // namespace as substrate-owned so future locator fields cannot be shadowed.
 ]);
 
 function isDeniedPayloadEnvironmentName(key: string): boolean {
   const upper = key.toUpperCase();
-  return PAYLOAD_IDENTITY_DENY.has(upper) || upper.startsWith('LD_') || upper.startsWith('DYLD_');
+  return (
+    PAYLOAD_IDENTITY_DENY.has(upper) ||
+    upper.startsWith('AGOR_CLOUD_') ||
+    upper.startsWith('LD_') ||
+    upper.startsWith('DYLD_')
+  );
 }
 
 export interface AppliedPromptPayloadEnvironment {

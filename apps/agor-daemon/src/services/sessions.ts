@@ -482,6 +482,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Object.hasOwn(data, 'sdk_native_state')) {
       throw new BadRequest('sdk_native_state is server-managed and cannot be set by clients');
     }
+    if (
+      Object.hasOwn(data, 'sdk_native_state_store_id') ||
+      Object.hasOwn(data, 'opencode_cleanup_cursor')
+    ) {
+      throw new BadRequest('OpenCode native-state coordination is server-managed');
+    }
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
     );
@@ -590,6 +596,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         branchSdkHomeIntent: branch.sdk_home ?? null,
         enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
         inheritedScope: params?._sdkHomeScope,
+        tool: agenticTool,
+        delegated: config.execution?.unix_user_mode === 'delegated',
       });
       if (admission.scope === 'branch') {
         // Admission must reject credential/state combinations before it
@@ -1709,6 +1717,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   ): Promise<Session> {
     const session = await sessionRepo.findById(id);
     if (!session) throw new NotFound(`Session not found: ${id}`);
+    await (
+      sessionRepo as SessionRepository & {
+        assertNativeStateHandoffClear(id: string): Promise<void>;
+      }
+    ).assertNativeStateHandoffClear(session.session_id);
     if (await taskRepo.hasNonterminalForSession(session.session_id)) {
       throw new Conflict(
         `Cannot delete session ${session.session_id} while it has unfinished tasks. Stop them first.`
@@ -1747,6 +1760,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     assertSessionArchiveStateUsesDedicatedOperation(data);
     if (Object.hasOwn(data, 'sdk_native_state')) {
       throw new BadRequest('sdk_native_state is server-managed and cannot be set by clients');
+    }
+    if (
+      Object.hasOwn(data, 'sdk_native_state_store_id') ||
+      Object.hasOwn(data, 'opencode_cleanup_cursor')
+    ) {
+      throw new BadRequest('OpenCode native-state coordination is server-managed');
     }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');

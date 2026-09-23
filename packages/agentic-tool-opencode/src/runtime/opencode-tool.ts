@@ -36,6 +36,7 @@ import {
   type OpenCodeEventEffect,
   reconcileOpenCodeMessages,
 } from './event-translator.js';
+import { assertHostedOpenCodeInvocationConfig } from './hosted-config.js';
 import {
   createOpenCodeSanitizer,
   type ManagedChild,
@@ -106,7 +107,8 @@ export type RunOpenCodeTurnInput = {
     authContent?: string;
     authSecrets: readonly string[];
     nativeState: OpenCodeNativeStateLayout;
-    accepted: OpenCodeNativeStateAttempt | null;
+    /** Input is returned only by the committed DB holder grant. */
+    input: OpenCodeNativeStateAttempt | null;
   };
   signal: AbortSignal;
   persistOpenCodeSessionId: (sessionId: string) => Promise<void>;
@@ -696,9 +698,9 @@ export class OpenCodeTool {
     } catch (error) {
       throw preliminarySanitizer.error(error);
     }
-    // OPENCODE_CONFIG_CONTENT is the highest-precedence, invocation-scoped
-    // configuration. Force every interceptable permission through Agor even if
-    // the repository's opencode.json contains permissive rules.
+    // Local mode still merges repository configuration; hosted mode seals
+    // discovery at server startup. Force interceptable permissions in both.
+    if (input.managed) assertHostedOpenCodeInvocationConfig(resolvedInvocationConfig);
     const invocationConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
     const configContent = JSON.stringify(invocationConfig);
     let managedServer: ManagedOpenCodeServer;
@@ -707,25 +709,17 @@ export class OpenCodeTool {
         {
           directory: input.directory,
           dataHome: input.dataHome,
+          hostedLayout: input.managed?.nativeState,
           environment: {
             OPENCODE_CONFIG_CONTENT: configContent,
             // OpenCode resolves this dedicated runtime override when creating
             // session permission rules. Keep it alongside the config content so
             // permissive project/agent rules cannot bypass Agor interception.
             OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
-            ...(input.managed
-              ? {
-                  // Every native root and the live database live on Job-local
-                  // scratch; credentials are projected, never written to disk.
-                  XDG_DATA_HOME: input.managed.nativeState.xdg.data,
-                  XDG_CONFIG_HOME: input.managed.nativeState.xdg.config,
-                  XDG_CACHE_HOME: input.managed.nativeState.xdg.cache,
-                  XDG_STATE_HOME: input.managed.nativeState.xdg.state,
-                  OPENCODE_DB: input.managed.nativeState.liveDbPath,
-                  ...(input.managed.authContent
-                    ? { OPENCODE_AUTH_CONTENT: input.managed.authContent }
-                    : {}),
-                }
+            // Scratch/config roots are pinned by the hosted server boundary;
+            // credentials are projected only onto this child, never to disk.
+            ...(input.managed?.authContent
+              ? { OPENCODE_AUTH_CONTENT: input.managed.authContent }
               : {}),
           },
           secrets: [

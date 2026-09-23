@@ -5,13 +5,15 @@ const runtime = vi.hoisted(() => ({
   initialize: vi.fn().mockResolvedValue(undefined),
   recordPulse: vi.fn(),
   stopHeartbeat: vi.fn(),
+  startHeartbeat: vi.fn(),
   refreshMcp: vi.fn().mockResolvedValue({}),
+  createExecutorClient: vi.fn(),
 }));
 vi.mock('./executor-heartbeat.js', () => ({
-  startExecutorHeartbeat: () => ({
-    recordPulse: runtime.recordPulse,
-    stop: runtime.stopHeartbeat,
-  }),
+  startExecutorHeartbeat: (...args: unknown[]) => {
+    runtime.startHeartbeat(...args);
+    return { recordPulse: runtime.recordPulse, stop: runtime.stopHeartbeat };
+  },
 }));
 vi.mock('./handlers/sdk/tool-registry.js', () => ({
   initializeToolRegistry: runtime.initialize,
@@ -19,6 +21,9 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
 }));
 vi.mock('./mcp-runtime-refresh.js', () => ({
   requestMCPRuntimeRefresh: runtime.refreshMcp,
+}));
+vi.mock('./services/feathers-client.js', () => ({
+  createExecutorClient: runtime.createExecutorClient,
 }));
 
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
@@ -67,6 +72,109 @@ describe('AgorExecutor watchdog handoff', () => {
     vi.clearAllMocks();
     runtime.execute.mockResolvedValue(undefined);
     runtime.refreshMcp.mockResolvedValue({});
+    runtime.createExecutorClient.mockReset();
+  });
+
+  it('admits one of two outer invocations before heartbeat/provider work', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let finishWinner!: () => void;
+    runtime.execute.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWinner = resolve;
+        })
+    );
+    const holderId = '00000000-0000-7000-8000-000000000005';
+    const admission = {
+      outcome: 'admitted',
+      attempt: {
+        task_id: 'task-1',
+        holder_instance_id: holderId,
+        write_state: 'open',
+        retired_at: null,
+        store_id: '00000000-0000-7000-8000-000000000006',
+      },
+      input: null,
+    };
+    const rejected = { outcome: 'rejected', code: 'already_admitted' };
+    const makeClient = (begin: (holderInstanceId: string) => Promise<unknown>) => ({
+      service(path: string) {
+        if (path === 'tasks')
+          return {
+            connectExecutor: vi
+              .fn()
+              .mockResolvedValue({ task_id: 'task-1', session_id: 'session-1', status: 'running' }),
+            on: vi.fn(),
+            get: vi.fn(),
+            reportTerminationComplete: vi.fn(),
+          };
+        if (path === 'opencode-native-state')
+          return {
+            begin: vi.fn(async (input: { holder_instance_id: string }) => {
+              const result = await begin(input.holder_instance_id);
+              return result === admission
+                ? {
+                    ...admission,
+                    attempt: { ...admission.attempt, holder_instance_id: input.holder_instance_id },
+                  }
+                : result;
+            }),
+          };
+        return { on: vi.fn() };
+      },
+    });
+    const winnerClient = makeClient(async () => admission);
+    const loserClient = makeClient(async () => rejected);
+    runtime.createExecutorClient
+      .mockResolvedValueOnce(winnerClient)
+      .mockResolvedValueOnce(loserClient);
+
+    const makeExecutor = () => {
+      const executor = new AgorExecutor({
+        sessionToken: 'token',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'prompt',
+        tool: 'opencode',
+        daemonUrl: 'http://daemon',
+        agenticToolContext: { version: 3, mode: 'managed-projection' },
+        managedOpenCodeLocator: {
+          runId: 'run-1',
+          cellId: 'cell-1',
+          namespace: 'tenant-ns',
+          podName: 'pod-1',
+          podUid: 'pod-uid-1',
+          containerName: 'executor',
+        },
+      });
+      (executor as unknown as { setupShutdownHandlers: () => void }).setupShutdownHandlers =
+        vi.fn();
+      return executor;
+    };
+    const winner = makeExecutor();
+    const loser = makeExecutor();
+
+    const winnerRun = winner.start();
+    await vi.waitFor(() => expect(runtime.execute).toHaveBeenCalledOnce());
+    const loserRun = loser.start();
+    await Promise.all([loserRun]);
+
+    expect(runtime.execute).toHaveBeenCalledOnce();
+    expect(runtime.startHeartbeat).toHaveBeenCalledOnce();
+    expect(runtime.createExecutorClient.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.startHeartbeat.mock.invocationCallOrder[0]!
+    );
+    expect(runtime.startHeartbeat.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.execute.mock.invocationCallOrder[0]!
+    );
+    expect(exit).toHaveBeenCalledWith(1);
+
+    finishWinner();
+    await winnerRun;
+    expect(exit).toHaveBeenLastCalledWith(0);
   });
 
   it('starts SDK observation before invoking the tool', async () => {

@@ -34,6 +34,7 @@ import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import { exportTenantTableRows } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import { copyTenantFilesystemInto, type TenantFilesystemEntry } from './tenant-filesystem';
+import { assertTenantNativeStateHandoffClear } from './tenant-native-state-guard';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -95,6 +96,7 @@ export async function exportTenant(
   assertSafeOperationId(operationId);
 
   const identity = await resolveTenantDatabaseIdentity(db);
+  await assertTenantNativeStateHandoffClear(db, tenantId);
   await assertEmptyArchiveDestination(options.archivePath);
   await mkdir(databaseDir(options.archivePath), { recursive: true });
 

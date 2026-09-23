@@ -48,7 +48,9 @@ filesystem. This document specifies the smallest safe first release instead.
   native state (`supportsSessionFork` remains `false`; spawn creates a fresh
   native session).
 - Per-branch SDK home for OpenCode (branch-scoped sessions still refuse
-  OpenCode; the reason text becomes capability-specific).
+  OpenCode). New delegated OpenCode sessions, including scheduled occurrences,
+  select owner-only execution homes even when the branch has adopted `per_branch`.
+  Inherited lineage is preserved; other agents still follow branch-home policy.
 - Arbitrary plugins, local MCP `command` servers, custom provider endpoints,
   and remote auxiliary executor operations (discovery/verification Jobs).
 - Any change to other agents' branch-home policy, Cloud's delegated execution
@@ -197,6 +199,16 @@ Executor turn (managed-projection mode), across the executor adapter and
    the existing permission interception. In managed mode the executor does
    **not** patch `sdk_session_id` at native-session creation; the id is
    published only with the accepted checkpoint.
+   Hosted configuration discovery is sealed before startup: project OpenCode
+   config/component discovery is disabled, all inherited `OPENCODE_*` selectors
+   are removed, and home/system configuration discovery uses empty scratch roots.
+   The real execution `HOME` remains unchanged for tools. The pinned binary's
+   `OPENCODE_PURE` and default-plugin controls prevent plugin loading; the
+   invocation validator refuses plugins, provider configuration overrides, and
+   attached local MCP commands. Remote MCP entries still come from the authorized
+   Agor resolver. Repository OpenCode configuration is ignored, not merged.
+   This is a configuration boundary, not a sandbox protecting a user's key from
+   code the user explicitly runs in their own Job.
 4. On a successful turn: close the server (existing bounded SIGTERM/SIGKILL),
    then run the **durability barrier**: open the scratch DB with `node:sqlite`
    (available unflagged in the executor image's Node 22.13),

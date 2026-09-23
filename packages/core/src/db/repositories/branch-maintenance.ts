@@ -20,7 +20,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { branches, sessions, uploads } from '../schema';
+import { branches, opencodeCheckpointAttempts, sessions, uploads } from '../schema';
 import { requireCurrentTenantId } from '../tenant-context';
 import { assertTenantWritable } from '../tenant-write-gate';
 import { EntityNotFoundError, RepositoryError } from './base';
@@ -68,6 +68,11 @@ export class BranchMaintenanceRepository {
     requestedBy?: UserID,
     validate?: (tx: Database) => Promise<void>
   ): Promise<{ claim: BranchMaintenanceClaim; acquired: boolean }> {
+    // Capture trusted tenant identity before the database transaction changes
+    // async context. SQLite has no RLS, but its attempt rows still carry the
+    // `default` tenant discriminator; production PostgreSQL callers must scope
+    // this destructive operation explicitly.
+    const nativeStateTenantId = kind === 'delete' ? requireCurrentTenantId() : undefined;
     return this.locked(branchId, async (tx, row) => {
       await validate?.(tx);
       if (row.data.maintenance) {
@@ -110,6 +115,31 @@ export class BranchMaintenanceRepository {
       ) {
         throw new RepositoryError(
           'Branch upload staging is active or unsettled; reconcile it before maintenance'
+        );
+      }
+      if (
+        kind === 'delete' &&
+        ((await select(tx, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+          .from(opencodeCheckpointAttempts)
+          .innerJoin(sessions, eq(opencodeCheckpointAttempts.session_id, sessions.session_id))
+          .where(
+            and(
+              eq(sessions.branch_id, branchId),
+              eq(opencodeCheckpointAttempts.tenant_id, nativeStateTenantId!)
+            )
+          )
+          .limit(1)
+          .one()) ||
+          (await select(tx)
+            .from(sessions)
+            .where(sql`${sessions.branch_id} = ${branchId}
+              AND (${sessions.data} -> 'sdk_native_state' IS NOT NULL
+                OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`)
+            .limit(1)
+            .one()))
+      ) {
+        throw new RepositoryError(
+          'opencode_native_state_handoff_required: branch contains managed OpenCode state and requires whole-home process/queued-launch fencing'
         );
       }
       if (

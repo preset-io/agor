@@ -11,7 +11,7 @@
  *   pnpm --filter @agor/core exec vitest run src/db/tenant-portability.postgres.test.ts
  */
 
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,7 +38,7 @@ import {
   tableJsonlPath,
   writeManifest,
 } from './tenant-archive';
-import { deleteTenantData } from './tenant-deletion';
+import { deleteTenantData, TenantNativeStateHandoffRequiredError } from './tenant-deletion';
 import { exportTenant } from './tenant-export';
 import { importTenant } from './tenant-import';
 import { inspectTenant } from './tenant-inspect';
@@ -777,6 +777,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'github_install_states',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'opencode_checkpoint_attempts',
       'user_mcp_oauth_tokens',
       'user_provider_oauth_grants',
     ]);
@@ -825,6 +826,47 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     await deleteTenantData(db, source);
     await deleteTenantData(db, occupied);
+  });
+
+  it('blocks export, import, and verify before touching a tenant with native checkpoint state', async () => {
+    const tenantId = `tp-opencode-${generateId()}`;
+    await seedTenant(db, tenantId);
+    const archive = join(scratch, `${tenantId}-archive`);
+    await exportTenant(db, tenantId, { archivePath: archive });
+
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      const session = await select(scoped)
+        .from(pg.sessions)
+        .where(eq(pg.sessions.tenant_id, tenantId))
+        .one();
+      if (!session) throw new Error('expected a seeded session');
+      await update(scoped, pg.sessions)
+        .set({
+          data: { ...session.data, sdk_native_state_store_id: generateId() },
+        })
+        .where(eq(pg.sessions.session_id, session.session_id))
+        .run();
+    });
+
+    const refusedArchive = join(scratch, `${tenantId}-refused-export`);
+    await expect(
+      exportTenant(db, tenantId, { archivePath: refusedArchive })
+    ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+    expect(existsSync(refusedArchive)).toBe(false);
+    await expect(importTenant(db, { archivePath: archive, tenantId })).rejects.toBeInstanceOf(
+      TenantNativeStateHandoffRequiredError
+    );
+    await expect(
+      verifyTenant(db, { archivePath: archive, tenantId, scope: 'database' })
+    ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+
+    const remaining = await runWithTenantDatabaseScope(db, tenantId, async (scoped) =>
+      select(scoped, { session_id: pg.sessions.session_id })
+        .from(pg.sessions)
+        .where(eq(pg.sessions.tenant_id, tenantId))
+        .all()
+    );
+    expect(remaining).toHaveLength(1);
   });
 
   it('re-homes OAuth server configuration but omits grants across master secrets', async () => {

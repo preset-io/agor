@@ -51,12 +51,12 @@ verification and are re-run by QA only where noted.
 
 ## Isolation and posture
 
-| ID    | Boundary | Scenario                                                                        | Passing observation                                                                                                                 |
-| ----- | -------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| OC-40 | cloud    | Inspect a running OpenCode executor pod                                         | Server bound to `127.0.0.1` only; no service-account token; no AWS credentials; per-run server password absent from logs and events |
-| OC-41 | cloud    | Wrong branch id / wrong session id / crafted attempt path in a replayed payload | Rejected by existing task-credential and payload validation; no cross-user file access                                              |
-| OC-42 | unit     | Repository `opencode.json` with permissive permissions or a plugin              | Agor interception still forces `ask` and disables `task`/`question` (existing behavior)                                             |
-| OC-43 | cloud    | User B's Job payload replayed with user A's `namespaceKey`                      | Files resolve under B's own per-user home `subPath`; A's attempts remain unreachable; the accepted-digest check fails closed        |
+| ID    | Boundary | Scenario                                                                                                                           | Passing observation                                                                                                                                                                    |
+| ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OC-40 | cloud    | Inspect a running OpenCode executor pod                                                                                            | Server bound to `127.0.0.1` only; no service-account token; no AWS credentials; per-run server password absent from logs and events                                                    |
+| OC-41 | cloud    | Wrong branch id / wrong session id / crafted attempt path in a replayed payload                                                    | Rejected by existing task-credential and payload validation; no cross-user file access                                                                                                 |
+| OC-42 | runtime  | Repository/ancestor/home OpenCode config with a plugin, local MCP command, or custom provider endpoint; inherited config selectors | Pinned executable loads none of the excluded configuration, plugin/MCP markers remain absent, and Agor permissions remain authoritative; attached local MCP commands fail before spawn |
+| OC-43 | cloud    | User B's Job payload replayed with user A's `namespaceKey`                                                                         | Files resolve under B's own per-user home `subPath`; A's attempts remain unreachable; the accepted-digest check fails closed                                                           |
 
 ## Lifecycle and portability
 
@@ -82,6 +82,11 @@ verification and are re-run by QA only where noted.
   creation. Manual and cron paths reject missing opt-in or persistent homes
   before creating a row, preserve the structured reason in the refusal log,
   and admit a properly configured hosted occurrence (fake prompt delivery).
+  Real session creation and manual/cron scheduling replay the launch-enabled
+  provisioning/Helm configuration (`per_branch`) and select `execution_home` for
+  OpenCode, whether or not another tool has adopted the branch. Existing branch
+  intent, inherited lineage refusal, other tools' branch homes, and owner-only
+  launch admission remain unchanged.
 
 - Hosted execute-handler composition: real capability/admission/launch contributions
   with a fake templated launcher admit repeated turns and concurrent same-owner

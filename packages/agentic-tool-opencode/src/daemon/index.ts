@@ -48,7 +48,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
   },
   getExecutorLaunch(input: {
     tenantId: string;
-    session: Pick<Session, 'created_by' | 'unix_username' | 'session_id' | 'sdk_native_state'>;
+    session: Pick<Session, 'created_by' | 'unix_username' | 'session_id'>;
     taskId: string;
     homeDir: string;
     config: Pick<AgorConfig, 'execution' | 'multi_tenancy' | 'agentic_tools'>;
@@ -63,6 +63,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
         homeDir: input.homeDir,
       });
       return {
+        managedProtocolVersion: 3 as const,
         namespaceKey: namespace.namespaceKey,
         requiresLocalContainment: false,
         executorPayload: {
@@ -70,7 +71,6 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
             namespaceKey: namespace.namespaceKey,
             agorSessionId: input.session.session_id,
             taskId: input.taskId,
-            accepted: input.session.sdk_native_state ?? null,
           }),
         },
       };

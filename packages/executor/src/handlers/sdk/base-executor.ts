@@ -94,7 +94,8 @@ export async function settleTaskFailure(
   sessionId: SessionID,
   taskId: TaskID,
   failure: Error,
-  patch: Partial<Task>
+  patch: Partial<Task>,
+  nativeStateHolderInstanceId?: string
 ): Promise<void> {
   // Terminal task hooks may drain the next queued turn, so reserve the current
   // transcript index before publishing terminality. Message failure stays best-effort.
@@ -102,7 +103,10 @@ export async function settleTaskFailure(
   await client.service('tasks').patch(taskId, {
     ...patch,
     ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
-  });
+    ...(nativeStateHolderInstanceId
+      ? { native_state_holder_instance_id: nativeStateHolderInstanceId }
+      : {}),
+  } as Partial<Task>);
   markTaskFailurePersisted(failure);
 }
 

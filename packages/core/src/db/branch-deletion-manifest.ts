@@ -24,6 +24,15 @@ export const BRANCH_DELETION_RELATIONS: Readonly<Record<string, BranchDeletionRe
     'Preserve foreign-branch sessions; clear deleted schedule provenance.'
   ),
   'tasks.session_id': owned('Settle runtime containment before deleting tasks in bounded chunks.'),
+  'opencode_checkpoint_attempts.session_id': classify(
+    'Native-state grants/tombstones are never portable or branch-deletable; the locked branch admission guard blocks affected state before filesystem work.'
+  ),
+  'opencode_checkpoint_attempts.task_id': classify(
+    'Checkpoint authority survives Task terminality and blocks affected branch deletion until whole-home fencing.'
+  ),
+  'opencode_checkpoint_attempts.input_task_id': classify(
+    'An input pin may outlive its Task; preserve it and block handoff rather than cascade it.'
+  ),
   'messages.session_id': owned('Batch by session, including messages without a task.'),
   'messages.task_id': classify(
     'Delete branch-owned messages; a foreign-session reference is not ownership.'

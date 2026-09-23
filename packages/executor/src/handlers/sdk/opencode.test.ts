@@ -21,21 +21,26 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
 }));
 
 const nativeState = vi.hoisted(() => ({
-  layout: vi.fn((input: { taskId: string }) => ({
-    scratchRoot: `/scratch/${input.taskId}`,
-    xdg: {
-      data: `/scratch/${input.taskId}/xdg-data`,
-      config: `/scratch/${input.taskId}/xdg-config`,
-      cache: `/scratch/${input.taskId}/xdg-cache`,
-      state: `/scratch/${input.taskId}/xdg-state`,
-    },
-    liveDbPath: `/scratch/${input.taskId}/opencode.db`,
-    attemptsDir: '/home/user/attempts',
-    attemptTaskId: input.taskId,
-  })),
+  layout: vi.fn(
+    (input: { taskId: string; namespaceKey: string; agorSessionId: string; storeId: string }) => ({
+      homeDir: '/home/user',
+      namespaceKey: input.namespaceKey,
+      agorSessionId: input.agorSessionId,
+      storeId: input.storeId,
+      scratchRoot: `/scratch/${input.taskId}`,
+      xdg: {
+        data: `/scratch/${input.taskId}/xdg-data`,
+        config: `/scratch/${input.taskId}/xdg-config`,
+        cache: `/scratch/${input.taskId}/xdg-cache`,
+        state: `/scratch/${input.taskId}/xdg-state`,
+      },
+      liveDbPath: `/scratch/${input.taskId}/opencode.db`,
+      attemptsDir: '/home/user/attempts',
+      attemptTaskId: input.taskId,
+    })
+  ),
   assertRuntime: vi.fn(async () => undefined),
   prepare: vi.fn(async () => undefined),
-  prune: vi.fn(async () => []),
   restore: vi.fn(async () => undefined),
   discard: vi.fn(async () => undefined),
 }));
@@ -49,10 +54,14 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
     }
     runTurn = mocks.runTurn;
   },
-  resolveOpenCodeNativeStateLayout: (input: { taskId: string }) => nativeState.layout(input),
+  resolveOpenCodeNativeStateLayout: (input: {
+    taskId: string;
+    namespaceKey: string;
+    agorSessionId: string;
+    storeId: string;
+  }) => nativeState.layout(input),
   assertOpenCodeCheckpointRuntime: nativeState.assertRuntime,
   prepareOpenCodeScratch: nativeState.prepare,
-  pruneOpenCodeAttempts: nativeState.prune,
   restoreOpenCodeAcceptedState: nativeState.restore,
   discardOpenCodeScratch: nativeState.discard,
 }));
@@ -124,6 +133,14 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
         useNativeAuth: false,
       })),
     },
+    'opencode-native-state': {
+      closeRead: vi.fn(async () => undefined),
+      seal: vi.fn(async () => undefined),
+      abandon: vi.fn(async () => undefined),
+      prepareCleanup: vi.fn(async () => ({ kind: 'none' })),
+      observe: vi.fn(async () => undefined),
+      acknowledgeDelete: vi.fn(async () => undefined),
+    },
   };
   return {
     services,
@@ -132,26 +149,43 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
 }
 
 const managedContext = {
-  version: 2 as const,
+  version: 3 as const,
   mode: 'managed-projection' as const,
   namespaceKey: 'e'.repeat(64),
   agorSessionId: sessionId,
   taskId,
-  accepted: null,
 };
 const acceptedAttempt = {
-  version: 1 as const,
+  version: 3 as const,
+  storeId: '00000000-0000-7000-8000-000000000004',
+  openCodeVersion: '1.18.31',
   attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727f',
   digest: `sha256:${'a'.repeat(64)}`,
   bytes: 4096,
   openCodeSessionId: 'oc-accepted',
   publishedAt: '2026-09-10T22:18:55.000Z',
 };
+const managedAdmission = {
+  outcome: 'admitted' as const,
+  attempt: {
+    task_id: taskId,
+    store_id: acceptedAttempt.storeId,
+    holder_instance_id: '00000000-0000-7000-8000-000000000005',
+    input_store_id: acceptedAttempt.storeId,
+    input_task_id: acceptedAttempt.attemptTaskId,
+    input_read_closed_at: null,
+    write_state: 'open' as const,
+    sealed_manifest: null,
+    retired_at: null,
+  },
+  input: acceptedAttempt,
+};
 
 function execute(
   value: ReturnType<typeof client>['value'],
   abortController = new AbortController(),
-  agenticToolContext: Record<string, unknown> = { dataHome: '/opaque/opencode-home' }
+  agenticToolContext: Record<string, unknown> = { dataHome: '/opaque/opencode-home' },
+  managedOpenCodeAdmission?: typeof managedAdmission
 ) {
   return executeOpenCodeTask({
     client: value as never,
@@ -160,6 +194,7 @@ function execute(
     prompt: 'Continue',
     abortController,
     agenticToolContext,
+    managedOpenCodeAdmission: managedOpenCodeAdmission as never,
   });
 }
 
@@ -330,7 +365,7 @@ describe('OpenCode executor adapter', () => {
     abortController.abort();
     mocks.runTurn.mockRejectedValue(new Error('cancelled'));
 
-    await expect(execute(state.value, abortController)).rejects.toThrow('cancelled');
+    await expect(execute(state.value, abortController)).resolves.toBeUndefined();
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
@@ -338,6 +373,21 @@ describe('OpenCode executor adapter', () => {
 });
 
 describe('OpenCode executor adapter (hosted managed projection)', () => {
+  it('has no managed side effects without a committed outer-executor grant', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+
+    await expect(
+      execute(state.value, new AbortController(), managedContext)
+    ).resolves.toBeUndefined();
+
+    expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
+    expect(state.services.messages.create).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    expect(nativeState.prepare).not.toHaveBeenCalled();
+    expect(nativeState.restore).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+  });
+
   it('pulls reviewed keys through the task-scoped read, restores the accepted checkpoint, and publishes with completion', async () => {
     const state = client({
       sdk_session_id: 'oc-stale-unpublished',
@@ -355,10 +405,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
 
-    await execute(state.value, new AbortController(), {
-      ...managedContext,
-      accepted: acceptedAttempt,
-    });
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
 
     expect(state.services['config/resolve-api-key'].create).toHaveBeenCalledWith({
       taskId,
@@ -366,12 +413,11 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       tool: 'opencode',
     });
     expect(nativeState.prepare).toHaveBeenCalledOnce();
-    expect(nativeState.prune).toHaveBeenCalledWith(expect.anything(), acceptedAttempt);
     expect(nativeState.restore).toHaveBeenCalledWith(expect.anything(), acceptedAttempt);
     const turn = mocks.runTurn.mock.calls[0][0] as {
       existingOpenCodeSessionId?: string;
       dataHome?: string;
-      managed?: { authContent?: string; authSecrets: string[]; accepted: unknown };
+      managed?: { authContent?: string; authSecrets: string[]; input: unknown };
     };
     expect(turn.existingOpenCodeSessionId).toBe('oc-accepted');
     expect(turn.dataHome).toBeUndefined();
@@ -384,17 +430,31 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     expect(state.services.sessions.patch).not.toHaveBeenCalled();
     expect(state.services.tasks.patch).toHaveBeenCalledWith(
       taskId,
-      expect.objectContaining({ status: 'completed', native_state_attempt: published })
+      expect.objectContaining({
+        status: 'completed',
+        native_state_attempt: published,
+        native_state_holder_instance_id: managedAdmission.attempt.holder_instance_id,
+      })
     );
+    expect(state.services['opencode-native-state'].closeRead).toHaveBeenCalledWith({
+      task_id: taskId,
+      holder_instance_id: managedAdmission.attempt.holder_instance_id,
+      input: { storeId: acceptedAttempt.storeId, taskId: acceptedAttempt.attemptTaskId },
+    });
+    expect(state.services['opencode-native-state'].seal).toHaveBeenCalledWith({
+      task_id: taskId,
+      holder_instance_id: managedAdmission.attempt.holder_instance_id,
+      manifest: published,
+    });
     expect(nativeState.discard).toHaveBeenCalledOnce();
   });
 
   it('fails before the provider turn when the executor runtime lacks node:sqlite', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
     nativeState.assertRuntime.mockRejectedValueOnce(new Error('runtime lacks node:sqlite'));
-    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
-      /lacks node:sqlite/
-    );
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/lacks node:sqlite/);
     expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
     expect(mocks.runTurn).not.toHaveBeenCalled();
   });
@@ -404,9 +464,9 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     nativeState.layout.mockImplementationOnce(() => {
       throw new Error('OpenCode managed scratch root is not pinned');
     });
-    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
-      /not pinned/
-    );
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/not pinned/);
     expect(state.services['config/resolve-api-key'].create).not.toHaveBeenCalled();
     expect(nativeState.prepare).not.toHaveBeenCalled();
     expect(mocks.runTurn).not.toHaveBeenCalled();
@@ -421,9 +481,9 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       useNativeAuth: false,
     });
 
-    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
-      /selected for this session has no saved key/
-    );
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/selected for this session has no saved key/);
     expect(mocks.runTurn).not.toHaveBeenCalled();
     expect(state.services.tasks.patch).toHaveBeenCalledWith(
       taskId,
@@ -433,9 +493,9 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
 
   it('rejects a different saved provider before scratch restore or a provider turn', async () => {
     const state = client(); // openai session, only anthropic saved
-    await expect(execute(state.value, new AbortController(), managedContext)).rejects.toThrow(
-      /selected for this session has no saved key/
-    );
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/selected for this session has no saved key/);
     expect(state.services['config/resolve-api-key'].create).toHaveBeenCalledWith({
       taskId,
       keyName: 'OPENCODE_API_KEY_OPENAI',
@@ -449,10 +509,15 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
   it('refuses a managed context that names another task and a turn without a checkpoint', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
     await expect(
-      execute(state.value, new AbortController(), {
-        ...managedContext,
-        taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727f',
-      })
+      execute(
+        state.value,
+        new AbortController(),
+        {
+          ...managedContext,
+          taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727f',
+        },
+        managedAdmission
+      )
     ).rejects.toThrow(/does not belong to this task/);
     expect(mocks.runTurn).not.toHaveBeenCalled();
 
@@ -462,9 +527,9 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
     const second = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
-    await expect(execute(second.value, new AbortController(), managedContext)).rejects.toThrow(
-      /without a published checkpoint/
-    );
+    await expect(
+      execute(second.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/without a published checkpoint/);
     expect(second.services.tasks.patch).not.toHaveBeenCalledWith(
       taskId,
       expect.objectContaining({ status: 'completed' })

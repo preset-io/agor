@@ -147,7 +147,10 @@ import type { UnixUserMode } from '@agor/core/unix';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
-import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  requireTaskScopedExecutorRuntimeToken,
+} from './auth/executor-runtime-scope.js';
 import {
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
@@ -331,6 +334,7 @@ import {
 } from './services/mcp-slack-oauth-authority.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
+import { OpenCodeNativeStateService } from './services/opencode-native-state.js';
 import { setupOwnershipTransferServices } from './services/ownership-transfer.js';
 import { createReposService } from './services/repos.js';
 import {
@@ -587,6 +591,28 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
     //      the executor for live tool/thinking visualization.
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
+  });
+  app.use(
+    '/opencode-native-state',
+    new OpenCodeNativeStateService({
+      db,
+      getConfig: () => config,
+      executorCredentialRevoker: sessionTokenService,
+    }) as never,
+    {
+      methods: [
+        'begin',
+        'closeRead',
+        'seal',
+        'abandon',
+        'prepareCleanup',
+        'observe',
+        'acknowledgeDelete',
+      ],
+    }
+  );
+  app.service('/opencode-native-state').hooks({
+    before: { all: [requireTaskScopedExecutorRuntimeToken()] },
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
@@ -1726,6 +1752,15 @@ export function createExecuteHandler(
         config,
       });
     })();
+
+    // Managed checkpoint coordination is a server-derived Task requirement,
+    // persisted before any executor token or payload can be issued. Local
+    // OpenCode and every other tool retain their existing lifecycle.
+    if (executorLaunch?.managedProtocolVersion === 3) {
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        tasksService.stampManagedOpenCodeProtocol(data.taskId)
+      );
+    }
 
     // Issue only after every launch prerequisite succeeds. The credential
     // scope repeats the locked, server-derived launch authority; token retries

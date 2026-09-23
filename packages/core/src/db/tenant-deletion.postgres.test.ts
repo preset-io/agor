@@ -14,15 +14,22 @@ import { count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { UUID } from '../types/id';
+import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
 import { executeRaw, insert, isPostgresDatabase, select } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import { BranchRepository } from './repositories/branches';
+import { OpenCodeCheckpointAttemptRepository } from './repositories/opencode-checkpoint-attempts';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
+import { TaskRepository } from './repositories/tasks';
 import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
-import { deleteTenantData, TenantDeletionCatalogError } from './tenant-deletion';
+import {
+  deleteTenantData,
+  TenantDeletionCatalogError,
+  TenantNativeStateHandoffRequiredError,
+} from './tenant-deletion';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -371,6 +378,120 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
 
     await deleteTenantData(db, tenantC);
     expect(await countTenantSessions(db, tenantC)).toBe(0);
+  });
+
+  it('blocks physical tenant deletion while a coordinated OpenCode attempt exists', async () => {
+    const tenantId = `td-opencode-${generateId()}`;
+    const ownerId = generateId() as UUID;
+    const repoId = generateId();
+    const branchId = generateId();
+    const sessionId = generateId();
+    const taskId = generateId();
+    const storeId = generateId();
+    const holderId = generateId();
+
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await new UsersRepository(scoped).create({
+        user_id: ownerId,
+        email: `tenant-opencode-${tenantId}@example.invalid`,
+        role: 'member',
+      });
+      await new RepoRepository(scoped).create({
+        repo_id: repoId,
+        slug: `td-opencode-${repoId}`,
+        name: 'OpenCode native-state guard',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/tenant-opencode.git',
+        local_path: `/tmp/${repoId}`,
+        default_branch: 'main',
+      });
+      await new BranchRepository(scoped).create({
+        branch_id: branchId,
+        repo_id: repoId,
+        name: 'opencode-guard',
+        ref: 'main',
+        branch_unique_id: branchUniqueSeq++,
+        path: `/tmp/${branchId}`,
+        created_by: ownerId,
+      });
+      await new SessionRepository(scoped).create({
+        session_id: sessionId,
+        branch_id: branchId,
+        agentic_tool: 'opencode',
+        created_by: ownerId,
+      });
+      const tasks = new TaskRepository(scoped);
+      await tasks.create({
+        task_id: taskId,
+        session_id: sessionId,
+        created_by: ownerId,
+        full_prompt: 'tenant deletion guard',
+        status: TaskStatus.DISPATCHING,
+        message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+        tool_use_count: 0,
+        git_state: { ref_at_start: 'main', sha_at_start: 'tenant-guard' },
+      });
+      const connected = await tasks.connectExecutor(taskId);
+      if (!connected) throw new Error('Task connection failed');
+      await tasks.stampManagedOpenCodeProtocol(taskId);
+      await new OpenCodeCheckpointAttemptRepository(scoped).begin({
+        taskId,
+        holderInstanceId: holderId,
+        storeId,
+        binding: {
+          protocol: 3,
+          tenantId,
+          ownerUserId: ownerId,
+          sessionId,
+          taskId,
+          storeId,
+          holderInstanceId: holderId,
+          locator: {
+            runId: generateId(),
+            cellId: generateId(),
+            tenantId,
+            ownerRuntimeUserId: ownerId,
+            sessionId,
+            taskId,
+            storeId,
+            holderInstanceId: holderId,
+            namespace: 'tenant-deletion-test',
+            jobName: `job-${taskId}`,
+            jobUid: generateId(),
+            podName: `pod-${taskId}`,
+            podUid: generateId(),
+            containerName: 'executor',
+            containerId: `containerd://${generateId()}`,
+            restartCount: 0,
+            imageIdentity: `sha256:${'d'.repeat(64)}`,
+          },
+        },
+      });
+    });
+
+    try {
+      await expect(deleteTenantData(db, tenantId)).rejects.toBeInstanceOf(
+        TenantNativeStateHandoffRequiredError
+      );
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await executeRaw(
+          scoped,
+          sql`
+          DELETE FROM public.opencode_checkpoint_attempts WHERE tenant_id = ${tenantId}
+        `
+        );
+        await executeRaw(
+          scoped,
+          sql`
+          UPDATE public.sessions SET data = data - 'sdk_native_state_store_id'
+          WHERE tenant_id = ${tenantId}
+        `
+        );
+      });
+      await deleteTenantData(db, tenantId);
+    }
   });
 
   it('deletes and verifies the imperative embeddings table without touching another tenant', async () => {

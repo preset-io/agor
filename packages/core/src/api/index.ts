@@ -322,6 +322,7 @@ export interface ServiceTypes {
   templates: TemplateRenderResponse;
   'agentic-tool-settings': TenantAgenticToolSettings;
   'agentic-tool-presets': AgenticToolPreset;
+  'opencode-native-state': import('../types').OpenCodeCheckpointAdmission;
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
   'executor-git-environment': ExecutorGitEnvironment;
@@ -466,6 +467,35 @@ export interface OpenCodeAuthService {
     params?: Params
   ): Promise<OpenCodeOAuthAttempt>;
   remove(providerId: string, params?: Params): Promise<OpenCodeProviderSettings>;
+}
+
+/** Executor-only managed OpenCode coordination boundary. */
+export interface OpenCodeNativeStateService {
+  begin(
+    data: import('../types').OpenCodeCheckpointBeginInput,
+    params?: Params
+  ): Promise<import('../types').OpenCodeCheckpointAdmission>;
+  closeRead(
+    data: import('../types').OpenCodeCheckpointCloseReadInput,
+    params?: Params
+  ): Promise<void>;
+  seal(data: import('../types').OpenCodeCheckpointSealInput, params?: Params): Promise<void>;
+  abandon(data: import('../types').OpenCodeCheckpointHolderInput, params?: Params): Promise<void>;
+  prepareCleanup(
+    data: import('../types').OpenCodeCheckpointHolderInput,
+    params?: Params
+  ): Promise<import('../types').OpenCodeCheckpointCleanupWork>;
+  observe(
+    data: import('../types').OpenCodeCheckpointHolderInput & { attempt_id: string },
+    params?: Params
+  ): Promise<void>;
+  acknowledgeDelete(
+    data: import('../types').OpenCodeCheckpointHolderInput & {
+      object: { storeId: string; taskId: string };
+      result: { outcome: 'deleted' } | { outcome: 'failed'; errorCode: string };
+    },
+    params?: Params
+  ): Promise<void>;
 }
 
 export interface OpenCodeModelsService {
@@ -880,6 +910,7 @@ export interface AgorClient
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
   service(path: 'opencode-auth'): OpenCodeAuthService;
+  service(path: 'opencode-native-state'): OpenCodeNativeStateService;
   service(path: 'opencode-models'): OpenCodeModelsService;
   service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 

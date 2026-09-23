@@ -65,6 +65,10 @@ import {
   type TenantFilesystemEntry,
   tenantFilesystemEntriesEqual,
 } from './tenant-filesystem';
+import {
+  assertArchiveNativeStateAbsent,
+  assertTenantNativeStateHandoffClear,
+} from './tenant-native-state-guard';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -248,6 +252,7 @@ export async function importTenant(
       `Refusing to import: archive failed integrity check (${integrity.problemCount} problem(s)); first: ${integrity.problems[0] ?? 'unknown'}`
     );
   }
+  await assertArchiveNativeStateAbsent(options.archivePath, manifest);
 
   // Prove every stored symlink target is root-contained BEFORE any database
   // write. Structural manifest validation checks each entry's own path but not
@@ -273,6 +278,7 @@ export async function importTenant(
       `Refusing to import: live database identity (schemaVersion=${identity.schemaVersion}) does not match the archive (schemaVersion=${manifest.database.identity.schemaVersion})`
     );
   }
+  await assertTenantNativeStateHandoffClear(db, tenantId);
 
   // The archive must carry exactly the live catalog's movable tenant tables —
   // no missing, extra, or duplicate — before we read or restore any of them.

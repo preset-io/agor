@@ -402,6 +402,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Override create to atomically update session status when task is created with RUNNING status
    */
   async create(data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+    if (Object.hasOwn(data, 'managed_opencode_protocol')) {
+      throw new BadRequest('managed_opencode_protocol is server-managed');
+    }
     console.log(
       `🔍 [TasksService.create] Called with status: ${data.status}, TaskStatus.RUNNING: ${TaskStatus.RUNNING}`
     );
@@ -932,8 +935,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    *
    * NOTE: Tasks are only ever patched one at a time (never in bulk), so we don't need to loop.
    */
-  async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
-    const nextStatus = data.status;
+  async patch(
+    id: string,
+    data: Partial<Task> & { native_state_holder_instance_id?: string },
+    params?: TaskParams
+  ): Promise<Task | Task[]> {
+    if (Object.hasOwn(data, 'managed_opencode_protocol')) {
+      throw new BadRequest('managed_opencode_protocol is server-managed');
+    }
+    const nativeStateHolderId = data.native_state_holder_instance_id;
+    const { native_state_holder_instance_id: _holderOnly, ...taskPatch } = data;
+    if (nativeStateHolderId && !params?.provider) {
+      throw new BadRequest('native_state_holder_instance_id is executor-only');
+    }
+    const nextStatus = taskPatch.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
     if (
       currentTask?.status === TaskStatus.STOPPING &&
@@ -966,19 +981,35 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
-    if (params?.provider && data.native_state_attempt !== undefined) {
+    if (params?.provider && taskPatch.native_state_attempt !== undefined) {
       // Hosted OpenCode only: the pointer is meaningful solely for a managed
       // projection turn of an OpenCode session. Any other executor carrying
       // it is refused before the repository is touched.
       await this.assertNativeStatePublicationAdmitted(currentTask, params);
     }
     const result = params?.provider
-      ? data.native_state_attempt !== undefined
+      ? taskPatch.native_state_attempt !== undefined
         ? // Hosted OpenCode: the checkpoint pointer is accepted only together
           // with completion, Session lock first (see the repository method).
-          await this.taskRepo.completeWithNativeStatePublication(id, data)
-        : await this.taskRepo.updateFromExecutor(id, data)
-      : await super.patch(id, data, params);
+          await (
+            this.taskRepo as unknown as {
+              completeWithNativeStatePublication(
+                id: string,
+                updates: Partial<Task>,
+                holderId: string
+              ): Promise<Task>;
+            }
+          ).completeWithNativeStatePublication(id, taskPatch, nativeStateHolderId ?? '')
+        : await (
+            this.taskRepo as unknown as {
+              updateFromExecutor(
+                id: string,
+                updates: Partial<Task>,
+                holderId?: string
+              ): Promise<Task>;
+            }
+          ).updateFromExecutor(id, taskPatch, nativeStateHolderId)
+      : await super.patch(id, taskPatch, params);
 
     // Task terminality is the one lifecycle boundary shared by local and
     // off-host executors. Retire every bearer for this exact task before any
@@ -1002,7 +1033,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // executor turns. Timeout paths patch session state separately and should not
     // enqueue callbacks, mark sessions promptable, archive forks, or drain queues here.
     if (isCompletionSideEffectTransition) {
-      await this.processCompletionSideEffects(result as Task, data.status!, params);
+      await this.processCompletionSideEffects(result as Task, taskPatch.status!, params);
     }
 
     return result;
@@ -1655,7 +1686,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.bindExecutorLaunchAuthority(taskId);
   }
 
+  /** Stamp server-derived managed OpenCode protocol before a hosted executor is issued. */
+  async stampManagedOpenCodeProtocol(taskId: string): Promise<void> {
+    await (
+      this.taskRepo as unknown as {
+        stampManagedOpenCodeProtocol(taskId: string): Promise<void>;
+      }
+    ).stampManagedOpenCodeProtocol(taskId);
+  }
+
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
+    const holderInstanceId = (data as RuntimeTelemetryInput & { holder_instance_id?: string })
+      .holder_instance_id;
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;
       if (!Number.isSafeInteger(sequence) || sequence <= 0) {
@@ -1695,8 +1737,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
 
+    const reportRuntimeTelemetry = this.taskRepo.reportRuntimeTelemetry as unknown as (
+      id: string,
+      authority: Parameters<TaskRepository['reportRuntimeTelemetry']>[1],
+      pulse?: RuntimeTelemetryInput['pulse'],
+      observedAt?: Date,
+      holderId?: string
+    ) => ReturnType<TaskRepository['reportRuntimeTelemetry']>;
     const persistTelemetry = () =>
-      this.taskRepo.reportRuntimeTelemetry(
+      reportRuntimeTelemetry.call(
+        this.taskRepo,
         data.task_id,
         {
           token_fingerprint: authority.tokenFingerprint,
@@ -1707,7 +1757,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             ? {}
             : { standalone_token_current: standaloneTokenCurrent }),
         },
-        data.pulse
+        data.pulse,
+        undefined,
+        holderInstanceId
       );
 
     // PostgreSQL tenant-owned services run inside a request transaction. The
@@ -1781,6 +1833,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {
+    const holderInstanceId = (data as SdkHealthFailureInput & { holder_instance_id?: string })
+      .holder_instance_id;
     if (!SDK_WATCHDOG_FAILURE_REASONS.includes(data.reason))
       throw new BadRequest('invalid SDK health reason');
     for (const [name, value] of Object.entries({
@@ -1825,6 +1879,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
+    await (
+      this.taskRepo as unknown as {
+        assertManagedExecutorHolder(taskId: string, holderId?: string): Promise<void>;
+      }
+    ).assertManagedExecutorHolder(data.task_id, holderInstanceId);
     const session = await this.app.service('sessions').get(current.session_id, params);
     const failure: SdkFailure = {
       reason: data.reason,
@@ -1839,7 +1898,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     };
     if (action === 'would_fire') {
       const observed = await runInFreshTerminationTenantWriteDatabase(() =>
-        this.taskRepo.recordSdkHealthObservation(data.task_id, failure)
+        (
+          this.taskRepo as unknown as {
+            recordSdkHealthObservation(
+              taskId: string,
+              failure: SdkFailure,
+              holderId?: string
+            ): Promise<Task | null>;
+          }
+        ).recordSdkHealthObservation(data.task_id, failure, holderInstanceId)
       );
       if (!observed) throw new Conflict(`Task ${shortId(data.task_id)} is no longer active`);
       emitServiceEvent(this.app, {

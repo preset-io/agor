@@ -51,6 +51,8 @@ export interface ExecutorPulse {
 
 export interface RuntimeTelemetryInput {
   task_id: string;
+  /** Required only for server-marked managed OpenCode Tasks. */
+  holder_instance_id?: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
 }
 
@@ -83,7 +85,7 @@ export interface SdkFailure {
 export type SdkHealthFailureInput = Pick<
   SdkFailure,
   'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
-> & { task_id: string; reason: SdkWatchdogFailureReason };
+> & { task_id: string; reason: SdkWatchdogFailureReason; holder_instance_id?: string };
 
 export type TerminationCause =
   | 'user_stop'
@@ -147,6 +149,8 @@ export interface TerminationRequest {
 
 export interface ExecutorTerminationCompleteInput {
   task_id: string;
+  /** Required only for server-marked managed OpenCode Tasks. */
+  holder_instance_id?: string;
   /** Fences a late report from a previous termination request. */
   requested_at: string;
 }

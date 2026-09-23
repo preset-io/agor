@@ -13,6 +13,7 @@ import type {
   MCPRuntimeRecovery,
   MCPServerID,
   MCPSlackRecoveryNotice,
+  OpenCodeNativeStateAttempt,
   SdkFailure,
   SessionID,
   SessionUsageSummary,
@@ -28,7 +29,6 @@ import type {
 } from '@agor/core/types';
 import {
   EXECUTING_TASK_STATUSES,
-  isOpenCodeNativeStateAttempt,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
   SessionStatus,
@@ -54,6 +54,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
+import { isCoordinatedOpenCodeNativeStateAttempt } from '../../types/opencode-native-state.js';
 import { lockSessionBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
@@ -68,6 +69,7 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  opencodeCheckpointAttempts,
   type SessionRow,
   sessionMcpServers,
   sessions,
@@ -100,6 +102,24 @@ function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>
       row.status === TaskStatus.AWAITING_PERMISSION ||
       row.status === TaskStatus.AWAITING_INPUT)
   );
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function sameNativeStateManifest(
+  left: OpenCodeNativeStateAttempt,
+  right: OpenCodeNativeStateAttempt
+): boolean {
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 function mcpReprojectionAuthorityDigest(authorityFingerprints: readonly string[]): string {
@@ -441,6 +461,38 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     );
   }
 
+  /** Server-side dispatch stamp used before issuing a hosted managed OpenCode executor. */
+  async stampManagedOpenCodeProtocol(taskId: string): Promise<void> {
+    await this.mutateLockedSessionTask(
+      taskId,
+      async (tx, taskRow, sessionRow) => {
+        if (
+          sessionRow.agentic_tool !== 'opencode' ||
+          sessionRow.sdk_home_scope !== 'execution_home'
+        ) {
+          throw new RepositoryError(
+            'Managed OpenCode protocol requires an owner execution-home Session'
+          );
+        }
+        if (isTerminalTaskStatus(taskRow.status))
+          throw new RepositoryError('Cannot stamp a terminal Task');
+        if (
+          taskRow.data.managed_opencode_protocol !== undefined &&
+          taskRow.data.managed_opencode_protocol !== 3
+        ) {
+          throw new RepositoryError('Task already carries an unsupported OpenCode protocol marker');
+        }
+        await update(tx, tasks)
+          .set({
+            data: { ...taskRow.data, managed_opencode_protocol: 3 },
+          })
+          .where(eq(tasks.task_id, taskRow.task_id))
+          .run();
+      },
+      true
+    );
+  }
+
   /**
    * Resolve a mutation timestamp from PostgreSQL's clock. SQLite retains its
    * historical process-clock behavior, and callers may inject a clock for
@@ -461,9 +513,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   private rowToTask(row: TaskRow): Task {
     const storedTerminationRequest = row.data.termination_request;
-    // Strip the retired JSON key without migrating historical blobs.
+    // Never expose internal protocol or retired JSON fields through Task DTOs.
     const {
       executor_launch_fs_access_floor: _executorLaunchFsAccessFloor,
+      managed_opencode_protocol: _managedOpenCodeProtocol,
       tool_use_count: _retiredToolCount,
       ...publicData
     } = row.data as TaskRow['data'] & { tool_use_count?: unknown };
@@ -1471,6 +1524,25 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       throw new RepositoryError('Task credential authority unavailable');
   }
 
+  /** Validate holder-bound managed lifecycle authority without mutating Task state. */
+  async assertManagedExecutorHolder(id: string, holderId?: string): Promise<void> {
+    const route = await select(this.db, { data: tasks.data })
+      .from(tasks)
+      .where(eq(tasks.task_id, id))
+      .one();
+    if (!route) throw new EntityNotFoundError('Task', id);
+    if ((route.data as TaskRow['data']).managed_opencode_protocol !== 3) return;
+    await this.mutateLockedSessionTask(
+      id,
+      async (txDb, row) => {
+        if (!executorOwnsTask(row))
+          throw new RepositoryError('Managed OpenCode Task is not executor-owned');
+        await this.requireManagedOpenCodeHolder(txDb, row, holderId);
+      },
+      true
+    );
+  }
+
   /**
    * Revalidate exact runtime authority, then atomically stamp heartbeat/pulse.
    * Explicit denial returns the unchanged Task so the service can claim the
@@ -1481,9 +1553,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     id: string,
     authority: TaskRuntimeAuthorityScope,
     pulse?: Omit<ExecutorPulse, 'observed_at'>,
-    observedAt?: Date
+    observedAt?: Date,
+    holderId?: string
   ): Promise<RuntimeTelemetryReportResult> {
-    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+    const mutate = async (
+      txDb: Database,
+      row: TaskRow,
+      fullId: string
+    ): Promise<RuntimeTelemetryReportResult> => {
+      if (row.data.managed_opencode_protocol === 3) {
+        await this.requireManagedOpenCodeHolder(txDb, row, holderId);
+      }
       const current = this.rowToTask(row);
       // STOPPING remains executor-owned until the scoped executor reports
       // quiescence. An unverified containment guard is not proof of absence,
@@ -1513,7 +1593,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         outcome: 'continued',
         task: this.rowToTask({ ...row, last_executor_heartbeat_at: heartbeatAt, data }),
       };
-    });
+    };
+    const route = await select(this.db, { data: tasks.data })
+      .from(tasks)
+      .where(eq(tasks.task_id, id))
+      .one();
+    if (!route) throw new EntityNotFoundError('Task', id);
+    return (route.data as TaskRow['data']).managed_opencode_protocol === 3
+      ? this.mutateLockedSessionTask(
+          id,
+          (txDb, row, _sessionRow, fullId) => mutate(txDb, row, fullId),
+          true
+        )
+      : this.mutateLockedTask(id, mutate);
   }
 
   /**
@@ -1526,7 +1618,21 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     input: ExecutorTerminationCompleteInput,
     observedAt?: Date
   ): Promise<Task | null> {
-    return this.mutateLockedTask(input.task_id, async (txDb, row, fullId) => {
+    const mutate = async (txDb: Database, row: TaskRow, fullId: string) => {
+      let managedLedger: typeof opencodeCheckpointAttempts.$inferSelect | undefined;
+      if (row.data.managed_opencode_protocol === 3) {
+        managedLedger = await this.requireManagedOpenCodeHolder(
+          txDb,
+          row,
+          input.holder_instance_id
+        );
+        if (
+          (managedLedger.input_task_id && !managedLedger.input_read_closed_at) ||
+          managedLedger.write_state === 'open'
+        ) {
+          throw new RepositoryError('Managed OpenCode I/O has not drained before quiescence');
+        }
+      }
       const current = this.rowToTask(row);
       const request = current.termination_request;
       if (
@@ -1583,18 +1689,49 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         data,
         ...(recoveringUnverified ? { termination_unverified_at: null } : {}),
       });
-    });
+    };
+    const route = await select(this.db, { data: tasks.data })
+      .from(tasks)
+      .where(eq(tasks.task_id, input.task_id))
+      .one();
+    if (!route) throw new EntityNotFoundError('Task', input.task_id);
+    return (route.data as TaskRow['data']).managed_opencode_protocol === 3
+      ? this.mutateLockedSessionTask(
+          input.task_id,
+          (txDb, row, _sessionRow, fullId) => mutate(txDb, row, fullId),
+          true
+        )
+      : this.mutateLockedTask(input.task_id, mutate);
   }
 
   /** Record observe-only SDK health evidence only while the executor still owns the task. */
-  async recordSdkHealthObservation(id: string, failure: SdkFailure): Promise<Task | null> {
-    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+  async recordSdkHealthObservation(
+    id: string,
+    failure: SdkFailure,
+    holderId?: string
+  ): Promise<Task | null> {
+    const mutate = async (txDb: Database, row: TaskRow, fullId: string) => {
+      if (row.data.managed_opencode_protocol === 3) {
+        await this.requireManagedOpenCodeHolder(txDb, row, holderId);
+      }
       if (!executorOwnsTask(row)) return null;
 
       const data = { ...row.data, sdk_failure: failure };
       await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
       return this.rowToTask({ ...row, data });
-    });
+    };
+    const route = await select(this.db, { data: tasks.data })
+      .from(tasks)
+      .where(eq(tasks.task_id, id))
+      .one();
+    if (!route) throw new EntityNotFoundError('Task', id);
+    return (route.data as TaskRow['data']).managed_opencode_protocol === 3
+      ? this.mutateLockedSessionTask(
+          id,
+          (txDb, row, _sessionRow, fullId) => mutate(txDb, row, fullId),
+          true
+        )
+      : this.mutateLockedTask(id, mutate);
   }
 
   /** Atomically validate and persist ownership of a termination request. */
@@ -1908,11 +2045,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   private async updateTask(
     id: string,
     updates: Partial<Task>,
-    executorUpdate: boolean
+    executorUpdate: boolean,
+    holderId?: string
   ): Promise<Task> {
     try {
       return await this.mutateLockedTask(id, (txDb, currentRow, fullId) =>
-        this.applyTaskUpdate(txDb, currentRow, fullId, updates, executorUpdate)
+        this.applyTaskUpdate(txDb, currentRow, fullId, updates, executorUpdate, holderId)
       );
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
@@ -1921,6 +2059,43 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /** Require the exact unretired holder row while the Session/Task locks are held. */
+  private async requireManagedOpenCodeHolder(
+    txDb: Database,
+    taskRow: TaskRow,
+    holderId?: string
+  ): Promise<typeof opencodeCheckpointAttempts.$inferSelect> {
+    if (taskRow.data.managed_opencode_protocol !== 3 || !holderId) {
+      throw new RepositoryError('Managed OpenCode lifecycle requires an admitted holder');
+    }
+    const tenant = getCurrentTenantId() ?? 'default';
+    const predicate = and(
+      eq(opencodeCheckpointAttempts.tenant_id, tenant),
+      eq(opencodeCheckpointAttempts.task_id, taskRow.task_id),
+      eq(opencodeCheckpointAttempts.holder_instance_id, holderId)
+    );
+    const candidate = await select(txDb).from(opencodeCheckpointAttempts).where(predicate).one();
+    if (!candidate) throw new RepositoryError('Managed OpenCode holder is not admitted');
+    await lockRowForUpdate(
+      txDb,
+      this.db,
+      opencodeCheckpointAttempts,
+      eq(opencodeCheckpointAttempts.attempt_id, candidate.attempt_id)
+    );
+    const ledger = await select(txDb).from(opencodeCheckpointAttempts).where(predicate).one();
+    if (
+      !ledger ||
+      ledger.retired_at ||
+      ledger.owner_user_id !== taskRow.created_by ||
+      ledger.session_id !== taskRow.session_id ||
+      ledger.binding.holderInstanceId !== holderId ||
+      ledger.binding.taskId !== taskRow.task_id
+    ) {
+      throw new RepositoryError('Managed OpenCode holder is no longer authoritative');
+    }
+    return ledger;
   }
 
   /**
@@ -1932,36 +2107,69 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * is refused by `applyTaskUpdate`, so a late publication from a stale
    * executor cannot become the session's current native state.
    */
-  async completeWithNativeStatePublication(id: string, updates: Partial<Task>): Promise<Task> {
+  async completeWithNativeStatePublication(
+    id: string,
+    updates: Partial<Task>,
+    holderId: string
+  ): Promise<Task> {
     const attempt = updates.native_state_attempt;
-    if (!isOpenCodeNativeStateAttempt(attempt)) {
+    if (!isCoordinatedOpenCodeNativeStateAttempt(attempt)) {
       throw new RepositoryError('native_state_attempt is malformed');
     }
+    if (!holderId) throw new RepositoryError('native_state_holder_instance_id is required');
     if (updates.status !== TaskStatus.COMPLETED) {
       throw new RepositoryError('native state is published only with a completed status');
     }
     try {
-      return await this.mutateLockedSessionTask(id, async (txDb, taskRow, sessionRow, fullId) => {
-        if (attempt.attemptTaskId !== fullId) {
-          throw new RepositoryError('native_state_attempt must name the completing task');
-        }
-        const task = await this.applyTaskUpdate(txDb, taskRow, fullId, updates, true);
-        const projection = await update(txDb, sessions)
-          .set({
-            data: {
-              ...sessionRow.data,
-              sdk_session_id: attempt.openCodeSessionId,
-              sdk_native_state: attempt,
-            },
-            updated_at: new Date(),
-          })
-          .where(eq(sessions.session_id, sessionRow.session_id))
-          .run();
-        if (projection.rowsAffected === 0) {
-          throw new EntityNotFoundError('Session', sessionRow.session_id);
-        }
-        return task;
-      });
+      return await this.mutateLockedSessionTask(
+        id,
+        async (txDb, taskRow, sessionRow, fullId) => {
+          if (
+            taskRow.data.managed_opencode_protocol !== 3 ||
+            sessionRow.agentic_tool !== 'opencode' ||
+            sessionRow.sdk_home_scope !== 'execution_home'
+          ) {
+            throw new RepositoryError(
+              'coordinated native-state publication requires managed OpenCode'
+            );
+          }
+          if (
+            attempt.attemptTaskId !== fullId ||
+            attempt.storeId !== sessionRow.data.sdk_native_state_store_id
+          ) {
+            throw new RepositoryError('native_state_attempt must name the completing task');
+          }
+          const ledger = await this.requireManagedOpenCodeHolder(txDb, taskRow, holderId);
+          if (
+            ledger.retired_at ||
+            ledger.write_state !== 'sealed' ||
+            !isCoordinatedOpenCodeNativeStateAttempt(ledger.sealed_manifest) ||
+            !sameNativeStateManifest(ledger.sealed_manifest, attempt) ||
+            (ledger.input_task_id && !ledger.input_read_closed_at)
+          ) {
+            throw new RepositoryError(
+              'native_state_attempt is not the exact sealed output of this holder'
+            );
+          }
+          const task = await this.applyTaskUpdate(txDb, taskRow, fullId, updates, true, holderId);
+          const projection = await update(txDb, sessions)
+            .set({
+              data: {
+                ...sessionRow.data,
+                sdk_session_id: attempt.openCodeSessionId,
+                sdk_native_state: attempt,
+              },
+              updated_at: new Date(),
+            })
+            .where(eq(sessions.session_id, sessionRow.session_id))
+            .run();
+          if (projection.rowsAffected === 0) {
+            throw new EntityNotFoundError('Session', sessionRow.session_id);
+          }
+          return task;
+        },
+        true
+      );
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -1976,12 +2184,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     currentRow: TaskRow,
     fullId: string,
     updates: Partial<Task>,
-    executorUpdate: boolean
+    executorUpdate: boolean,
+    holderId?: string
   ): Promise<Task> {
     console.debug(
       `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
     );
     const current = this.rowToTask(currentRow);
+
+    if (executorUpdate && currentRow.data.managed_opencode_protocol === 3) {
+      await this.requireManagedOpenCodeHolder(txDb, currentRow, holderId);
+    }
 
     if (executorUpdate) {
       if (!executorOwnsTask(currentRow)) {
@@ -2067,6 +2280,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             ? {
                 executor_launch_fs_access_floor: currentRow.data.executor_launch_fs_access_floor,
               }
+            : {}),
+          // Admission protocol is server-owned and survives every unrelated
+          // executor/coordinator patch, even if a caller supplies a value.
+          ...(currentRow.data.managed_opencode_protocol === 3
+            ? { managed_opencode_protocol: 3 as const }
             : {}),
         },
       })
@@ -2512,8 +2730,39 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /** Apply executor-owned result fields only while the executor still owns the locked row. */
-  async updateFromExecutor(id: string, updates: Partial<Task>): Promise<Task> {
-    return this.updateTask(id, updates, true);
+  async updateFromExecutor(id: string, updates: Partial<Task>, holderId?: string): Promise<Task> {
+    const fullId = await this.resolveId(id);
+    const route = await select(this.db, { session_id: tasks.session_id, data: tasks.data })
+      .from(tasks)
+      .where(eq(tasks.task_id, fullId))
+      .one();
+    if (!route) throw new EntityNotFoundError('Task', id);
+    if ((route.data as TaskRow['data']).managed_opencode_protocol === 3) {
+      return this.mutateLockedSessionTask(
+        id,
+        async (txDb, taskRow, _sessionRow, resolvedId) => {
+          const ledger = await this.requireManagedOpenCodeHolder(txDb, taskRow, holderId);
+          if (
+            updates.native_state_attempt !== undefined ||
+            updates.status === TaskStatus.COMPLETED
+          ) {
+            throw new RepositoryError('Managed OpenCode completion requires sealed publication');
+          }
+          if (
+            isTerminalTaskStatus(updates.status) &&
+            ((ledger.input_task_id && !ledger.input_read_closed_at) ||
+              ledger.write_state === 'open')
+          ) {
+            throw new RepositoryError(
+              'Managed OpenCode I/O must drain before executor terminality'
+            );
+          }
+          return this.applyTaskUpdate(txDb, taskRow, resolvedId, updates, true, holderId);
+        },
+        true
+      );
+    }
+    return this.updateTask(id, updates, true, holderId);
   }
 
   /**

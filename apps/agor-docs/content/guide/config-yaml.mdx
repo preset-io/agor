@@ -146,6 +146,19 @@ The execution substrate must also pin `AGOR_OPENCODE_SCRATCH_ROOT` to an absolut
 Job-local storage path; without it, executor startup fails closed even when the
 daemon-side prerequisites pass.
 
+New hosted OpenCode sessions, including scheduled runs, use the owner's execution
+home even when `execution.sandbox.sdk_home_mode` is `per_branch`. They do not
+adopt or change the branch's SDK-home policy; other tools still follow that
+policy. Existing lineage is never relocated, and branch-scoped OpenCode sessions
+and cross-user prompting remain refused.
+
+Hosted startup ignores repository OpenCode configuration and component discovery
+(including `opencode.json`, `opencode.jsonc`, and `.opencode`), home configuration,
+and inherited `OPENCODE_*` configuration selectors. Only the invocation generated
+by Agor is loaded from isolated configuration roots. Plugins, provider overrides,
+and attached local MCP commands are refused; attach remote MCP servers instead.
+Local OpenCode configuration behavior is unchanged.
+
 ```yaml
 agentic_tools:
   opencode_hosted_native_state: checkpointed

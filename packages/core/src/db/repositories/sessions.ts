@@ -47,11 +47,13 @@ import { sanitizeDbError } from '../sanitize-error';
 import {
   branches,
   messages,
+  opencodeCheckpointAttempts,
   type SessionInsert,
   type SessionRow,
   sessions,
   tasks,
 } from '../schema';
+import { getCurrentTenantId } from '../tenant-context';
 import { tenantInventoryCondition } from '../tenant-inventory-condition';
 import {
   AmbiguousIdError,
@@ -863,6 +865,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (Object.hasOwn(updates, 'sdk_home_scope')) {
         throw new RepositoryError('Session sdk_home_scope is immutable after creation');
       }
+      for (const key of [
+        'sdk_native_state',
+        'sdk_native_state_store_id',
+        'opencode_cleanup_cursor',
+      ] as const) {
+        if (Object.hasOwn(updates, key))
+          throw new RepositoryError(`Session ${key} is server-managed`);
+      }
       const fullId = await this.resolveId(id);
       const baseUrl = await getBaseUrl(this.db);
 
@@ -916,6 +926,18 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         }
 
         const insertData = this.sessionToInsert(merged);
+        // These native-state protocol fields are not part of the public Session
+        // projection. Preserve them verbatim under the Session lock so an
+        // unrelated metadata patch cannot reset the immutable store/cursor.
+        insertData.data = {
+          ...insertData.data,
+          ...(currentRow.data.sdk_native_state_store_id
+            ? { sdk_native_state_store_id: currentRow.data.sdk_native_state_store_id }
+            : {}),
+          ...(currentRow.data.opencode_cleanup_cursor
+            ? { opencode_cleanup_cursor: currentRow.data.opencode_cleanup_cursor }
+            : {}),
+        };
 
         // STEP 3: Write merged session (within same transaction)
         // Pass all columns via insertData (matches branch repo pattern).
@@ -1078,12 +1100,37 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     return Number(result?.count ?? 0);
   }
 
+  /** Session deletion cannot discard live or retired checkpoint authority. */
+  async assertNativeStateHandoffClear(sessionId: string): Promise<void> {
+    const fullId = await this.resolveId(sessionId);
+    const row = await select(this.db).from(sessions).where(eq(sessions.session_id, fullId)).one();
+    if (!row) throw new EntityNotFoundError('Session', sessionId);
+    const attempt = await select(this.db, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+      .from(opencodeCheckpointAttempts)
+      .where(
+        and(
+          eq(opencodeCheckpointAttempts.session_id, fullId),
+          eq(opencodeCheckpointAttempts.tenant_id, getCurrentTenantId() ?? 'default')
+        )
+      )
+      .limit(1)
+      .one();
+    if (attempt || row.data.sdk_native_state || row.data.sdk_native_state_store_id) {
+      throw new RepositoryError(
+        'opencode_native_state_handoff_required: session has managed OpenCode state and requires whole-home process/queued-launch fencing'
+      );
+    }
+  }
+
   /**
    * Delete session by ID
    */
   async delete(id: string): Promise<void> {
     try {
       const fullId = await this.resolveId(id);
+      // Keep the guard in the repository as well as the recursive service path:
+      // direct callers must not erase legacy pointers or acknowledged tombstones.
+      await this.assertNativeStateHandoffClear(fullId);
 
       const result = await deleteFrom(this.db, sessions)
         .where(eq(sessions.session_id, fullId))

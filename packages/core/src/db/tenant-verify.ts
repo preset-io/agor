@@ -26,6 +26,10 @@ import {
   tenantFilesystemEntriesEqual,
   walkTenantFilesystemTree,
 } from './tenant-filesystem';
+import {
+  assertArchiveNativeStateAbsent,
+  assertTenantNativeStateHandoffClear,
+} from './tenant-native-state-guard';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /**
@@ -149,6 +153,8 @@ export async function verifyTenant(
   const integrity = await verifyArchiveIntegrity(options.archivePath, manifest, {
     maxProblems: maxEvidence,
   });
+  await assertArchiveNativeStateAbsent(options.archivePath, manifest);
+  await assertTenantNativeStateHandoffClear(db, tenantId);
 
   const identity = await resolveTenantDatabaseIdentity(db);
   const identityMatched =

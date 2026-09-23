@@ -8,6 +8,7 @@ import type { SpawnExecutorOptions } from './utils/spawn-executor.js';
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   spawn: vi.fn(),
+  stampManagedOpenCodeProtocol: vi.fn(),
   slot: vi.fn(async () => {
     throw new Error('local containment slot');
   }),
@@ -79,6 +80,7 @@ function handler(hosted = true, principal = 'owner', target = session) {
       principal_user_id: principal,
       fs_access: 'write',
     })),
+    stampManagedOpenCodeProtocol: mocks.stampManagedOpenCodeProtocol,
   };
   return createExecuteHandler(ctx, {} as never, token as never, tasks as never);
 }
@@ -88,6 +90,7 @@ const execute = (run: ReturnType<typeof handler>, taskId = taskA, sessionId = se
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.prepare.mockResolvedValue(session);
+  mocks.stampManagedOpenCodeProtocol.mockResolvedValue(undefined);
   mocks.spawn.mockImplementation((_payload: unknown, options: SpawnExecutorOptions) => {
     // Real launch contribution + execute-handler callbacks, fake external launcher.
     // No local pid or remote Job/provider is created.
@@ -96,7 +99,7 @@ beforeEach(() => {
 });
 
 describe('hosted OpenCode execute-handler composition', () => {
-  it('launches repeated templated turns with v2 context and no daemon-local fence', async () => {
+  it('launches repeated templated turns with v3 context and no daemon-local fence', async () => {
     const run = handler();
     await expect(execute(run)).resolves.toMatchObject({ success: true });
     const options = mocks.spawn.mock.calls[0][1] as SpawnExecutorOptions;
@@ -104,8 +107,10 @@ describe('hosted OpenCode execute-handler composition', () => {
     await expect(execute(run, taskB)).resolves.toMatchObject({ success: true });
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
     expect(mocks.spawn.mock.calls[1][0]).toMatchObject({
-      agenticToolContext: { version: 2, mode: 'managed-projection', taskId: taskB },
+      agenticToolContext: { version: 3, mode: 'managed-projection', taskId: taskB },
     });
+    expect(mocks.stampManagedOpenCodeProtocol).toHaveBeenNthCalledWith(1, taskA);
+    expect(mocks.stampManagedOpenCodeProtocol).toHaveBeenNthCalledWith(2, taskB);
     expect(mocks.slot).not.toHaveBeenCalled();
   });
 

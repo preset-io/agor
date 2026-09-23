@@ -394,6 +394,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
 
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
+      // 0112 is newer than this historical watermark. Remove its additive
+      // table and parent-key indexes as part of reconstructing the prior DB,
+      // otherwise the rebased runner encounters duplicate relations while
+      // replaying the pending migration chain below.
+      await executeRaw(db, sql`DROP TABLE IF EXISTS opencode_checkpoint_attempts`);
+      await executeRaw(db, sql`DROP INDEX IF EXISTS sessions_tenant_session_key`);
+      await executeRaw(db, sql`DROP INDEX IF EXISTS tasks_tenant_task_key`);
+      await executeRaw(db, sql`DROP INDEX IF EXISTS tasks_tenant_session_task_key`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
       await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
 

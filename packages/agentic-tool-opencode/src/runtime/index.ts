@@ -23,12 +23,13 @@ export {
 } from './managed-server.js';
 export {
   assertOpenCodeCheckpointRuntime,
+  deleteRetiredOpenCodeAttempt,
+  deleteRetiredOpenCodeAttemptInWorker,
   discardOpenCodeScratch,
   OPENCODE_SCRATCH_ROOT_ENV,
   OpenCodeNativeStateError,
   type OpenCodeNativeStateLayout,
   prepareOpenCodeScratch,
-  pruneOpenCodeAttempts,
   publishOpenCodeCheckpoint,
   resolveOpenCodeNativeStateLayout,
   resolveOpenCodeScratchRoot,

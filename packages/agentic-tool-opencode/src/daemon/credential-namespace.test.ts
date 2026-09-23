@@ -96,9 +96,11 @@ describe('OpenCode credential namespace routing', () => {
     });
   });
 
-  it('emits the logical managed-projection context instead of a daemon path in hosted mode', () => {
+  it('emits only logical managed-projection identity rather than DB pointer or daemon path', () => {
     const accepted = {
-      version: 1 as const,
+      version: 3 as const,
+      storeId: '01a08d5f-7773-77fa-a7dc-2575cfe67260',
+      openCodeVersion: '1.18.31',
       attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727d',
       digest: `sha256:${'a'.repeat(64)}`,
       bytes: 4096,
@@ -127,13 +129,13 @@ describe('OpenCode credential namespace routing', () => {
     });
     const context = launch.executorPayload.agenticToolContext;
     expect(context).toEqual({
-      version: 2,
+      version: 3,
       mode: 'managed-projection',
       namespaceKey: launch.namespaceKey,
       agorSessionId: '01a08d5f-775f-73f6-86a1-624b43050180',
       taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
-      accepted,
     });
+    expect(context).not.toHaveProperty('accepted');
     expect(JSON.stringify(context)).not.toContain('/home/daemon');
     expect(JSON.stringify(context)).not.toContain('tenant-a');
   });

@@ -10,7 +10,6 @@ const managed = {
   namespaceKey: 'e'.repeat(64),
   agorSessionId: '01a08d5f-775f-73f6-86a1-624b43050180',
   taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
-  accepted: null,
 };
 
 describe('OpenCode executor context', () => {
@@ -28,29 +27,22 @@ describe('OpenCode executor context', () => {
     }
   });
 
-  it('round-trips the hosted managed-projection context with an accepted checkpoint', () => {
-    const accepted = {
-      version: 1 as const,
-      attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
-      digest: `sha256:${'a'.repeat(64)}`,
-      bytes: 4096,
-      openCodeSessionId: 'ses_1',
-      publishedAt: '2026-09-10T22:18:55.000Z',
-    };
-    const context = createOpenCodeManagedExecutorContext({ ...managed, accepted });
+  it('round-trips only the logical hosted context; the DB grant supplies checkpoint authority', () => {
+    const context = createOpenCodeManagedExecutorContext(managed);
     expect(parseOpenCodeExecutorContext(JSON.parse(JSON.stringify(context)))).toEqual(context);
     expect(isOpenCodeManagedExecutorContext(context)).toBe(true);
     expect(isOpenCodeManagedExecutorContext({ dataHome: '/x' })).toBe(false);
   });
 
-  it('rejects a malformed or partial v2 context rather than falling back to legacy behavior', () => {
+  it('rejects v2 and malformed/extra-field v3 contexts rather than falling back', () => {
     for (const value of [
       { version: 2 },
       { ...managed, version: 2, mode: 'managed-projection', taskId: managed.taskId.toUpperCase() },
       { mode: 'managed-projection', namespaceKey: 'short' },
       { ...managed, version: 2, mode: 'managed-projection', taskId: 'nope' },
-      { ...managed, version: 2, mode: 'managed-projection', accepted: { digest: 'x' } },
-      { ...managed, version: 3, mode: 'managed-projection' },
+      { ...managed, version: 2, mode: 'managed-projection' },
+      { ...managed, version: 3, mode: 'managed-projection', accepted: null },
+      { ...managed, version: 3, mode: 'not-managed' },
     ]) {
       expect(() => parseOpenCodeExecutorContext(value)).toThrow(/managed executor context/i);
     }

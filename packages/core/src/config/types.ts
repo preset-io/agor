@@ -605,6 +605,11 @@ export interface AgorExecutionSettings {
    * stdin; keep secrets out of the command argv.
    */
   executor_heartbeat?: AgorExecutorHeartbeatSettings;
+  /** Narrow trusted Cloud helper used to resolve and observe managed OpenCode container identity. */
+  opencode_native_state_observer?: {
+    command_template?: string;
+    timeout_ms?: number;
+  };
   sdk_watchdog?: {
     mode?: 'disabled' | 'observe' | 'enforce';
     first_progress_timeout_ms?: number;

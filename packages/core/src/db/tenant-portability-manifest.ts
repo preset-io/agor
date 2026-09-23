@@ -47,6 +47,9 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'user_provider_oauth_grants',
   'user_mcp_oauth_tokens',
   'github_install_states',
+  // Native checkpoint authority and tombstones cannot move to a new database:
+  // old holders may still have access to the physical store.
+  'opencode_checkpoint_attempts',
 ]);
 
 function portableDeletionManifest() {

@@ -18,7 +18,6 @@ import {
   isOpenCodeCleanupUnverifiedError,
   OpenCodeTool,
   prepareOpenCodeScratch,
-  pruneOpenCodeAttempts,
   resolveOpenCodeNativeStateLayout,
   restoreOpenCodeAcceptedState,
 } from '@agor/agentic-tool-opencode/runtime';
@@ -35,6 +34,10 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import type {
+  ManagedOpenCodeAdmission,
+  ManagedOpenCodeNativeStateManifest,
+} from '../../managed-opencode-admission.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
@@ -54,6 +57,41 @@ import {
   resolveApiKeyForTask,
   settleTaskFailure,
 } from './base-executor.js';
+import { OpenCodeCleanupOperation } from './opencode-cleanup.js';
+
+interface ManagedOpenCodeStateService {
+  closeRead(input: {
+    task_id: string;
+    holder_instance_id: string;
+    input: { storeId: string; taskId: string };
+  }): Promise<void>;
+  seal(input: {
+    task_id: string;
+    holder_instance_id: string;
+    manifest: import('../../managed-opencode-admission.js').ManagedOpenCodeNativeStateManifest;
+  }): Promise<void>;
+  abandon(input: { task_id: string; holder_instance_id: string }): Promise<void>;
+}
+
+interface ManagedOpenCodeNativeStateLayout {
+  homeDir: string;
+  namespaceKey: string;
+  agorSessionId: string;
+  storeId: string;
+  attemptsDir: string;
+  attemptTaskId: string;
+  scratchRoot: string;
+  liveDbPath: string;
+  xdg: { data: string; config: string; cache: string; state: string };
+}
+
+type ManagedNativeManifest = ManagedOpenCodeNativeStateManifest;
+
+function managedStateService(client: AgorClient): ManagedOpenCodeStateService {
+  return client.service(
+    'opencode-native-state' as string
+  ) as unknown as ManagedOpenCodeStateService;
+}
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -64,6 +102,7 @@ export async function executeOpenCodeTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   agenticToolContext?: Record<string, unknown>;
+  managedOpenCodeAdmission?: ManagedOpenCodeAdmission;
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
@@ -76,7 +115,36 @@ export async function executeOpenCodeTask(params: {
     client.service('sessions').emit(event, data);
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
-  let managedScratch: Parameters<typeof discardOpenCodeScratch>[0] | undefined;
+  let managedScratch: ManagedOpenCodeNativeStateLayout | undefined;
+  const committedGrant = params.managedOpenCodeAdmission;
+  const managedPayloadCandidate =
+    !!params.agenticToolContext &&
+    (params.agenticToolContext.mode === 'managed-projection' ||
+      params.agenticToolContext.version !== undefined);
+  let inputReadClosed = !committedGrant?.input;
+  let managedIoSettled = false;
+  let cleanupOperation: OpenCodeCleanupOperation | undefined;
+
+  const closeInputAndAbandon = async (): Promise<void> => {
+    if (!committedGrant) return;
+    const service = managedStateService(client);
+    if (committedGrant.input && !inputReadClosed) {
+      await service.closeRead({
+        task_id: taskId,
+        holder_instance_id: committedGrant.attempt.holder_instance_id,
+        input: {
+          storeId: committedGrant.input.storeId,
+          taskId: committedGrant.input.attemptTaskId,
+        },
+      });
+      inputReadClosed = true;
+    }
+    await service.abandon({
+      task_id: taskId,
+      holder_instance_id: committedGrant.attempt.holder_instance_id,
+    });
+    managedIoSettled = true;
+  };
 
   try {
     const session = await client.service('sessions').get(sessionId);
@@ -99,31 +167,42 @@ export async function executeOpenCodeTask(params: {
     const branch = session.branch_id ? await repos.branches.findById(session.branch_id) : null;
     if (!branch?.path) throw new Error('OpenCode requires an Agor branch working directory');
 
-    const [messages, sessionNextIndex] = await Promise.all([
-      repos.messages.findInitialUserMessagesByTaskId(taskId),
-      repos.messages.getNextIndexBySessionId(sessionId),
-    ]);
-    await createUserMessage(sessionId, prompt, taskId, sessionNextIndex, repos.messagesService, {
-      messageSource: params.messageSource,
-      existingMessages: messages,
-    });
-
-    // Hosted managed projection: pull the owner's reviewed provider keys
-    // through the task-scoped daemon read (never the payload), prepare the
-    // Job-local scratch, prune stale attempts, and restore the accepted
-    // checkpoint. Credentials stay in memory; nothing enters process.env.
+    // Managed v3 authority is committed by the outer executor before this
+    // runner. The payload contains logical identity only; it never chooses an
+    // accepted pointer or holder.
     let managed: NonNullable<Parameters<OpenCodeTool['runTurn']>[0]['managed']> | undefined;
     if (managedContext) {
+      if (
+        !committedGrant ||
+        committedGrant.attempt.task_id !== taskId ||
+        committedGrant.attempt.holder_instance_id.length === 0 ||
+        committedGrant.attempt.write_state !== 'open' ||
+        committedGrant.attempt.retired_at ||
+        (committedGrant.attempt.store_id !== committedGrant.input?.storeId &&
+          committedGrant.input !== null) ||
+        managedContext.agorSessionId !== sessionId ||
+        managedContext.taskId !== taskId
+      ) {
+        throw new Error('OpenCode managed executor lacks an exact active DB holder grant');
+      }
       // Fail early on an executor image that cannot run the durability barrier
       // instead of spending a full provider turn first.
       await assertOpenCodeCheckpointRuntime();
       // Resolve the layout (which requires the pinned scratch root) before the
       // owner's keys enter executor memory, so an unpinned image fails before
       // any credential read.
-      const nativeState = resolveOpenCodeNativeStateLayout({
+      const nativeState = (
+        resolveOpenCodeNativeStateLayout as unknown as (input: {
+          namespaceKey: string;
+          agorSessionId: string;
+          taskId: string;
+          storeId: string;
+        }) => ManagedOpenCodeNativeStateLayout
+      )({
         namespaceKey: managedContext.namespaceKey,
         agorSessionId: managedContext.agorSessionId,
         taskId,
+        storeId: committedGrant.attempt.store_id,
       });
       const provider = session.model_config.provider.trim();
       const credentialField = hostedCredentialFieldForProvider(provider);
@@ -144,18 +223,70 @@ export async function executeOpenCodeTask(params: {
           'The OpenCode provider selected for this session has no saved key. Save its key in Settings > OpenCode.'
         );
       }
-      await prepareOpenCodeScratch(nativeState);
+      await (
+        prepareOpenCodeScratch as unknown as (
+          layout: ManagedOpenCodeNativeStateLayout
+        ) => Promise<void>
+      )(nativeState);
       managedScratch = nativeState;
-      await pruneOpenCodeAttempts(nativeState, managedContext.accepted);
-      if (managedContext.accepted) {
-        await restoreOpenCodeAcceptedState(nativeState, managedContext.accepted);
+      if (committedGrant.input) {
+        if (committedGrant.input.storeId !== nativeState.storeId) {
+          throw new Error('OpenCode DB input pin does not match the immutable store');
+        }
+        try {
+          await (
+            restoreOpenCodeAcceptedState as unknown as (
+              layout: ManagedOpenCodeNativeStateLayout,
+              accepted: ManagedOpenCodeNativeStateManifest
+            ) => Promise<void>
+          )(nativeState, committedGrant.input);
+        } finally {
+          // restore settles only after every source descriptor has closed, on
+          // both successful verification and copy failure.
+          await managedStateService(client).closeRead({
+            task_id: taskId,
+            holder_instance_id: committedGrant.attempt.holder_instance_id,
+            input: {
+              storeId: committedGrant.input.storeId,
+              taskId: committedGrant.input.attemptTaskId,
+            },
+          });
+          inputReadClosed = true;
+        }
       }
+      if (params.abortController.signal.aborted) {
+        await closeInputAndAbandon();
+        return;
+      }
+      cleanupOperation = new OpenCodeCleanupOperation(
+        client,
+        taskId,
+        committedGrant.attempt.holder_instance_id,
+        nativeState
+      );
+      cleanupOperation.start();
       managed = {
         authContent: projected.content,
         authSecrets: projected.secrets,
         nativeState,
-        accepted: managedContext.accepted,
-      };
+        input: committedGrant.input,
+      } as unknown as NonNullable<Parameters<OpenCodeTool['runTurn']>[0]['managed']>;
+    } else if (committedGrant) {
+      throw new Error('OpenCode holder grant has no matching managed execution context');
+    }
+
+    const [messages, sessionNextIndex] = await Promise.all([
+      repos.messages.findInitialUserMessagesByTaskId(taskId),
+      repos.messages.getNextIndexBySessionId(sessionId),
+    ]);
+    await createUserMessage(sessionId, prompt, taskId, sessionNextIndex, repos.messagesService, {
+      messageSource: params.messageSource,
+      existingMessages: messages,
+    });
+    if (params.abortController.signal.aborted) {
+      await closeInputAndAbandon();
+      await cleanupOperation?.stopAndDrain();
+      return;
     }
 
     const assistantMessageId = generateId() as MessageID;
@@ -223,7 +354,7 @@ export async function executeOpenCodeTask(params: {
         // Managed turns resume only the accepted checkpoint's native session;
         // an unpublished sdk_session_id from a failed turn is never reused.
         existingOpenCodeSessionId: managed
-          ? (managed.accepted?.openCodeSessionId ?? undefined)
+          ? (committedGrant?.input?.openCodeSessionId ?? undefined)
           : session.sdk_session_id,
         title: session.title || `Task ${shortId(taskId)}`,
         directory: branch.path,
@@ -236,15 +367,34 @@ export async function executeOpenCodeTask(params: {
         dataHome,
         managed,
         persistOpenCodeSessionId: async (openCodeSessionId) => {
-          await client.service('sessions').patch(sessionId, { sdk_session_id: openCodeSessionId });
+          if (!managed)
+            await client
+              .service('sessions')
+              .patch(sessionId, { sdk_session_id: openCodeSessionId });
         },
       },
       createStreamingCallbacks(client, 'opencode', sessionId, taskId, params.onPulse)
     );
 
-    if (params.abortController.signal.aborted) return;
-    if (managed && !result.nativeStateAttempt) {
+    if (params.abortController.signal.aborted) {
+      await closeInputAndAbandon();
+      await cleanupOperation?.stopAndDrain();
+      return;
+    }
+    const publishedManifest = result.nativeStateAttempt as unknown as
+      | ManagedNativeManifest
+      | undefined;
+    if (managed && !publishedManifest) {
       throw new Error('OpenCode managed turn completed without a published checkpoint');
+    }
+    if (managed && committedGrant && publishedManifest) {
+      await managedStateService(client).seal({
+        task_id: taskId,
+        holder_instance_id: committedGrant.attempt.holder_instance_id,
+        manifest: publishedManifest,
+      });
+      managedIoSettled = true;
+      cleanupOperation?.stopScheduling();
     }
 
     const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
@@ -267,27 +417,68 @@ export async function executeOpenCodeTask(params: {
       model: `${session.model_config.provider}/${session.model_config.model}`,
       // The daemon accepts this pointer only together with completion, Session
       // lock first; a terminal task refuses it (stale writer fence).
-      ...(result.nativeStateAttempt ? { native_state_attempt: result.nativeStateAttempt } : {}),
-    });
+      ...(publishedManifest ? { native_state_attempt: publishedManifest } : {}),
+      ...(committedGrant
+        ? { native_state_holder_instance_id: committedGrant.attempt.holder_instance_id }
+        : {}),
+    } as Partial<import('@agor/core/types').Task>);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     console.error('[opencode] execution failed category=task_execution');
 
+    if (managedPayloadCandidate && !committedGrant) {
+      // The outer executor owns shared-Task lifecycle before invoking any
+      // handler. Missing or rejected grants have no transcript, credential,
+      // provider, or terminal side effects here.
+      return;
+    }
+
     if (isOpenCodeCleanupUnverifiedError(failure)) {
       // Keep the task active. Executor exit hands containment to the daemon;
       // making it terminal here would release the session before absence is proven.
+      if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
+      return;
+    }
+    if (committedGrant && !managedIoSettled) {
+      try {
+        // If a source restore failed, it has settled and closed every source
+        // descriptor before reaching this catch. If it never settled, this
+        // code is never reached and the DB pin remains live for Cloud proof.
+        await closeInputAndAbandon();
+      } catch {
+        console.warn('[opencode] managed checkpoint I/O drain unverified; task remains guarded');
+        if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
+        return;
+      }
+    }
+    if (params.abortController.signal.aborted) {
+      await cleanupOperation?.stopAndDrain();
       return;
     }
     if (!params.abortController.signal.aborted) {
-      await settleTaskFailure(client, sessionId, taskId, failure, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-        error_message: failure.message,
-      });
+      await settleTaskFailure(
+        client,
+        sessionId,
+        taskId,
+        failure,
+        {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: failure.message,
+        },
+        committedGrant?.attempt.holder_instance_id
+      );
     }
     throw failure;
   } finally {
+    cleanupOperation?.stopScheduling();
     globalPermissionManager.unregister(sessionId);
-    if (managedScratch) await discardOpenCodeScratch(managedScratch);
+    if (managedScratch) {
+      await (
+        discardOpenCodeScratch as unknown as (
+          layout: ManagedOpenCodeNativeStateLayout
+        ) => Promise<void>
+      )(managedScratch);
+    }
   }
 }

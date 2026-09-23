@@ -14,6 +14,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
+import type { ManagedOpenCodeAdmission } from '../../managed-opencode-admission.js';
 import type { ExecutorResult, ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
@@ -38,6 +39,7 @@ export type ToolRunner = (params: {
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+  managedOpenCodeAdmission?: ManagedOpenCodeAdmission;
 }) => Promise<void>;
 
 /**
@@ -141,6 +143,7 @@ export class ToolRegistry {
       agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
+      managedOpenCodeAdmission?: ManagedOpenCodeAdmission;
     }
   ): Promise<void> {
     const config = ToolRegistry.get(tool);

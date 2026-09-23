@@ -41,6 +41,44 @@ describe('sessionUsesBranchSdkHome', () => {
 });
 
 describe('resolveNewSessionSdkHomeScope', () => {
+  it('selects hosted OpenCode execution homes without relocating inherited lineage or other tools', () => {
+    for (const branchSdkHomeIntent of [null, 'per_branch'] as const) {
+      expect(
+        resolveNewSessionSdkHomeScope({
+          branchSdkHomeIntent,
+          enabledForNewSessions: true,
+          tool: 'opencode',
+          delegated: true,
+        })
+      ).toEqual({ scope: 'execution_home', adoptBranch: false });
+      expect(
+        resolveNewSessionSdkHomeScope({
+          branchSdkHomeIntent,
+          enabledForNewSessions: true,
+          tool: 'claude-code',
+          delegated: true,
+        })
+      ).toEqual({ scope: 'branch', adoptBranch: !branchSdkHomeIntent });
+      expect(
+        resolveNewSessionSdkHomeScope({
+          branchSdkHomeIntent,
+          enabledForNewSessions: true,
+          tool: 'opencode',
+          delegated: false,
+        })
+      ).toEqual({ scope: 'branch', adoptBranch: !branchSdkHomeIntent });
+      expect(
+        resolveNewSessionSdkHomeScope({
+          branchSdkHomeIntent,
+          enabledForNewSessions: true,
+          tool: 'opencode',
+          delegated: true,
+          inheritedScope: 'branch',
+        })
+      ).toEqual({ scope: 'branch', adoptBranch: false });
+    }
+  });
+
   it('backfills compatibility by keeping fresh sessions in the execution home by default', () => {
     expect(
       resolveNewSessionSdkHomeScope({

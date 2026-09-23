@@ -1,5 +1,3 @@
-import { isOpenCodeNativeStateAttempt, type OpenCodeNativeStateAttempt } from '@agor/core/types';
-
 /**
  * Local `native-file` context: the daemon-authorized absolute XDG data home in
  * the execution home (credentials and native state share it).
@@ -15,12 +13,11 @@ export interface OpenCodeNativeFileExecutorContext {
  * task-scoped daemon read, and resumes the accepted checkpoint if one exists.
  */
 export interface OpenCodeManagedExecutorContext {
-  version: 2;
+  version: 3;
   mode: 'managed-projection';
   namespaceKey: string;
   agorSessionId: string;
   taskId: string;
-  accepted: OpenCodeNativeStateAttempt | null;
 }
 
 export type OpenCodeExecutorContext =
@@ -39,7 +36,6 @@ export function createOpenCodeManagedExecutorContext(input: {
   namespaceKey: string;
   agorSessionId: string;
   taskId: string;
-  accepted: OpenCodeNativeStateAttempt | null;
 }): OpenCodeManagedExecutorContext {
   if (!HEX_KEY.test(input.namespaceKey)) {
     throw new Error('OpenCode managed executor context requires a namespace key');
@@ -48,12 +44,11 @@ export function createOpenCodeManagedExecutorContext(input: {
     throw new Error('OpenCode managed executor context requires session and task identity');
   }
   return {
-    version: 2,
+    version: 3,
     mode: 'managed-projection',
     namespaceKey: input.namespaceKey,
     agorSessionId: input.agorSessionId,
     taskId: input.taskId,
-    accepted: input.accepted,
   };
 }
 
@@ -64,9 +59,9 @@ export function isOpenCodeManagedExecutorContext(
 }
 
 /**
- * Fail closed on anything but the two exact shapes. An executor image that only
- * understands the v1 shape throws here on a v2 payload, which is the intended
- * mixed-version behavior (daemon and executor are one release).
+ * Fail closed on anything but the exact current shapes. Legacy managed payloads
+ * intentionally cannot convey accepted checkpoint authority; v3 admission
+ * returns its input pin from the database ledger instead.
  */
 export function parseOpenCodeExecutorContext(value: unknown): OpenCodeExecutorContext {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -75,25 +70,24 @@ export function parseOpenCodeExecutorContext(value: unknown): OpenCodeExecutorCo
   const candidate = value as Record<string, unknown>;
   if (candidate.mode === 'managed-projection' || candidate.version !== undefined) {
     if (
-      candidate.version !== 2 ||
+      candidate.version !== 3 ||
       candidate.mode !== 'managed-projection' ||
+      Object.keys(candidate).length !== 5 ||
       typeof candidate.namespaceKey !== 'string' ||
       !HEX_KEY.test(candidate.namespaceKey) ||
       typeof candidate.agorSessionId !== 'string' ||
       !UUID.test(candidate.agorSessionId) ||
       typeof candidate.taskId !== 'string' ||
-      !UUID.test(candidate.taskId) ||
-      !(candidate.accepted === null || isOpenCodeNativeStateAttempt(candidate.accepted))
+      !UUID.test(candidate.taskId)
     ) {
       throw new Error('OpenCode managed executor context is malformed');
     }
     return {
-      version: 2,
+      version: 3,
       mode: 'managed-projection',
       namespaceKey: candidate.namespaceKey,
       agorSessionId: candidate.agorSessionId,
       taskId: candidate.taskId,
-      accepted: candidate.accepted as OpenCodeNativeStateAttempt | null,
     };
   }
   const dataHome = candidate.dataHome;

@@ -11,6 +11,7 @@ import type { Database } from '../client';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { RepositoryError } from './base';
 import { BranchRepository } from './branches';
+import { OpenCodeCheckpointAttemptRepository } from './opencode-checkpoint-attempts';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
@@ -59,12 +60,55 @@ async function runningTask(db: Database, sessionId: UUID): Promise<Task> {
   });
   const connection = await taskRepo.connectExecutor(created.task_id);
   if (!connection) throw new Error('executor connection failed');
+  await taskRepo.stampManagedOpenCodeProtocol(created.task_id);
   return connection.task;
 }
 
-function attemptFor(task: Task, overrides: Record<string, unknown> = {}) {
-  return {
-    version: 2 as const,
+async function attemptFor(
+  db: Database,
+  task: Task,
+  sessionId: string,
+  overrides: Record<string, unknown> = {}
+) {
+  const holderId = generateId();
+  const storeId = generateId();
+  const binding = {
+    protocol: 3 as const,
+    tenantId: 'default',
+    ownerUserId: 'test-user',
+    sessionId,
+    taskId: task.task_id,
+    storeId,
+    holderInstanceId: holderId,
+    locator: {
+      runId: generateId(),
+      cellId: generateId(),
+      tenantId: 'default',
+      ownerRuntimeUserId: 'test-user',
+      sessionId,
+      taskId: task.task_id,
+      storeId,
+      holderInstanceId: holderId,
+      namespace: 'tenant-ns',
+      jobName: 'executor-job',
+      jobUid: generateId(),
+      podName: 'executor-pod',
+      podUid: generateId(),
+      containerName: 'executor' as const,
+      containerId: `containerd://${generateId()}`,
+      restartCount: 0 as const,
+      imageIdentity: `registry.example/agor/executor@sha256:${'d'.repeat(64)}`,
+    },
+  };
+  await new OpenCodeCheckpointAttemptRepository(db).begin({
+    taskId: task.task_id,
+    holderInstanceId: holderId,
+    binding,
+    storeId,
+  });
+  const manifest = {
+    version: 3 as const,
+    storeId,
     openCodeVersion: '1.18.31',
     attemptTaskId: task.task_id,
     digest: `sha256:${'b'.repeat(64)}`,
@@ -73,17 +117,20 @@ function attemptFor(task: Task, overrides: Record<string, unknown> = {}) {
     publishedAt: '2026-09-10T22:18:55.000Z',
     ...overrides,
   };
+  await new OpenCodeCheckpointAttemptRepository(db).seal(task.task_id, holderId, manifest);
+  return { manifest, holderId };
 }
 
 describe('TaskRepository.completeWithNativeStatePublication', () => {
   dbTest('publishes the pointer and native session id together with completion', async ({ db }) => {
     const sessionId = await createSession(db);
     const task = await runningTask(db, sessionId);
-    const attempt = attemptFor(task);
+    const { manifest: attempt, holderId } = await attemptFor(db, task, sessionId);
 
     const completed = await new TaskRepository(db).completeWithNativeStatePublication(
       task.task_id,
-      { status: TaskStatus.COMPLETED, native_state_attempt: attempt }
+      { status: TaskStatus.COMPLETED, native_state_attempt: attempt },
+      holderId
     );
 
     expect(completed.status).toBe(TaskStatus.COMPLETED);
@@ -99,16 +146,21 @@ describe('TaskRepository.completeWithNativeStatePublication', () => {
       const sessionId = await createSession(db);
       const task = await runningTask(db, sessionId);
       const taskRepo = new TaskRepository(db);
-      await taskRepo.updateFromExecutor(task.task_id, {
+      const { manifest: attempt, holderId } = await attemptFor(db, task, sessionId);
+      await taskRepo.update(task.task_id, {
         status: TaskStatus.FAILED,
         error_message: 'force-failed',
       });
 
       await expect(
-        taskRepo.completeWithNativeStatePublication(task.task_id, {
-          status: TaskStatus.COMPLETED,
-          native_state_attempt: attemptFor(task),
-        })
+        taskRepo.completeWithNativeStatePublication(
+          task.task_id,
+          {
+            status: TaskStatus.COMPLETED,
+            native_state_attempt: attempt,
+          },
+          holderId
+        )
       ).rejects.toThrow(RepositoryError);
       const session = await new SessionRepository(db).findById(sessionId);
       expect(session?.sdk_native_state).toBeUndefined();
@@ -123,24 +175,37 @@ describe('TaskRepository.completeWithNativeStatePublication', () => {
       const sessionId = await createSession(db);
       const task = await runningTask(db, sessionId);
       const taskRepo = new TaskRepository(db);
+      const { manifest: attempt, holderId } = await attemptFor(db, task, sessionId);
 
       await expect(
-        taskRepo.completeWithNativeStatePublication(task.task_id, {
-          status: TaskStatus.COMPLETED,
-          native_state_attempt: attemptFor(task, { digest: 'md5:nope' }) as never,
-        })
+        taskRepo.completeWithNativeStatePublication(
+          task.task_id,
+          {
+            status: TaskStatus.COMPLETED,
+            native_state_attempt: { ...attempt, digest: 'md5:nope' } as never,
+          },
+          holderId
+        )
       ).rejects.toThrow(/malformed/);
       await expect(
-        taskRepo.completeWithNativeStatePublication(task.task_id, {
-          status: TaskStatus.COMPLETED,
-          native_state_attempt: attemptFor(task, { attemptTaskId: generateId() }),
-        })
+        taskRepo.completeWithNativeStatePublication(
+          task.task_id,
+          {
+            status: TaskStatus.COMPLETED,
+            native_state_attempt: { ...attempt, attemptTaskId: generateId() },
+          },
+          holderId
+        )
       ).rejects.toThrow(/must name the completing task/);
       await expect(
-        taskRepo.completeWithNativeStatePublication(task.task_id, {
-          status: TaskStatus.FAILED,
-          native_state_attempt: attemptFor(task),
-        })
+        taskRepo.completeWithNativeStatePublication(
+          task.task_id,
+          {
+            status: TaskStatus.FAILED,
+            native_state_attempt: attempt,
+          },
+          holderId
+        )
       ).rejects.toThrow(/completed status/);
       expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
       expect(

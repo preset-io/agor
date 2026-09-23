@@ -847,6 +847,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution, 'execution', [
     'executor_heartbeat',
+    'opencode_native_state_observer',
     'executor_response',
     'sdk_watchdog',
     'dispatch_connect_timeout_ms',
@@ -880,6 +881,17 @@ function validateConfig(config: AgorConfig): void {
     'command_template',
     'timeout_ms',
   ]);
+  only(
+    config.execution?.opencode_native_state_observer,
+    'execution.opencode_native_state_observer',
+    ['command_template', 'timeout_ms']
+  );
+  if (config.execution?.opencode_native_state_observer?.timeout_ms !== undefined) {
+    const timeout = config.execution.opencode_native_state_observer.timeout_ms;
+    if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 10_000) {
+      throw new Error('execution.opencode_native_state_observer.timeout_ms must be 100..10000');
+    }
+  }
   only(config.execution?.executor_response, 'execution.executor_response', [
     'max_response_bytes',
     'max_active_requests',

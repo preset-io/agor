@@ -1,11 +1,12 @@
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertOpenCodeCheckpointRuntime,
+  deleteRetiredOpenCodeAttempt,
+  deleteRetiredOpenCodeAttemptInWorker,
   prepareOpenCodeScratch,
-  pruneOpenCodeAttempts,
   publishOpenCodeCheckpoint,
   resolveOpenCodeNativeStateLayout,
   resolveOpenCodeScratchRoot,
@@ -15,12 +16,13 @@ import {
 const TASK_A = '01a08d5f-7773-77fa-a7dc-2575cfe6727e';
 const TASK_B = '01a08d5f-7773-77fa-a7dc-2575cfe6727f';
 const SESSION = '01a08d5f-775f-73f6-86a1-624b43050180';
+const STORE = '01a08d5f-7773-77fa-a7dc-2575cfe67260';
 const NAMESPACE = 'e'.repeat(64);
 
 let root: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'opencode-native-state-'));
+  root = await realpath(await mkdtemp(join(tmpdir(), 'opencode-native-state-')));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -31,6 +33,7 @@ function layoutFor(taskId: string) {
     namespaceKey: NAMESPACE,
     agorSessionId: SESSION,
     taskId,
+    storeId: STORE,
     homeDir: join(root, 'home'),
     scratchRoot: join(root, 'scratch'),
   });
@@ -79,6 +82,8 @@ describe('OpenCode hosted native state', () => {
         NAMESPACE,
         'sessions',
         SESSION,
+        'stores',
+        STORE,
         'attempts'
       )
     );
@@ -95,7 +100,8 @@ describe('OpenCode hosted native state', () => {
     });
 
     expect(attempt).toMatchObject({
-      version: 2,
+      version: 3,
+      storeId: STORE,
       attemptTaskId: TASK_A,
       openCodeSessionId: 'ses_1',
     });
@@ -148,7 +154,7 @@ describe('OpenCode hosted native state', () => {
     const second = layoutFor(TASK_B);
     await prepareOpenCodeScratch(second);
     await expect(
-      restoreOpenCodeAcceptedState(second, { ...attempt, version: 2, openCodeVersion: '0.0.1' })
+      restoreOpenCodeAcceptedState(second, { ...attempt, openCodeVersion: '0.0.1' })
     ).rejects.toThrow(/runtime version/);
     const { openCodeVersion: _version, ...legacy } = attempt as typeof attempt & {
       openCodeVersion: string;
@@ -197,35 +203,101 @@ describe('OpenCode hosted native state', () => {
     await expect(stat(join(layout.attemptsDir, TASK_A, 'manifest.json'))).rejects.toThrow();
   });
 
-  it('prunes only attempts provably older than the launch pointer', async () => {
-    // P0 < B < C in UUIDv7 order. A stale Job for C launched with pointer P0
-    // must never delete B, which a later Job may have published and the daemon
-    // accepted while C was still starting.
-    const P0 = '01a08d5f-7773-77fa-a7dc-2575cfe67270';
-    const OLD = '01a08d5f-7773-77fa-a7dc-2575cfe67260';
-    const B = '01a08d5f-7773-77fa-a7dc-2575cfe67280';
-    const C = '01a08d5f-7773-77fa-a7dc-2575cfe67290';
-    const publish = async (taskId: string, rows: string[]) => {
+  it('deletes only the exact DB-authorized store/task tombstone object', async () => {
+    const otherStore = '01a08d5f-7773-77fa-a7dc-2575cfe67261';
+    const publish = async (taskId: string, storeId: string, rows: string[]) => {
       const layout = layoutFor(taskId);
-      await prepareOpenCodeScratch(layout);
-      await writeSqliteDatabase(layout.liveDbPath, rows);
-      return publishOpenCodeCheckpoint(layout, { taskId, openCodeSessionId: 'ses_1' });
+      const scoped = {
+        ...layout,
+        storeId,
+        attemptsDir: layout.attemptsDir.replace(STORE, storeId),
+      };
+      await prepareOpenCodeScratch(scoped);
+      await writeSqliteDatabase(scoped.liveDbPath, rows);
+      const manifest = await publishOpenCodeCheckpoint(scoped, {
+        taskId,
+        openCodeSessionId: 'ses_1',
+      });
+      return { scoped, manifest };
     };
-    await publish(OLD, ['ses_1']);
-    const accepted = await publish(P0, ['ses_1']);
-    await publish(B, ['ses_1', 'newer']);
-    await writeFile(join(layoutFor(C).attemptsDir, 'not-an-attempt'), 'keep');
+    const a = '01a08d5f-7773-77fa-a7dc-2575cfe67270';
+    const b = '01a08d5f-7773-77fa-a7dc-2575cfe67280';
+    const first = await publish(a, STORE, ['ses_1']);
+    const second = await publish(b, STORE, ['ses_1', 'newer']);
+    await expect(
+      deleteRetiredOpenCodeAttempt(first.scoped, { storeId: otherStore, taskId: a })
+    ).rejects.toThrow(/identity/);
+    await link(
+      join(first.scoped.attemptsDir, a, 'opencode.db'),
+      join(
+        first.scoped.attemptsDir,
+        a,
+        `.opencode.db.tmp-1-${'1'.repeat(8)}-1111-4111-8111-111111111111`
+      )
+    );
+    await deleteRetiredOpenCodeAttempt(first.scoped, { storeId: STORE, taskId: a });
+    await expect(stat(join(first.scoped.attemptsDir, a))).rejects.toThrow();
+    expect(await readFile(join(second.scoped.attemptsDir, b, 'manifest.json'), 'utf8')).toContain(
+      'ses_1'
+    );
+    expect(second.manifest.attemptTaskId).toBe(b);
+  });
 
-    expect(await pruneOpenCodeAttempts(layoutFor(C), accepted)).toEqual([OLD]);
-    expect((await readdir(layoutFor(C).attemptsDir)).sort()).toEqual([P0, B, 'not-an-attempt']);
+  it('treats an already-absent exact tombstone as an idempotent worker deletion', async () => {
+    const layout = layoutFor(TASK_A);
+    await prepareOpenCodeScratch(layout);
 
-    // Without an accepted pointer only entries older than this Job are removed.
-    expect(await pruneOpenCodeAttempts(layoutFor(B), null)).toEqual([P0]);
-    expect((await readdir(layoutFor(C).attemptsDir)).sort()).toEqual([B, 'not-an-attempt']);
-    expect(await pruneOpenCodeAttempts(layoutFor(P0), null)).toEqual([]);
-    expect(
-      await pruneOpenCodeAttempts(layoutFor('01a08d5f-7773-77fa-a7dc-2575cfe672a0'), null)
-    ).toEqual([B]);
+    await expect(
+      deleteRetiredOpenCodeAttemptInWorker(layout, {
+        storeId: STORE,
+        taskId: TASK_A,
+      })
+    ).resolves.toEqual({ outcome: 'deleted' });
+  });
+
+  it('refuses symlink and hardlinked accepted payloads', async () => {
+    const first = layoutFor(TASK_A);
+    await prepareOpenCodeScratch(first);
+    await writeSqliteDatabase(first.liveDbPath, ['ses_1']);
+    const attempt = await publishOpenCodeCheckpoint(first, {
+      taskId: TASK_A,
+      openCodeSessionId: 'ses_1',
+    });
+    const payload = join(first.attemptsDir, TASK_A, 'opencode.db');
+    const secondLink = join(root, 'outside-link.db');
+    await link(payload, secondLink);
+    await expect(restoreOpenCodeAcceptedState(layoutFor(TASK_B), attempt)).rejects.toThrow(
+      /OpenCode native state unavailable/
+    );
+    await rm(secondLink);
+    await rm(payload);
+    await writeFile(payload, 'replacement');
+    await expect(restoreOpenCodeAcceptedState(layoutFor(TASK_B), attempt)).rejects.toThrow(
+      /does not match its digest/
+    );
+  });
+
+  it('refuses an unpaired temporary hardlink in both cleanup implementations', async () => {
+    const layout = layoutFor(TASK_A);
+    await prepareOpenCodeScratch(layout);
+    await writeSqliteDatabase(layout.liveDbPath, ['ses_1']);
+    await publishOpenCodeCheckpoint(layout, { taskId: TASK_A, openCodeSessionId: 'ses_1' });
+    const attemptDir = join(layout.attemptsDir, TASK_A);
+    const external = join(root, 'external.db');
+    await writeFile(external, 'external bytes');
+    const temporary = join(
+      attemptDir,
+      `.opencode.db.tmp-1-${'2'.repeat(8)}-1111-4111-8111-111111111111`
+    );
+    await link(external, temporary);
+
+    await expect(
+      deleteRetiredOpenCodeAttempt(layout, { storeId: STORE, taskId: TASK_A })
+    ).rejects.toThrow(/unpaired temporary hardlink/);
+    await expect(
+      deleteRetiredOpenCodeAttemptInWorker(layout, { storeId: STORE, taskId: TASK_A })
+    ).resolves.toMatchObject({ outcome: 'failed', errorCode: 'UNSAFE_PATH' });
+    expect((await stat(external)).nlink).toBe(2);
   });
 
   it('refuses to run the durability barrier on a runtime without node:sqlite', async () => {
@@ -254,6 +326,7 @@ describe('OpenCode scratch root selection', () => {
         namespaceKey: NAMESPACE,
         agorSessionId: SESSION,
         taskId: TASK_A,
+        storeId: STORE,
         homeDir: join(root, 'home'),
       })
     ).toThrow(/AGOR_OPENCODE_SCRATCH_ROOT/);

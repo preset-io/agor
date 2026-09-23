@@ -159,6 +159,8 @@ export const sessions = pgTable(
         agentic_tool_version?: string;
         sdk_session_id?: string; // SDK session ID for conversation continuity (Claude Agent SDK, Codex SDK, etc.)
         sdk_native_state?: Session['sdk_native_state']; // Accepted hosted OpenCode checkpoint pointer
+        sdk_native_state_store_id?: string; // Immutable v3 store identity
+        opencode_cleanup_cursor?: import('@agor/core/types').OpenCodeCleanupCursor;
         mcp_token?: string; // MCP authentication token for Agor self-access
         title?: string; // Session title (user-provided or auto-generated)
         description?: string; // Legacy field, may contain first prompt
@@ -242,6 +244,10 @@ export const sessions = pgTable(
       table.tenant_id,
       table.archived,
       table.updated_at
+    ),
+    tenantSessionKey: uniqueIndex('sessions_tenant_session_key').on(
+      table.tenant_id,
+      table.session_id
     ),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
@@ -381,6 +387,7 @@ export const tasks = pgTable(
         duration_ms?: number;
         agent_session_id?: string;
         native_state_attempt?: Task['native_state_attempt']; // Hosted OpenCode checkpoint pointer (executor-reported)
+        managed_opencode_protocol?: 3; // Server-derived dispatch requirement
 
         // Populated when a task transitions to `failed` so the cause is
         // preserved instead of the session silently sitting idle.
@@ -419,6 +426,12 @@ export const tasks = pgTable(
     tenantIdx: index('tasks_tenant_id_idx').on(table.tenant_id),
     sessionIdx: index('tasks_session_idx').on(table.session_id),
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
+    tenantTaskKey: uniqueIndex('tasks_tenant_task_key').on(table.tenant_id, table.task_id),
+    tenantSessionTaskKey: uniqueIndex('tasks_tenant_session_task_key').on(
+      table.tenant_id,
+      table.session_id,
+      table.task_id
+    ),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
     mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
@@ -452,6 +465,95 @@ export const tasks = pgTable(
     queueScanIdx: index('tasks_queue_scan_idx')
       .on(table.tenant_id, table.session_id, table.created_at)
       .where(sql`${table.status} = 'queued'`),
+  })
+);
+
+/** DB-authoritative grants and permanent retirement ledger for managed OpenCode native state. */
+export const opencodeCheckpointAttempts = pgTable(
+  'opencode_checkpoint_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    owner_user_id: varchar('owner_user_id', { length: 36 }).notNull(),
+    session_id: varchar('session_id', { length: 36 }).notNull(),
+    task_id: varchar('task_id', { length: 36 }).notNull(),
+    store_id: varchar('store_id', { length: 36 }).notNull(),
+    attempt_no: integer('attempt_no').notNull(),
+    holder_instance_id: varchar('holder_instance_id', { length: 36 }).notNull(),
+    binding: jsonb('binding')
+      .$type<import('@agor/core/types').OpenCodeCheckpointBinding>()
+      .notNull(),
+    input_store_id: varchar('input_store_id', { length: 36 }),
+    input_task_id: varchar('input_task_id', { length: 36 }),
+    input_read_closed_at: t.timestamp('input_read_closed_at'),
+    write_state: text('write_state', { enum: ['open', 'sealed', 'abandoned'] }).notNull(),
+    sealed_manifest:
+      jsonb('sealed_manifest').$type<import('@agor/core/types').OpenCodeNativeStateAttempt>(),
+    retired_at: t.timestamp('retired_at'),
+    delete_observed_at: t.timestamp('delete_observed_at'),
+    delete_retry_at: t.timestamp('delete_retry_at'),
+    delete_failure_count: integer('delete_failure_count').notNull().default(0),
+    delete_last_error: text('delete_last_error'),
+    holder_closed_observed_at: t.timestamp('holder_closed_observed_at'),
+    holder_observation_retry_at: t.timestamp('holder_observation_retry_at'),
+    holder_observation_failure_count: integer('holder_observation_failure_count')
+      .notNull()
+      .default(0),
+    holder_observation_last_error: text('holder_observation_last_error'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    ownerFk: foreignKey({
+      name: 'opencode_checkpoint_attempts_tenant_owner_fk',
+      columns: [table.tenant_id, table.owner_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('restrict'),
+    sessionFk: foreignKey({
+      name: 'opencode_checkpoint_attempts_tenant_session_fk',
+      columns: [table.tenant_id, table.session_id],
+      foreignColumns: [sessions.tenant_id, sessions.session_id],
+    }).onDelete('restrict'),
+    taskFk: foreignKey({
+      name: 'opencode_checkpoint_attempts_tenant_task_fk',
+      columns: [table.tenant_id, table.task_id],
+      foreignColumns: [tasks.tenant_id, tasks.task_id],
+    }).onDelete('restrict'),
+    inputFk: foreignKey({
+      name: 'opencode_checkpoint_attempts_input_fk',
+      columns: [table.tenant_id, table.session_id, table.input_task_id],
+      foreignColumns: [tasks.tenant_id, tasks.session_id, tasks.task_id],
+    }).onDelete('restrict'),
+    tenantIdx: index('opencode_checkpoint_attempts_tenant_idx').on(table.tenant_id),
+    taskUnique: uniqueIndex('opencode_checkpoint_attempts_task_unique').on(
+      table.tenant_id,
+      table.task_id
+    ),
+    storeTaskUnique: uniqueIndex('opencode_checkpoint_attempts_store_task_unique').on(
+      table.tenant_id,
+      table.session_id,
+      table.store_id,
+      table.task_id
+    ),
+    sessionAttemptNoUnique: uniqueIndex('opencode_checkpoint_attempts_session_no_unique').on(
+      table.tenant_id,
+      table.session_id,
+      table.attempt_no
+    ),
+    sessionAttemptOrderIdx: index('opencode_checkpoint_attempts_session_order_idx').on(
+      table.tenant_id,
+      table.session_id,
+      table.attempt_no
+    ),
+    liveInputIdx: index('opencode_checkpoint_attempts_live_input_idx')
+      .on(table.tenant_id, table.session_id, table.input_store_id, table.input_task_id)
+      .where(sql`${table.input_task_id} IS NOT NULL AND ${table.input_read_closed_at} IS NULL`),
+    retirementRetryIdx: index('opencode_checkpoint_attempts_retirement_retry_idx').on(
+      table.tenant_id,
+      table.session_id,
+      table.retired_at,
+      table.delete_retry_at
+    ),
   })
 );
 
@@ -3490,6 +3592,8 @@ export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
 export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
+export type OpenCodeCheckpointAttemptRow = typeof opencodeCheckpointAttempts.$inferSelect;
+export type OpenCodeCheckpointAttemptInsert = typeof opencodeCheckpointAttempts.$inferInsert;
 export type ExecutorSessionTokenAuthorityRow = typeof executorSessionTokenAuthorities.$inferSelect;
 export type ExecutorSessionTokenAuthorityInsert =
   typeof executorSessionTokenAuthorities.$inferInsert;

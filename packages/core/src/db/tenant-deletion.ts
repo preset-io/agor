@@ -77,6 +77,17 @@ export class TenantDeletionCatalogError extends Error {
   }
 }
 
+/** Typed fail-closed outcome until an affected checkpoint home is fenced. */
+export class TenantNativeStateHandoffRequiredError extends Error {
+  readonly code = 'opencode_native_state_handoff_required';
+  constructor() {
+    super(
+      'Tenant has managed OpenCode native-state authority; whole-home process and queued-launch fencing is required before deletion or handoff.'
+    );
+    this.name = 'TenantNativeStateHandoffRequiredError';
+  }
+}
+
 /** Thrown when post-deletion verification still finds tenant rows. */
 export class TenantDeletionVerificationError extends Error {
   /** Names of tables that still contain rows for the tenant. */
@@ -426,6 +437,8 @@ const MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION =
 // guard prevents the permissive maintenance policy from being ORed with it.
 const STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION =
   "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=nullif(current_setting('agor.tenant_id',true),''))";
+const CANONICAL_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION =
+  "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
 
 function stripOuterParentheses(expression: string): string {
   let current = expression;
@@ -470,13 +483,15 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
     relation.tableName === 'mcp_oauth_client_registrations' ||
     relation.tableName === 'codex_device_auth_attempts'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
-      : relation.tableName === 'claude_oauth_attempts' ||
-          relation.tableName === 'user_provider_oauth_grants' ||
-          relation.tableName === 'kb_import_receipts'
-        ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
-        : relation.tableName === 'github_install_states'
-          ? STRICT_TENANT_POLICY_EXPRESSION
-          : CANONICAL_TENANT_POLICY_EXPRESSION;
+      : relation.tableName === 'opencode_checkpoint_attempts'
+        ? CANONICAL_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
+        : relation.tableName === 'claude_oauth_attempts' ||
+            relation.tableName === 'user_provider_oauth_grants' ||
+            relation.tableName === 'kb_import_receipts'
+          ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
+          : relation.tableName === 'github_install_states'
+            ? STRICT_TENANT_POLICY_EXPRESSION
+            : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {
@@ -824,6 +839,34 @@ async function hardenDeletionSearchPath(db: Database): Promise<void> {
   );
 }
 
+async function assertTenantHasNoNativeState(db: Database, tenantId: string): Promise<void> {
+  const result = await executeRaw(
+    db,
+    sql`
+    SELECT
+      EXISTS (SELECT 1 FROM public.opencode_checkpoint_attempts WHERE tenant_id = ${tenantId}) AS has_attempts,
+      EXISTS (
+        SELECT 1 FROM public.sessions
+        WHERE tenant_id = ${tenantId}
+          AND (data ? 'sdk_native_state' OR data ? 'sdk_native_state_store_id')
+      ) AS has_session_state
+  `
+  );
+  const rows = Array.isArray(result)
+    ? (result as Array<Record<string, unknown>>)
+    : (((result as { rows?: unknown[] } | undefined)?.rows ?? []) as Array<
+        Record<string, unknown>
+      >);
+  if (
+    rows[0]?.has_attempts === true ||
+    rows[0]?.has_session_state === true ||
+    rows[0]?.has_attempts === 't' ||
+    rows[0]?.has_session_state === 't'
+  ) {
+    throw new TenantNativeStateHandoffRequiredError();
+  }
+}
+
 /**
  * Permanently delete all data for a single tenant, or report what would be
  * deleted when `dryRun` is set. Returns the frozen machine-readable result.
@@ -890,6 +933,10 @@ export async function deleteTenantData(
     }
     schemaVersion = await resolveSchemaVersion(scoped);
     const phaseOnePlan = await buildLockedDeletionPlan(scoped, manifest, planNames);
+    // The generic tenant manifest would otherwise delete the ledger and then
+    // allow Session/Task cascades to erase the only durable fence. Check after
+    // every tenant table is locked and before the first row count/delete.
+    await assertTenantHasNoNativeState(scoped, tenantId);
     phaseOneFingerprint = phaseOnePlan.fingerprint;
     phaseOneTableCount = phaseOnePlan.steps.length;
     log(

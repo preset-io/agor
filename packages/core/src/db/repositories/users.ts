@@ -24,7 +24,13 @@ import { isValidExecutionHomeKey } from '../../types/user';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
-import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
+import {
+  opencodeCheckpointAttempts,
+  type UserInsert as SchemaUserInsert,
+  sessions,
+  type UserRow,
+  users,
+} from '../schema';
 import { isExecutionHomeKeyAvailable } from '../user-execution-home';
 import {
   type BaseRepository,
@@ -579,8 +585,31 @@ export class UsersRepository
    */
   async delete(id: string): Promise<void> {
     const fullId = await this.resolveId(id);
+    await this.assertNativeStateHandoffClear(fullId);
 
     await deleteFrom(this.db, users).where(eq(users.user_id, fullId)).run();
+  }
+
+  /** Owner deletion cannot revoke old HOME-mounted process authority. */
+  async assertNativeStateHandoffClear(id: string): Promise<void> {
+    const fullId = await this.resolveId(id);
+    const attempt = await select(this.db, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+      .from(opencodeCheckpointAttempts)
+      .where(eq(opencodeCheckpointAttempts.owner_user_id, fullId))
+      .limit(1)
+      .one();
+    const pointer = await select(this.db, { session_id: sessions.session_id })
+      .from(sessions)
+      .where(sql`${sessions.created_by} = ${fullId}
+        AND (${sessions.data} -> 'sdk_native_state' IS NOT NULL
+          OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`)
+      .limit(1)
+      .one();
+    if (attempt || pointer) {
+      throw new RepositoryError(
+        'opencode_native_state_handoff_required: user owns managed OpenCode state and requires whole-home process/queued-launch fencing'
+      );
+    }
   }
 
   /**
