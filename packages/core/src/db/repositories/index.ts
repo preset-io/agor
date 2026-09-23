@@ -33,6 +33,7 @@ export * from './knowledge';
 export * from './knowledge-attribution';
 export * from './knowledge-embedding-work';
 export * from './knowledge-semantic-settings';
+export * from './knowledge-transfer';
 export * from './mcp-catalog-candidates';
 export * from './mcp-egress-settings';
 export * from './mcp-marketplace';

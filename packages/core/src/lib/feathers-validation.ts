@@ -109,6 +109,8 @@ export function createQuerySchema<T extends TProperties>(properties: TObject<T>)
  */
 export const sessionQuerySchema = createQuerySchema(
   Type.Object({
+    // Session-only opt-out of exact totals; coerces REST boolean strings.
+    $count: Type.Optional(CommonSchemas.boolean),
     include_usage: Type.Optional(CommonSchemas.boolean),
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(CommonSchemas.sessionStatus),

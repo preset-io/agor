@@ -386,6 +386,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);
       await executeRaw(db, sql`ALTER TABLE repos DROP COLUMN cleanup_policy`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN cleanup_protected`);
+      // Rewind 0112's schema too: replaying its ledger must recreate the table.
+      await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
 
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);

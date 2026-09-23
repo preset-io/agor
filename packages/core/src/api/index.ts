@@ -1,3 +1,10 @@
+import type {
+  KNOWLEDGE_TRANSFER,
+  KnowledgeTransferBody,
+  KnowledgeTransferPage,
+  KnowledgeTransferWrite,
+  KnowledgeTransferWriteResult,
+} from '../types/knowledge-transfer';
 /**
  * Feathers Client for Agor
  *
@@ -877,6 +884,11 @@ export interface AgorClient
   service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 
   // Standard services (CRUD only)
+  service(path: typeof KNOWLEDGE_TRANSFER.path): {
+    find(params?: Params): Promise<KnowledgeTransferPage>;
+    get(id: string, params?: Params): Promise<KnowledgeTransferBody>;
+    create(data: KnowledgeTransferWrite, params?: Params): Promise<KnowledgeTransferWriteResult>;
+  };
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;

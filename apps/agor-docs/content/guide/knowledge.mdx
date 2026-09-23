@@ -97,6 +97,8 @@ Knowledge is more than a folder of pages. Documents can link to each other, and 
 
 When a Knowledge document contains a resolvable link to another Knowledge document, Agor syncs a `references` edge in the graph. The Knowledge UI can show a namespace-wide document graph, and MCP tools can fetch neighbors around a document or create explicit graph links.
 
+Content saves replace the document's outgoing `references` set, including explicitly created edges of that type. Other edge types are left alone. Removing and restoring a reference preserves its edge identity and metadata. Graph maintenance is best-effort: if it fails, the document still saves and the previous graph remains intact until a later successful content save.
+
 Use links when you want agents to understand relationships such as:
 
 - A runbook references a decision record.
@@ -133,6 +135,147 @@ This makes Knowledge a natural companion to [Teammates](/guide/teammates): teamm
 Knowledge is tied into Agor's existing role-based control plane. Members can create and work with documents and namespaces, workspace admins manage semantic-search settings, and namespace owners/admins manage namespace governance. Each document also carries visibility and edit-policy controls.
 
 In practice, that means Knowledge follows the same posture as the rest of Agor: humans and agents collaborate in one system, with view/edit boundaries enforced by the daemon rather than scattered across ad hoc files and local MCP servers.
+
+---
+
+## Discover and inspect Knowledge with the CLI
+
+The read-only commands use your connected deployment and normal Knowledge read
+permissions; they do not require export-admin access or write Knowledge data.
+
+```bash
+agor kb namespace list
+agor kb namespace show pr-2821-test
+agor kb document list --namespace pr-2821-test
+agor kb document list --namespace pr-2821-test --status draft
+agor kb document get index.md --namespace pr-2821-test
+```
+
+Lists default to 50 rows, sorted by namespace slug or document path. Use
+`--limit 20 --offset 20` for the next display page. The footer reports **N of X**
+accessible active entries, with the displayed range. Empty and out-of-range pages
+report zero displayed rows. These existing APIs return the complete authorized
+metadata inventory: pagination limits **display**, not server-side retrieval.
+Document lists include every draft you are allowed to read, omit archived documents,
+and do not fetch Markdown bodies. Counts can change between invocations and are
+not a snapshot or a count of inaccessible documents.
+
+All four commands accept `--json`. Lists emit `{ total, limit, offset, data }`;
+namespace show emits namespace details; document get emits metadata, current
+version, and content. Without `--json`, document get writes only current Markdown
+to stdout, preserving content when piped or redirected. Interactive terminal output
+escapes control characters. Paths are logical Knowledge paths, including `.md`
+when stored that way, not local filenames. Read these details before exporting and
+again after importing to spot-check the destination. No archive, edit, or history
+management commands are added by this workflow.
+
+## Move a namespace with the CLI
+
+Use `agor kb export` and `agor kb import` to migrate **current markdown documents**
+between deployments. Every run plans its work first. The CLI reads stored SHA-256
+hashes without downloading document bodies, hashes local files, and transfers only
+needed content. Planning, copying and reference reconciliation each show progress;
+once planning finishes, the action total is fixed.
+
+```bash
+# Log in to the source deployment as a workspace admin.
+agor login --url https://source.example
+agor kb export --namespace team-docs --output ./team-docs-export --dry-run
+agor kb export --namespace team-docs --output ./team-docs-export
+
+# Move the entire directory if the destination CLI runs on another machine.
+agor login --url https://destination.example
+agor kb import ./team-docs-export --namespace migrated-docs --dry-run
+agor kb import ./team-docs-export --namespace migrated-docs --apply
+```
+
+Import defaults to planning only; **`--apply` is required for writes**. Export writes
+by default and creates the output directory with mode `0700`. Existing output
+directories must be private and owned by the CLI user. This first directory adapter
+requires **Linux**, using an opened directory handle to prevent symlink/root-swap
+escapes. It does not write files on the daemon or require an Agor session, S3 or a
+background migration job.
+
+Typical progress looks like:
+
+```text
+Plan: 240 documents; 200 unchanged; 40 fetch/verify; 81920 known bytes; 0 unknown hashes
+Exporting: 17 / 40 34816 / 81920 bytes | elapsed 3s
+```
+
+Human progress goes to stderr; the final JSON summary goes to stdout. Redirected
+terminals receive periodic newline updates instead of an animated progress line.
+During discovery, counts describe the current scan, not a transactionally frozen
+snapshot. A legacy version without a stored hash is planned as fetch/verify, never
+assumed unchanged. Indexing may continue after the CLI finishes.
+
+### Scope and ownership
+
+Export requires workspace-admin access so it can include all active documents,
+including private documents and other authors' drafts. Import requires member
+access and creates a **new, private namespace owned by the importing user**.
+Documents are private with owner-only editing. Titles, icons, kinds, draft/published
+status and separate frontmatter are retained. Original metadata, author facts and
+timestamps are kept as inert provenance; destination attribution records the actual
+import. Source ACLs, owners, admin roles and repo/branch bindings are never applied.
+Review the result before sharing the destination namespace.
+
+The bundle contains `manifest.json`, `checkpoint.json` and immutable UTF-8 files
+named `d000001-<sha256>.md`. The manifest maps these files to their original Knowledge
+paths, including paths without a markdown extension. Physical filenames do not
+depend on source paths, so filesystem case collisions and file/folder conflicts do
+not change Knowledge paths. Refreshing an export appends changed content and
+updates the manifest; **old files are retained, not pruned**. A refreshed directory
+can still contain older or removed content; use a fresh directory for a minimal
+migration handoff. Import reads only manifest-listed files. Treat the directory as
+sensitive data and do not commit it to a shared repository by accident.
+
+Supported in-namespace Markdown link destinations and reference definitions are
+rewritten to destination namespace paths. Unresolved KB links are counted; unusual
+escaped destinations, absolute source-site URLs and external references may need
+manual review. Code and ordinary prose are not rewritten. After all documents
+exist, the CLI reconciles reference edges without creating extra content revisions.
+
+This is **not a full backup or bidirectional sync**. It excludes historical versions,
+archived documents, manually authored graph edges, asset bytes, grants and semantic
+search settings/credentials. Images and external/upload/branch-file references are
+not fetched and may not remain available after moving. Source UUIDs are provenance,
+not destination authority. There is no email-based ownership matching.
+
+### Resume, conflicts and limits
+
+```bash
+agor kb export --namespace team-docs --output ./team-docs-export --resume
+agor kb import ./team-docs-export --namespace migrated-docs --resume --apply
+```
+
+Cancellation stops scheduling new work; a request already in flight may finish.
+Imports retain committed documents. Durable, caller-bound receipts make a lost
+acknowledgement safe to retry: unchanged entries are skipped without new revisions.
+Renamed, edited or archived imported documents cause a conflict, not recreation.
+An unrelated existing namespace is never merged or overwritten. A modified bundle
+is a new import and needs a new destination namespace. Keep the destination private
+and unchanged until import and reference reconciliation finish.
+
+An export interrupted before its first completed manifest can resume only against
+the same source inventory; if that source changed, use a fresh output directory.
+Completed exports can be refreshed. Independently altered content-addressed files
+are rejected, not overwritten. The export lock renews while the process runs; after
+a hard process exit, allow 30 seconds for a stale lock to become reclaimable.
+Import refuses a directory whose export lock is still present.
+
+Each body is checked against its recorded version/hash. Export compares inventory
+again before publishing its completed manifest, but this is **not a point-in-time
+namespace snapshot**. Keep the source quiet during a migration cutover. A failed
+export never publishes a new completed manifest; an older completed export may
+still be present and represents the older state.
+
+Limits are 10,000 documents, 10 MiB per body, 100 MiB total body bytes, a 10 MiB
+manifest, a 9 MiB encoded import request (below the daemon's HTTP JSON ceiling),
+and 110 MiB across all encoded document requests. Import planning checks the full
+rewritten plan, including JSON escaping and metadata, before creating the namespace.
+Excessive nesting, unsafe filenames, symlinks, hardlinks, invalid
+UTF-8 and mismatched hashes fail closed. Archive extraction is not part of this v1.
 
 ---
 

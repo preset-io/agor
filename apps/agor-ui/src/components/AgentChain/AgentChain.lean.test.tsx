@@ -44,7 +44,7 @@ it('updates a quiet collapsed header from live activity to a known count without
   rerender(<AgentChain messages={[first, activity('Bash', 1, true)]} isLatest />);
   const header = screen.getByRole('button', { name: '2 tool calls', expanded: false });
   expect(header).toHaveAttribute('aria-expanded', 'false');
-  expect(container.querySelector('.ant-tag')).toBeNull();
+  expect(container.querySelector('.ant-tag')).toHaveTextContent('2');
   expect(header).toHaveAttribute('aria-busy', 'false');
   expect(screen.queryByText('Result')).not.toBeInTheDocument();
   fireEvent.click(header);
@@ -93,4 +93,25 @@ it('hands activity to a following assistant response unless the latest tool is e
     'aria-busy',
     'true'
   );
+});
+
+it('counts distinct calls, not reasoning, results, or duplicate persisted/live IDs', () => {
+  const first = activity('Read', 0, true);
+  const duplicate = { ...first, message_id: generateId(), index: 1 };
+  const reasoning = { ...activity('Read', 2), content: [{ type: 'thinking', text: 'Think' }] };
+  const view = (id: string) => (
+    <AgentChain
+      messages={[first, duplicate, reasoning]}
+      isTaskRunning
+      isLatest
+      latestActivity={{ toolUseId: id, toolName: 'Read', status: 'executing' }}
+    />
+  );
+  const { rerender } = render(view('call-0'));
+  const header = screen.getByRole('button', { name: 'Running: Read' });
+  expect(header.querySelector('.ant-tag')).toHaveTextContent(/^1$/);
+  rerender(view('call-3'));
+  expect(header.querySelector('.ant-tag')).toHaveTextContent(/^2$/);
+  rerender(view('call-3'));
+  expect(header.querySelector('.ant-tag')).toHaveTextContent(/^2$/);
 });

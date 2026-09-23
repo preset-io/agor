@@ -23,6 +23,7 @@ import { AgentChain } from '../AgentChain';
 import { MessageBlock } from '../MessageBlock';
 import { ContextWindowPill, ModelPill } from '../Pill';
 import { LeanTurnMetadata } from '../TaskBlock/LeanTurnMetadata';
+import { TaskBlock } from '../TaskBlock/TaskBlock';
 import { ConversationView } from './ConversationView';
 
 function TestSurface({ children }: { children: ReactElement }) {
@@ -65,6 +66,11 @@ const tasks: Task[] = Array.from({ length: 20 }, (_, index) => ({
   full_prompt: `Prompt ${index}`,
   created_by: '',
   status: TaskStatus.COMPLETED,
+  message_range: {
+    start_index: index * 2,
+    end_index: index * 2 + 1,
+    start_timestamp: '2026-09-01T00:00:00Z',
+  },
   created_at: '2026-09-01T00:00:00.000Z',
   model: 'synthetic-model',
   git_state: { ref_at_start: 'main', sha_at_start: 'test' },
@@ -189,7 +195,7 @@ it('fences an old page request when navigating to another session', async () => 
         finishNew = resolve;
       })
   );
-  currentHandle = { ...handle, loadOlderTasks: oldLoad } as ReactiveSessionHandle;
+  currentHandle = { ...handle, loadOlderTasks: oldLoad } as unknown as ReactiveSessionHandle;
   const view = (id: typeof sessionId) => (
     <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
       <ConversationView client={null} sessionId={id} />
@@ -199,7 +205,7 @@ it('fences an old page request when navigating to another session', async () => 
   fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
   expect(oldLoad).toHaveBeenCalledTimes(1);
   const nextId = generateId();
-  currentHandle = { ...handle, loadOlderTasks: newLoad } as ReactiveSessionHandle;
+  currentHandle = { ...handle, loadOlderTasks: newLoad } as unknown as ReactiveSessionHandle;
   state = { ...state, sessionId: nextId };
   rerender(view(nextId));
   fireEvent.click(screen.getByRole('button', { name: /Load older history/ }));
@@ -385,7 +391,8 @@ it('keeps familiar icon-led tool rows and results inside the quiet outer disclos
   const tool = screen.getByRole('button', { name: /Read/ });
   expect(tool.querySelector('.anticon')).not.toBeNull();
   expect(tool).toHaveAttribute('aria-expanded', 'false');
-  const label = screen.getByText('1 tool call');
+  const label = screen.getByText('Tool calls');
+  expect(header.querySelector('.ant-tag')?.textContent).toBe('1');
   const caret = header.querySelector('.anticon-up')!;
   expect(getComputedStyle(label).fontSize).toBe(
     getComputedStyle(tool.querySelector('strong')!).fontSize
@@ -627,4 +634,281 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
   expect(screen.getByRole('alert')).toHaveClass('ant-alert-error');
   expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
+});
+
+it('retains the recorded count through lazy loading and retry without double count text', async () => {
+  const load = vi.fn().mockRejectedValue(new Error('offline'));
+  render(
+    <TaskBlock
+      task={{ ...tasks[0], recorded_tool_count: 42 }}
+      taskMessages={[]}
+      taskMessagesLoaded={false}
+      onLoadTaskMessages={load}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: '42 tool calls' }));
+  const loading = screen.getByRole('button', { name: 'Loading tool activity…' });
+  expect(loading.querySelector('.ant-tag')?.textContent).toBe('42');
+  expect(loading).toBeDisabled();
+  const retry = await screen.findByRole('button', { name: 'Couldn’t load tool activity · Retry' });
+  expect(retry.querySelector('.ant-tag')?.textContent).toBe('42');
+  expect(retry.textContent?.match(/42/g)).toHaveLength(1);
+  expect(load).toHaveBeenCalledTimes(1);
+});
+
+it('keeps history text choices, keyboard disclosure and scroll anchors with multiline markdown', async () => {
+  const longMessages = new Map(
+    [...messages].map(([taskId, rows], turn) => [
+      taskId,
+      rows.map((message, index) => ({
+        ...message,
+        content: [
+          `History ${turn} message ${index}`,
+          '',
+          '```text',
+          'synthetic code',
+          '```',
+          '',
+          '| Column | Value |',
+          '| --- | --- |',
+          '| synthetic | table |',
+          '',
+          ...Array.from(
+            { length: 12 },
+            (_, line) =>
+              `Paragraph ${turn}-${index}-${line}. ${'Long prose wraps naturally. '.repeat(8)}\n`
+          ),
+          `Tail ${turn}-${index}`,
+        ].join('\n'),
+      })),
+    ])
+  );
+  state = { ...state, messagesByTask: longMessages };
+  render(
+    <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
+      <ConversationView client={null} sessionId={sessionId} />
+    </div>
+  );
+  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(18);
+  expect(screen.getByText('Tail 19-0')).toBeInTheDocument();
+  expect(screen.getByText('Tail 19-1')).toBeInTheDocument();
+  expect(screen.queryByText('Tail 10-0')).not.toBeInTheDocument();
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  await waitFor(
+    () =>
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(24),
+    { timeout: 10000 }
+  );
+
+  // Escape bottom follow before interacting with historical text.
+  act(() => {
+    viewport.scrollTop -= 100;
+    fireEvent.scroll(viewport);
+  });
+  const expand = screen.getAllByRole('button', { name: 'show more' })[0];
+  expand.focus();
+  await page.screenshot({ path: `./.vitest/history-collapsed-${window.innerWidth}.png` });
+  await userEvent.keyboard('{Enter}');
+  expect(expand).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByText('Tail 10-0')).toBeInTheDocument();
+  await userEvent.keyboard(' ');
+  expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await userEvent.click(expand);
+  expect(screen.getByText('Tail 10-0')).toBeInTheDocument();
+  expect(viewport.querySelector('pre')).not.toBeNull();
+  expect(viewport.querySelector('table')).not.toBeNull();
+
+  // Reconnect/tool hydration does not expand unrelated history or reset choice.
+  act(() =>
+    update({
+      ...state,
+      messagesByTask: new Map(longMessages),
+      loadedTaskIds: new Set(tasks.map((t) => t.task_id)),
+    })
+  );
+  expect(screen.getByText('Tail 10-0')).toBeInTheDocument();
+  expect(screen.queryByText('Tail 11-0')).not.toBeInTheDocument();
+
+  act(() => {
+    viewport.scrollTop = 150;
+    fireEvent.scroll(viewport);
+  });
+  let anchor: HTMLElement | undefined;
+  let top = 0;
+  act(() => {
+    viewport.scrollTop = 60;
+    anchor = Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
+      (element) => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top
+    );
+    top = anchor!.getBoundingClientRect().top;
+    fireEvent.scroll(viewport);
+  });
+  await waitFor(() => expect(screen.getByText('History 0 message 0')).toBeInTheDocument());
+  await waitFor(() => expect(Math.abs(anchor!.getBoundingClientRect().top - top)).toBeLessThan(3));
+  expect(screen.queryByText('Tail 0-0')).not.toBeInTheDocument();
+  expect(screen.getByText('Tail 10-0')).toBeInTheDocument();
+
+  const current = viewport.querySelector<HTMLElement>(`[data-task-block="${tasks[19].task_id}"]`)!;
+  const height = current.getBoundingClientRect().height;
+  const readerTop = viewport.scrollTop;
+  const nextTask = { ...tasks[19], task_id: generateId(), status: TaskStatus.RUNNING };
+  act(() => update({ ...state, tasks: [...state.tasks, nextTask] }));
+  expect(current.getBoundingClientRect().height).toBe(height);
+  expect(screen.getByText('Tail 19-0')).toBeInTheDocument();
+  expect(screen.getByText('Tail 19-1')).toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(Math.abs(viewport.scrollTop - readerTop)).toBeLessThan(3);
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
+  await page.screenshot({ path: `./.vitest/history-see-more-${window.innerWidth}.png` });
+});
+
+it('follows a long live response without clamping the current prompt or losing persisted identity', async () => {
+  const task = { ...tasks[19], status: TaskStatus.RUNNING };
+  const rows = messages.get(task.task_id)!;
+  const prompt = {
+    ...rows[0],
+    content: Array.from(
+      { length: 20 },
+      (_, i) => `Live prompt ${i}\n\n${'Synthetic prompt prose. '.repeat(6)}`
+    ).join('\n\n'),
+  };
+  const response = rows[1];
+  state = {
+    ...state,
+    tasks: [task],
+    messagesByTask: new Map([[task.task_id, [prompt]]]),
+    hasOlderTasks: false,
+  };
+  render(
+    <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
+      <ConversationView client={null} sessionId={sessionId} />
+    </div>
+  );
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  for (const length of [5, 25, 35]) {
+    const content = Array.from(
+      { length },
+      (_, i) => `Live answer ${i}\n\n${'Synthetic answer prose. '.repeat(6)}`
+    ).join('\n\n');
+    act(() =>
+      update({
+        ...state,
+        streamingMessages: new Map([
+          [
+            response.message_id,
+            {
+              message_id: response.message_id,
+              role: MessageRole.ASSISTANT,
+              session_id: sessionId,
+              task_id: task.task_id,
+              content,
+              thinkingContent: '',
+              isStreaming: true,
+              timestamp: response.timestamp,
+              index: response.index,
+            },
+          ],
+        ]),
+      })
+    );
+    expect(screen.getByText(`Live answer ${length - 1}`)).toBeInTheDocument();
+    expect(screen.getByText('Live prompt 19')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+    await waitFor(
+      () =>
+        expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(24),
+      { timeout: 10000 }
+    );
+  }
+  const content = state.streamingMessages.get(response.message_id)!.content;
+  act(() =>
+    update({
+      ...state,
+      tasks: [tasks[19]],
+      streamingMessages: new Map(),
+      messagesByTask: new Map([[task.task_id, [prompt, { ...response, content }]]]),
+    })
+  );
+  expect(screen.getByText('Live answer 34')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+  await page.screenshot({ path: `./.vitest/history-live-expanded-${window.innerWidth}.png` });
+});
+
+it('bounds long code, tables and single-line prose previews while preserving full expansion', async () => {
+  const base = messages.get(tasks[0].task_id)![1];
+  const code = [
+    '```text',
+    ...Array.from({ length: 200 }, (_, i) => `code-line-${i}`),
+    '```',
+    '',
+    'After code fence',
+  ].join('\n');
+  const table = [
+    '| Row | Value |',
+    '| --- | --- |',
+    ...Array.from({ length: 200 }, (_, i) => `| row-${i} | value-${i} |`),
+  ].join('\n');
+  render(
+    <div>
+      <MessageBlock message={{ ...base, content: code }} defaultTextExpanded={false} />
+      <MessageBlock
+        message={{ ...base, message_id: generateId(), content: table }}
+        defaultTextExpanded={false}
+      />
+      <MessageBlock
+        message={{ ...base, message_id: generateId(), content: 'Wrapped prose '.repeat(200) }}
+        defaultTextExpanded={false}
+      />
+      <MessageBlock
+        message={{ ...base, message_id: generateId(), content: 'Short message' }}
+        defaultTextExpanded={false}
+      />
+    </div>
+  );
+  await waitFor(() => expect(screen.getByText('code-line-0')).toBeInTheDocument());
+  expect(screen.queryByText('code-line-199')).not.toBeInTheDocument();
+  expect(screen.queryByText('After code fence')).not.toBeInTheDocument();
+  expect(screen.queryByText('row-199')).not.toBeInTheDocument();
+  expect(screen.queryByText('Wrapped prose '.repeat(200).trim())).not.toBeInTheDocument();
+  expect(screen.getByText('Short message')).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(3);
+  expect(screen.queryByRole('button', { name: 'Download file' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  expect(screen.getByText('After code fence')).toBeInTheDocument();
+  expect(screen.getByText('code-line-199')).toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  expect(screen.getByText('row-199')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  expect(screen.getByText('Wrapped prose '.repeat(200).trim())).toBeInTheDocument();
+  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+});
+
+it('collapses tall low-character history and medium prose with shorter previews', async () => {
+  const base = messages.get(tasks[0].task_id)![1];
+  const words = Array.from({ length: 50 }, (_, i) => `Word${i}`);
+  const tall = words.join('  \n');
+  const prose = 'Synthetic prose for a medium-length historical response. '.repeat(28).trim();
+  expect(tall.length).toBeLessThan(1200);
+  expect(prose.length).toBeGreaterThan(1200);
+  expect(prose.length).toBeLessThan(2000);
+  const view = render(
+    <div>
+      <MessageBlock message={{ ...base, content: tall }} defaultTextExpanded={false} />
+      <MessageBlock
+        message={{ ...base, message_id: generateId(), content: prose }}
+        defaultTextExpanded={false}
+      />
+    </div>
+  );
+  const articles = view.container.querySelectorAll('article');
+  expect(articles[0].textContent).toContain('Word9');
+  expect(articles[0].textContent).not.toContain('Word10');
+  expect(articles[0].getBoundingClientRect().height).toBeLessThan(300);
+  expect(articles[1].textContent!.length).toBeLessThanOrEqual(700);
+  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(2);
+  await page.screenshot({ path: `./.vitest/history-dual-budget-${window.innerWidth}.png` });
+  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  expect(articles[0].textContent).toContain('Word49');
+  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  expect(screen.getByText(prose)).toBeInTheDocument();
 });

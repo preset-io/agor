@@ -10,6 +10,7 @@
  * - Auto-scrolling to latest content
  */
 
+import { isTaskExecuting } from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
@@ -27,6 +28,7 @@ import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
+import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
@@ -134,7 +136,7 @@ export interface ConversationViewProps {
   compact?: boolean;
 }
 
-export const ConversationView = React.memo<ConversationViewProps>(
+const ConversationViewInner = React.memo<ConversationViewProps>(
   ({
     client,
     sessionId,
@@ -227,7 +229,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
       // Clearing the escape on an explicit go-to-bottom intent lets the pin
       // survive until the round-tripped/streamed content actually arrives.
       state.escapedFromLock = false;
-      scrollToBottom();
+      // initial/resize options do not apply to this explicit call: without
+      // animation it springs through history. Late code-block shrinkage can
+      // then look like upward user scrolling and cancel the initial bottom lock.
+      scrollToBottom({ animation: 'instant' });
     }, [state, scrollToBottom]);
 
     // Scroll to top. While content is still streaming/growing, the library's
@@ -273,27 +278,51 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [currentReactiveState?.tasks]
     );
 
+    const allStreamingMessages =
+      currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
+    const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
+
+    const [textChoices, setTextChoices] = useState(() => new Map<string, boolean>());
+    const setTextChoice = useCallback((key: string, expanded: boolean) => {
+      setTextChoices((choices) => new Map(choices).set(key, expanded));
+    }, []);
+    const textChoiceContext = useMemo(
+      () => ({ choices: textChoices, setChoice: setTextChoice }),
+      [textChoices, setTextChoice]
+    );
+    const [protectedTurns, setProtectedTurns] = useState(() => new Set<string>());
+    // Lean hydration commits the ordered task page and messages atomically.
+    // Realtime events also advance lastSyncedAt before that commit. Only loading
+    // tracks initial readiness; ordinary reconnects leave it false.
+    const initialHydrationPending = !!currentReactiveState?.loading;
+    const latestTaskId = !initialHydrationPending ? tasks.at(-1)?.task_id : undefined;
+    const liveIds = tasks
+      .filter((task) => isTaskExecuting(task) || streamingMessagesByTask.has(task.task_id))
+      .map((task) => task.task_id);
+    const newlyProtected = [...liveIds, ...(latestTaskId ? [latestTaskId] : [])].filter(
+      (id) => !protectedTurns.has(id)
+    );
+    // Render-time state adjustment prevents a full-text flash/collapse. Protection
+    // is monotonic for this mount, including messages arriving late in a turn.
+    if (newlyProtected.length) setProtectedTurns(new Set([...protectedTurns, ...newlyProtected]));
+
     // Land at the bottom on panel open / session switch — but only once real
     // content is mounted. On a cold open ConversationView early-returns <Spin/>
     // (scrollRef/contentRef unmounted), so firing before tasks exist is a no-op
     // that never re-runs; gating on tasks.length>0 fires it when the container
     // mounts. handleScrollToBottom also clears the escape so the library's
     // persistent observer reliably follows lazy/streamed growth from there.
-    const hasContent = tasks.length > 0;
+    const hasContent = tasks.length > 0 && !initialHydrationPending;
     useEffect(() => {
       if (isActive && sessionId && hasContent) {
         handleScrollToBottom();
       }
     }, [isActive, sessionId, hasContent, handleScrollToBottom]);
 
-    const allStreamingMessages =
-      currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = currentReactiveState ? currentReactiveState.loading : !!sessionId;
     const error = currentReactiveState?.error || null;
     const isTerminalError = !!currentReactiveState?.terminal;
     const [isReloading, setIsReloading] = useState(false);
-
-    const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
 
     // Stable task-scoped detail loading; the transcript itself never collapses.
     const handleLoadTaskMessages = useCallback(
@@ -399,7 +428,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       );
     }
 
-    if (loading && tasks.length === 0) {
+    if (loading && (tasks.length === 0 || initialHydrationPending)) {
       return (
         <div
           style={{
@@ -514,48 +543,55 @@ export const ConversationView = React.memo<ConversationViewProps>(
           minHeight: 0,
         }}
       >
-        <div ref={contentRef}>
-          {/* Genealogy Banner */}
-          <GenealogyBanner />
+        <HistoryTextChoices.Provider value={textChoiceContext}>
+          <div ref={contentRef}>
+            {/* Genealogy Banner */}
+            <GenealogyBanner />
 
-          {error && <Alert type="error" title={error} />}
-          {currentReactiveState?.hasOlderTasks && (
-            <Button loading={loadingOlder} onClick={() => void loadOlder()}>
-              Load older history
-            </Button>
-          )}
-          {/* Task-organized conversation */}
-          {tasks.map((task, taskIndex) => (
-            <TaskBlock
-              key={task.task_id}
-              task={task}
-              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
-              agentic_tool={agentic_tool}
-              sessionModel={sessionModel}
-              userById={userById}
-              currentUserId={currentUserId}
-              sessionId={sessionId}
-              onPermissionDecision={onPermissionDecision}
-              branchName={branchName}
-              scheduledFromBranch={scheduledFromBranch}
-              scheduledRunAt={scheduledRunAt}
-              streamingMessages={streamingMessagesByTask.get(task.task_id)}
-              taskMessages={
-                currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-              }
-              taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-              onLoadTaskMessages={handleLoadTaskMessages}
-              teammateEmoji={teammateEmoji}
-              isLatestTask={taskIndex === tasks.length - 1}
-              client={client}
-              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-              compact={compact}
-            />
-          ))}
-        </div>
+            {error && <Alert type="error" title={error} />}
+            {currentReactiveState?.hasOlderTasks && (
+              <Button loading={loadingOlder} onClick={() => void loadOlder()}>
+                Load older history
+              </Button>
+            )}
+            {/* Task-organized conversation */}
+            {tasks.map((task, taskIndex) => (
+              <TaskBlock
+                key={task.task_id}
+                task={task}
+                latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
+                agentic_tool={agentic_tool}
+                sessionModel={sessionModel}
+                userById={userById}
+                currentUserId={currentUserId}
+                sessionId={sessionId}
+                onPermissionDecision={onPermissionDecision}
+                branchName={branchName}
+                scheduledFromBranch={scheduledFromBranch}
+                scheduledRunAt={scheduledRunAt}
+                streamingMessages={streamingMessagesByTask.get(task.task_id)}
+                taskMessages={
+                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
+                }
+                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+                onLoadTaskMessages={handleLoadTaskMessages}
+                teammateEmoji={teammateEmoji}
+                isLatestTask={taskIndex === tasks.length - 1}
+                client={client}
+                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                compact={compact}
+                defaultTextExpanded={protectedTurns.has(task.task_id)}
+              />
+            ))}
+          </div>
+        </HistoryTextChoices.Provider>
       </div>
     );
   }
 );
 
+// A session switch is a new mounted conversation, including text choices and scroll ownership.
+export const ConversationView = React.memo<ConversationViewProps>((props) => (
+  <ConversationViewInner key={props.sessionId} {...props} />
+));
 ConversationView.displayName = 'ConversationView';

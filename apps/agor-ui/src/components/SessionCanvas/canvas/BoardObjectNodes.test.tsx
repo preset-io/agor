@@ -1,10 +1,11 @@
+import type { BoardComment } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { ReactFlowProvider } from 'reactflow';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
-import { ZoneNode } from './BoardObjectNodes';
+import { CommentNode, ZoneNode } from './BoardObjectNodes';
 
 const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
 
@@ -124,6 +125,33 @@ describe('ZoneNode compact toolbar', () => {
       />
     );
     expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+  });
+});
+
+function renderComment(comment: BoardComment) {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <AntApp>
+      <ReactFlowProvider>{children}</ReactFlowProvider>
+    </AntApp>
+  );
+  return render(<CommentNode data={{ comment, replyCount: 0 }} />, { wrapper });
+}
+
+describe('CommentNode reconnect rehydration', () => {
+  // A comment can rehydrate from a partial payload on reconnect before its
+  // `content` arrives. Rendering must not throw — a bare string method on
+  // `undefined` here would crash the whole SessionPanel via the error boundary.
+  it('renders without throwing when content is not yet populated', () => {
+    const partial = {
+      comment_id: 'comment-1',
+      board_id: 'board-1',
+      created_by: 'user-1',
+      // content intentionally omitted to simulate partial rehydration
+      resolved: false,
+      created_at: new Date().toISOString(),
+    } as unknown as BoardComment;
+
+    expect(() => renderComment(partial)).not.toThrow();
   });
 });
 

@@ -27,6 +27,24 @@ Branch: "auth-feature"
 
 _A coordinator session fanned out to eight parallel security-review children, each its own introspectable conversation._
 
+## Reading conversation history
+
+Long user and assistant messages in older turns start collapsed, with **show more**
+to reveal the full text. The latest whole turn and live turns stay expanded; a new
+turn never automatically collapses text you were already reading. Your explicit
+**show more / show less** choices last while that conversation is mounted, including
+reconnects and tool-detail loading. Reopening it applies the history defaults again.
+
+Messages over 1,200 source characters **or** 15 source lines are eligible for
+collapse. The preview stops at 10 source lines or roughly 600 characters, whichever
+comes first. The character boundary prefers a newline within the next 100
+characters, then whitespace in that window; otherwise it cuts at the target.
+These are literal source newlines, not estimates of wrapped lines or screen height.
+Streamdown handles incomplete Markdown in the preview. Partial
+code/table export controls are hidden until expansion; the message copy action
+still copies the full source. All fetched text remains available for expansion and
+copying; this is a display preference, not a payload reduction.
+
 ---
 
 ## Three ways to branch

@@ -68,7 +68,8 @@ export const sessions = pgTable(
     // Primary identity
     session_id: varchar('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
@@ -3385,6 +3386,9 @@ export const kbGraphNodes = pgTable(
   },
   (table) => ({
     tenantIdx: index('kb_graph_nodes_tenant_id_idx').on(table.tenant_id),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Deployed identity includes archived rows; repositories must
+    // restore them. Do not infer active-only uniqueness from this declaration.
     uriIdx: uniqueIndex('kb_graph_nodes_tenant_uri_unique')
       .on(table.tenant_id, table.uri)
       .where(sql`${table.archived} = false`),
@@ -3454,6 +3458,9 @@ export const kbGraphEdges = pgTable(
       table.target_node_id,
       table.edge_type
     ),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Archived edge identities remain unique and must be restored.
+    // Keep the deployed constraint intact when reconciling migration metadata.
     sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_tenant_source_target_type_unique')
       .on(table.tenant_id, table.source_node_id, table.target_node_id, table.edge_type)
       .where(sql`${table.archived} = false`),
@@ -3606,3 +3613,33 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Durable create receipts survive target archive/deletion; never grant access by themselves. */
+export const kbImportReceipts = pgTable(
+  'kb_import_receipts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    receipt_id: text('receipt_id').primaryKey(),
+    owner_user_id: varchar('owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    bundle: text('bundle').notNull(),
+    slug: text('slug').notNull(),
+    entry_key: text('entry_key').notNull(),
+    target_id: text('target_id').notNull(),
+    digest: text('digest').notNull(),
+    request_bytes: integer('request_bytes').notNull().default(0),
+    reconciled_count: integer('reconciled_count').notNull().default(-1),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    tenantIdx: index('kb_import_receipts_tenant_idx').on(table.tenant_id),
+    identityIdx: uniqueIndex('kb_import_receipts_identity_unique').on(
+      table.tenant_id,
+      table.owner_user_id,
+      table.bundle,
+      table.slug,
+      table.entry_key
+    ),
+  })
+);

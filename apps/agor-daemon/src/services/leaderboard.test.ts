@@ -93,10 +93,12 @@ async function seedSession(
   db: Database,
   opts: { sessionId: string; branchId: string; tool: 'claude-code' | 'codex' | 'gemini' }
 ): Promise<void> {
+  const now = new Date();
   await insert(db, sessions)
     .values({
       session_id: opts.sessionId,
-      created_at: new Date(),
+      created_at: now,
+      updated_at: now,
       status: 'idle',
       agentic_tool: opts.tool,
       branch_id: opts.branchId,

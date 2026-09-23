@@ -46,6 +46,25 @@ console.log(`Session ${session.session_id} started`);
 
 REST clients exit cleanly without keeping a socket open. Perfect for CLI tools and short-lived scripts.
 
+### Bounded session lists without totals
+
+For a recent-session slice, `sessions.find` accepts `$count: false` to skip the
+exact count and return a bounded array rather than `{ data, total, limit, skip }`:
+
+```ts
+const recent = await client.service('sessions').find({
+  query: { archived: false, $sort: { updated_at: -1 }, $limit: 50, $count: false },
+});
+```
+
+The default remains exact-count pagination. No-count requests still enforce the
+server's default/max page size and preserve authorization. `$limit: 0` returns an
+empty array without counting. This option supports the SQL list filters
+`archived`, `status`, `board_id`, and `branch_id` (a string or `$in` list), sorting
+by `updated_at` or `created_at`, and non-negative integer `$limit`/`$skip`.
+Other query shapes are rejected when `$count` is supplied. Use this with `find`,
+not `findAll`: an array has no continuation metadata and represents only one slice.
+
 ### Driving the executor without MCP
 
 Two equivalent ways to send work to a session. Pick whichever fits your harness:
@@ -88,11 +107,11 @@ const client = createClient(url, true, {
   socketAuthentication: { accessToken },
 });
 
-client.service('messages').on('created', (msg) => {
+client.service('messages').on('created', msg => {
   console.log('[message]', msg.session_id, msg.role, msg.content?.slice(0, 80));
 });
 
-client.service('sessions').on('patched', (session) => {
+client.service('sessions').on('patched', session => {
   console.log('[session]', session.session_id, session.status);
 });
 ```
@@ -127,19 +146,20 @@ handle.release();
 
 What you get on `handle.state`:
 
-| Field | Description |
-|---|---|
-| `session` | The full `Session` model (status, current task, agent config, …) |
-| `tasks` | All tasks for this session, ordered |
-| `messagesByTask` | `Map<taskId, Message[]>`, hydrated lazily or eagerly per `taskHydration` option |
-| `queuedTasks` | Tasks queued but not yet running, ordered by `queue_position` |
-| `streamingMessages` | In-flight assistant messages with live `content` + `thinkingContent` |
-| `toolsByTask` | Tool executions per task, with `executing` / `complete` status |
-| `connected`, `loading`, `error`, `lastSyncedAt` | Connection + sync metadata |
+| Field                                           | Description                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| `session`                                       | The full `Session` model (status, current task, agent config, …)                |
+| `tasks`                                         | All tasks for this session, ordered                                             |
+| `messagesByTask`                                | `Map<taskId, Message[]>`, hydrated lazily or eagerly per `taskHydration` option |
+| `queuedTasks`                                   | Tasks queued but not yet running, ordered by `queue_position`                   |
+| `streamingMessages`                             | In-flight assistant messages with live `content` + `thinkingContent`            |
+| `toolsByTask`                                   | Tool executions per task, with `executing` / `complete` status                  |
+| `connected`, `loading`, `error`, `lastSyncedAt` | Connection + sync metadata                                                      |
 
 `retainReactiveSession()` is reference-counted. Multiple subscribers on the same session ID share one handle and one set of socket listeners. Call `release()` when you're done; the handle tears itself down when the last consumer releases.
 
 This is what you'd reach for if you wanted to:
+
 - Build a custom session viewer in your own React/Vue/Svelte app
 - Mirror Agor sessions into a Slack or terminal UI
 - Pipe live tool calls into your own observability stack
@@ -147,10 +167,10 @@ This is what you'd reach for if you wanted to:
 
 ## Authentication
 
-| Strategy | When to use | How |
-|---|---|---|
-| **API Key** | Scripts, services, CI | Pass to `createRestClient(url, apiKey)`, or set `AGOR_API_KEY=agor_sk_…` and use `getApiKeyFromEnv()` |
-| **JWT** | Browser apps after REST login | Pass `socketAuthentication: { accessToken }` to `createClient()` |
+| Strategy    | When to use                   | How                                                                                                   |
+| ----------- | ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **API Key** | Scripts, services, CI         | Pass to `createRestClient(url, apiKey)`, or set `AGOR_API_KEY=agor_sk_…` and use `getApiKeyFromEnv()` |
+| **JWT**     | Browser apps after REST login | Pass `socketAuthentication: { accessToken }` to `createClient()`                                      |
 
 Authentication is required on every endpoint. There is no anonymous strategy.
 
@@ -182,11 +202,11 @@ Helpers worth knowing:
 
 ## When to reach for which client
 
-| You are… | Use… |
-|---|---|
-| An agent running inside a session | [Agor MCP Server](/guide/internal-mcp) (already injected) |
-| A Node script poking at the daemon | `createRestClient()` |
-| A live dashboard or custom UI | `createClient()` + reactive sessions |
+| You are…                            | Use…                                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------- |
+| An agent running inside a session   | [Agor MCP Server](/guide/internal-mcp) (already injected)                   |
+| A Node script poking at the daemon  | `createRestClient()`                                                        |
+| A live dashboard or custom UI       | `createClient()` + reactive sessions                                        |
 | A long-lived service routing events | `createClient()` with service `.on('created' \| 'patched' \| 'removed', …)` |
 
 ## Related

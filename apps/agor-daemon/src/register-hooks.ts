@@ -1,4 +1,4 @@
-import { OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
+import { KNOWLEDGE_TRANSFER, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
 /**
  * Service Hooks Registration
  *
@@ -542,6 +542,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'thread-session-map',
   'gateway-outbound-messages',
   'session-env-selections',
+  KNOWLEDGE_TRANSFER.path,
   'kb/namespaces',
   'kb/documents',
   'kb/graph',
@@ -2426,6 +2427,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       removeAcl: [requireMinimumRole(ROLES.MEMBER, 'manage knowledge namespace permissions')],
     },
   } as never);
+
+  safeService(KNOWLEDGE_TRANSFER.path)?.hooks({
+    before: { all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'transfer knowledge')] },
+    after: { create: [suppressKnowledgeCommandRealtimeEvent] },
+  });
 
   safeService('kb/documents')?.hooks({
     before: {

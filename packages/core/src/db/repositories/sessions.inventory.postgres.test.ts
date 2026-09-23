@@ -55,6 +55,14 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             await repository.findPage({ visibleToUserId, branchId: foreign.branchId, limit: 1 })
           ).toEqual({ total: 0, data: [] });
           expect(
+            await repository.findPage({
+              visibleToUserId,
+              branchId: foreign.branchId,
+              limit: 1,
+              includeTotal: false,
+            })
+          ).toEqual({ data: [] });
+          expect(
             await repository.findPage({ visibleToUserId, boardId: foreign.boardId, limit: 0 })
           ).toEqual({ total: 0, data: [] });
           expect(await repository.findAll({ visibleToUserId, branchId: foreign.branchId })).toEqual(
@@ -185,6 +193,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(page.data).toHaveLength(20);
         expect(captured).toHaveLength(2);
         expect(captured[1].query).not.toContain('"branches"."data"');
+        // Recency is migration-backed NOT NULL; wrapping it defeats the index order.
+        expect(captured[1].query).not.toMatch(/coalesce\s*\(/i);
+        expect(captured[1].query).toContain('order by "sessions"."updated_at" desc');
         const actualQueries = captured.map(({ query, params }) => bindQuery(query, params));
         for (const [name, query] of [
           ['legacy', legacy],

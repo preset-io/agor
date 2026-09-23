@@ -11,14 +11,8 @@ const MessageRole = {
   ASSISTANT: 'assistant',
 } as const;
 
-vi.mock('@agor-live/client', () => ({
-  TaskStatus: {
-    COMPLETED: 'completed',
-    QUEUED: 'queued',
-  },
-  MessageRole: {
-    ASSISTANT: 'assistant',
-  },
+vi.mock('@agor-live/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor-live/client')>()),
   shortId: () => 'short-id',
 }));
 

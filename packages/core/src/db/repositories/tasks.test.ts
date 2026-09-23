@@ -7,6 +7,7 @@ import type {
   MCPServerID,
   MessageID,
   Task,
+  TaskLaunchFields,
   TaskPendingDispatchStatus,
   UserID,
   UUID,
@@ -3214,7 +3215,149 @@ function createPendingInput(overrides: {
   };
 }
 
+function dispatchFields(): TaskLaunchFields {
+  return {
+    status: TaskStatus.DISPATCHING,
+    executor_mode: 'local',
+    message_range: {
+      start_index: 0,
+      end_index: 1,
+      start_timestamp: new Date().toISOString(),
+    },
+    git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
+  };
+}
+
 describe('TaskRepository.createPending', () => {
+  dbTest('directly admits an idle prompt and atomically projects its Session', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const task = await repo.createPending({
+      ...input,
+      dispatchIfIdle: dispatchFields(),
+    });
+    expect(task.status).toBe(TaskStatus.DISPATCHING);
+    expect(task.queue_position).toBeUndefined();
+    expect(task.full_prompt).toBe(input.full_prompt);
+    expect(task.session_id).toBe(sessionId);
+    expect(await repo.findQueued(sessionId)).toEqual([]);
+    expect(await new SessionRepository(db).findById(sessionId)).toMatchObject({
+      status: SessionStatus.RUNNING,
+      ready_for_prompt: false,
+      tasks: [task.task_id],
+    });
+    // A second submission cannot take another direct dispatch slot.
+    const next = await repo.createPending({
+      ...input,
+      dispatchIfIdle: dispatchFields(),
+    });
+    expect(next).toMatchObject({ status: TaskStatus.QUEUED, queue_position: 1 });
+  });
+
+  dbTest('direct admission never jumps an existing queue or CREATED handoff', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    for (const status of [TaskStatus.QUEUED, TaskStatus.CREATED]) {
+      const sessionId = await createSessionWithDeps(db);
+      await repo.createPending(createPendingInput({ session_id: sessionId, status }));
+      const next = await repo.createPending({
+        ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+        dispatchIfIdle: dispatchFields(),
+      });
+      expect(next.status).toBe(TaskStatus.QUEUED);
+      expect(next.queue_position).toBe(status === TaskStatus.QUEUED ? 2 : 1);
+    }
+  });
+
+  dbTest(
+    'queue mutations preserve direct dispatch and subsequent admission order',
+    async ({ db }) => {
+      const repo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const input = {
+        ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+        dispatchIfIdle: dispatchFields(),
+      };
+      const active = await repo.createPending(input);
+      expect(active.status).toBe(TaskStatus.DISPATCHING);
+      const session = await new SessionRepository(db).findById(sessionId);
+      const first = await repo.createPending(input);
+      const second = await repo.createPending(input);
+      const ids = [first.task_id, second.task_id];
+
+      // A batch containing directly dispatched work must not cancel its queued sibling.
+      expect(
+        await repo.mutateQueued(sessionId, { cancel: [first.task_id, active.task_id] })
+      ).toMatchObject({ outcome: 'conflict', removed: [], wake: false });
+      expect((await repo.findQueued(sessionId)).map((task) => task.task_id)).toEqual(ids);
+      expect(
+        await repo.mutateQueued(sessionId, { order: [...ids].reverse(), expected: ids })
+      ).toMatchObject({ outcome: 'changed', wake: false });
+      expect(await repo.mutateQueued(sessionId, { cancel: [first.task_id] })).toMatchObject({
+        outcome: 'changed',
+        removed: [{ task_id: first.task_id }],
+        wake: false,
+      });
+      const next = await repo.createPending(input);
+      expect(next).toMatchObject({ status: TaskStatus.QUEUED, queue_position: 2 });
+      expect((await repo.findQueued(sessionId)).map((task) => task.task_id)).toEqual([
+        second.task_id,
+        next.task_id,
+      ]);
+      expect(await repo.findById(active.task_id)).toEqual(active);
+      expect(await new SessionRepository(db).findById(sessionId)).toEqual(session);
+    }
+  );
+
+  dbTest('does not directly dispatch a stopping Session or a missing creator', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    await new SessionRepository(db).update(sessionId, {
+      status: SessionStatus.STOPPING,
+      ready_for_prompt: false,
+    });
+    const stopped = await repo.createPending({
+      ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+      dispatchIfIdle: dispatchFields(),
+    });
+    expect(stopped.status).toBe(TaskStatus.QUEUED);
+    const otherSession = await createSessionWithDeps(db);
+    const missingActor = await repo.createPending({
+      ...createPendingInput({ session_id: otherSession, status: TaskStatus.QUEUED }),
+      created_by: 'deleted-fixture-user',
+      dispatchIfIdle: dispatchFields(),
+    });
+    expect(missingActor.status).toBe(TaskStatus.QUEUED);
+  });
+
+  dbTest('rolls back direct Task admission and Session projection together', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const before = await new SessionRepository(db).findById(sessionId);
+    await expect(
+      runDatabaseTransaction(db, async (tx) => {
+        await new TaskRepository(tx).createPending({
+          ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+          dispatchIfIdle: dispatchFields(),
+        });
+        throw new Error('fixture rollback');
+      })
+    ).rejects.toThrow('fixture rollback');
+    expect(await new SessionRepository(db).findById(sessionId)).toEqual(before);
+    expect((await repo.findPage({ sessionId })).total).toBe(0);
+  });
+
+  dbTest('rejects direct admission for stable-ID producers', async ({ db }) => {
+    const sessionId = await createSessionWithDeps(db);
+    await expect(
+      new TaskRepository(db).createPending({
+        ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+        task_id: generateId(),
+        dispatchIfIdle: dispatchFields(),
+      })
+    ).rejects.toThrow('fresh queued input');
+  });
+
   dbTest('reconciles concurrent stable-ID creation to one task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

@@ -59,6 +59,9 @@ describe('lean task presentation', () => {
     };
     const { rerender } = render(view(props));
     expect(load).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'Reasoning' }).querySelector('.ant-tag')
+    ).toHaveTextContent(/^0$/);
     fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     rerender(
@@ -342,4 +345,96 @@ it('keeps stopped outcomes warning-level even with an explanatory reason', () =>
   );
   expect(screen.getByRole('status')).toHaveClass('ant-alert-warning');
   expect(screen.getByRole('status')).toHaveTextContent('Turn stopped: Stopped by request');
+});
+
+it('keeps tool-result errors inside activity details without masking a failed turn', () => {
+  const failedCall = message(1, MessageRole.ASSISTANT, [
+    { type: 'tool_use', id: 'failed-read', name: 'Read', input: { file_path: 'missing.txt' } },
+    {
+      type: 'tool_result',
+      tool_use_id: 'failed-read',
+      content: 'File does not exist',
+      is_error: true,
+    },
+  ]);
+  const props = {
+    taskMessages: [messages[0], failedCall],
+    taskMessagesLoaded: true,
+    isLatestTask: true,
+  };
+  const { rerender } = render(view(props));
+  const header = screen.getByRole('button', { name: '1 tool call', expanded: false });
+  expect(screen.queryByText('File does not exist')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  const running = { ...task, status: TaskStatus.RUNNING };
+  rerender(view({ ...props, task: running }));
+  expect(screen.getByRole('button', { name: 'Latest: Read' })).toBe(header);
+  rerender(
+    view({
+      ...props,
+      task: running,
+      latestActivity: { toolUseId: 'retry', toolName: 'Bash', status: 'executing' },
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Running: Bash' })).toBe(header);
+  rerender(
+    view({
+      ...props,
+      task: running,
+      latestActivity: { toolUseId: 'retry', toolName: 'Bash', status: 'complete' },
+    })
+  );
+  expect(screen.getByRole('button', { name: 'Latest: Bash' })).toBe(header);
+  fireEvent.click(header);
+  expect(screen.getByRole('img', { name: 'close-circle' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: /Read missing.txt/ }));
+  expect(screen.getByText('File does not exist')).toBeVisible();
+  rerender(
+    view({
+      ...props,
+      task: { ...task, status: TaskStatus.FAILED, error_message: 'Unable to finish turn' },
+    })
+  );
+  expect(screen.getByRole('button', { name: '1 tool call' })).toBe(header);
+  expect(header).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed: Unable to finish turn');
+  expect(screen.getByText('File does not exist')).toBeVisible();
+});
+
+it.each([undefined, null, 12345])(
+  'shows only known historical counts (%s) without fetching',
+  (count) => {
+    const load = vi.fn();
+    render(view({ task: { ...task, recorded_tool_count: count }, onLoadTaskMessages: load }));
+    const header = screen.getByRole('button', {
+      name: count ? `${count} tool calls` : 'Tool calls',
+    });
+    if (count == null) expect(header.querySelector('.ant-tag')).toBeNull();
+    else expect(header.querySelector('.ant-tag')).toHaveTextContent(String(count));
+    expect(header).toHaveTextContent('Tool calls');
+    expect(load).not.toHaveBeenCalled();
+  }
+);
+
+it('uses each loaded group count instead of repeating the recorded turn total', () => {
+  const call = (id: string) => ({ type: 'tool_use', id, name: 'Read', input: {} });
+  render(
+    view({
+      task: { ...task, recorded_tool_count: 3 },
+      taskMessagesLoaded: true,
+      taskMessages: [
+        messages[0],
+        message(1, MessageRole.ASSISTANT, [call('a')]),
+        message(2, MessageRole.ASSISTANT, 'Between groups'),
+        message(3, MessageRole.ASSISTANT, [call('b'), call('c')]),
+      ],
+    })
+  );
+  expect(
+    screen.getByRole('button', { name: '1 tool call' }).querySelector('.ant-tag')
+  ).toHaveTextContent(/^1$/);
+  expect(
+    screen.getByRole('button', { name: '2 tool calls' }).querySelector('.ant-tag')
+  ).toHaveTextContent(/^2$/);
+  expect(screen.queryByRole('button', { name: '3 tool calls' })).toBeNull();
 });

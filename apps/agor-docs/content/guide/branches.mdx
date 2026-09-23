@@ -83,6 +83,29 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 ---
 
+## Files and Git changes
+
+The branch's **Files** tab has three views:
+
+- **All files** browses the working directory, with combined Git status badges.
+- **Changes** lists unstaged changes, including untracked files and conflicts.
+  Text comparisons use the index as their base.
+- **Staged changes** lists index changes and compares staged text with HEAD,
+  independently of subsequent working-directory edits.
+
+Use **Refresh** to reload files and statuses. Badges identify added, modified,
+deleted, renamed, copied, untracked, conflicted, and ignored paths without relying
+on color alone. Deleted paths remain available in the change views. Text previews
+offer **File** and **Changes** modes; Markdown is rendered in File mode. Downloads
+are available from All files and contain working-directory bytes, not index bytes.
+
+Git enrichment is best-effort and bounded: if Git is unavailable or exceeds its
+read budget, ordinary browsing remains available without status badges. Binary
+or oversized comparisons are not text previews, and complex diffs show a limit
+notice rather than blocking the browser. Use local Git for complete diffs or
+unresolved conflicts whose working file is absent. Existing branch filesystem
+read permissions apply to all three views.
+
 ## Asynchronous filesystem readiness
 
 Branch creation records the branch and dispatches worktree or clone materialization asynchronously.

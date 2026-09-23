@@ -1,3 +1,4 @@
+import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
 import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 /**
  * Service Registration
@@ -251,6 +252,7 @@ import { createKnowledgeNamespacesService } from './services/knowledge-namespace
 import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
 import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
+import { KnowledgeTransfersService } from './services/knowledge-transfers.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import {
@@ -746,6 +748,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
   // Knowledge (backend/data foundations)
   // ============================================================================
+
+  app.use(KNOWLEDGE_TRANSFER.path, new KnowledgeTransfersService(db, app), {
+    methods: ['find', 'get', 'create'],
+  });
 
   app.use('/kb/namespaces', createKnowledgeNamespacesService(db, app), {
     methods: [

@@ -15,7 +15,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { ThoughtChain } from '@ant-design/x';
-import { Button, Typography, theme } from 'antd';
+import { Button, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -25,12 +25,15 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
  * hydration can replace the trigger with multiple chronological groups. */
 export function ToolDisclosureHeader({
   label,
+  count,
   expanded,
   onClick,
   loading = false,
   executing = false,
 }: {
   label: string;
+  /** Known distinct calls in this disclosure, not the enclosing turn total. */
+  count?: number | null;
   expanded: boolean;
   onClick: () => void;
   loading?: boolean;
@@ -46,7 +49,11 @@ export function ToolDisclosureHeader({
       aria-busy={loading || executing}
       icon={loading ? <LoadingOutlined spin /> : <ToolOutlined />}
       aria-expanded={expanded}
-      aria-label={label}
+      aria-label={
+        label === 'Tool calls' && count != null && count > 0
+          ? `${count} tool ${count === 1 ? 'call' : 'calls'}`
+          : label
+      }
       onClick={onClick}
       style={{
         display: 'flex',
@@ -57,6 +64,20 @@ export function ToolDisclosureHeader({
         color: token.colorTextSecondary,
       }}
     >
+      {count != null && (
+        <Tag
+          style={{
+            flexShrink: 0,
+            marginInlineEnd: 0,
+            paddingInline: token.sizeUnit,
+            // Tag defines its own typography; explicitly match the compact header.
+            fontSize: token.fontSizeSM,
+            lineHeight: token.lineHeightSM,
+          }}
+        >
+          {count}
+        </Tag>
+      )}
       <span
         style={{
           flex: '0 1 auto',

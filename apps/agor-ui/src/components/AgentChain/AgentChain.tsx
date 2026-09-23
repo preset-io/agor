@@ -54,11 +54,6 @@ interface ToolResultBlock {
   diff?: DiffEnrichment;
 }
 
-interface TextBlock {
-  type: 'text';
-  text: string;
-}
-
 interface AgentChainProps {
   /**
    * Messages containing thoughts and/or tool uses
@@ -178,7 +173,15 @@ export const AgentChain = React.memo<AgentChainProps>(
         // Collect blocks from this message
         for (const block of message.content) {
           if (block.type === 'text' || block.type === 'thinking') {
-            const text = (block as unknown as TextBlock).text.trim();
+            // Normalized blocks use text; Claude SDK thinking blocks use thinking.
+            // ContentBlock fields are unknown and may be absent in partial payloads.
+            const text = (
+              typeof block.text === 'string'
+                ? block.text
+                : block.type === 'thinking' && typeof block.thinking === 'string'
+                  ? block.thinking
+                  : ''
+            ).trim();
             if (text) {
               if (hasSeenTool) {
                 textBlocksAfterTools.push(text);
@@ -228,17 +231,18 @@ export const AgentChain = React.memo<AgentChainProps>(
       return items;
     }, [messages]);
 
-    const stats = useMemo(() => {
-      let toolCount = 0;
-      let errorCount = 0;
+    const toolCount = useMemo(() => {
+      const ids = new Set<string>();
       for (const item of chainItems) {
         if (item.type === 'tool' && typeof item.content !== 'string') {
-          toolCount++;
-          if (item.content.toolResult?.is_error) errorCount++;
+          ids.add(item.content.toolUse.id);
         }
       }
-      return { toolCount, errorCount };
-    }, [chainItems]);
+      // TaskBlock assigns the event to its owning group. Do not count its
+      // eventual persisted payload twice, or borrow the turn-wide snapshot.
+      if (latestActivity) ids.add(latestActivity.toolUseId);
+      return ids.size;
+    }, [chainItems, latestActivity]);
 
     // Generate smart description for tool
     const getToolDescription = (toolUse: ToolUseBlock): string | null => {
@@ -431,31 +435,33 @@ export const AgentChain = React.memo<AgentChainProps>(
       );
     };
 
-    const hasErrors = stats.errorCount > 0;
     const latestToolItem = [...chainItems].reverse().find((item) => item.type === 'tool');
     const latestToolName =
       latestToolItem && typeof latestToolItem.content !== 'string'
         ? latestToolItem.content.toolUse.name
         : undefined;
 
-    // Early return if no items (prevents empty bordered boxes)
-    if (chainItems.length === 0) {
+    // Empty streamed text is not a boundary; its live tool event can own
+    // this disclosure until the corresponding payload arrives.
+    if (chainItems.length === 0 && !latestActivity) {
       return null;
     }
 
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        {/* Collapsed summary - clickable */}
+        {/* Tool failures are normal agent iteration, not the turn outcome.
+            Keep error status/details on the inner tools, not this summary. */}
         <ToolDisclosureHeader
-          label={`${
+          count={toolCount}
+          label={
             isTaskRunning && isLatest && latestActivity
               ? `${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`
               : isTaskRunning && isLatest && latestToolName
                 ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
-                : stats.toolCount
-                  ? `${stats.toolCount} tool ${stats.toolCount === 1 ? 'call' : 'calls'}`
+                : toolCount
+                  ? 'Tool calls'
                   : 'Reasoning'
-          }${hasErrors ? ' · Errors' : ''}`}
+          }
           expanded={expanded}
           executing={
             !!(

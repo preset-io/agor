@@ -148,6 +148,16 @@ describe('userQueryValidator', () => {
 });
 
 describe('sessionQueryValidator', () => {
+  it.each([false, 'false', true, 'true'])('preserves and coerces $count=%s', async ($count) => {
+    const context = { params: { query: { $count } } };
+    await typedValidateQuery(sessionQueryValidator)(context);
+    expect(context.params.query.$count).toBe($count === true || $count === 'true');
+  });
+
+  it('rejects invalid count options', async () => {
+    await expect(sessionQueryValidator({ $count: 'sometimes' })).rejects.toThrow();
+  });
+
   it('preserves the _swapReplace marker so the switch-tool guard can see it', async () => {
     // Regression: `removeAdditional: 'all'` silently stripped `_swapReplace`
     // before it reached SessionsService.remove, making the swap-safety guard

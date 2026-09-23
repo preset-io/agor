@@ -59,7 +59,7 @@ const EMPTY_USER_MAP = new Map<string, User>();
  */
 export type Block =
   | { type: 'message'; message: Message }
-  | { type: 'agent-chain'; messages: Message[] }
+  | { type: 'agent-chain'; messages: Message[]; parentToolUseId?: string }
   | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
 
 interface TaskBlockProps {
@@ -92,6 +92,7 @@ interface TaskBlockProps {
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
   latestActivity?: ToolExecutionState;
+  defaultTextExpanded?: boolean;
 }
 
 /**
@@ -343,6 +344,14 @@ export function MCPRecoveryNotice({
   );
 }
 
+function messageHasTool(message: Message, toolUseId: string): boolean {
+  return !!(
+    message.tool_uses?.some((tool) => tool.id === toolUseId) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => block.type === 'tool_use' && block.id === toolUseId))
+  );
+}
+
 function isAgentChainMessage(message: Message): boolean {
   // EXCEPTION: User messages with ONLY tool_result blocks are part of agent execution
   // (tool results are technically "user" role per Anthropic API, but they're automated responses)
@@ -366,7 +375,9 @@ function isAgentChainMessage(message: Message): boolean {
   if (Array.isArray(message.content)) {
     const hasTools = message.content.some((block) => block.type === 'tool_use');
     const hasThinking = message.content.some((block) => block.type === 'thinking');
-    const hasText = message.content.some((block) => block.type === 'text');
+    const hasText = message.content.some(
+      (block) => block.type === 'text' && typeof block.text === 'string' && !!block.text.trim()
+    );
 
     // SPECIAL: Task tools should display as regular agent messages, not in chain
     const hasOnlyTaskTool =
@@ -385,7 +396,10 @@ function isAgentChainMessage(message: Message): boolean {
     // Only tools/thinking, no text = pure agent chain
     if (hasTools || hasThinking) return true;
 
-    // Only text blocks = user-facing response
+    // An empty streaming text placeholder is not a user-facing boundary.
+    if (message.content.every((block) => block.type === 'text')) return true;
+
+    // Other content stays in its dedicated message renderer.
     return false;
   }
 
@@ -529,7 +543,7 @@ export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
         }
 
         // Show nested operations + result as a regular agent chain
-        blocks.push({ type: 'agent-chain', messages: chainMessages });
+        blocks.push({ type: 'agent-chain', messages: chainMessages, parentToolUseId: taskTool.id });
       }
     }
   }
@@ -614,10 +628,16 @@ function getBlockMarker(block: Block): 'streaming' | 'settled' {
     : 'settled';
 }
 
-/** Same composition: identical message references in identical order. */
-function blocksHaveSameMessages(a: Block, b: Block): boolean {
+/** Same render composition: grouping ownership and ordered message references. */
+function blocksHaveSameComposition(a: Block, b: Block): boolean {
   if (a.type !== b.type) return false;
   if (a.type === 'message' && b.type === 'message') return a.message === b.message;
+  if (
+    a.type === 'agent-chain' &&
+    b.type === 'agent-chain' &&
+    a.parentToolUseId !== b.parentToolUseId
+  )
+    return false;
   const aMessages = (a as { messages: Message[] }).messages;
   const bMessages = (b as { messages: Message[] }).messages;
   if (aMessages.length !== bMessages.length) return false;
@@ -646,6 +666,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
     compact = false,
     latestActivity,
+    defaultTextExpanded = true,
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
@@ -686,7 +707,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
       const reconciled = next.map((block) => {
         const prev = prevByKey.get(getBlockKey(block));
-        return prev && blocksHaveSameMessages(prev, block) ? prev : block;
+        return prev && blocksHaveSameComposition(prev, block) ? prev : block;
       });
       prevBlocksRef.current = reconciled;
       return reconciled;
@@ -700,6 +721,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       }
       return -1;
     }, [blocks]);
+
+    const activityIsRecorded =
+      !!latestActivity &&
+      messages.some((message) => messageHasTool(message, latestActivity.toolUseId));
+    // Events and messages arrive independently. An unpersisted next call belongs
+    // to the contiguous tail, not a second disclosure beside that same chain.
+    // Do not cross a response/approval/compaction or borrow a nested Task chain.
+    const trailingChain = blocks.at(-1);
+    const pendingActivityChainIndex =
+      latestActivity &&
+      !activityIsRecorded &&
+      runtimeLive &&
+      trailingChain?.type === 'agent-chain' &&
+      !trailingChain.parentToolUseId &&
+      trailingChain.messages.every((message) => !message.parent_tool_use_id)
+        ? blocks.length - 1
+        : -1;
 
     // Get normalized SDK response (computed by executor, stored in DB)
     const normalized = task.normalized_sdk_response || null;
@@ -864,13 +902,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       <div style={{ marginBottom: token.marginSM }}>
         {!taskMessagesLoaded && !hasTools && !hasReasoning && !isTaskExecuting(task) ? (
           <ToolDisclosureHeader
+            count={task.recorded_tool_count}
             label={
               detailsLoading
                 ? 'Loading tool activity…'
                 : detailsError
                   ? 'Couldn’t load tool activity · Retry'
                   : task.recorded_tool_count != null && task.recorded_tool_count > 0
-                    ? `${task.recorded_tool_count} tool ${task.recorded_tool_count === 1 ? 'call' : 'calls'}`
+                    ? 'Tool calls'
                     : hasDeferredReasoning
                       ? task.recorded_tool_count === 0
                         ? 'Reasoning'
@@ -885,6 +924,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           <>
             <ToolDisclosureHeader
               label="Tool calls"
+              count={latestActivity ? undefined : 0}
               expanded={emptyActivityExpanded}
               onClick={() => setEmptyActivityExpanded(!emptyActivityExpanded)}
             />
@@ -975,6 +1015,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 client={client}
                 onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                 compact={compact}
+                defaultTextExpanded={defaultTextExpanded}
               />
             );
             return (
@@ -1005,16 +1046,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   messages={block.messages}
                   revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
                   latestActivity={
-                    blockIndex === lastAgentChainIndex &&
-                    block.messages.some(
-                      (message) =>
-                        message.tool_uses?.some((tool) => tool.id === latestActivity?.toolUseId) ||
-                        (Array.isArray(message.content) &&
-                          message.content.some(
-                            (item) =>
-                              item.type === 'tool_use' && item.id === latestActivity?.toolUseId
-                          ))
-                    )
+                    blockIndex === pendingActivityChainIndex ||
+                    (blockIndex === lastAgentChainIndex &&
+                      latestActivity &&
+                      block.messages.some((message) =>
+                        messageHasTool(message, latestActivity.toolUseId)
+                      ))
                       ? latestActivity
                       : undefined
                   }
@@ -1053,19 +1090,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           return null;
         })}
 
-        {/* Tool events can precede their durable message. Keep that actual activity
-            visible without inventing a message ID or dropping it behind an older group. */}
+        {/* Before the first chain (or after a real boundary), an unrecorded
+            event still needs its own disclosure. Contiguous tail activity is
+            owned by AgentChain above, including during partial persistence. */}
         {latestActivity &&
           runtimeLive &&
-          !messages.some(
-            (message) =>
-              message.tool_uses?.some((tool) => tool.id === latestActivity.toolUseId) ||
-              (Array.isArray(message.content) &&
-                message.content.some(
-                  (block) => block.type === 'tool_use' && block.id === latestActivity.toolUseId
-                ))
-          ) && (
+          !activityIsRecorded &&
+          pendingActivityChainIndex === -1 && (
             <ToolDisclosureHeader
+              count={1}
               label={`${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`}
               expanded={false}
               loading={detailsLoading}

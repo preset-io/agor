@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0113_session_recency_not_null',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'performance',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Backfills missing session recency from creation time and requires updated_at on every session. Enables direct recency sorting; existing writers already supply the timestamp.',
+      }),
+    },
+  ],
+  [
     '0111_management_ownership_transfer',
     {
       requiresOfflineCutover: false,

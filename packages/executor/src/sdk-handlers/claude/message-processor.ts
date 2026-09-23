@@ -894,7 +894,15 @@ export class SDKMessageProcessor {
       } else if (block.type === 'thinking') {
         return {
           type: 'thinking',
-          text: block.text,
+          // Claude's SDK stores reasoning on `thinking`, unlike text blocks.
+          // Normalize before persistence, retaining already-normalized legacy
+          // input and representing an absent/partial value as empty text.
+          text:
+            typeof block.thinking === 'string'
+              ? block.thinking
+              : typeof block.text === 'string'
+                ? block.text
+                : '',
           signature: block.signature as string | undefined, // Cryptographic signature for verification
         };
       } else {

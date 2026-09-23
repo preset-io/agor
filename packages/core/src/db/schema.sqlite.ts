@@ -54,7 +54,8 @@ export const sessions = sqliteTable(
     // Primary identity
     session_id: text('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
@@ -3194,3 +3195,30 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Durable create receipts survive target archive/deletion; never grant access by themselves. */
+export const kbImportReceipts = sqliteTable(
+  'kb_import_receipts',
+  {
+    receipt_id: text('receipt_id').primaryKey(),
+    owner_user_id: text('owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    bundle: text('bundle').notNull(),
+    slug: text('slug').notNull(),
+    entry_key: text('entry_key').notNull(),
+    target_id: text('target_id').notNull(),
+    digest: text('digest').notNull(),
+    request_bytes: integer('request_bytes').notNull().default(0),
+    reconciled_count: integer('reconciled_count').notNull().default(-1),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    identityIdx: uniqueIndex('kb_import_receipts_identity_unique').on(
+      table.owner_user_id,
+      table.bundle,
+      table.slug,
+      table.entry_key
+    ),
+  })
+);

@@ -155,7 +155,7 @@ describe('SessionFooter model picker persistence boundary', () => {
 
     fireEvent.click(screen.getByTestId('model-chip'));
     const reopenedInput = await screen.findByDisplayValue(savedModel);
-    for (const draft of ['g', 'gp', 'gpt-5.6-sol']) {
+    for (const draft of ['g', 'gp', 'gpt-6-sol']) {
       fireEvent.change(reopenedInput, { target: { value: draft } });
     }
 
@@ -166,7 +166,7 @@ describe('SessionFooter model picker persistence boundary', () => {
     expect(onModelConfigCommit).toHaveBeenCalledTimes(2);
     expect(onModelConfigCommit).toHaveBeenLastCalledWith({
       mode: 'exact',
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-sol',
     });
     await waitFor(() => expect(showSuccess).toHaveBeenCalledTimes(2));
     expect(updateSession).toHaveBeenCalledTimes(2);

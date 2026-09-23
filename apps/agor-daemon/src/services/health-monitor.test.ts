@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { ENVIRONMENT } from '@agor/core/config';
-import { getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { Branch } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -190,11 +194,13 @@ describe('HealthMonitor tenant context', () => {
     await monitor.cleanup();
   });
 
-  it('enters the branch tenant DB scope instead of inheriting stale timer scope', async () => {
+  it('carries tenant identity without a database transaction across the health probe', async () => {
     const branches = new BranchServiceMock();
     const ambientTenantIds: Array<string | undefined> = [];
+    const ambientScopes: unknown[] = [];
     branches.checkHealth.mockImplementation(async (branchId: string) => {
       ambientTenantIds.push(getCurrentTenantId());
+      ambientScopes.push(getCurrentTenantDatabaseScope());
       return makeBranch({
         branch_id: branchId,
         tenant_id: 'tenant-a',
@@ -222,6 +228,7 @@ describe('HealthMonitor tenant context', () => {
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
 
     expect(ambientTenantIds).toEqual(['tenant-a']);
+    expect(ambientScopes).toEqual([undefined]);
     await monitor.cleanup();
   });
 

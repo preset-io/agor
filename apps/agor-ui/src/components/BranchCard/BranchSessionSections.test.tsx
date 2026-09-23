@@ -173,6 +173,22 @@ describe('BranchSessionSections', () => {
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument();
   });
 
+  it('keeps the labeled button and count badges on board cards', () => {
+    renderSections({ sessions: [scheduledSession] });
+
+    expect(screen.getByRole('button', { name: /new session/i })).toHaveTextContent('New Session');
+    expect(document.querySelectorAll('.ant-badge').length).toBeGreaterThan(0);
+  });
+
+  it('uses an icon-only new-session action and plain counts in panel mode', () => {
+    renderSections({ sessions: [scheduledSession], mode: 'panel' });
+
+    expect(screen.getByRole('button', { name: /new session/i })).not.toHaveTextContent(
+      'New Session'
+    );
+    expect(document.querySelector('.ant-badge')).toBeNull();
+  });
+
   it('marks a failed session', () => {
     const failedSession = makeManualSession({
       session_id: 'session-failed-task',
