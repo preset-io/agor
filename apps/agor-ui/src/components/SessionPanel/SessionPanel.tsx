@@ -958,7 +958,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     });
   };
 
-  const hasBranchActions = !!branch;
+  // "Center map on branch" recenters the desktop React-Flow canvas, which the
+  // mobile shell has no equivalent of, so it is hidden there. The divider below
+  // only renders when at least one branch action remains, so hiding it on mobile
+  // never leaves a dangling leading separator.
+  const showCenterMap = !!branch && !isMobileShell;
+  const hasBranchActions = showCenterMap || !!(onOpenTerminal && branch);
   const canSwitchTool =
     hasActiveAgenticTool && !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
   const handleSwitchTool = async (tool: string) => {
@@ -972,7 +977,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
-    ...(branch
+    ...(showCenterMap && branch
       ? [
           {
             key: 'center-map',

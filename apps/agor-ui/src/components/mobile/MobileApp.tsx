@@ -508,14 +508,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         </Routes>
       </div>
 
-      {!isSubView && (
-        <MobileTabBar
-          activeTab={activeTab}
-          onSelect={handleTabSelect}
-          sessionsBadge={sessionsBadge}
-          askPending={creatingSession}
-        />
-      )}
+      {/* The primary tab bar is docked (in-flow, not fixed) on EVERY /m screen,
+          including the full-screen session and comments sub-views, so the user
+          can always reach Home / Board / Ask / Marketplace / More. On sub-views
+          `activeTab` is null, so no tab is force-highlighted. Because the bar is
+          a normal flex child it reserves its own space; each page's content
+          (including the session composer) lays out ABOVE it with no overlap. */}
+      <MobileTabBar
+        activeTab={activeTab}
+        onSelect={handleTabSelect}
+        sessionsBadge={sessionsBadge}
+        askPending={creatingSession}
+      />
 
       <Drawer
         open={askPickerOpen}

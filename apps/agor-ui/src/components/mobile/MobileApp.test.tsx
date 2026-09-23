@@ -158,11 +158,11 @@ describe('MobileApp branch actions', () => {
     const onSessionClick = branchModalProps.onSessionClick as (id: string) => void;
     act(() => onSessionClick('session-9'));
 
-    // Sheet closes and the session opens on its own /m route, a full-screen sub-view with no tab bar.
+    // Sheet closes and the session opens on its own full-screen /m route. The
+    // docked tab bar stays visible on the sub-view (Ask remains reachable).
     expect(screen.queryByTestId('branch-sheet')).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-page')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
   });
 
   it('renders board content under the /m/* descendant route', () => {
@@ -188,11 +188,12 @@ describe('MobileApp branch actions', () => {
     expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('hides the tab bar on a full-screen session detail route', () => {
+  it('keeps the docked tab bar on a full-screen session detail route', () => {
     renderMobileApp('/m/session/session-1');
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    // The bar is visible on every /m screen; on a sub-view no tab is force-active.
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', { name: 'Board' })).not.toHaveAttribute('aria-current');
   });
 
   it('surfaces the shared connect-AI banner on Home', () => {

@@ -50,6 +50,12 @@ export function responsiveRoutePath(
     return '/m';
   }
 
+  // The desktop MCP catalog and global search are modals, not routes, so carry
+  // the intent as a query flag the workspace opens on arrival — otherwise a
+  // resize off these tabs silently dumps the user on a bare desktop Home.
+  if (/^\/m\/marketplace\/?$/.test(pathname)) return '/?open=mcp-catalog';
+  if (/^\/m\/search\/?$/.test(pathname)) return '/?open=search';
+
   const match = pathname.match(/^\/m\/(board|comments|session)\/([^/]+)\/?$/);
   if (!match) return '/';
   const [, kind, id] = match;

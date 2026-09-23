@@ -93,8 +93,8 @@ function mount(path = '/m/board/alpha') {
   );
 }
 
-it('uses real browser history for session switches, Back/Forward, X and board switches', async () => {
-  mount();
+it('uses real browser history for session switches, Back/Forward, a Back-style X and board switches', async () => {
+  mount(); // starts on /m/board/alpha (board a)
   await userEvent.click(screen.getByRole('button', { name: 'Open Parent' }));
   await userEvent.click(await screen.findByRole('button', { name: 'Open child session' }));
   expect(window.location.pathname).toBe('/m/session/child');
@@ -102,17 +102,33 @@ it('uses real browser history for session switches, Back/Forward, X and board sw
   await screen.findByRole('heading', { name: 'parent' });
   await act(async () => window.history.forward());
   await screen.findByRole('heading', { name: 'child' });
+  // The leading X is a real history Back: it returns to the previously viewed
+  // session, not the closed session's board, and does not replace history.
   await userEvent.click(screen.getByRole('button', { name: 'Close session' }));
-  expect(window.location.pathname).toBe('/m/board/b');
+  expect(window.location.pathname).toBe('/m/session/parent');
+  await screen.findByRole('heading', { name: 'parent' });
+  // Backing out once more reaches the board the run started on.
+  await userEvent.click(screen.getByRole('button', { name: 'Close session' }));
+  expect(window.location.pathname).toBe('/m/board/alpha');
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Close session' })).not.toBeInTheDocument()
   );
   await userEvent.click(await screen.findByRole('button', { name: /Switch board/ }));
-  await userEvent.click(screen.getByRole('button', { name: 'Switch to Alpha' }));
-  expect(window.location.pathname).toBe('/m/board/a');
+  await userEvent.click(screen.getByRole('button', { name: 'Switch to Beta' }));
+  expect(window.location.pathname).toBe('/m/board/b');
   await userEvent.click(screen.getByRole('button', { name: 'Home', exact: true }));
   await userEvent.click(screen.getByRole('button', { name: 'Board', exact: true }));
-  expect(window.location.pathname).toBe('/m/board/a');
+  expect(window.location.pathname).toBe('/m/board/b');
+});
+
+it('keeps the primary tab bar docked on the full-screen session sub-view', async () => {
+  mount('/m/session/parent');
+  // Ask (center action) plus the Home/Board tabs are reachable from a session.
+  expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Home', exact: true })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Board', exact: true })).toBeInTheDocument();
+  // The session's own leading Close is still present alongside the tab bar.
+  expect(screen.getByRole('button', { name: 'Close session' })).toBeInTheDocument();
 });
 
 it('remembers the canonical slug board rather than defaulting to another board', async () => {
