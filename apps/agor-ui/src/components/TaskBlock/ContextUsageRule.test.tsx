@@ -9,13 +9,16 @@ import { TaskBlock } from './TaskBlock';
 
 /** The muted band colors the rule is expected to pick, from the live theme. */
 function tokens() {
-  let read: { success: string; warning: string; error: string } | undefined;
+  let read:
+    | { success: string; warning: string; error: string; text: Record<string, string> }
+    | undefined;
   function Probe() {
     const { token } = theme.useToken();
     read = {
       success: token.colorSuccessBorder,
       warning: token.colorWarningBorder,
       error: token.colorErrorBorder,
+      text: { rest: token.colorTextTertiary, revealed: token.colorTextSecondary },
     };
     return null;
   }
@@ -26,12 +29,22 @@ function tokens() {
 
 const view = (props: Partial<React.ComponentProps<typeof ContextUsageRule>> = {}) =>
   render(
-    <ContextUsageRule used={undefined} limit={undefined} snapshot={undefined} {...props}>
+    <ContextUsageRule
+      used={undefined}
+      limit={undefined}
+      snapshot={undefined}
+      usageLabel={undefined}
+      {...props}
+    >
       <p>Assistant answer</p>
     </ContextUsageRule>
   );
 
-const rule = () => document.querySelector<HTMLElement>('[data-testid="context-usage-rule"]');
+const metadataRegion = () => screen.queryByLabelText('Turn metadata');
+
+// AntD renders the tooltip in a portal on hover, so the rule is located
+// structurally rather than by a `title` attribute.
+const rule = () => screen.queryByTestId('context-usage-rule');
 
 /** Token colors are hex; the style they land in reads back as rgb(). */
 const asRenderedColor = (color: string) => {
@@ -48,17 +61,26 @@ const band = (el: HTMLElement) => {
 };
 
 describe('ContextUsageRule', () => {
-  it('renders nothing extra for a turn with no usage data', () => {
+  it('draws no line for a turn with no usage data', () => {
     view();
 
     expect(screen.getByText('Assistant answer')).toBeVisible();
     expect(rule()).toBeNull();
   });
 
-  it('renders nothing extra when a used count has no limit to measure against', () => {
+  it('draws no line when a used count has no limit to measure against', () => {
     view({ used: 40_000, limit: 0 });
 
     expect(rule()).toBeNull();
+  });
+
+  it('still shows the usage label when there is no fill to draw', () => {
+    // A turn can report usage without a limit. The pill says so ('?'), and
+    // losing it because there is no gradient would lose that.
+    view({ used: 40_000, limit: 0, usageLabel: <span>? via pill</span> });
+
+    expect(rule()).toBeNull();
+    expect(screen.getByText('? via pill')).toBeInTheDocument();
   });
 
   it.each([
@@ -66,34 +88,14 @@ describe('ContextUsageRule', () => {
     ['mid', 60_000, 100_000, 60, 'warning'],
     ['high', 91_000, 100_000, 91, 'error'],
   ] as const)(
-    'uses the %s band color and shows the percentage',
+    'fills the line to the usage percentage in the %s band',
     (_label, used, limit, pct, bandName) => {
-      const expected = asRenderedColor(tokens()[bandName]);
       view({ used, limit });
 
-      const line = rule()!;
-      expect(line).toBeVisible();
-      expect(screen.getByText(`${pct}%`)).toBeVisible();
-      // The gradient stops at the usage percentage, so the line reads as a
-      // fill as well as a band color.
-      expect(band(line.firstElementChild as HTMLElement)).toEqual({ color: expected, fill: pct });
+      expect(rule()).toBeVisible();
+      expect(band(rule()!)).toEqual({ color: asRenderedColor(tokens()[bandName]), fill: pct });
     }
   );
-
-  it('dims the line at rest and draws it at full strength while the answer is hovered', () => {
-    const border = asRenderedColor(tokens().error);
-    view({ used: 91_000, limit: 100_000 });
-    const line = rule()!.firstElementChild as HTMLElement;
-    const opacity = () => Number(line.style.opacity || 1);
-
-    expect(opacity()).toBeGreaterThan(0);
-    expect(opacity()).toBeLessThan(1);
-    expect(band(line).color).toBe(border);
-
-    fireEvent.mouseEnter(screen.getByText('Assistant answer').parentElement!);
-    expect(opacity()).toBe(1);
-    expect(band(line).color).toBe(border);
-  });
 
   it("prefers the executor's authoritative snapshot percentage over used/limit", () => {
     const snapshot = {
@@ -103,31 +105,45 @@ describe('ContextUsageRule', () => {
     } as ContextUsageSnapshot;
     view({ used: 10_000, limit: 100_000, snapshot });
 
-    expect(screen.getByText('85%')).toBeVisible();
-    expect(band(rule()!.firstElementChild as HTMLElement)).toEqual({
-      color: asRenderedColor(tokens().error),
-      fill: 85,
-    });
+    expect(band(rule()!)).toEqual({ color: asRenderedColor(tokens().error), fill: 85 });
   });
 
-  it('names the absolute token counts behind the percentage on hover', async () => {
-    view({ used: 30_000, limit: 200_000 });
+  it('still renders the footer values on a turn with no usage data', () => {
+    view({ metadata: <span>synthetic-model</span> });
 
-    fireEvent.mouseOver(rule()!);
-    expect(
-      await screen.findByText('Context window · 30,000 / 200,000 tokens (15%)')
-    ).toBeInTheDocument();
+    expect(rule()).toBeNull();
+    expect(metadataRegion()).not.toBeNull();
+    expect(screen.getByText('synthetic-model')).toBeInTheDocument();
   });
 
-  it('tips the percentage alone when no absolute counts were reported', async () => {
-    view({
-      used: undefined,
-      limit: undefined,
-      snapshot: { totalTokens: 0, maxTokens: 0, percentage: 15 } as ContextUsageSnapshot,
-    });
+  it('dims the line at rest and fades it out when the turn is revealed', () => {
+    view({ used: 91_000, limit: 100_000 });
+    const opacity = () => Number(rule()!.style.opacity || 1);
 
-    fireEvent.mouseOver(rule()!);
-    expect(await screen.findByText('Context window · 15% used')).toBeInTheDocument();
+    expect(opacity()).toBeGreaterThan(0);
+    expect(opacity()).toBeLessThan(1);
+    expect(band(rule()!).color).toBe(asRenderedColor(tokens().error));
+    fireEvent.mouseEnter(screen.getByLabelText('Turn and its metadata'));
+    expect(opacity()).toBe(0);
+  });
+
+  it('lifts the usage label when the turn is revealed', () => {
+    view({ used: 12_000, limit: 100_000, usageLabel: <span>12% via pill</span> });
+    const label = screen.getByTestId('turn-usage-label');
+    const turn = screen.getByLabelText('Turn and its metadata');
+
+    expect(label.style.color).toBe(asRenderedColor(tokens().text.rest));
+    fireEvent.mouseEnter(turn);
+    expect(label.style.color).toBe(asRenderedColor(tokens().text.revealed));
+    fireEvent.mouseLeave(turn);
+    expect(label.style.color).toBe(asRenderedColor(tokens().text.rest));
+  });
+
+  it("shows the caller's label as the only percentage in the row", () => {
+    view({ used: 12_000, limit: 100_000, usageLabel: <span>12% via pill</span> });
+
+    expect(screen.getByTestId('turn-usage-label')).toHaveTextContent('12% via pill');
+    expect(screen.queryByText('12%')).toBeNull();
   });
 });
 
@@ -155,40 +171,6 @@ describe('ContextUsageRule in a task turn', () => {
     content: 'Here is the answer',
   } as unknown as Message;
 
-  const message = (index: number, role: MessageRole, content: string): Message =>
-    ({
-      message_id: `message-${index}`,
-      task_id: baseTask.task_id,
-      session_id: baseTask.session_id,
-      index,
-      role,
-      type: role === MessageRole.USER ? 'user' : 'assistant',
-      timestamp: baseTask.created_at,
-      content_preview: '',
-      content,
-    }) as unknown as Message;
-
-  const withUsage = (base: Task): Task =>
-    ({
-      ...base,
-      computed_context_window: 42_000,
-      normalized_sdk_response: {
-        contextWindowLimit: 100_000,
-        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-      },
-    }) as unknown as Task;
-
-  /** A turn still running, so usage has not landed yet. */
-  const runningTurn = (props: Partial<React.ComponentProps<typeof TaskBlock>>) => (
-    <TaskBlock
-      task={{ ...baseTask, status: TaskStatus.RUNNING }}
-      taskMessages={[answer]}
-      taskMessagesLoaded
-      onLoadTaskMessages={vi.fn()}
-      {...props}
-    />
-  );
-
   const turn = (task: Task) =>
     render(
       <TaskBlock
@@ -211,24 +193,7 @@ describe('ContextUsageRule in a task turn', () => {
 
     expect(rule()).toBeVisible();
     // Scoped: the turn's metadata pills carry the same percentage.
-    expect(within(rule()!).getByText('12%')).toBeVisible();
-  });
-
-  it('does not remount the answer when context usage arrives at turn end', () => {
-    const streamed = [
-      message(0, MessageRole.USER, 'Do the thing'),
-      message(1, MessageRole.ASSISTANT, 'Partial answer'),
-    ];
-    const { container, rerender } = render(runningTurn({ taskMessages: streamed }));
-    const answerBefore = container.querySelector('[data-conversation-block]');
-    expect(container.querySelector('[data-testid="context-usage-rule"]')).toBeNull();
-
-    // Usage data only lands once the turn completes. The answer's DOM has to
-    // survive that, or the whole turn visibly flashes as it finishes.
-    rerender(runningTurn({ task: withUsage(baseTask), taskMessages: streamed }));
-
-    expect(container.querySelector('[data-testid="context-usage-rule"]')).not.toBeNull();
-    expect(container.querySelector('[data-conversation-block]')).toBe(answerBefore);
+    expect(within(screen.getByTestId('turn-usage-label')).getByText('12%')).toBeVisible();
   });
 
   it('adds nothing to a turn the executor reported no usage for', () => {

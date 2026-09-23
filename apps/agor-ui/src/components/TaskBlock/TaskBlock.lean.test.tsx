@@ -165,8 +165,6 @@ describe('lean task presentation', () => {
     );
     expect(screen.getByRole('button', { name: /Approve/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /Deny/ })).toBeVisible();
-    const promptRegion = screen.getByRole('region', { name: 'User prompt and turn metadata' });
-    expect(Number.parseFloat(promptRegion.style.paddingBottom)).toBeGreaterThan(0);
   });
 });
 

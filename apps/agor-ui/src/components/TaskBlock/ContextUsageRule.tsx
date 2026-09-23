@@ -1,39 +1,53 @@
 import type { ContextUsageSnapshot } from '@agor/core/types';
-import { Tooltip, theme } from 'antd';
-import { type ReactNode, useState } from 'react';
+import { theme } from 'antd';
+import { type ReactNode, useRef, useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import {
-  formatContextWindowSummary,
-  getContextWindowGradient,
-  resolveContextWindowPercentage,
-} from '../../utils/contextWindow';
+import { getContextWindowGradient } from '../../utils/contextWindow';
 
 // Border tokens still read loud at rest in dark; the next token down vanishes in light.
 const LINE_RESTING_OPACITY = 0.6;
 
 /**
- * Ambient "how full is the context" cue under a turn's answer: a hairline
- * filled and colored by the same helpers `ContextWindowPill` reads, with the
- * percentage beside it as a small number.
+ * Anything that owns the pointer itself: a tap landing here is that control's,
+ * not a tap on the turn.
+ */
+const INTERACTIVE_IN_TURN =
+  'a, button, input, textarea, select, summary, label, [role="button"], [role="link"], [contenteditable], [aria-label="Turn metadata"], [data-testid="turn-usage-label"]';
+
+/**
+ * The footer under a turn's answer: the turn's metadata on the left, a hairline
+ * whose fill and band color come from the same helpers `ContextWindowPill`
+ * reads, and the usage percentage at the end.
  *
- * Muted enough to be noticed only when looked for. Turns with no usage data —
- * anything the executor hasn't reported a snapshot for — render their answer
- * with nothing added.
+ * The line and the values share one grid cell and cross-fade, which keeps the
+ * line the full width of the row however long the values are, and means
+ * revealing a turn reflows nothing. Reveal is the turn's own region: hover,
+ * keyboard focus-within, Escape to dismiss, and tap-to-pin on touch.
  */
 export function ContextUsageRule({
   used,
   limit,
   snapshot,
+  metadata,
+  usageLabel,
   children,
 }: {
   used: number | undefined;
   limit: number | undefined;
   snapshot: ContextUsageSnapshot | null | undefined;
+  metadata?: ReactNode;
+  /** The turn's usage percentage, as whatever opens its breakdown. */
+  usageLabel: ReactNode;
   children: ReactNode;
 }) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
   const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const visible = !dismissed && (hovered || focused || pinned);
 
   // Same bands as the pill (<50 / <80 / rest), in the border tokens: a fill
   // tint is invisible at this height and the solid colors shout.
@@ -42,60 +56,153 @@ export function ContextUsageRule({
     warning: token.colorWarningBorder,
     critical: token.colorErrorBorder,
   });
-  const percentage = Math.round(resolveContextWindowPercentage(used, limit, snapshot));
+  const fade = reducedMotion
+    ? 'none'
+    : `opacity ${token.motionDurationFast} ${token.motionEaseOut}`;
 
   // The wrapper is unconditional even though the rule is not. Usage data lands
   // when the turn completes, so swapping this element for a fragment on the
   // way there would remount the whole answer mid-stream.
   return (
-    <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <section
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: focus reveals the footer without turning a turn full of links and buttons into a nested control.
+      tabIndex={0}
+      aria-label="Turn and its metadata"
+      onMouseEnter={() => {
+        setHovered(true);
+        setDismissed(false);
+      }}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => {
+        setFocused(true);
+        setDismissed(false);
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setFocused(false);
+          setPinned(false);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setPinned(false);
+          setDismissed(true);
+        }
+      }}
+      onPointerDown={(event) => {
+        touchStart.current =
+          event.pointerType === 'touch' ? { x: event.clientX, y: event.clientY } : null;
+      }}
+      onPointerCancel={() => {
+        touchStart.current = null;
+      }}
+      onPointerUp={(event) => {
+        const start = touchStart.current;
+        touchStart.current = null;
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > token.marginSM)
+          return;
+        // Do not hijack a selection, a control, or a scroll of the values.
+        if (
+          (event.target as HTMLElement).closest(INTERACTIVE_IN_TURN) ||
+          window.getSelection()?.toString()
+        )
+          return;
+        setPinned(!pinned);
+        setDismissed(pinned);
+      }}
+    >
       {children}
-      {/* The tooltip covers the line and its label together: the percentage is
-          the summary, and the absolute counts behind it are what a reader
-          hovering actually wants. No role or ARIA state here — a native
-          <meter> can't carry the band gradient without pseudo-element CSS, and
-          ARIA state is not supported on a generic div, so the visible number
-          stays the accessible content. */}
-      {gradient && (
-        <Tooltip title={formatContextWindowSummary(used, limit, snapshot)} placement="top">
-          <div
-            data-testid="context-usage-rule"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: token.marginXS,
-              marginTop: token.marginXXS,
-            }}
-          >
-            {/* The gradient stops at the usage percentage, so the line reads as a
-            fill as well as a band color. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.marginXS,
+          marginTop: token.marginXXS,
+          minHeight: token.controlHeightSM,
+        }}
+      >
+        <div
+          style={{
+            // Basis 0, so the stack is whatever width the row has left after
+            // the label — never a function of how long the values are.
+            flex: '1 1 0',
+            minWidth: 0,
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr)',
+            alignItems: 'center',
+          }}
+        >
+          {gradient && (
             <div
+              data-testid="context-usage-rule"
               style={{
-                flex: 1,
-                minWidth: 0,
+                gridArea: '1 / 1',
                 height: token.lineWidth * 2,
                 borderRadius: token.lineWidth,
                 background: gradient,
-                opacity: hovered ? 1 : LINE_RESTING_OPACITY,
-                transition: reducedMotion
-                  ? 'none'
-                  : `opacity ${token.motionDurationFast} ${token.motionEaseOut}`,
+                // Out of the way once the values take the same cell, so they
+                // never sit on a visible line.
+                opacity: visible ? 0 : LINE_RESTING_OPACITY,
+                transition: fade,
               }}
             />
-            <span
+          )}
+          {metadata && (
+            <section
+              aria-label="Turn metadata"
               style={{
-                flexShrink: 0,
-                fontSize: token.fontSizeSM,
-                lineHeight: 1,
-                color: token.colorTextTertiary,
-                fontVariantNumeric: 'tabular-nums',
+                gridArea: '1 / 1',
+                minWidth: 0,
+                justifySelf: 'start',
+                maxWidth: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                // One line that scrolls, never two that wrap: at phone width
+                // the values are wider than the viewport.
+                flexWrap: 'nowrap',
+                whiteSpace: 'nowrap',
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                // Swiping to the end of the values does not then drag the
+                // transcript behind it.
+                overscrollBehaviorX: 'contain',
+                scrollbarWidth: 'none',
+                // `visibility` takes the values out of the tab order and the
+                // accessibility tree; only its delay is animated, so the fade
+                // still finishes before they go.
+                visibility: visible ? 'visible' : 'hidden',
+                opacity: visible ? 1 : 0,
+                pointerEvents: visible ? 'auto' : 'none',
+                transition: reducedMotion
+                  ? 'none'
+                  : `${fade}, visibility 0s ${visible ? '0s' : token.motionDurationFast}`,
               }}
             >
-              {percentage}%
-            </span>
-          </div>
-        </Tooltip>
-      )}
-    </div>
+              {metadata}
+            </section>
+          )}
+        </div>
+        {usageLabel && (
+          // Never dimmed: it stays readable once the line has faded, and it is
+          // what opens the usage breakdown. Revealing the turn lifts it one
+          // step — neutral, since the muted band colors fail text contrast.
+          <span
+            data-testid="turn-usage-label"
+            style={{
+              flexShrink: 0,
+              fontSize: token.fontSizeSM,
+              lineHeight: 1,
+              color: visible ? token.colorTextSecondary : token.colorTextTertiary,
+              fontVariantNumeric: 'tabular-nums',
+              transition: reducedMotion
+                ? 'none'
+                : `color ${token.motionDurationFast} ${token.motionEaseOut}`,
+            }}
+          >
+            {usageLabel}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }

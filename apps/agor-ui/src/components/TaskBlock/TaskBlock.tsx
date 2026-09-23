@@ -27,7 +27,6 @@ import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
-import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
@@ -47,7 +46,6 @@ import { Tag } from '../Tag';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ContextUsageRule } from './ContextUsageRule';
-import { LeanTurnMetadata } from './LeanTurnMetadata';
 import { TurnOutcome } from './TurnOutcome';
 
 const { Paragraph } = Typography;
@@ -776,14 +774,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       (typeof task.computed_context_window === 'number' && task.computed_context_window > 0);
     const contextWindowUsed = task.computed_context_window ?? contextSnapshot?.totalTokens ?? 0;
     const contextWindowLimit = contextSnapshot?.maxTokens ?? normalized?.contextWindowLimit ?? 0;
-    const taskHeaderGradient = hasContextWindowUsage
-      ? getContextWindowGradient(contextWindowUsed, contextWindowLimit, contextSnapshot, {
-          normal: token.colorSuccessBg,
-          warning: token.colorWarningBg,
-          critical: token.colorErrorBg,
-        })
-      : undefined;
-
     const hasPendingApproval =
       task.status === TaskStatus.AWAITING_PERMISSION ||
       messages.some(
@@ -801,6 +791,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       color: token.colorTextTertiary,
       paddingInline: 0,
     };
+
+    // The footer prints one percentage. Render it as the pill rather than as
+    // plain text, so the breakdown popover stays reachable from the number.
+    const contextUsageLabel = hasContextWindowUsage ? (
+      <ContextWindowPill
+        style={plainPillStyle}
+        used={contextWindowUsed}
+        limit={contextWindowLimit || 0}
+        taskMetadata={{
+          model: task.model,
+          duration_ms: task.duration_ms,
+          agentic_tool,
+          raw_sdk_response: task.raw_sdk_response,
+          normalized_sdk_response: normalized ?? undefined,
+        }}
+      />
+    ) : undefined;
 
     const metadataPills = (
       <Flex
@@ -843,20 +850,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             outputTokens={normalized.tokenUsage.outputTokens}
             cacheReadTokens={normalized.tokenUsage.cacheReadTokens}
             cacheCreationTokens={normalized.tokenUsage.cacheCreationTokens}
-          />
-        )}
-        {hasContextWindowUsage && (
-          <ContextWindowPill
-            style={plainPillStyle}
-            used={contextWindowUsed}
-            limit={contextWindowLimit || 0}
-            taskMetadata={{
-              model: task.model,
-              duration_ms: task.duration_ms,
-              agentic_tool,
-              raw_sdk_response: task.raw_sdk_response,
-              normalized_sdk_response: normalized ?? undefined,
-            }}
           />
         )}
         {task.model && task.model !== sessionModel && (
@@ -1063,20 +1056,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             );
             return (
               <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
-                {block.message.message_id === firstPromptId ? (
-                  <>
-                    <LeanTurnMetadata
-                      metadata={metadataPills}
-                      background={taskHeaderGradient}
-                      reserveSpace={hasPendingApproval}
-                    >
-                      {messageElement}
-                    </LeanTurnMetadata>
-                    {toolDisclosure}
-                  </>
-                ) : (
-                  messageElement
-                )}
+                {messageElement}
+                {block.message.message_id === firstPromptId && toolDisclosure}
               </div>
             );
           }
@@ -1235,15 +1216,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {!firstPromptId && (
           <>
             {task.full_prompt && (
-              <LeanTurnMetadata
-                metadata={metadataPills}
-                background={taskHeaderGradient}
-                reserveSpace={hasPendingApproval}
-              >
-                <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-                  {task.full_prompt}
-                </Typography.Paragraph>
-              </LeanTurnMetadata>
+              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                {task.full_prompt}
+              </Typography.Paragraph>
             )}
             {toolDisclosure}
           </>
@@ -1252,6 +1227,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           used={contextWindowUsed}
           limit={contextWindowLimit}
           snapshot={contextSnapshot}
+          metadata={metadataPills}
+          usageLabel={contextUsageLabel}
         >
           {taskContent}
         </ContextUsageRule>

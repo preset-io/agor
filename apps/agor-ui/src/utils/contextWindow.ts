@@ -89,29 +89,3 @@ export function getContextWindowPercentage(
 ): number {
   return resolveContextWindowPercentage(used, limit, null);
 }
-
-/**
- * One-line summary of a turn's context-window usage, for the tooltip on the
- * usage rule and its label.
- *
- * Token counts use `toLocaleString`, the same formatting the breakdown popover
- * in `ContextWindowPill` prints, and the percentage comes from
- * `resolveContextWindowPercentage` so the tooltip cannot disagree with the
- * number beside it.
- *
- * An executor that reported only a percentage — a snapshot with no absolute
- * counts, or a limit nobody knows — gets the short form rather than a total
- * of zero.
- */
-export function formatContextWindowSummary(
-  used: number | undefined,
-  limit: number | undefined,
-  snapshot?: ContextUsageSnapshot | null
-): string {
-  const percentage = Math.round(resolveContextWindowPercentage(used, limit, snapshot));
-  const effectiveUsed = snapshot?.totalTokens ?? used;
-  const effectiveLimit = snapshot?.maxTokens ?? limit;
-
-  if (!effectiveUsed || !effectiveLimit) return `Context window · ${percentage}% used`;
-  return `Context window · ${effectiveUsed.toLocaleString()} / ${effectiveLimit.toLocaleString()} tokens (${percentage}%)`;
-}
