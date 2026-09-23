@@ -39,6 +39,8 @@ describe('FileUpload previews', () => {
       'a.ant-upload-list-item-thumbnail'
     );
     expect(thumbnails).toHaveLength(1);
+    // Excluded types opt out of Ant Design's automatic canvas thumbnail.
+    expect(document.querySelectorAll('img.ant-upload-list-item-image')).toHaveLength(1);
     fireEvent.click(thumbnails[0]);
     expect(openUploadBlob).toHaveBeenCalledWith(png, 'chart.png', false);
   });

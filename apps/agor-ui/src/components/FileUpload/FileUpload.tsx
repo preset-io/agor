@@ -58,7 +58,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       name: file.name,
       status: 'done',
       originFileObj: rc,
-      thumbUrl: isImage ? URL.createObjectURL(file) : undefined,
+      // '' (not undefined) stops Ant Design auto-generating a thumbnail.
+      thumbUrl: isImage ? URL.createObjectURL(file) : '',
     };
   }, []);
 
