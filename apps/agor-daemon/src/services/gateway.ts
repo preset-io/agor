@@ -1356,6 +1356,9 @@ export class GatewayService {
         return;
       }
       void runWithTenantContext(tenantId, async () => {
+        // These are ordinary Slack projections, not termination/safety
+        // settlement. A tenant scope is not an authorization to send.
+        if (!(await isCurrentTenantRuntimeActive(this.db))) return;
         const now = new Date();
         const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
         // Per-item repair failures, tallied rather than logged one by one:
@@ -1771,6 +1774,12 @@ export class GatewayService {
     attempt = 0,
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    const notice = task.metadata?.mcp_slack_recovery_notice;
+    if (!notice) return;
+    if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(notice)))) {
+      await this.retireSuspendedMcpSlackRecovery(task.task_id, notice.notice_id);
+      return;
+    }
     const claimRef: McpSlackRecoveryClaimRef = {};
     try {
       await this.renderMcpSlackRecoveryNotice(task, attempt, failures, claimRef);
@@ -1799,6 +1808,10 @@ export class GatewayService {
   ): Promise<void> {
     const initial = task.metadata?.mcp_slack_recovery_notice;
     if (!initial) return;
+    if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(initial)))) {
+      await this.retireSuspendedMcpSlackRecovery(task.task_id, initial.notice_id);
+      return;
+    }
     const state = mcpSlackRecoveryRenderedState(task, initial);
     this.scheduleMcpSlackRecoveryExpiry(task.task_id, initial, state);
     if (initial.slack_message_ts && initial.rendered_state === state) {
@@ -1950,6 +1963,13 @@ export class GatewayService {
         : []),
       { type: 'context', elements: [{ type: 'mrkdwn', text: 'Return here after using Agor.' }] },
     ];
+    // Connector acquisition and link creation above can outlive an admission
+    // read. Recheck the durable boundary immediately before provider egress.
+    if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(notice)))) {
+      claimRef.claimId = undefined;
+      await this.retireSuspendedMcpSlackRecovery(task.task_id, notice.notice_id);
+      return;
+    }
     try {
       const { receipt, reconciledMessageTs } = await sendSlackCard(connector, {
         threadId: notice.slack_thread_id,
@@ -1959,11 +1979,20 @@ export class GatewayService {
         deliveryId: notice.delivery_id,
         ...(notice.slack_message_ts ? { recordedTs: notice.slack_message_ts } : {}),
         onLateReceipt: (late) =>
-          this.reconcileLateMcpSlackRecoverySend(task.task_id, notice.notice_id, state, late, {
-            connector,
-            threadId: notice.slack_thread_id,
-          }),
+          this.reconcileLateMcpSlackRecoverySend(
+            task.task_id,
+            notice.notice_id,
+            this.mcpSlackRecoveryOccurrence(notice),
+            state,
+            late,
+            { connector, threadId: notice.slack_thread_id }
+          ),
       });
+      if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(notice)))) {
+        claimRef.claimId = undefined;
+        await this.retireSuspendedMcpSlackRecovery(task.task_id, notice.notice_id);
+        return;
+      }
       const renderedAt = new Date();
       const settled = await this.taskRepo.mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
         current?.notice_id === notice.notice_id && current.delivery_claim?.claim_id === claimId
@@ -1982,6 +2011,10 @@ export class GatewayService {
       // Settled or lost, the claim is no longer this pass's to account for.
       claimRef.claimId = undefined;
       if (!settled.changed) {
+        if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(notice)))) {
+          await this.retireSuspendedMcpSlackRecovery(task.task_id, notice.notice_id);
+          return;
+        }
         // The same lease, the same two outcomes as the connect lane. This one
         // fenced its receipt from the start and then did nothing about what it
         // had already written to Slack: a post that lost the claim left a
@@ -2012,6 +2045,10 @@ export class GatewayService {
       this.mcpSlackDeliveryRetryTimers.cancel(notice.notice_id);
     } catch {
       claimRef.claimId = undefined;
+      if (!(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(notice)))) {
+        await this.retireSuspendedMcpSlackRecovery(task.task_id, notice.notice_id);
+        return;
+      }
       await this.recordMcpSlackDeliveryFailure(
         task.task_id,
         notice.notice_id,
@@ -2033,14 +2070,26 @@ export class GatewayService {
   private reconcileLateMcpSlackRecoverySend(
     taskId: string,
     noticeId: string,
+    occurredAt: string,
     renderedState: MCPSlackRecoveryRenderedState,
     late: LateSlackCardReceipt,
     retire: { connector: GatewayConnector; threadId: string }
   ): void {
     const tenantId = requireCurrentTenantId();
     void runWithTenantContext(tenantId, async () => {
+      if (!(await this.mcpSlackProjectionAdmitted(occurredAt))) {
+        await this.retireSuspendedMcpSlackRecovery(taskId, noticeId);
+        return;
+      }
       const task = await this.taskRepo.findById(taskId);
       const latest = task?.metadata?.mcp_slack_recovery_notice;
+      if (
+        latest?.notice_id === noticeId &&
+        !(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(latest)))
+      ) {
+        await this.retireSuspendedMcpSlackRecovery(taskId, noticeId);
+        return;
+      }
       const isThisDelivery = latest?.notice_id === noticeId;
       const ownedTs = isThisDelivery ? latest?.slack_message_ts : undefined;
       const disposition = lateSlackCardDisposition(late, { isThisDelivery, ownedTs });
@@ -2203,20 +2252,91 @@ export class GatewayService {
     return this.data.read(read);
   }
 
+  /** The original event time, not the repair time, must survive suspension. */
+  private async mcpSlackProjectionAdmitted(occurredAt: string): Promise<boolean> {
+    return isCurrentTenantEventAdmitted(this.db, Date.parse(occurredAt));
+  }
+
+  private mcpSlackRecoveryOccurrence(notice: MCPSlackRecoveryNotice): string {
+    // Recovery tokens pin whole-second iat/exp. New notices retain the exact
+    // event time separately so a fresh event in the release second is not
+    // mistaken for pre-release backlog. Old records fail conservatively.
+    return notice.source_observed_at ?? notice.issued_at;
+  }
+
+  private async retireSuspendedMcpSlackRecovery(taskId: string, noticeId: string): Promise<void> {
+    await this.taskRepo.mutateMCPSlackRecoveryNotice(taskId, (current) =>
+      current?.notice_id === noticeId
+        ? {
+            ...current,
+            delivery_claim: undefined,
+            next_repair_at: undefined,
+            binding_invalidated_at: current.binding_invalidated_at ?? new Date().toISOString(),
+          }
+        : null
+    );
+    this.mcpSlackDeliveryRetryTimers.cancel(noticeId);
+    this.mcpSlackRecoveryExpiryTimers.cancel(noticeId);
+    this.mcpSlackOAuthStartClaimTimers.cancel(noticeId);
+  }
+
+  private async retireSuspendedMcpSlackConnect(
+    widgetId: MessageID,
+    requestedAt: string
+  ): Promise<void> {
+    await this.messagesRepo.mutateMetadataLocked(widgetId, (metadata) => {
+      const widget = metadata?.widget;
+      if (!widget || widget.requested_at !== requestedAt) return null;
+      const { slack_connect_due_at: _dueAt, ...rest } = widget;
+      const delivery = widget.slack_connect;
+      if (!delivery && !widget.slack_connect_due_at) return null;
+      return {
+        ...metadata,
+        widget: {
+          ...rest,
+          ...(delivery
+            ? {
+                slack_connect: {
+                  ...delivery,
+                  delivery_claim: undefined,
+                  next_repair_at: undefined,
+                  binding_invalidated_at:
+                    delivery.binding_invalidated_at ?? new Date().toISOString(),
+                },
+              }
+            : {}),
+        },
+      };
+    });
+    this.mcpSlackConnectRetryTimers.cancel(widgetId);
+    this.mcpSlackConnectExpiryTimers.cancel(widgetId);
+  }
+
   /** Project authoritative Task recovery into one idempotently editable Slack row. */
   async syncMcpSlackRecoveryNotice(
     taskId: string,
     /** The sweep pass's failure tally, when this notice is one of its items. */
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    const task = await this.taskRepo.findById(taskId);
+    if (!task) return;
+    const recovery = task.metadata?.mcp_recovery;
+    let existing = task.metadata?.mcp_slack_recovery_notice;
+    if (
+      existing &&
+      !(await this.mcpSlackProjectionAdmitted(this.mcpSlackRecoveryOccurrence(existing)))
+    ) {
+      await this.retireSuspendedMcpSlackRecovery(task.task_id, existing.notice_id);
+      // A genuinely new recovery observed after resume may still issue its
+      // own notice. The old notice must not be treated as that new authority.
+      existing = undefined;
+    }
+    if (recovery && !(await this.mcpSlackProjectionAdmitted(recovery.observed_at))) return;
+    if (!existing && !recovery) return;
     const { recoveryEnabled, mode } = await this.readInTenantScope(async (db) => ({
       recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
       mode: await getMCPEgressGatewayMode(db),
     }));
-    const task = await this.taskRepo.findById(taskId);
-    if (!task) return;
-    const recovery = task.metadata?.mcp_recovery;
-    const existing = task.metadata?.mcp_slack_recovery_notice;
 
     if (
       existing?.oauth_start_claim_expires_at &&
@@ -2361,6 +2481,7 @@ export class GatewayService {
                 notice_id: noticeId,
                 token_jti: randomUUID(),
                 issued_at: issued.toISOString(),
+                source_observed_at: locked.observed_at,
                 expires_at: expires.toISOString(),
                 principal_user_id: task.created_by as UserID,
                 credential_user_id: session.created_by as UserID,
@@ -2815,6 +2936,10 @@ export class GatewayService {
     const widget = binding.widget;
     const slack = binding.slack;
     const delivery = widget?.slack_connect;
+    if (widget && !(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+      await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+      return;
+    }
     // A mint-time marker (`slack_connect_due_at`) puts a widget on this sweep
     // before any delivery record exists. Retire it on the first look at a
     // widget this lane can never post for, so a Discord/GitHub/Teams mint —
@@ -3091,6 +3216,13 @@ export class GatewayService {
       ...(binding.ok ? {} : { refusal: binding.reason }),
     });
     const blocks = mcpSlackConnectBlocks(copy, url);
+    // Binding reads, OAuth minting and connector acquisition are all async.
+    // A restriction installed during them must still stop the actual write.
+    if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+      claimRef.claimId = undefined;
+      await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+      return;
+    }
     try {
       // Once, before the first card lands in the thread — not on every edit.
       if (!current.slack_message_ts && binding.message) {
@@ -3104,12 +3236,17 @@ export class GatewayService {
         deliveryId: current.delivery_id,
         ...(current.slack_message_ts ? { recordedTs: current.slack_message_ts } : {}),
         onLateReceipt: (late) =>
-          this.reconcileLateMcpSlackConnectSend(widgetId, fence, state, late, {
+          this.reconcileLateMcpSlackConnectSend(widgetId, fence, widget.requested_at, state, late, {
             connector,
             threadId: slack.threadId,
             text: mcpSlackConnectDuplicateCardText(binding.params?.serverName ?? 'this MCP server'),
           }),
       });
+      if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+        claimRef.claimId = undefined;
+        await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+        return;
+      }
       const renderedAt = new Date();
       const settled = await mutateSlackConnectDelivery(this.messagesRepo, widgetId, (latest) => {
         if (!latest || latest.delivery_id !== fence.deliveryId) return null;
@@ -3140,6 +3277,10 @@ export class GatewayService {
       // holds it.
       claimRef.claimId = undefined;
       if (!settled.changed) {
+        if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+          await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+          return;
+        }
         // A lost claim has to reconcile whatever this delivery actually did,
         // and that is two different things. A fresh POST left a second Slack
         // row nothing durable names, so it is retired. An EDIT reused the row
@@ -3169,6 +3310,10 @@ export class GatewayService {
       this.mcpSlackConnectRetryTimers.cancel(widgetId);
     } catch {
       claimRef.claimId = undefined;
+      if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+        await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+        return;
+      }
       await this.recordMcpSlackConnectDeliveryFailure(widgetId, claimId, 'slack_write_failed');
     }
   }
@@ -3186,13 +3331,23 @@ export class GatewayService {
   private reconcileLateMcpSlackConnectSend(
     widgetId: MessageID,
     fence: { deliveryId: string; generation: number | undefined },
+    occurredAt: string,
     renderedState: MCPSlackConnectRenderedState,
     late: LateSlackCardReceipt,
     retire: { connector: GatewayConnector; threadId: string; text: string }
   ): void {
     const tenantId = requireCurrentTenantId();
     void runWithTenantContext(tenantId, async () => {
-      const latest = (await this.messagesRepo.findById(widgetId))?.metadata?.widget?.slack_connect;
+      if (!(await this.mcpSlackProjectionAdmitted(occurredAt))) {
+        await this.retireSuspendedMcpSlackConnect(widgetId, occurredAt);
+        return;
+      }
+      const widget = (await this.messagesRepo.findById(widgetId))?.metadata?.widget;
+      if (widget && !(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+        await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
+        return;
+      }
+      const latest = widget?.slack_connect;
       const isThisDelivery =
         latest?.delivery_id === fence.deliveryId && latest.delivery_generation === fence.generation;
       const ownedTs = isThisDelivery ? latest?.slack_message_ts : undefined;

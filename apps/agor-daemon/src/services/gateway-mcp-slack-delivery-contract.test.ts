@@ -37,6 +37,26 @@ import type {
 import { TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const tenantBoundaries = vi.hoisted(
+  () => new Map<string, { allowed: boolean; resumeAfter?: number }>()
+);
+vi.mock('../auth/tenant-access.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('../auth/tenant-access.js');
+  const { getCurrentTenantId } =
+    await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
+  return {
+    ...actual,
+    isCurrentTenantEventAdmitted: async (_db: unknown, occurredAt: number) => {
+      const boundary = tenantBoundaries.get(getCurrentTenantId() ?? '');
+      return (
+        !boundary ||
+        (boundary.allowed &&
+          (boundary.resumeAfter === undefined || occurredAt > boundary.resumeAfter))
+      );
+    },
+  };
+});
+
 const killSwitch = vi.hoisted(() => ({ enabled: true }));
 vi.mock('@agor/core/db', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@agor/core/db');
@@ -95,11 +115,14 @@ interface LaneHarness {
   renderedState(): string | undefined;
   /** The durable delivery record, for the accounting assertions. */
   record(): SlackDeliveryRecord | undefined;
+  dueMarker?(): string | undefined;
 }
 
 interface LaneOptions {
   /** `'post'` starts with no recorded row; `'edit'` starts with one. */
-  start: 'post' | 'edit';
+  start: 'post' | 'edit' | 'marker';
+  tenantId?: string;
+  sourceObservedAt?: string;
   /**
    * Make the channel read throw ONCE THE CLAIM IS ON THE RECORD.
    *
@@ -144,6 +167,7 @@ interface LaneOptions {
 // ---------------------------------------------------------------------------
 
 function connectLane(options: LaneOptions): LaneHarness {
+  const tenantId = options.tenantId ?? 'tenant-a';
   const widgetId = 'widget-1' as MessageID;
   const sends: SentMessage[] = [];
   const deleted: { threadId: string; messageId: string }[] = [];
@@ -165,22 +189,26 @@ function connectLane(options: LaneOptions): LaneHarness {
           oauthMode: 'per_user',
           reason: 'Read the roadmap page.',
         },
-        slack_connect: {
-          delivery_id: 'delivery-1',
-          delivery_generation: 1,
-          token_jti: 'jti-1',
-          issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 600_000).toISOString(),
-          gateway_config_generation: 7,
-          // An edit needs a recorded row and a state that is not the state
-          // this delivery is about to render, or the no-op shortcut returns.
-          ...(options.start === 'edit'
-            ? { slack_message_ts: OWNED_TS, rendered_state: 'expired' }
-            : {}),
-          ...(options.start === 'edit'
-            ? { oauth_failed_at: new Date(Date.now() - 30_000).toISOString() }
-            : {}),
-        } as MCPSlackConnectDelivery,
+        ...(options.start === 'marker'
+          ? { slack_connect_due_at: new Date(Date.now() - 60_000).toISOString() }
+          : {
+              slack_connect: {
+                delivery_id: 'delivery-1',
+                delivery_generation: 1,
+                token_jti: 'jti-1',
+                issued_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                gateway_config_generation: 7,
+                // An edit needs a recorded row and a state that is not the state
+                // this delivery is about to render, or the no-op shortcut returns.
+                ...(options.start === 'edit'
+                  ? { slack_message_ts: OWNED_TS, rendered_state: 'expired' }
+                  : {}),
+                ...(options.start === 'edit'
+                  ? { oauth_failed_at: new Date(Date.now() - 30_000).toISOString() }
+                  : {}),
+              } as MCPSlackConnectDelivery,
+            }),
       },
     },
   } as unknown as Message;
@@ -275,7 +303,7 @@ function connectLane(options: LaneOptions): LaneHarness {
     },
     activeListeners: new Map([
       [
-        'tenant-a\0gateway-1',
+        `${tenantId}\0gateway-1`,
         {
           channelType: 'slack' as const,
           findMessageByMetadata: async () => undefined,
@@ -298,7 +326,7 @@ function connectLane(options: LaneOptions): LaneHarness {
     sends,
     deleted,
     deliver: () =>
-      runWithTenantContext('tenant-a', () =>
+      runWithTenantContext(tenantId, () =>
         (
           service as unknown as { deliverMcpSlackConnectCard(id: MessageID): Promise<void> }
         ).deliverMcpSlackConnectCard(widgetId)
@@ -307,6 +335,7 @@ function connectLane(options: LaneOptions): LaneHarness {
     recordedTs: () => message.metadata?.widget?.slack_connect?.slack_message_ts,
     renderedState: () => message.metadata?.widget?.slack_connect?.rendered_state,
     record: () => message.metadata?.widget?.slack_connect,
+    dueMarker: () => message.metadata?.widget?.slack_connect_due_at,
   };
 }
 
@@ -315,12 +344,14 @@ function connectLane(options: LaneOptions): LaneHarness {
 // ---------------------------------------------------------------------------
 
 function recoveryLane(options: LaneOptions): LaneHarness {
+  const tenantId = options.tenantId ?? 'tenant-a';
   const sends: SentMessage[] = [];
   const deleted: { threadId: string; messageId: string }[] = [];
   const baseNotice: MCPSlackRecoveryNotice = {
     notice_id: 'notice-1',
     token_jti: 'jti-1',
     issued_at: new Date(Date.now() - 600_000).toISOString(),
+    ...(options.sourceObservedAt ? { source_observed_at: options.sourceObservedAt } : {}),
     // Past its own clock, so the state this delivery renders is terminal and
     // differs from the `reconnect_required` an edit starts recorded as.
     expires_at: new Date(Date.now() - 1).toISOString(),
@@ -426,7 +457,7 @@ function recoveryLane(options: LaneOptions): LaneHarness {
     },
     activeListeners: new Map([
       [
-        'tenant-a\0gateway-1',
+        `${tenantId}\0gateway-1`,
         {
           channelType: 'slack' as const,
           findMessageByMetadata: async () => undefined,
@@ -449,7 +480,7 @@ function recoveryLane(options: LaneOptions): LaneHarness {
     sends,
     deleted,
     deliver: () =>
-      runWithTenantContext('tenant-a', () =>
+      runWithTenantContext(tenantId, () =>
         (
           service as unknown as { deliverMcpSlackRecoveryNotice(value: Task): Promise<void> }
         ).deliverMcpSlackRecoveryNotice(currentTask)
@@ -484,6 +515,7 @@ describe.each(LANES)(
     let previousSecret: string | undefined;
     let previousBaseUrl: string | undefined;
     beforeEach(() => {
+      tenantBoundaries.clear();
       previousSecret = process.env.AGOR_MASTER_SECRET;
       process.env.AGOR_MASTER_SECRET = SECRET;
       // Both lanes now refuse to build a link on a base URL no other browser
@@ -498,6 +530,147 @@ describe.each(LANES)(
         if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
         else process.env.AGOR_BASE_URL = previousBaseUrl;
       };
+    });
+
+    it('cuts off restricted A without suppressing neighbor B or replaying A after resume', async () => {
+      tenantBoundaries.set('tenant-a', { allowed: false });
+      const restricted = build({ start: 'post', tenantId: 'tenant-a' });
+      const neighbor = build({ start: 'post', tenantId: 'tenant-b' });
+      try {
+        await restricted.deliver();
+        expect(restricted.sends).toHaveLength(0);
+        expect(restricted.record()?.next_repair_at).toBeUndefined();
+        expect(restricted.record()?.binding_invalidated_at).toBeDefined();
+
+        await neighbor.deliver();
+        expect(neighbor.sends).toHaveLength(1);
+
+        tenantBoundaries.set('tenant-a', { allowed: true, resumeAfter: Date.now() + 1_000 });
+        await restricted.deliver();
+        expect(restricted.sends).toHaveLength(0);
+        expect(restricted.record()?.next_repair_at).toBeUndefined();
+      } finally {
+        await restricted.stop();
+        await neighbor.stop();
+      }
+    });
+
+    if (build === connectLane) {
+      it('retires a restricted first-card marker durably and never replays it on resume', async () => {
+        tenantBoundaries.set('tenant-a', { allowed: false });
+        const restricted = connectLane({ start: 'marker', tenantId: 'tenant-a' });
+        try {
+          expect(restricted.dueMarker?.()).toBeDefined();
+          await restricted.deliver();
+          expect(restricted.sends).toHaveLength(0);
+          expect(restricted.dueMarker?.()).toBeUndefined();
+
+          tenantBoundaries.set('tenant-a', { allowed: true, resumeAfter: Date.now() + 1_000 });
+          await restricted.deliver();
+          expect(restricted.sends).toHaveLength(0);
+          expect(restricted.dueMarker?.()).toBeUndefined();
+        } finally {
+          await restricted.stop();
+        }
+      });
+    }
+
+    if (build === recoveryLane) {
+      it('admits a fresh event in the release second despite token-time rounding', async () => {
+        const releaseAt = Date.now() - 500;
+        tenantBoundaries.set('tenant-a', { allowed: true, resumeAfter: releaseAt });
+        const fresh = recoveryLane({
+          start: 'post',
+          sourceObservedAt: new Date(releaseAt + 1).toISOString(),
+        });
+        try {
+          await fresh.deliver();
+          expect(fresh.sends).toHaveLength(1);
+        } finally {
+          await fresh.stop();
+        }
+      });
+
+      it('does not mint a first notice from an old recovery event after resume', async () => {
+        tenantBoundaries.set('tenant-a', { allowed: true, resumeAfter: Date.now() + 1_000 });
+        const findById = vi.fn(
+          async () =>
+            ({
+              task_id: 'task-1',
+              metadata: {
+                mcp_recovery: {
+                  code: 'oauth_reauth_required',
+                  status: 'action_required',
+                  observed_at: new Date(Date.now() - 60_000).toISOString(),
+                },
+              },
+            }) as Task
+        );
+        const mutateMCPSlackRecoveryNotice = vi.fn();
+        const service = new GatewayService({ run: vi.fn() } as never, {} as never);
+        Object.assign(service as unknown as Record<string, unknown>, {
+          taskRepo: { findById, mutateMCPSlackRecoveryNotice },
+        });
+        try {
+          await runWithTenantContext('tenant-a', () =>
+            service.syncMcpSlackRecoveryNotice('task-1')
+          );
+          expect(findById).toHaveBeenCalledOnce();
+          expect(mutateMCPSlackRecoveryNotice).not.toHaveBeenCalled();
+        } finally {
+          await service.stopListeners();
+        }
+      });
+    }
+
+    it('retires a write that became restricted while provider I/O was in flight', async () => {
+      const harness = build({
+        start: 'post',
+        winner: () => tenantBoundaries.set('tenant-a', { allowed: false }),
+      });
+      try {
+        await harness.deliver();
+        // The first call had already crossed the egress boundary. It cannot
+        // be unsent, but its receipt must not re-arm a due retry.
+        expect(harness.sends).toHaveLength(1);
+        expect(harness.record()?.next_repair_at).toBeUndefined();
+        expect(harness.record()?.binding_invalidated_at).toBeDefined();
+        tenantBoundaries.set('tenant-a', { allowed: true, resumeAfter: Date.now() + 1_000 });
+        await harness.deliver();
+        expect(harness.sends).toHaveLength(1);
+      } finally {
+        await harness.stop();
+      }
+    });
+
+    it('does not repaint or retire through Slack from a restricted late callback', async () => {
+      vi.useFakeTimers();
+      try {
+        let land!: () => void;
+        const harness = build({
+          start: 'post',
+          lateSlack: new Promise<void>((resolve) => {
+            land = resolve;
+          }),
+        });
+        try {
+          const first = harness.deliver();
+          await vi.advanceTimersByTimeAsync(MCP_SLACK_SEND_TIMEOUT_MS + 1_000);
+          await first;
+          expect(harness.sends).toHaveLength(1);
+          tenantBoundaries.set('tenant-a', { allowed: false });
+          land();
+          for (let i = 0; i < 20; i += 1) await vi.advanceTimersByTimeAsync(0);
+          expect(harness.sends).toHaveLength(1);
+          expect(harness.deleted).toEqual([]);
+          expect(harness.record()?.next_repair_at).toBeUndefined();
+          expect(harness.record()?.binding_invalidated_at).toBeDefined();
+        } finally {
+          await harness.stop();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     /**

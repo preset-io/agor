@@ -969,6 +969,8 @@ export interface MCPSlackRecoveryNotice {
   token_jti: string;
   token_consumed_at?: string;
   issued_at: string;
+  /** Exact source-event timestamp for the suspension cutoff; issued_at is rounded for token claims. */
+  source_observed_at?: string;
   expires_at: string;
   principal_user_id: UserID;
   credential_user_id: UserID;

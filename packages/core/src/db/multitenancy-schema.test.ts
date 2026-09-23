@@ -76,7 +76,9 @@ function migrationTenantTables(): string[] {
   return [
     ...new Set(
       [
-        ...restrictionMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...restrictionMigration.matchAll(
+          /CREATE TABLE (?:IF NOT EXISTS )?"([^"]+)" \([\s\S]*?"tenant_id"/g
+        ),
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
