@@ -5,7 +5,7 @@ import { CollapsibleMarkdown } from './CollapsibleMarkdown';
 afterEach(cleanup);
 
 it('collapses a long single paragraph but not short multiline text', () => {
-  const short = Array.from({ length: 30 }, (_, i) => `Line ${i}`).join('\n');
+  const short = Array.from({ length: 15 }, (_, i) => `Line ${i}`).join('\n');
   const view = render(<CollapsibleMarkdown>{short}</CollapsibleMarkdown>);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
   const paragraph = 'Long paragraph '.repeat(150) + 'Complete tail';
@@ -29,7 +29,7 @@ it('repairs cut emphasis without exposing syntax markers, then renders the full 
 
 it('does not turn a truncated URL into a navigable destination', () => {
   const url = `https://example.com/${'a'.repeat(2400)}`;
-  const markdown = 'Intro '.repeat(195) + `[Link](${url})`;
+  const markdown = 'Intro '.repeat(95) + `[Link](${url})`;
   render(<CollapsibleMarkdown>{markdown}</CollapsibleMarkdown>);
   expect(screen.queryByRole('link', { name: 'Link' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'show more' }));

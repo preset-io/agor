@@ -882,3 +882,33 @@ it('bounds long code, tables and single-line prose previews while preserving ful
   expect(screen.getByText('Wrapped prose '.repeat(200).trim())).toBeInTheDocument();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
 });
+
+it('collapses tall low-character history and medium prose with shorter previews', async () => {
+  const base = messages.get(tasks[0].task_id)![1];
+  const words = Array.from({ length: 50 }, (_, i) => `Word${i}`);
+  const tall = words.join('  \n');
+  const prose = 'Synthetic prose for a medium-length historical response. '.repeat(28).trim();
+  expect(tall.length).toBeLessThan(1200);
+  expect(prose.length).toBeGreaterThan(1200);
+  expect(prose.length).toBeLessThan(2000);
+  const view = render(
+    <div>
+      <MessageBlock message={{ ...base, content: tall }} defaultTextExpanded={false} />
+      <MessageBlock
+        message={{ ...base, message_id: generateId(), content: prose }}
+        defaultTextExpanded={false}
+      />
+    </div>
+  );
+  const articles = view.container.querySelectorAll('article');
+  expect(articles[0].textContent).toContain('Word9');
+  expect(articles[0].textContent).not.toContain('Word10');
+  expect(articles[0].getBoundingClientRect().height).toBeLessThan(300);
+  expect(articles[1].textContent!.length).toBeLessThanOrEqual(700);
+  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(2);
+  await page.screenshot({ path: `./.vitest/history-dual-budget-${window.innerWidth}.png` });
+  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  expect(articles[0].textContent).toContain('Word49');
+  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  expect(screen.getByText(prose)).toBeInTheDocument();
+});

@@ -35,10 +35,12 @@ turn never automatically collapses text you were already reading. Your explicit
 **show more / show less** choices last while that conversation is mounted, including
 reconnects and tool-detail loading. Reopening it applies the history defaults again.
 
-Messages over 2,000 source characters are eligible for collapse, regardless of
-newlines or screen width. The preview targets 1,200 characters, preferring a newline
-within the next 200 characters, then whitespace in that same window; otherwise it
-cuts at the target. Streamdown handles incomplete Markdown in the preview. Partial
+Messages over 1,200 source characters **or** 15 source lines are eligible for
+collapse. The preview stops at 10 source lines or roughly 600 characters, whichever
+comes first. The character boundary prefers a newline within the next 100
+characters, then whitespace in that window; otherwise it cuts at the target.
+These are literal source newlines, not estimates of wrapped lines or screen height.
+Streamdown handles incomplete Markdown in the preview. Partial
 code/table export controls are hidden until expansion; the message copy action
 still copies the full source. All fetched text remains available for expansion and
 copying; this is a display preference, not a payload reduction.
