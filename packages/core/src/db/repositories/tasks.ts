@@ -18,6 +18,7 @@ import type {
   SessionUsageSummary,
   Task,
   TaskID,
+  TaskLaunchFields,
   TaskMetadata,
   TaskPendingDispatchStatus,
   TerminationCause,
@@ -2484,9 +2485,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Create a pending task — either CREATED (will spawn immediately) or
-   * QUEUED (will drain later) — owning the sentinel defaults that the
-   * caller would otherwise have to assemble by hand.
+   * Admit CREATED/QUEUED work with repository-owned sentinel defaults, or
+   * insert a fresh idle prompt directly as DISPATCHING with prepared launch
+   * fields and its atomic Session projection.
    *
    * For QUEUED tasks, `queue_position = max(queue_position) + 1` is computed
    * while holding the owning Session row lock. A transaction by itself does
@@ -2496,8 +2497,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    *
    * Sentinel contract: while a task carries `message_range.start_index = -1`
    * and `git_state.sha_at_start = ''`, it has not yet been pinned to real
-   * conversation/git state. spawnTaskExecutor is the sole place that
-   * overwrites these on the way to RUNNING.
+   * conversation/git state. Direct admission supplies prepared fields here;
+   * queued work receives them at claimDispatchAndProjectSession.
    */
   async createPending(input: {
     /** Optional stable identity used by idempotent internal producers. */
@@ -2512,7 +2513,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
      * Session fence, insert DISPATCHING directly when no unfinished work exists.
      * Stable-ID producers retain their existing queue/reconciliation protocol.
      */
-    dispatchIfIdle?: Partial<Task>;
+    dispatchIfIdle?: TaskLaunchFields;
   }): Promise<Task> {
     if (
       input.dispatchIfIdle &&
@@ -2531,9 +2532,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       created_by: input.created_by,
       status: input.status,
       metadata: input.metadata,
-      // Sentinels — overwritten by spawnTaskExecutor at the status → RUNNING
-      // transition. While `start_index === -1` / `sha_at_start === ''`, the
-      // task is intentionally unpinned.
+      // Sentinels — replaced when dispatch is claimed, including direct admission.
+      // While `start_index === -1` / `sha_at_start === ''`, the task is unpinned.
       message_range: {
         start_index: -1,
         end_index: -1,
@@ -2651,8 +2651,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
                 : undefined;
               const dispatchAt = nowRow ? new Date(nowRow.now) : new Date();
               const insertData = this.taskToInsert({
-                ...input.dispatchIfIdle,
                 ...taskBase,
+                executor_mode: input.dispatchIfIdle.executor_mode,
+                sdk_watchdog_mode: input.dispatchIfIdle.sdk_watchdog_mode,
                 // Preparation supplies launch state, not caller identity or payload.
                 message_range: input.dispatchIfIdle.message_range,
                 git_state: input.dispatchIfIdle.git_state,

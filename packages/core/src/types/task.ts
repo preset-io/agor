@@ -24,6 +24,12 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 /** Task states that have not yet crossed the daemon's durable dispatch fence. */
 export type TaskPendingDispatchStatus = typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
 
+/** Launch metadata only; does not confer ownership of a dispatch claim. */
+export type TaskLaunchFields = Pick<
+  Task,
+  'message_range' | 'git_state' | 'started_at' | 'executor_mode' | 'sdk_watchdog_mode'
+> & { status: typeof TaskStatus.DISPATCHING };
+
 export type ExecutorMode = 'local' | 'templated';
 
 export const ExecutorPulseKind = {

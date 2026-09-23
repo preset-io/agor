@@ -30,7 +30,12 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
-import type { MessageCreate, SessionUpdate } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  MessageCreate,
+  SessionUpdate,
+  TaskLaunchFields,
+} from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SessionsService } from '../services/sessions.js';
@@ -50,6 +55,19 @@ const deferred = () => {
   });
   return { promise, resolve };
 };
+
+function dispatchFields(): TaskLaunchFields {
+  return {
+    status: TaskStatus.DISPATCHING,
+    executor_mode: 'local',
+    message_range: {
+      start_index: 0,
+      end_index: 1,
+      start_timestamp: new Date().toISOString(),
+    },
+    git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
+  };
+}
 
 describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
   'prompt admission PostgreSQL/RLS',
@@ -136,11 +154,11 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
 
     it('direct admission has one winner across concurrent PostgreSQL transactions', async () => {
       const f = await seed();
-      const prepare = { status: TaskStatus.DISPATCHING, executor_mode: 'local' as const };
+      const prepare = dispatchFields();
       const admit = (connection: Database) =>
         runWithTenantDatabaseTransaction(connection, f.tenant, async (tx) => {
           await lockTenantAuthorizationFence(tx);
-          await resolveCurrentTenantAuthorityActor(tx, { user: f.actor });
+          await resolveCurrentTenantAuthorityActor(tx, { user: f.actor } as AuthenticatedParams);
           return new TaskRepository(tx).createPending({ ...f.input, dispatchIfIdle: prepare });
         });
       const result = await Promise.all([admit(a), admit(b)]);
@@ -177,7 +195,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const head = await runWithTenantDatabaseScope(db, f.tenant, (tx) =>
         new TaskRepository(tx).createPending(f.input)
       );
-      const updates = { status: TaskStatus.DISPATCHING };
+      const updates = dispatchFields();
       const [next, claimed] = await Promise.all([
         runWithTenantDatabaseTransaction(a, f.tenant, (tx) =>
           new TaskRepository(tx).createPending({ ...f.input, dispatchIfIdle: updates })
@@ -213,7 +231,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const admission = runPromptAdmissionTransaction(db, f.tenant, async (tx) => {
         attempts++;
         await lockTenantAuthorizationFence(tx);
-        await resolveCurrentTenantAuthorityActor(tx, { user: f.actor });
+        await resolveCurrentTenantAuthorityActor(tx, { user: f.actor } as AuthenticatedParams);
         enqueueAfterTenantDatabaseCommit(() => {
           effects++;
         });
@@ -467,7 +485,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             attempts++;
             const task = await new TaskRepository(tx).createPending({
               ...f.input,
-              ...(direct ? { dispatchIfIdle: { status: TaskStatus.DISPATCHING } } : {}),
+              ...(direct ? { dispatchIfIdle: dispatchFields() } : {}),
             });
             enqueueAfterTenantDatabaseCommit(async () => {
               throw Object.assign(new Error('post-commit failure'), { code: '40001' });
@@ -528,7 +546,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         runPromptAdmissionTransaction(db, f.tenant, async (tx) => {
           attempts++;
           await lockTenantAuthorizationFence(tx);
-          await resolveCurrentTenantAuthorityActor(tx, { user: outsider });
+          await resolveCurrentTenantAuthorityActor(tx, { user: outsider } as AuthenticatedParams);
           const access = await resolveSessionPromptAccess({
             branchRepository: new BranchRepository(tx),
             branch: f.branch,
@@ -553,7 +571,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const f = await seed();
         const input = {
           ...f.input,
-          ...(direct ? { dispatchIfIdle: { status: TaskStatus.DISPATCHING } } : {}),
+          ...(direct ? { dispatchIfIdle: dispatchFields() } : {}),
         };
         let attempts = 0;
         await expect(

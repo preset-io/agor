@@ -7,6 +7,7 @@ import type {
   MCPServerID,
   MessageID,
   Task,
+  TaskLaunchFields,
   TaskPendingDispatchStatus,
   UserID,
   UUID,
@@ -3214,6 +3215,19 @@ function createPendingInput(overrides: {
   };
 }
 
+function dispatchFields(): TaskLaunchFields {
+  return {
+    status: TaskStatus.DISPATCHING,
+    executor_mode: 'local',
+    message_range: {
+      start_index: 0,
+      end_index: 1,
+      start_timestamp: new Date().toISOString(),
+    },
+    git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
+  };
+}
+
 describe('TaskRepository.createPending', () => {
   dbTest('directly admits an idle prompt and atomically projects its Session', async ({ db }) => {
     const repo = new TaskRepository(db);
@@ -3221,7 +3235,7 @@ describe('TaskRepository.createPending', () => {
     const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
     const task = await repo.createPending({
       ...input,
-      dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+      dispatchIfIdle: dispatchFields(),
     });
     expect(task.status).toBe(TaskStatus.DISPATCHING);
     expect(task.queue_position).toBeUndefined();
@@ -3236,7 +3250,7 @@ describe('TaskRepository.createPending', () => {
     // A second submission cannot take another direct dispatch slot.
     const next = await repo.createPending({
       ...input,
-      dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+      dispatchIfIdle: dispatchFields(),
     });
     expect(next).toMatchObject({ status: TaskStatus.QUEUED, queue_position: 1 });
   });
@@ -3248,7 +3262,7 @@ describe('TaskRepository.createPending', () => {
       await repo.createPending(createPendingInput({ session_id: sessionId, status }));
       const next = await repo.createPending({
         ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
-        dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+        dispatchIfIdle: dispatchFields(),
       });
       expect(next.status).toBe(TaskStatus.QUEUED);
       expect(next.queue_position).toBe(status === TaskStatus.QUEUED ? 2 : 1);
@@ -3264,14 +3278,14 @@ describe('TaskRepository.createPending', () => {
     });
     const stopped = await repo.createPending({
       ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
-      dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+      dispatchIfIdle: dispatchFields(),
     });
     expect(stopped.status).toBe(TaskStatus.QUEUED);
     const otherSession = await createSessionWithDeps(db);
     const missingActor = await repo.createPending({
       ...createPendingInput({ session_id: otherSession, status: TaskStatus.QUEUED }),
       created_by: 'deleted-fixture-user',
-      dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+      dispatchIfIdle: dispatchFields(),
     });
     expect(missingActor.status).toBe(TaskStatus.QUEUED);
   });
@@ -3284,7 +3298,7 @@ describe('TaskRepository.createPending', () => {
       runDatabaseTransaction(db, async (tx) => {
         await new TaskRepository(tx).createPending({
           ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
-          dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+          dispatchIfIdle: dispatchFields(),
         });
         throw new Error('fixture rollback');
       })
@@ -3299,7 +3313,7 @@ describe('TaskRepository.createPending', () => {
       new TaskRepository(db).createPending({
         ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
         task_id: generateId(),
-        dispatchIfIdle: createTaskData({ status: TaskStatus.DISPATCHING }),
+        dispatchIfIdle: dispatchFields(),
       })
     ).rejects.toThrow('fresh queued input');
   });

@@ -100,6 +100,7 @@ import type {
   StreamingEventType,
   Task,
   TaskID,
+  TaskLaunchFields,
   TaskMetadata,
   TenantID,
   User,
@@ -1689,8 +1690,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     });
   }
 
+  interface PreparedTaskDispatch {
+    session: Session;
+    messageStartIndex: number;
+    startTimestamp: string;
+    updates: TaskLaunchFields;
+  }
+
   // Preparation may materialize configuration; never run it under admission locks.
-  async function prepareTaskDispatch(sessionId: SessionID, params: RouteParams) {
+  async function prepareTaskDispatch(
+    sessionId: SessionID,
+    params: RouteParams
+  ): Promise<PreparedTaskDispatch> {
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing tenant context for dispatch preparation');
     const {
@@ -1726,12 +1737,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       config.execution?.executor_command_template ? 'templated' : 'local'
     );
 
-    const updates: Partial<Task> = {
+    const updates: TaskLaunchFields = {
       ...launchState,
       ...(launchState.executor_mode
         ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
         : {}),
-      queue_position: undefined,
       message_range: {
         start_index: messageStartIndex,
         end_index: messageStartIndex + 1,
@@ -1750,14 +1760,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    * spawnTaskExecutor — shared post-commit launch path. Claims pending work,
    * or consumes the fresh prompt admission's already-committed dispatch claim.
    *
-   * Both POST /sessions/:id/prompt's immediate queue-head attempt and the
-   * queued-task drainer call this helper. Centralising the transition
-   * guarantees that:
+   * Both POST /sessions/:id/prompt and the queued-task drainer call this
+   * helper. Sharing preparation and post-commit launch guarantees that:
    *
    *   - `message_range.start_index`, `git_state.{ref,sha}_at_start`, and
-   *     `started_at` are recomputed against fresh state right before the
-   *     executor is spawned (sentinels on the stored row are only ever
-   *     visible while `status='queued'`).
+   *     `started_at` are prepared before the durable dispatch decision, then
+   *     consumed by its winner (queued/created rows retain sentinels until claimed).
    *   - The initial user-message row is written by the daemon synchronously,
    *     before the executor process is forked. Without this, any crash
    *     during executor startup loses the prompt from the chat transcript
@@ -1771,8 +1779,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *     chat surfaces *why* the assistant didn't respond, instead of silently
    *     leaving a ghost task in FAILED with no transcript trace.
    *
-   * The session.tasks list is appended here too, so callers don't have to
-   * remember to do it themselves.
+   * Both repository admission paths append session.tasks atomically before
+   * entering this post-commit launch path.
    */
   async function spawnTaskExecutor(
     task: Task,
@@ -1781,11 +1789,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       stream?: boolean;
       messageSource?: MessageSource;
       stableInitialMessageId?: MessageID;
-      /** Only the fresh admission winner may bypass the second dispatch claim. */
-      admittedLaunch?: Awaited<ReturnType<typeof prepareTaskDispatch>>;
+      /** Prepared metadata alone is not ownership: name the fresh admission winner. */
+      dispatch?:
+        | { kind: 'claim' }
+        | { kind: 'admitted'; taskId: Task['task_id']; preparation: PreparedTaskDispatch };
     },
     params: RouteParams
   ): Promise<Task> {
+    const admittedLaunch = options.dispatch?.kind === 'admitted' ? options.dispatch : undefined;
     const tenantId = getCurrentTenantId();
     if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
     const stableInitialMessageId = stableInitialMessageIdForTask(
@@ -1802,10 +1813,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // deterministic projection repair. Do not make that reconciliation depend
     // on mutable launch-time state (tool enablement, preset validity, or user
     // defaults): no new executor launch will occur on this path.
-    if (
-      !options.admittedLaunch &&
-      shouldReconcileStableInitialMessage(task, stableInitialMessageId)
-    ) {
+    if (!admittedLaunch && shouldReconcileStableInitialMessage(task, stableInitialMessageId)) {
       await reconcileStableInitialUserMessage(task, params, stableInitialMessageId, {
         messageSource: runtimeMessageSource,
       });
@@ -1818,18 +1826,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // authorize consuming somebody else's provider credential.
     assertTaskExecutorPrincipal(task, params);
 
-    const prepared = options.admittedLaunch ?? (await prepareTaskDispatch(task.session_id, params));
+    const prepared =
+      admittedLaunch?.preparation ?? (await prepareTaskDispatch(task.session_id, params));
     const { session, messageStartIndex, startTimestamp } = prepared;
 
-    if (options.admittedLaunch && task.status !== TaskStatus.DISPATCHING) {
+    if (
+      admittedLaunch &&
+      (task.status !== TaskStatus.DISPATCHING || admittedLaunch.taskId !== task.task_id)
+    ) {
       throw new Error('Direct launch requires a freshly admitted dispatching task');
     }
-    if (!options.admittedLaunch && !isTaskPendingDispatch(task)) return task;
+    if (!admittedLaunch && !isTaskPendingDispatch(task)) return task;
 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = options.admittedLaunch
+    const dispatchClaim = admittedLaunch
       ? { outcome: 'claimed' as const, task }
       : await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
           await lockTenantAuthorizationFence(tenantDb, params);
@@ -1869,7 +1881,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return dispatchClaim.task;
     }
     const updatedTask = dispatchClaim.task;
-    if (options.admittedLaunch) recordDispatchClaim(getDaemonMetrics(app), dispatchClaim);
+    if (admittedLaunch) recordDispatchClaim(getDaemonMetrics(app), dispatchClaim);
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1890,19 +1902,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       });
     }
 
-    // Re-apply the Session projection through Feathers so hooks/realtime see
-    // the transition. TaskRepository.claimDispatchAndProjectSession already
-    // committed the same projection atomically with the Task fence; this
-    // service patch is no longer correctness-critical on SQLite and is
-    // intentionally idempotent.
-    //
-    // The session-status flip used to fall out of `TasksService.create` when
-    // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch the task here, which
-    // `TasksService.patch` does NOT mirror onto the session. Without this
-    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
-    // causing the queue gate in the prompt route to wave subsequent prompts
-    // through instead of queuing them.
+    // Both admission paths have committed the Session projection. Re-apply
+    // status through Feathers for existing hooks/realtime, but never overwrite
+    // its authoritative task list from a preflight snapshot.
     await runWithTenantDatabaseScope(db, tenantId, () =>
       app.service('sessions').patch(
         task.session_id,
@@ -2305,7 +2307,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 stream: data.stream !== false,
                 messageSource,
                 ...(task.status === TaskStatus.DISPATCHING && preparedLaunch
-                  ? { admittedLaunch: preparedLaunch }
+                  ? {
+                      dispatch: {
+                        kind: 'admitted' as const,
+                        taskId: task.task_id,
+                        preparation: preparedLaunch,
+                      },
+                    }
                   : {}),
                 ...(data.idempotencyTaskId
                   ? { stableInitialMessageId: data.idempotencyTaskId as MessageID }
