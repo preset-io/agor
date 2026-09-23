@@ -21,6 +21,7 @@ import {
   jitterDelay,
 } from '@agor/core/coordination';
 import {
+  assertTenantExecutionAdmission,
   BranchRepository,
   DiscordMessageDeliveryRepository,
   GatewayChannelRepository,
@@ -36,21 +37,26 @@ import {
   isDatabaseUniqueConstraintError,
   isMCPSlackConnectCardEnabled,
   isPostgresDatabase,
+  isPostgresDatabaseHandle,
   MCPServerRepository,
   type MCPSlackConnectDueCursor,
   MessagesRepository,
+  readTenantRestrictionGeneration,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
   shortId,
   TaskRepository,
+  TenantRestrictedError,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
+  tenantRestrictionGenerationMatches,
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
@@ -113,6 +119,7 @@ import type {
   ThreadSessionMap,
   User,
   UserID,
+  WidgetMessageMetadata,
 } from '@agor/core/types';
 import {
   DEFAULT_DISCORD_CATCH_UP,
@@ -2257,6 +2264,26 @@ export class GatewayService {
     return isCurrentTenantEventAdmitted(this.db, Date.parse(occurredAt));
   }
 
+  /** Slack connect widgets use a DB epoch, never the daemon's requested_at. */
+  private async mcpSlackConnectWidgetAdmitted(widget: WidgetMessageMetadata): Promise<boolean> {
+    if (!isPostgresDatabaseHandle(this.db)) {
+      return this.mcpSlackProjectionAdmitted(widget.requested_at);
+    }
+    const tenantId = requireCurrentTenantId();
+    try {
+      return await runWithTenantDatabaseTransaction(this.db, tenantId, async (scopedDb) => {
+        await assertTenantExecutionAdmission(scopedDb);
+        return tenantRestrictionGenerationMatches(
+          widget.tenant_restriction_generation,
+          await readTenantRestrictionGeneration(scopedDb, tenantId)
+        );
+      });
+    } catch (error) {
+      if (error instanceof TenantRestrictedError) return false;
+      throw error;
+    }
+  }
+
   private mcpSlackRecoveryOccurrence(notice: MCPSlackRecoveryNotice): string {
     // Recovery tokens pin whole-second iat/exp. New notices retain the exact
     // event time separately so a fresh event in the release second is not
@@ -2936,7 +2963,7 @@ export class GatewayService {
     const widget = binding.widget;
     const slack = binding.slack;
     const delivery = widget?.slack_connect;
-    if (widget && !(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+    if (widget && !(await this.mcpSlackConnectWidgetAdmitted(widget))) {
       await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
       return;
     }
@@ -3218,7 +3245,7 @@ export class GatewayService {
     const blocks = mcpSlackConnectBlocks(copy, url);
     // Binding reads, OAuth minting and connector acquisition are all async.
     // A restriction installed during them must still stop the actual write.
-    if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+    if (!(await this.mcpSlackConnectWidgetAdmitted(widget))) {
       claimRef.claimId = undefined;
       await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
       return;
@@ -3242,7 +3269,7 @@ export class GatewayService {
             text: mcpSlackConnectDuplicateCardText(binding.params?.serverName ?? 'this MCP server'),
           }),
       });
-      if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+      if (!(await this.mcpSlackConnectWidgetAdmitted(widget))) {
         claimRef.claimId = undefined;
         await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
         return;
@@ -3277,7 +3304,7 @@ export class GatewayService {
       // holds it.
       claimRef.claimId = undefined;
       if (!settled.changed) {
-        if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+        if (!(await this.mcpSlackConnectWidgetAdmitted(widget))) {
           await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
           return;
         }
@@ -3310,7 +3337,7 @@ export class GatewayService {
       this.mcpSlackConnectRetryTimers.cancel(widgetId);
     } catch {
       claimRef.claimId = undefined;
-      if (!(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+      if (!(await this.mcpSlackConnectWidgetAdmitted(widget))) {
         await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
         return;
       }
@@ -3338,12 +3365,8 @@ export class GatewayService {
   ): void {
     const tenantId = requireCurrentTenantId();
     void runWithTenantContext(tenantId, async () => {
-      if (!(await this.mcpSlackProjectionAdmitted(occurredAt))) {
-        await this.retireSuspendedMcpSlackConnect(widgetId, occurredAt);
-        return;
-      }
       const widget = (await this.messagesRepo.findById(widgetId))?.metadata?.widget;
-      if (widget && !(await this.mcpSlackProjectionAdmitted(widget.requested_at))) {
+      if (widget && !(await this.mcpSlackConnectWidgetAdmitted(widget))) {
         await this.retireSuspendedMcpSlackConnect(widgetId, widget.requested_at);
         return;
       }

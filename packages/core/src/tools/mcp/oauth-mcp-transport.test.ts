@@ -11,26 +11,39 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MCPOAuthClientRegistrationID, MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
-vi.mock('../../utils/safe-outbound-fetch', () => ({
-  assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
-    const url = new URL(input);
-    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-    if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
-      throw new Error('OAuth endpoints require HTTPS');
+vi.mock('../../utils/safe-outbound-fetch', () => {
+  class OutboundPreDispatchAuthorityError extends Error {
+    constructor(readonly authorityCause: unknown) {
+      super('Outbound request authority changed before dispatch');
     }
-    return url;
-  },
-  safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
-    const {
-      timeoutMs: _timeout,
-      maxRedirects: _max,
-      maxResponseBytes: _bytes,
-      allowLocalhostHttp: _local,
-      ...init
-    } = options;
-    return globalThis.fetch(input, init as RequestInit);
-  }),
-}));
+  }
+  return {
+    OutboundPreDispatchAuthorityError,
+    assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
+      const url = new URL(input);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
+        throw new Error('OAuth endpoints require HTTPS');
+      }
+      return url;
+    },
+    safeOutboundFetch: vi.fn(async (input: string | URL, options: Record<string, unknown> = {}) => {
+      const {
+        timeoutMs: _timeout,
+        maxRedirects: _max,
+        maxResponseBytes: _bytes,
+        allowLocalhostHttp: _local,
+        ...init
+      } = options;
+      try {
+        await (options.assertCurrent as (() => Promise<void>) | undefined)?.();
+      } catch (error) {
+        throw new OutboundPreDispatchAuthorityError(error);
+      }
+      return globalThis.fetch(input, init as RequestInit);
+    }),
+  };
+});
 
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { MCPOAuthDynamicClientRegistrationResolver } from './oauth-mcp-transport';
@@ -324,6 +337,21 @@ describe('completeMCPOAuthFlow token exchange', () => {
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(OAuthCodeExchangeError);
     expect(failure).toMatchObject({ ambiguous: false, failureCode: 'provider_rejected' });
+  });
+
+  it('rejects a revoked callback before token dispatch without calling it ambiguous', async () => {
+    const dispatched = vi.fn();
+    globalThis.fetch = dispatched as unknown as typeof fetch;
+    const revoked = new Error('callback authority revoked');
+    await expect(
+      completeMCPOAuthFlow(context, 'code', 'state', {
+        cacheToken: false,
+        assertProviderAuthority: async () => {
+          throw revoked;
+        },
+      })
+    ).rejects.toBe(revoked);
+    expect(dispatched).not.toHaveBeenCalled();
   });
 
   it.each(['invalid_client', 'unauthorized_client'] as const)(

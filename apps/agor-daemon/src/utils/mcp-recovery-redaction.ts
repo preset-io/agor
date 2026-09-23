@@ -52,7 +52,17 @@ export function redactMcpRecoveryTopology(task: Task): Task {
  */
 export function stripWidgetSlackConnectDelivery(message: Message): Message {
   const widget = message.metadata?.widget;
-  if (!widget?.slack_connect && !widget?.slack_connect_due_at) return message;
-  const { slack_connect: _slackConnect, slack_connect_due_at: _dueAt, ...rest } = widget;
+  if (
+    !widget?.slack_connect &&
+    !widget?.slack_connect_due_at &&
+    widget?.tenant_restriction_generation === undefined
+  )
+    return message;
+  const {
+    slack_connect: _slackConnect,
+    slack_connect_due_at: _dueAt,
+    tenant_restriction_generation: _restrictionGeneration,
+    ...rest
+  } = widget;
   return { ...message, metadata: { ...message.metadata, widget: rest } };
 }

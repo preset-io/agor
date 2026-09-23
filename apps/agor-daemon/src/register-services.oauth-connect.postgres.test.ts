@@ -14,6 +14,7 @@ import {
   type RawDatabase,
   RepoRepository,
   readTenantExecutionBoundary,
+  readTenantRestrictionGeneration,
   runMigrations,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -34,11 +35,67 @@ import { type RegisterServicesContext, registerMCPServices } from './register-se
 import { issueMCPOAuthConnectLink } from './services/mcp-oauth-connect-delivery.js';
 
 const providerMock = vi.hoisted(() => ({
+  realStart: false,
+  onMetadata: undefined as (() => Promise<void>) | undefined,
+  dcrPosts: 0,
   onExchange: undefined as (() => Promise<void>) | undefined,
   onStart: undefined as (() => Promise<void>) | undefined,
   exchanges: 0,
   startedFlows: 0,
 }));
+vi.mock('@agor/core/utils/safe-outbound-fetch', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@agor/core/utils/safe-outbound-fetch')>();
+  return {
+    ...original,
+    safeOutboundFetch: async (
+      url: string | URL,
+      options: Parameters<typeof original.safeOutboundFetch>[1]
+    ) => {
+      if (!providerMock.realStart) return original.safeOutboundFetch(url, options);
+      try {
+        await options?.assertCurrent?.();
+      } catch (error) {
+        throw new original.OutboundPreDispatchAuthorityError(error);
+      }
+      const target = String(url);
+      if (options?.method === 'POST') {
+        providerMock.dcrPosts += 1;
+        const request = JSON.parse(String(options.body)) as { redirect_uris: string[] };
+        return new Response(
+          JSON.stringify({ client_id: 'r10-dcr-client', redirect_uris: request.redirect_uris }),
+          {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          }
+        );
+      }
+      if (target.includes('oauth-protected-resource')) {
+        return new Response(
+          JSON.stringify({
+            resource: 'https://oauth.example.test/saved/mcp',
+            authorization_servers: ['https://oauth.example.test'],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (target.includes('oauth-authorization-server')) {
+        await providerMock.onMetadata?.();
+        return new Response(
+          JSON.stringify({
+            issuer: 'https://oauth.example.test',
+            authorization_endpoint: 'https://oauth.example.test/authorize',
+            token_endpoint: 'https://oauth.example.test/token',
+            registration_endpoint: 'https://oauth.example.test/register',
+            code_challenge_methods_supported: ['S256'],
+            authorization_response_iss_parameter_supported: true,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      throw new Error(`Unexpected mocked provider URL: ${target}`);
+    },
+  };
+});
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
     await importOriginal<typeof import('@agor/core/tools/mcp/oauth-mcp-transport')>();
@@ -56,6 +113,9 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
       options: { resourceUri: string; compatibilityMode: 'strict' }
     ) => {
       providerMock.startedFlows += 1;
+      if (providerMock.realStart) {
+        return original.startMCPOAuthFlow(_challenge, clientId, redirectUri, options);
+      }
       await providerMock.onStart?.();
       const state = randomUUID();
       return {
@@ -133,7 +193,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         allowSuperadmin: false,
         requireAuth: async (context) => context,
         deployment: {} as RegisterServicesContext['deployment'],
-        mcpOAuthCallbackUrl: 'http://127.0.0.1:3030/oauth/callback',
+        mcpOAuthCallbackUrl: 'https://agor.example.test/oauth/callback',
         mcpOAuthFetch: async () => {
           providerRequests.push('/saved/mcp');
           await probeHold?.();
@@ -153,7 +213,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       else process.env.AGOR_MASTER_SECRET = priorSecret;
     });
 
-    async function seed(tenantId: string) {
+    async function seed(tenantId: string, dcr = false) {
       return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const user = await new UsersRepository(scoped).create({
           email: `${randomUUID()}@example.test`,
@@ -208,7 +268,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           headers: { 'X-Test': 'true' },
           scope: 'global',
           owner_user_id: user.user_id as UserID,
-          auth: { type: 'oauth', oauth_client_id: 'r9-client' },
+          auth: dcr ? { type: 'oauth' } : { type: 'oauth', oauth_client_id: 'r9-client' },
         });
         const taskId = generateId();
         await new TaskRepository(scoped).create({
@@ -254,6 +314,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               schema_version: 1,
               status: 'pending',
               requested_at: new Date().toISOString(),
+              tenant_restriction_generation: await readTenantRestrictionGeneration(
+                scoped,
+                tenantId
+              ),
               auto_resume: true,
               params: {
                 mcpServerId: server.mcp_server_id,
@@ -327,9 +391,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const retired = await seed(a);
       const neighbor = await seed(b);
       await suspendAndReactivate(a);
-      // Pin a same-second millisecond boundary in the owned test database.
-      // Production writes the timestamp; controlling only this fixture's
-      // clock makes both sides of the strict comparison deterministic.
+      // Pin a same-second cutoff in the owned test DB. The old widget is then
+      // deliberately given a fast daemon clock; its DB epoch must still lose.
       const boundary = await runWithTenantDatabaseScope(db, a, async (scoped) => {
         await executeRaw(
           scoped,
@@ -345,13 +408,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const cutoff = boundary.resumeAfter!;
         expect(await isCurrentTenantEventAdmitted(scoped, cutoff)).toBe(false);
         expect(await isCurrentTenantEventAdmitted(scoped, cutoff + 1)).toBe(true);
-        // Equality is stale even when the link's iat is rounded to the same
-        // whole second. This is an old record with no repair-sweep visit.
+        // A five-second-ahead daemon makes this old widget appear newer than
+        // the DB cutoff. Generation, not requested_at, remains authoritative.
         await new MessagesRepository(scoped).mutateMetadataLocked(
           unvisited.widgetId,
           (metadata) => ({
             ...metadata,
-            widget: { ...metadata!.widget!, requested_at: new Date(cutoff).toISOString() },
+            widget: { ...metadata!.widget!, requested_at: new Date(cutoff + 5_000).toISOString() },
           })
         );
       });
@@ -384,23 +447,18 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
       }
       expect(providerRequests).toHaveLength(beforeOldRedemption);
-      while (Date.now() <= boundary.resumeAfter!)
-        await new Promise((resolve) => setTimeout(resolve, 1));
       const fresh = await seed(a);
-      // Unlike token iat, the widget timestamp retains milliseconds; a
-      // fresh event one millisecond after release in that SAME second wins.
+      // Slow daemon clocks are harmless too: a fresh widget minted under the
+      // new DB epoch wins even with a timestamp before the release cutoff.
       await runWithTenantDatabaseScope(db, a, async (scoped) => {
         await new MessagesRepository(scoped).mutateMetadataLocked(fresh.widgetId, (metadata) => ({
           ...metadata,
           widget: {
             ...metadata!.widget!,
-            requested_at: new Date(boundary.resumeAfter! + 1).toISOString(),
+            requested_at: new Date(boundary.resumeAfter! - 5_000).toISOString(),
           },
         }));
       });
-      expect(Math.floor((boundary.resumeAfter! + 1) / 1_000)).toBe(
-        Math.floor(boundary.resumeAfter! / 1_000)
-      );
       await expect(
         app.service('mcp-oauth-connect').create({ token: fresh.token }, fresh.params)
       ).resolves.toMatchObject({ state: 'connect_required' });
@@ -469,6 +527,76 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(
         app.service('mcp-oauth-connect').create({ token: seeded.token }, seeded.params)
       ).rejects.toMatchObject({ code: 403 });
+    });
+
+    it('does not invent freshness for legacy unstamped widgets after restriction history', async () => {
+      const tenantId = `r10-legacy-${randomUUID()}`;
+      const old = await seed(tenantId);
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await new MessagesRepository(scoped).mutateMetadataLocked(old.widgetId, (metadata) => {
+          const { tenant_restriction_generation: _generation, ...widget } = metadata!.widget!;
+          return { ...metadata, widget };
+        });
+      });
+      await expect(
+        app.service('mcp-oauth-connect').create({ token: old.token }, old.params)
+      ).resolves.toMatchObject({ state: 'connect_required' });
+      await suspendAndReactivate(tenantId);
+      await expect(
+        app.service('mcp-oauth-connect').create({ token: old.token }, old.params)
+      ).rejects.toMatchObject({ code: 403 });
+    });
+
+    it('fences the real inner metadata GET to DCR POST boundary across a short cycle', async () => {
+      const tenantId = `r10-dcr-${randomUUID()}`;
+      const old = await seed(tenantId, true);
+      let metadataEntered!: () => void;
+      let releaseMetadata!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        metadataEntered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        releaseMetadata = resolve;
+      });
+      providerMock.realStart = true;
+      providerMock.dcrPosts = 0;
+      providerMock.onMetadata = () => {
+        metadataEntered();
+        return held;
+      };
+      try {
+        const start = app
+          .service('mcp-servers/oauth-start')
+          .create({ connect_token: old.token }, old.params) as Promise<{ success: boolean }>;
+        await entered;
+        await suspendAndReactivate(tenantId);
+        releaseMetadata();
+        expect((await start).success).toBe(false);
+        expect(providerMock.dcrPosts).toBe(0);
+        await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+          expect(
+            (await new MessagesRepository(scoped).findById(old.widgetId))?.metadata?.widget
+              ?.slack_connect?.oauth_failed_at
+          ).toBeDefined();
+        });
+        const fresh = await seed(tenantId, true);
+        providerMock.onMetadata = undefined;
+        const result = (await app
+          .service('mcp-servers/oauth-start')
+          .create({ connect_token: fresh.token }, fresh.params)) as { success: boolean };
+        expect(result).toMatchObject({ success: true });
+        expect(providerMock.dcrPosts).toBe(1);
+        const neighbor = await seed(`r10-neighbor-${randomUUID()}`);
+        const configured = (await app
+          .service('mcp-servers/oauth-start')
+          .create({ connect_token: neighbor.token }, neighbor.params)) as { success: boolean };
+        expect(configured.success).toBe(true);
+        expect(providerMock.dcrPosts).toBe(1);
+      } finally {
+        releaseMetadata();
+        providerMock.realStart = false;
+        providerMock.onMetadata = undefined;
+      }
     });
 
     it('does not advance from an in-flight provider probe after a short suspend/release', async () => {

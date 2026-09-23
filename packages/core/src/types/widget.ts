@@ -80,6 +80,8 @@ export interface WidgetMessageMetadata<
   status: WidgetStatus;
   /** ISO 8601 timestamp the agent requested the widget. */
   requested_at: string;
+  /** Internal restriction epoch captured under the tenant fence at Slack OAuth mint. */
+  tenant_restriction_generation?: string | null;
   /** ISO 8601 timestamp of submit/dismiss/short-circuit. Unset while pending. */
   resolved_at?: string;
   /**

@@ -15,16 +15,20 @@ import {
 } from './tenant-portability-manifest';
 import {
   applyTenantRestrictionIntent,
+  assertTenantExecutionAdmission,
   assertTenantUnrestricted,
   readTenantExecutionBoundary,
+  readTenantRestrictionGeneration,
   readTenantRestrictionIntents,
   TenantRestrictedError,
   TenantRestrictionDataError,
+  tenantRestrictionGenerationMatches,
 } from './tenant-restriction';
 import {
   createTenantScopedDatabaseProxy,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
 } from './tenant-scope';
 import { acquireTenantWriteGate, readTenantWriteGate } from './tenant-write-gate';
 
@@ -75,6 +79,68 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     );
     await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
     await expect(assertTenantUnrestricted(db, tenant)).resolves.toBeUndefined();
+  });
+
+  it('binds minted work to a DB restriction epoch and orders a concurrent transition', async () => {
+    const tenant = `restriction-generation-${generateId()}`;
+    const guarded = createTenantScopedDatabaseProxy(db, {
+      requireScope: true,
+      label: 'generation',
+    });
+    let releaseMint!: () => void;
+    let mintHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      mintHeld = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseMint = resolve;
+    });
+    const minted = runWithTenantDatabaseTransaction(guarded, tenant, async (scoped) => {
+      await assertTenantExecutionAdmission(scoped);
+      const marker = await readTenantRestrictionGeneration(scoped, tenant);
+      expect(marker).toBeNull();
+      mintHeld();
+      await release;
+      return marker;
+    });
+    await held;
+    const transition = applyTenantRestrictionIntent(db, tenant, command());
+    // The transition cannot commit between a fenced generation read and its
+    // corresponding widget insert/transaction commit.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      await runWithTenantDatabaseScope(guarded, tenant, (scoped) =>
+        readTenantRestrictionGeneration(scoped, tenant)
+      )
+    ).toBeNull();
+    releaseMint();
+    const oldMarker = await minted;
+    await transition;
+    await applyTenantRestrictionIntent(
+      db,
+      tenant,
+      command({
+        action: 'prepare_release',
+        operationId: 'release-two',
+        revision: 2,
+      })
+    );
+    await applyTenantRestrictionIntent(
+      db,
+      tenant,
+      command({
+        action: 'activate',
+        operationId: 'release-two',
+        revision: 2,
+      })
+    );
+    const newMarker = await runWithTenantDatabaseScope(guarded, tenant, (scoped) =>
+      readTenantRestrictionGeneration(scoped, tenant)
+    );
+    expect(newMarker).toMatch(/^[a-f0-9]{64}$/);
+    expect(tenantRestrictionGenerationMatches(oldMarker, newMarker)).toBe(false);
+    expect(tenantRestrictionGenerationMatches(undefined, newMarker)).toBe(false);
+    expect(tenantRestrictionGenerationMatches(newMarker, newMarker)).toBe(true);
   });
 
   it('persists through connection replacement; prepares closed, retains release watermark and rejects stale replay', async () => {

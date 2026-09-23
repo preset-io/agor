@@ -2869,7 +2869,9 @@ describe('SQLite saved-row OAuth authority', () => {
           harness.user.user_id as UserID,
           harness.server.mcp_server_id as MCPServerID
         );
-        if (committed && lookupCalls === 4) {
+        // The provider-dispatch fence adds one pre-exchange authority read.
+        // Keep the injected failure on the first post-commit hint lookup.
+        if (committed && lookupCalls === 5) {
           throw new Error('SECRET_POST_COMMIT_LOOKUP_FAILURE');
         }
         return originalFindById.call(this, id);
@@ -2889,7 +2891,7 @@ describe('SQLite saved-row OAuth authority', () => {
           '[MCP Runtime] event=hint_failed code=oauth_authority_changed'
         )
       );
-      expect(lookupCalls).toBe(4);
+      expect(lookupCalls).toBe(5);
       expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET_POST_COMMIT_LOOKUP_FAILURE');
     } finally {
       lookup.mockRestore();

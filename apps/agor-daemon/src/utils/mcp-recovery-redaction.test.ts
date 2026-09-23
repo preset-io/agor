@@ -146,4 +146,20 @@ describe('stripWidgetSlackConnectDelivery', () => {
       message_id: 'plain',
     });
   });
+
+  it('hides a DB restriction generation even before a Slack delivery exists', () => {
+    const message = {
+      message_id: 'widget-generation',
+      metadata: {
+        widget: {
+          widget_type: 'oauth',
+          status: 'pending',
+          tenant_restriction_generation: 'internal-epoch',
+        },
+      },
+    } as unknown as Message;
+    expect(
+      stripWidgetSlackConnectDelivery(message).metadata?.widget?.tenant_restriction_generation
+    ).toBeUndefined();
+  });
 });

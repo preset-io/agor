@@ -6,6 +6,7 @@
  * nobody: the application database role is a trusted process boundary, not an
  * operator credential. Do not call it from tenant-controlled request parameters.
  */
+import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import {
   isTenantRestrictionClosed,
@@ -217,6 +218,44 @@ export async function readTenantRestrictionIntents(
       )
     ).map(parseRow);
   });
+}
+
+/**
+ * Durable restriction epoch for work minted under the tenant execution fence.
+ * `null` means no restriction has ever been recorded. A later transition
+ * changes the revision/phase tuple even when DB and daemon clocks disagree or
+ * two transitions share the same timestamp. Callers must hold the fence while
+ * comparing this with a persisted work marker.
+ */
+export async function readTenantRestrictionGeneration(
+  db: Database,
+  tenantId: string
+): Promise<string | null> {
+  const records = await readTenantRestrictionIntents(db, tenantId);
+  if (records.length === 0) return null;
+  return createHash('sha256')
+    .update(
+      JSON.stringify(
+        records.map((record) => [
+          record.version,
+          record.controllerId,
+          record.placementId,
+          record.operationId,
+          record.revision,
+          record.phase,
+        ])
+      )
+    )
+    .digest('hex');
+}
+
+/** An unstamped legacy widget is admissible only before any restriction history. */
+export function tenantRestrictionGenerationMatches(
+  widgetGeneration: string | null | undefined,
+  currentGeneration: string | null
+): boolean {
+  if (widgetGeneration === undefined) return currentGeneration === null;
+  return widgetGeneration === currentGeneration;
 }
 
 /**

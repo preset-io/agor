@@ -34,6 +34,7 @@ import {
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  type Database,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
   enqueueAfterTenantDatabaseCommit,
@@ -52,6 +53,7 @@ import {
   MessagesRepository,
   mcpServers,
   RepoRepository,
+  readTenantRestrictionGeneration,
   runWithoutTenantDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -68,6 +70,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
+  tenantRestrictionGenerationMatches,
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -150,7 +153,6 @@ import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
-import { isCurrentTenantEventAdmitted } from './auth/tenant-access.js';
 import {
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
@@ -407,9 +409,20 @@ import { classifyExecutorExit } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
-/**
- * Interface for dependencies needed by service registration.
- */
+/** Compare only DB-fenced restriction epochs; daemon/request wall clocks are not authority. */
+async function slackConnectGenerationMatchesCurrent(
+  db: Database,
+  tenantId: string,
+  generation: string | null | undefined
+): Promise<boolean> {
+  if (!isPostgresDatabaseHandle(db)) return true;
+  return tenantRestrictionGenerationMatches(
+    generation,
+    await readTenantRestrictionGeneration(db, tenantId)
+  );
+}
+
+/** Interface for dependencies needed by service registration. */
 export interface RegisterServicesContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
@@ -437,7 +450,7 @@ export interface RegisterServicesContext {
   mcpOAuthFetch?: (
     input: string | URL | Request,
     init?: RequestInit,
-    assertCurrent?: () => void
+    assertCurrent?: () => void | Promise<void>
   ) => Promise<Response>;
 }
 
@@ -2056,9 +2069,9 @@ export async function registerMCPServices(
   const pinnedOAuthFetch = async (
     input: string | URL | Request,
     init: RequestInit = {},
-    assertCurrent?: () => void
+    assertCurrent?: () => void | Promise<void>
   ): Promise<Response> => {
-    assertCurrent?.();
+    await assertCurrent?.();
     const requestInput = input instanceof Request ? input : undefined;
     const target: string | URL = input instanceof Request ? input.url : input;
     const { signal: _signal, redirect: _redirect, ...safeInit } = init;
@@ -2581,6 +2594,7 @@ export async function registerMCPServices(
         // flow context. Daemon callers never read or populate its origin-only
         // bearer cache.
         cacheKey: opts.prefetchedAuthServerMetadata ? effectiveMcpUrl : undefined,
+        assertProviderAuthority: opts.assertStartAuthority,
         // Process-global DCR credentials are not a tenant/user/server namespace.
         // Daemon flows never share them, including in SQLite deployments.
         reuseDynamicClientRegistration: false,
@@ -3375,22 +3389,30 @@ export async function registerMCPServices(
         throw new Error('Slack MCP connect projection is disabled');
       }
       const sourceMessage = await new MessagesRepository(db).findById(connect.widget_id);
+      const sourceWidget = sourceMessage?.metadata?.widget;
       if (
-        !(await isCurrentTenantEventAdmitted(
-          db,
-          Date.parse(sourceMessage?.metadata?.widget?.requested_at ?? '')
-        ))
+        !sourceWidget ||
+        !(await runWithTenantDatabaseTransaction(db, tenantId, async (scopedDb) => {
+          await assertTenantExecutionAdmission(scopedDb);
+          return slackConnectGenerationMatchesCurrent(
+            scopedDb,
+            tenantId,
+            sourceWidget.tenant_restriction_generation
+          );
+        }))
       ) {
         throw new Error('Slack MCP connect request predates tenant resumption');
       }
       const fenced = await runWithTenantDatabaseTransaction(db, tenantId, async (scopedDb) => {
         // Serialize the short claim with a restriction transition. A callback
         // already in flight is checked again after provider exchange.
-        const boundary = await assertTenantExecutionAdmission(scopedDb);
-        const requestedAt = Date.parse(sourceMessage?.metadata?.widget?.requested_at ?? '');
+        await assertTenantExecutionAdmission(scopedDb);
         if (
-          !Number.isFinite(requestedAt) ||
-          (boundary.resumeAfter !== undefined && requestedAt <= boundary.resumeAfter)
+          !(await slackConnectGenerationMatchesCurrent(
+            scopedDb,
+            tenantId,
+            sourceWidget.tenant_restriction_generation
+          ))
         ) {
           throw new Error('Slack MCP connect request predates tenant resumption');
         }
@@ -3407,7 +3429,8 @@ export async function registerMCPServices(
             // channel, alignment, or server moved under this card, and a card
             // that may no longer offer a link may not complete one either.
             !current.binding_invalidated_at &&
-            widget.requested_at === sourceMessage?.metadata?.widget?.requested_at &&
+            widget.requested_at === sourceWidget.requested_at &&
+            widget.tenant_restriction_generation === sourceWidget.tenant_restriction_generation &&
             widget.status === 'pending' &&
             widget.widget_type === 'oauth' &&
             message.session_id === connect.session_id
@@ -3993,6 +4016,7 @@ export async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
           issuer,
+          assertProviderAuthority: () => assertPendingFlowStillAuthorized(pendingFlow!),
         });
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
@@ -4458,10 +4482,16 @@ export async function registerMCPServices(
    */
   async function probeMcpAuthViaReadOnlyToolCall(
     mcpUrl: string,
-    assertCurrent?: () => void
+    assertCurrent?: () => void,
+    assertProviderAuthority?: () => Promise<void>
   ): Promise<Response | null> {
-    try {
+    const assertDispatch = async () => {
       assertCurrent?.();
+      await assertProviderAuthority?.();
+      assertCurrent?.();
+    };
+    try {
+      await assertDispatch();
       const listResponse = await oauthFetch(
         mcpUrl,
         {
@@ -4470,21 +4500,21 @@ export async function registerMCPServices(
           body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
           signal: AbortSignal.timeout(15_000),
         },
-        assertCurrent
+        assertDispatch
       );
-      assertCurrent?.();
+      await assertDispatch();
       if (!listResponse.ok) return null;
 
       const listBody = (await listResponse.json()) as {
         result?: { tools?: Array<{ name?: string; annotations?: { readOnlyHint?: boolean } }> };
       };
-      assertCurrent?.();
+      await assertDispatch();
       const readOnlyTool = listBody.result?.tools?.find(
         (tool) => tool.annotations?.readOnlyHint === true && typeof tool.name === 'string'
       );
       if (!readOnlyTool?.name) return null;
 
-      assertCurrent?.();
+      await assertDispatch();
       const callResponse = await oauthFetch(
         mcpUrl,
         {
@@ -4498,14 +4528,14 @@ export async function registerMCPServices(
           }),
           signal: AbortSignal.timeout(15_000),
         },
-        assertCurrent
+        assertDispatch
       );
-      assertCurrent?.();
+      await assertDispatch();
       return callResponse.status === 401 ? callResponse : null;
     } catch (probeError) {
       // Do not downgrade an authority/deadline failure into "no fallback
       // challenge" and continue the browser flow.
-      assertCurrent?.();
+      await assertDispatch();
       externalFailure('OAuth Probe', 'discovery', probeError);
       return null;
     }
@@ -5279,12 +5309,20 @@ export async function registerMCPServices(
         const pending = options?.allowResolved
           ? readOAuthConnectWidget(message)
           : readPendingOAuthConnectWidget(message);
-        const requestedAt = Date.parse(pending?.widget.requested_at ?? '');
+        const generationCurrent = pending
+          ? await runWithTenantDatabaseTransaction(db, tenantId, async (scopedDb) => {
+              await assertTenantExecutionAdmission(scopedDb);
+              return slackConnectGenerationMatchesCurrent(
+                scopedDb,
+                tenantId,
+                pending.widget.tenant_restriction_generation
+              );
+            })
+          : false;
         if (
           !message ||
           !pending ||
-          !Number.isFinite(requestedAt) ||
-          !(await isCurrentTenantEventAdmitted(db, requestedAt)) ||
+          !generationCurrent ||
           message.session_id !== claims.session_id ||
           message.task_id !== claims.task_id ||
           pending.params.mcpServerId !== claims.mcp_server_id ||
@@ -5326,12 +5364,14 @@ export async function registerMCPServices(
             async (scopedDb) => {
               // The restriction fence precedes the message row lock, matching
               // suspension's lock order. A short suspend/release before this
-              // claim leaves a durable cutoff even if no repair sweep visited.
-              const boundary = await assertTenantExecutionAdmission(scopedDb);
-              const requestedAt = Date.parse(pending.widget.requested_at);
+              // claim advances the DB generation even without a repair sweep.
+              await assertTenantExecutionAdmission(scopedDb);
               if (
-                !Number.isFinite(requestedAt) ||
-                (boundary.resumeAfter !== undefined && requestedAt <= boundary.resumeAfter)
+                !(await slackConnectGenerationMatchesCurrent(
+                  scopedDb,
+                  tenantId,
+                  pending.widget.tenant_restriction_generation
+                ))
               ) {
                 throw new Error(genericFailure);
               }
@@ -5343,6 +5383,8 @@ export async function registerMCPServices(
                     !current ||
                     widget.status !== 'pending' ||
                     widget.requested_at !== pending.widget.requested_at ||
+                    widget.tenant_restriction_generation !==
+                      pending.widget.tenant_restriction_generation ||
                     !mcpOAuthConnectClaimsMatchDelivery(claims, current, tenantId) ||
                     current.token_consumed_at ||
                     new Date(current.expires_at).getTime() <= consumedAt.getTime()
@@ -5580,11 +5622,13 @@ export async function registerMCPServices(
           db,
           binding.claims.tid,
           async (scopedDb) => {
-            const boundary = await assertTenantExecutionAdmission(scopedDb);
-            const requestedAt = Date.parse(binding.widget.requested_at);
+            await assertTenantExecutionAdmission(scopedDb);
             if (
-              !Number.isFinite(requestedAt) ||
-              (boundary.resumeAfter !== undefined && requestedAt <= boundary.resumeAfter)
+              !(await slackConnectGenerationMatchesCurrent(
+                scopedDb,
+                binding.claims.tid,
+                binding.widget.tenant_restriction_generation
+              ))
             ) {
               throw new Conflict('This MCP connect action predates tenant resumption.');
             }
@@ -5596,6 +5640,8 @@ export async function registerMCPServices(
                   !current ||
                   widget.status !== 'pending' ||
                   widget.requested_at !== binding.widget.requested_at ||
+                  widget.tenant_restriction_generation !==
+                    binding.widget.tenant_restriction_generation ||
                   current.binding_invalidated_at ||
                   current.delivery_id !== binding.delivery.delivery_id ||
                   current.delivery_generation !== binding.delivery.delivery_generation ||
@@ -5627,10 +5673,16 @@ export async function registerMCPServices(
         run: () => Promise<T>
       ): Promise<T> => {
         // A short closed interval can fit entirely between two provider
-        // requests. Refresh the durable cutoff and delivery lease before each
+        // requests. Refresh the durable generation and delivery lease before each
         // outbound phase, not only on the ten-second renewal timer.
         if (connectBinding) await renewConnectStartLease();
         return runStartPhase(phase, run);
+      };
+      // Bind at invocation, not declaration: link consumption happens later in
+      // this request, after the provider helpers have been constructed.
+      const assertDurableProviderAuthority = async (): Promise<void> => {
+        if (slackRecoveryBinding) await renewSlackStartLease();
+        else if (connectBinding) await renewConnectStartLease();
       };
       /**
        * Record that this attempt's sign-in never opened.
@@ -5931,14 +5983,22 @@ export async function registerMCPServices(
               body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
               signal: AbortSignal.timeout(15_000),
             },
-            assertRequestAuthority
+            async () => {
+              assertRequestAuthority?.();
+              await assertDurableProviderAuthority?.();
+              assertRequestAuthority?.();
+            }
           )
         );
 
         if (probeResponse.status !== 401) {
           const fallbackProbe = await runProviderStartPhase('probe', () =>
             runWithinOAuthAuthority(assertRequestAuthority, () =>
-              probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl, assertRequestAuthority)
+              probeMcpAuthViaReadOnlyToolCall(
+                effectiveMcpUrl,
+                assertRequestAuthority,
+                assertDurableProviderAuthority
+              )
             )
           );
           if (fallbackProbe) {
@@ -5980,6 +6040,7 @@ export async function registerMCPServices(
               compatibilityMode,
               allowLocalhostHttp: !postgresOAuthDeployment,
               assertCurrent: assertRequestAuthority,
+              assertProviderAuthority: assertDurableProviderAuthority,
             })
           )
         );
@@ -6034,11 +6095,7 @@ export async function registerMCPServices(
               slackRecovery: slackRecoveryBinding?.oauthContext,
               slackConnect: connectBinding?.oauthContext,
               attemptId: reservedSlackAttemptId,
-              assertStartAuthority: slackRecoveryBinding
-                ? renewSlackStartLease
-                : connectBinding
-                  ? renewConnectStartLease
-                  : undefined,
+              assertStartAuthority: assertDurableProviderAuthority,
             })
           );
         } catch (err) {
@@ -6073,19 +6130,18 @@ export async function registerMCPServices(
             db,
             binding.claims.tid,
             async (scopedDb) => {
-              let boundary: { resumeAfter?: number } | null;
+              let admitted = false;
               try {
-                boundary = await assertTenantExecutionAdmission(scopedDb);
+                await assertTenantExecutionAdmission(scopedDb);
+                admitted = await slackConnectGenerationMatchesCurrent(
+                  scopedDb,
+                  binding.claims.tid,
+                  binding.widget.tenant_restriction_generation
+                );
               } catch (error) {
                 if (!(error instanceof TenantRestrictedError)) throw error;
-                boundary = null;
               }
-              const requestedAt = Date.parse(binding.widget.requested_at);
-              if (
-                !boundary ||
-                !Number.isFinite(requestedAt) ||
-                (boundary.resumeAfter !== undefined && requestedAt <= boundary.resumeAfter)
-              ) {
+              if (!admitted) {
                 return null;
               }
               return mutateSlackConnectDelivery(
@@ -6097,6 +6153,8 @@ export async function registerMCPServices(
                     !current ||
                     widget.status !== 'pending' ||
                     widget.requested_at !== binding.widget.requested_at ||
+                    widget.tenant_restriction_generation !==
+                      binding.widget.tenant_restriction_generation ||
                     current.binding_invalidated_at ||
                     current.delivery_id !== binding.delivery.delivery_id ||
                     current.delivery_generation !== binding.delivery.delivery_generation ||
@@ -6384,6 +6442,7 @@ export async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
           issuer,
+          assertProviderAuthority: () => assertPendingFlowStillAuthorized(pendingFlow!),
         });
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         const completedFlow = pendingFlow;
