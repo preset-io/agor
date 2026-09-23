@@ -859,6 +859,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     [updateCollapsedNode]
   );
 
+  const isPanelRowFailed = (session: Session) =>
+    isSessionFailed(session) && !isSessionExecuting(session);
+
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
     const isRemoteSurrogate = Boolean(session.remote_surrogate);
@@ -868,11 +871,20 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         border: 0,
         borderRadius: token.borderRadiusSM,
         paddingBlock: 0,
-        // A tight lead-in keeps the logo close to the chevron; the trailing mark keeps room.
+        // A tight lead-in keeps the logo close to the chevron; the trailing status mark
+        // gets more room so it sits comfortably inside a selected or failed fill.
         paddingInlineStart: token.paddingXXS,
-        paddingInlineEnd: token.paddingXS,
+        paddingInlineEnd: token.paddingSM,
         minHeight: panelRowHeight,
-        background: isSessionSelected ? token.colorFillSecondary : 'transparent',
+        // A failed session tints its whole row so it stands out; the icon keeps it non-color-only.
+        background: isPanelRowFailed(session)
+          ? isSessionSelected
+            ? // Hover is nearly identical to Bg in the light theme; Active reads as selected.
+              token.colorErrorBgActive
+            : token.colorErrorBg
+          : isSessionSelected
+            ? token.colorFillSecondary
+            : 'transparent',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'flex-start',
@@ -990,7 +1002,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   // Panel rows show the agent logo on every row, as one steady brand column.
   const renderAgentIcon = (session: Session) => {
-    if (isPanel) return <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} />;
+    if (isPanel) {
+      return <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} bordered={false} />;
+    }
     return isSessionExecuting(session) ? (
       <Spin size="small" />
     ) : (
@@ -1472,6 +1486,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const panelSectionHeaderStyle: React.CSSProperties | undefined = isPanel
     ? { paddingInline: 0 }
     : undefined;
+  // Section bodies nest one level under their header, with a guide under its chevron.
+  const panelSectionBodyGuide: React.CSSProperties | undefined = isPanel
+    ? {
+        marginInlineStart: token.controlHeightSM / 2,
+        paddingInlineStart: token.controlHeightSM / 2 - token.lineWidth,
+        borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+      }
+    : undefined;
   // The chevron slot supplies the one standard step before the title.
   const panelSectionIconStyle: React.CSSProperties | undefined = isPanel
     ? { marginInlineEnd: 0 }
@@ -1497,6 +1519,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       paddingInline: isPanel ? 0 : undefined,
       // Panel headers already separate the list; Collapse's body inset leaves a gap.
       paddingTop: isPanel ? 0 : undefined,
+      ...panelSectionBodyGuide,
     },
   };
   // Leave a few rows reachable when headers/other sections exceed a short
@@ -1845,6 +1868,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                       background: 'transparent',
                       paddingInline: isPanel ? 0 : undefined,
                       paddingTop: isPanel ? 0 : undefined,
+                      ...panelSectionBodyGuide,
                     },
                   },
                 },

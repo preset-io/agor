@@ -210,8 +210,9 @@ it('shows the agent logo on every row and hides only the implied spawn marker', 
   expect(titleLeft('Availability fixes')).toBeCloseTo(titleLeft('Independent availability'), 0);
 });
 
-it('uses one chevron size, color and column for section headers and tree parents', () => {
+it('nests rows one level inside their section with one chevron style', () => {
   mount();
+  const step = theme.getDesignToken(config).controlHeightSM;
 
   const headerChevron = document.querySelector('.ant-collapse-expand-icon svg')!;
   const treeChevron = screen
@@ -220,13 +221,26 @@ it('uses one chevron size, color and column for section headers and tree parents
   const header = headerChevron.getBoundingClientRect();
   const tree = treeChevron.getBoundingClientRect();
   expect(header.width).toBeCloseTo(tree.width, 1);
-  expect(header.left + header.width / 2).toBeCloseTo(tree.left + tree.width / 2, 0);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
-  // Section labels start where row content (the agent logo) starts.
-  expect(screen.getByText('Sessions').getBoundingClientRect().left).toBeCloseTo(
-    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left,
-    0
-  );
+  // Sections are containers: top-level rows sit exactly one indent step inside the header.
+  expect(tree.left + tree.width / 2 - (header.left + header.width / 2)).toBeCloseTo(step, 0);
+  expect(
+    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left -
+      screen.getByText('Sessions').getBoundingClientRect().left
+  ).toBeCloseTo(step, 0);
+
+  // A guide runs under the section chevron, and every nested level draws its own guide.
+  const body = treeChevron.closest('.ant-collapse-body')!;
+  expect(getComputedStyle(body).borderInlineStartWidth).not.toBe('0px');
+  const childUnit = row('Astra recheck — Abuse')
+    .closest('.ant-tree-treenode')!
+    .querySelector('.ant-tree-indent-unit')!;
+  const guide = getComputedStyle(childUnit, '::before');
+  expect(guide.display).not.toBe('none');
+  expect(guide.borderInlineEndWidth).not.toBe('0px');
+  // The guide sits under its parent's chevron, not beside it.
+  const unit = childUnit.getBoundingClientRect();
+  expect(unit.right - parseFloat(guide.insetInlineEnd)).toBeCloseTo(tree.left + tree.width / 2, 0);
   // Tree's own first-line switcher backing is replaced by the button's hover surface.
   const switcher = treeChevron.closest('.ant-tree-switcher')!;
   expect(getComputedStyle(switcher, '::before').display).toBe('none');
@@ -450,4 +464,65 @@ it('re-renders memoized rows when a context-only input changes', async () => {
   // A stale memoized row would still call the handler from the first render.
   expect(replacement).toHaveBeenCalledWith('abuse');
   expect(onOpenSessionSettings).not.toHaveBeenCalled();
+});
+
+it('tints failed rows, drops the logo outline, and gives the status mark trailing room', () => {
+  mount();
+  const token = theme.getDesignToken(config);
+  const probe = document.createElement('span');
+  document.body.append(probe);
+  const resolve = (value: string) => {
+    probe.style.color = value;
+    return getComputedStyle(probe).color;
+  };
+
+  // A failed session highlights its whole row and keeps the icon, so color isn't the only cue.
+  const failed = row('Execution security — implementation');
+  expect(getComputedStyle(failed).backgroundColor).toBe(resolve(token.colorErrorBg));
+  expect(within(failed).getByRole('img', { name: 'Latest task failed' })).toBeVisible();
+  expect(getComputedStyle(row('Astra recheck — Abuse')).backgroundColor).toBe(TRANSPARENT);
+
+  expect(getComputedStyle(row('Security agor').querySelector('.tool-icon')!).borderTopWidth).toBe(
+    '0px'
+  );
+
+  const style = getComputedStyle(row('Security agor'));
+  expect(parseFloat(style.paddingRight)).toBe(token.paddingSM);
+  expect(parseFloat(style.paddingLeft)).toBe(token.paddingXXS);
+  probe.remove();
+});
+
+it.each([
+  ['dark', theme.darkAlgorithm],
+  ['light', theme.defaultAlgorithm],
+] as const)('keeps a selected failed row visibly selected in the %s theme', (_, algorithm) => {
+  const themed = { algorithm, token: { motion: false } };
+  const ui = (selectedSessionId?: string) => (
+    <ConfigProvider theme={themed}>
+      <App>
+        <div style={{ width: 360 }}>
+          <BranchSessionSections
+            branch={branch}
+            sessions={sessions}
+            userById={new Map()}
+            selectedSessionId={selectedSessionId}
+            mode="panel"
+            client={null}
+          />
+        </div>
+      </App>
+    </ConfigProvider>
+  );
+  const background = () =>
+    getComputedStyle(row('Execution security — implementation')).backgroundColor;
+
+  const view = render(ui());
+  const unselected = background();
+  view.rerender(ui('exec-impl'));
+  const selected = background();
+
+  // Channel distance, so a one-unit token rounding difference doesn't count as "selected".
+  const channels = (value: string) => value.match(/\d+/g)!.slice(0, 3).map(Number);
+  const [a, b] = [channels(unselected), channels(selected)];
+  expect(Math.max(...a.map((v, i) => Math.abs(v - b[i]!)))).toBeGreaterThan(10);
 });
