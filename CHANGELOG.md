@@ -39,7 +39,7 @@ Release preparation includes merged changes from `v0.26.5` through `2c1b86ef`, p
 
 ### Fixes
 
-- **Opus 5.5 uses a compatible Claude runtime** — upgrades the pinned Claude Agent SDK to 0.3.280, which bundles Claude Code 2.1.280, resolving the older-runtime model rejection. Packaged installations must upgrade Agor and synchronize their managed integrations with `agor install --sync` before restarting; updating a global `claude` executable does not update Agor's runtime.
+- **Opus 5.5 uses a compatible Claude runtime** — upgrades the pinned Claude Agent SDK to 0.3.280, which bundles Claude Code 2.1.280, resolving the older-runtime model rejection. Packaged installations must upgrade Agor and synchronize their managed integrations with `agor install --sync` before restarting; updating a global `claude` executable does not update Agor's runtime. ([#2830](https://github.com/preset-io/agor/pull/2830))
 - **Older conversation text expands again** — restores **See more** for historical messages, bounds previews by characters or source lines, and stabilizes initial history hydration and explicit bottom scrolling. ([#2828](https://github.com/preset-io/agor/pull/2828))
 - **Session and board inventories do less work** — reuses configuration grant sets, enforces session recency, and skips optional inventory counts when they are not requested. ([#2829](https://github.com/preset-io/agor/pull/2829))
 
