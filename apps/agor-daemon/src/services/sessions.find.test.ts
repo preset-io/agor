@@ -17,12 +17,15 @@ import {
   generateId,
   RepoRepository,
   SessionRepository,
+  UsersRepository,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, feathers } from '@agor/core/feathers';
+import { sessionQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
 import { SessionsService } from './sessions';
 
 // The find() board_id path only touches the session repos built from `db`; the
@@ -44,7 +47,11 @@ async function createBoard(db: any): Promise<UUID> {
   return board.board_id as UUID;
 }
 
-async function createBranchOnBoard(db: any, boardId: UUID | null): Promise<UUID> {
+async function createBranchOnBoard(
+  db: any,
+  boardId: UUID | null,
+  createdBy = 'test-user' as UUID
+): Promise<UUID> {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
   const repo = await repoRepo.create({
@@ -65,7 +72,7 @@ async function createBranchOnBoard(db: any, boardId: UUID | null): Promise<UUID>
     path: '/tmp/test-repo',
     base_ref: 'main',
     new_branch: false,
-    created_by: 'test-user' as UUID,
+    created_by: createdBy,
     ...(boardId ? { board_id: boardId } : {}),
   });
   return branch.branch_id as UUID;
@@ -103,6 +110,90 @@ function orderedIds(result: Awaited<ReturnType<SessionsService['find']>>): strin
 }
 
 describe('SessionsService.find — board_id pushdown', () => {
+  dbTest(
+    'preserves no-count through transport validation and SQL authorization hooks',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        user_id: generateId(),
+        email: `count-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+      const hiddenBranch = await createBranchOnBoard(db, null);
+      const visibleIds = [
+        await createSession(db, visibleBranch),
+        await createSession(db, visibleBranch),
+      ];
+      await createSession(db, hiddenBranch);
+      const app = feathers<{ sessions: SessionsService }>();
+      app.use('sessions', createService(db));
+      app.service('sessions').hooks({
+        before: {
+          all: [typedValidateQuery(sessionQueryValidator)],
+          find: [scopeFindToAccessibleSessionsSql()],
+        },
+      });
+      for (const provider of ['socketio', 'rest']) {
+        const params = { provider, user, query: { $limit: 1, $sort: { updated_at: -1 } } };
+        const counted = await app.service('sessions').find(params);
+        expect(Array.isArray(counted)).toBe(false);
+        if (Array.isArray(counted)) throw new Error('Expected default pagination');
+        expect(counted.total).toBe(2);
+        expect(visibleIds).toContain(counted.data[0].session_id);
+        const spy = vi.spyOn(db, 'select');
+        try {
+          const uncounted = await app.service('sessions').find({
+            ...params,
+            query: {
+              ...params.query,
+              $count: provider === 'rest' ? 'false' : false,
+            },
+          });
+          expect(uncounted).toEqual(counted.data);
+          expect(spy.mock.calls.some(([columns]) => columns && 'count' in columns)).toBe(false);
+          expect(
+            await app.service('sessions').find({
+              ...params,
+              query: {
+                ...params.query,
+                branch_id: hiddenBranch,
+                $count: false,
+              },
+            })
+          ).toEqual([]);
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    }
+  );
+
+  dbTest(
+    'lets bounded consumers opt out of exact counts without changing default pagination',
+    async ({ db }) => {
+      const service = createService(db);
+      const board = await createBoard(db);
+      const branch = await createBranchOnBoard(db, board);
+      await createSession(db, branch);
+      await createSession(db, branch);
+      const query = { board_id: board, $limit: 1, $skip: 1, $sort: { updated_at: -1 } };
+      const counted = await service.find({ query });
+      expect(Array.isArray(counted)).toBe(false);
+      const uncounted = await service.find({ query: { ...query, $count: false } });
+      expect(uncounted).toEqual(Array.isArray(counted) ? counted : counted.data);
+      expect(await service.find({ query: { ...query, $count: false, $limit: 0 } })).toEqual([]);
+      await expect(service.find({ query: { ...query, $count: 'false' } })).rejects.toThrow(
+        '$count must be a boolean'
+      );
+      await expect(
+        service.find({ query: { ...query, $count: false, $limit: -1 } })
+      ).rejects.toThrow('non-negative integer');
+      await expect(
+        service.find({ query: { ...query, $count: false, $select: ['session_id'] } })
+      ).rejects.toThrow('SQL-paginated');
+    }
+  );
+
   dbTest('returns only sessions whose branch is on the requested board', async ({ db }) => {
     const service = createService(db);
 

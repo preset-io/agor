@@ -133,6 +133,8 @@ export const PAGINATION = {
  * need a complete Task transcript use the client's paginated `findAll()` loop.
  */
 export const MESSAGE_PAGINATION = {
+  /** Maximum task IDs in one session-scoped transcript query. */
+  MAX_TASK_IDS: 100,
   DEFAULT_LIMIT: 100,
   MAX_LIMIT: 1_000,
 } as const;

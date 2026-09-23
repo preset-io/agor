@@ -103,12 +103,45 @@ export class TenantPublicRoutingRepository {
   }
 }
 
+/**
+ * Why a tenant public link could not be resolved, as a stable code.
+ *
+ * Mirrors `PublicBaseUrlNotConfiguredError.code` (`config/config-manager.ts`),
+ * and for the same
+ * reason: these two were bare `new Error(...)`s, so the only thing that
+ * distinguished them was their message — which
+ * `context/guidelines/logging.md` forbids logging, and which a classifier
+ * therefore must not read. The live incident of 2026-09-16 was the second of
+ * them, and the lane reported it as `unexpected`.
+ */
+export class TenantPublicBaseUrlError extends Error {
+  constructor(
+    readonly code:
+      | 'TENANT_PUBLIC_BASE_URL_IDENTITY_REQUIRED'
+      | 'TENANT_PUBLIC_BASE_URL_DATABASE_REQUIRED',
+    message: string
+  ) {
+    super(message);
+    this.name = 'TenantPublicBaseUrlError';
+  }
+}
+
 /** No process cache: background work and every replica observe durable routing. */
 export async function getTenantPublicBaseUrl(db?: Database): Promise<string> {
   const tenantId = getCurrentTenantId();
-  if (!tenantId) throw new Error('Tenant public links require trusted tenant identity');
+  if (!tenantId) {
+    throw new TenantPublicBaseUrlError(
+      'TENANT_PUBLIC_BASE_URL_IDENTITY_REQUIRED',
+      'Tenant public links require trusted tenant identity'
+    );
+  }
   const database = db ?? getCurrentTenantDatabase();
-  if (!database) throw new Error('Tenant public links require a tenant database');
+  if (!database) {
+    throw new TenantPublicBaseUrlError(
+      'TENANT_PUBLIC_BASE_URL_DATABASE_REQUIRED',
+      'Tenant public links require a tenant database'
+    );
+  }
   return runWithTenantDatabaseScope(database, tenantId, async (scoped) => {
     const routing = await new TenantPublicRoutingRepository(scoped).find();
     // Existing entity projections represent unavailable links as null/empty.

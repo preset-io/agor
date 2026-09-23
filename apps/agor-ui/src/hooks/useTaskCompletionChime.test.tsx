@@ -80,7 +80,6 @@ function makeTask(overrides: Partial<Task> & Pick<Task, 'task_id' | 'status'>): 
     session_id: 'sess-1' as Task['session_id'],
     created_by: USER_ID,
     full_prompt: 'do the thing',
-    tool_use_count: 0,
     git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
     message_range: { start_index: 0, end_index: 0, start_timestamp: '0' },
     created_at: '0',

@@ -19,7 +19,11 @@ import type { Database } from '../client';
 import { select } from '../database-wrapper';
 import { boards, branches } from '../schema';
 import { BoardRepository } from './boards';
-import { boardCapabilityCondition, branchCapabilityCondition } from './branch-access';
+import {
+  boardCapabilityCondition,
+  branchCapabilityCondition,
+  inVisibleBranchSet,
+} from './branch-access';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { GroupRepository } from './groups';
@@ -116,8 +120,17 @@ export async function exerciseCapabilityPredicateParity(db: Database) {
           boardPoint.capabilities.includes(capability)
         );
       }
+      const inventory = await select(db, { id: branches.branch_id })
+        .from(branches)
+        .where(inVisibleBranchSet(db, userId, branches.branch_id))
+        .all();
       for (const branchId of branchIds) {
         const point = await policyRepo.resolveBranchAccess(branchId, userId);
+        expect(
+          inventory.some((row: { id: BranchID }) => row.id === branchId),
+          `${label}: inventory branch.view`
+        ).toBe(point.capabilities.includes('branch.view'));
+
         const row = await select(
           db,
           Object.fromEntries(

@@ -624,6 +624,7 @@ export function useAgorData(
                     query: {
                       archived: false,
                       $limit: RECENT_SESSIONS_LIMIT,
+                      $count: false,
                       $sort: { updated_at: -1 },
                     },
                   })

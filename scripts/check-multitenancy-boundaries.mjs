@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const ROOT = process.cwd();
 
@@ -238,47 +238,183 @@ const checks = [
   },
 ];
 
+/**
+ * The unclassified-service baseline, checked by NAME rather than by count.
+ *
+ * Every service the daemon registers must declare where its tenant database
+ * scope is armed (`scoped` / `identity-only` / narrowly reviewed `system`).
+ * The services that predate that mechanism are listed in
+ * `UNCLASSIFIED_SERVICE_BASELINE` and permitted, and that list may only shrink.
+ *
+ * A COUNT cannot express "may only shrink". Classify or delete one old entry,
+ * add a different newly-registered unclassified service, and the total is
+ * unchanged — a replenishable allowance rather than a closed debt inventory.
+ * So this compares the names. The list below is the approved original
+ * inventory: the 57 identities that existed when the mechanism landed.
+ *
+ * 57 itself is fine and is meant to stay until a platform sweep classifies
+ * them. There is deliberately no deadline here, because a deadline buys
+ * speculative classifications rather than correct ones.
+ */
+export const APPROVED_UNCLASSIFIED_SERVICE_BASELINE = [
+  'session-streams',
+  'messages/streaming',
+  'tasks/streaming',
+  'authentication',
+  'authentication/refresh',
+  'authentication/impersonate',
+  'auth/launch',
+  'config/resolve-api-key',
+  'branches/:id/clean',
+  'api/v1/user/api-keys',
+  'mcp-servers/test-jwt',
+  'templates',
+  'health',
+  'me/artifact-trust-grants',
+  'sessions/:id/fork',
+  'sessions/:id/spawn',
+  'sessions/:id/prompt',
+  'sessions/:id/initialize',
+  'sessions/:id/spawn-prompt',
+  'sessions/:id/stop',
+  'sessions/:id/archive',
+  'sessions/:id/unarchive',
+  'sessions/:id/genealogy',
+  'sessions/:id/env-selections',
+  'sessions/:id/permission-decision',
+  'sessions/:id/restart-cli',
+  'sessions/:id/tasks/queue',
+  'tasks/:id/run',
+  'tasks/:id/complete',
+  'tasks/:id/fail',
+  'branches/:id/start',
+  'branches/:id/stop',
+  'branches/:id/restart',
+  'branches/:id/nuke',
+  'branches/:id/health',
+  'branches/:id/render-environment',
+  'branches/logs',
+  'branches/:id/archive-or-delete',
+  'branches/:id/unarchive',
+  'branches/:id/execute-schedule-now',
+  'branches/:id/fire-zone-trigger',
+  'schedules/:id/run-now',
+  'boards/:id/sessions',
+  'board-comments/:id/reply',
+  'board-comments/:id/toggle-reaction',
+  'board-comments/:id/reposition',
+  'repos/local',
+  'repos/clone',
+  'repos/:id/branches',
+  'repos/:id/branches/:name',
+  'repos/:id/import-agor-yml',
+  'repos/:id/export-agor-yml',
+  'artifacts/:id/payload',
+  'artifacts/:id/console',
+  'artifacts/:id/sandpack-error',
+  'artifacts/:id/runtime-response/:requestId',
+  'artifacts/:id/trust',
+];
+
+const BASELINE_SOURCE = 'apps/agor-daemon/src/utils/tenant-service-classification.ts';
+const BASELINE_ENTRY_PATTERN = /^\s*'([^']+)', \/\/ BASELINE-ENTRY$/gm;
+
+/**
+ * Compare the file's `BASELINE-ENTRY` names against the approved inventory.
+ *
+ * Both directions fail, and they say different things:
+ *
+ *  - a name that is not approved means the list GREW, whatever the total says.
+ *    The answer is to classify the service, never to approve the name here.
+ *  - an approved name that has left the file means the list shrank, which is
+ *    the intended direction — but the approval has to go with it in the same
+ *    change, or the name could be re-listed later without failing anything.
+ *
+ * Returns error strings; empty means the ratchet held.
+ */
+export function checkUnclassifiedServiceBaseline(
+  source,
+  approved = APPROVED_UNCLASSIFIED_SERVICE_BASELINE
+) {
+  const listed = [...source.matchAll(BASELINE_ENTRY_PATTERN)].map((match) => match[1]);
+  const approvedSet = new Set(approved);
+  const errors = [];
+  const seen = new Set();
+  for (const entry of listed) {
+    if (seen.has(entry)) {
+      errors.push(`'${entry}' is listed twice; one baseline entry per service.`);
+      continue;
+    }
+    seen.add(entry);
+    if (!approvedSet.has(entry)) {
+      errors.push(
+        `'${entry}' is not one of the ${approved.length} approved baselined services. ` +
+          `The baseline is closed: declare the service in TENANT_SERVICE_CLASSIFICATIONS ` +
+          `(or one of the two hook inventories) instead of listing it.`
+      );
+    }
+  }
+  for (const entry of approved) {
+    if (!seen.has(entry)) {
+      errors.push(
+        `'${entry}' has left the baseline — remove it from ` +
+          `APPROVED_UNCLASSIFIED_SERVICE_BASELINE in this script too, so the name ` +
+          `cannot be re-listed later without failing this check.`
+      );
+    }
+  }
+  return errors;
+}
+
 function countMatches(text, patterns) {
   let total = 0;
   for (const pattern of patterns) total += [...text.matchAll(pattern)].length;
   return total;
 }
 
-let failed = false;
-for (const check of checks) {
-  const observed = new Map();
-  for (const root of check.roots) {
-    for (const file of filesUnder(root)) {
-      if (check.excludeTests && file.endsWith('.test.ts')) continue;
-      const count = countMatches(readFileSync(file, 'utf8'), check.patterns);
-      if (count > 0) observed.set(file, count);
+// Importable for tests: only run the checks when invoked as a command.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
+  let failed = false;
+  for (const check of checks) {
+    const observed = new Map();
+    for (const root of check.roots) {
+      for (const file of filesUnder(root)) {
+        if (check.excludeTests && file.endsWith('.test.ts')) continue;
+        const count = countMatches(readFileSync(file, 'utf8'), check.patterns);
+        if (count > 0) observed.set(file, count);
+      }
+    }
+
+    for (const [file, count] of observed) {
+      const allowed = check.baseline[file] ?? 0;
+      if (count > allowed) {
+        failed = true;
+        console.error(
+          `[multitenancy-boundaries] ${check.name}: ${file} has ${count} occurrence(s), baseline allows ${allowed}`
+        );
+      }
+    }
+    for (const [file, allowed] of Object.entries(check.baseline)) {
+      const count = observed.get(file) ?? 0;
+      if (count < allowed) {
+        console.log(
+          `[multitenancy-boundaries] ${check.name}: ${file} improved (${count}/${allowed}); please lower the baseline.`
+        );
+      }
     }
   }
 
-  for (const [file, count] of observed) {
-    const allowed = check.baseline[file] ?? 0;
-    if (count > allowed) {
-      failed = true;
-      console.error(
-        `[multitenancy-boundaries] ${check.name}: ${file} has ${count} occurrence(s), baseline allows ${allowed}`
-      );
-    }
+  for (const error of checkUnclassifiedServiceBaseline(readFileSync(BASELINE_SOURCE, 'utf8'))) {
+    failed = true;
+    console.error(`[multitenancy-boundaries] unclassified tenant service baseline: ${error}`);
   }
-  for (const [file, allowed] of Object.entries(check.baseline)) {
-    const count = observed.get(file) ?? 0;
-    if (count < allowed) {
-      console.log(
-        `[multitenancy-boundaries] ${check.name}: ${file} improved (${count}/${allowed}); please lower the baseline.`
-      );
-    }
+
+  if (failed) {
+    console.error(
+      '\nUse tenant-aware store/realtime abstractions or explicitly update the baseline with a justification.'
+    );
+    process.exit(1);
   }
+
+  console.log('[multitenancy-boundaries] ok');
 }
-
-if (failed) {
-  console.error(
-    '\nUse tenant-aware store/realtime abstractions or explicitly update the baseline with a justification.'
-  );
-  process.exit(1);
-}
-
-console.log('[multitenancy-boundaries] ok');

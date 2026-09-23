@@ -27,6 +27,24 @@ Branch: "auth-feature"
 
 _A coordinator session fanned out to eight parallel security-review children, each its own introspectable conversation._
 
+## Reading conversation history
+
+Long user and assistant messages in older turns start collapsed, with **show more**
+to reveal the full text. The latest whole turn and live turns stay expanded; a new
+turn never automatically collapses text you were already reading. Your explicit
+**show more / show less** choices last while that conversation is mounted, including
+reconnects and tool-detail loading. Reopening it applies the history defaults again.
+
+Messages over 1,200 source characters **or** 15 source lines are eligible for
+collapse. The preview stops at 10 source lines or roughly 600 characters, whichever
+comes first. The character boundary prefers a newline within the next 100
+characters, then whitespace in that window; otherwise it cuts at the target.
+These are literal source newlines, not estimates of wrapped lines or screen height.
+Streamdown handles incomplete Markdown in the preview. Partial
+code/table export controls are hidden until expansion; the message copy action
+still copies the full source. All fetched text remains available for expansion and
+copying; this is a display preference, not a payload reduction.
+
 ---
 
 ## Three ways to branch
@@ -263,6 +281,12 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 **Use callbacks wisely.** Include the last message for quick status updates. Include the original prompt only when context might be lost. Add extra instructions when you need a specific report format ("include line numbers for all changes").
 
+**Tool counts in custom callbacks and API clients.** Use `recordedToolCount` in
+callback templates and nullable `recorded_tool_count` in task API responses. These
+replace `toolUseCount` and `tool_use_count`. A missing count means unknown, not zero.
+To include a verified zero while omitting unknown counts, use
+`{{#if recordedToolCount includeZero=true}}{{recordedToolCount}} tool calls{{/if}}`.
+
 **Use the current caller for self callbacks.** With `agor_sessions_create`, set `enableCallback: true` and omit `callbackSessionId` to receive completion in the calling session—even from a fork, nested coordinator, or across branches. Only supply `callbackSessionId` for an intentional authorized alternate destination. Inherited conversation examples and shared workspace IDs may refer to an earlier session; the runtime-supplied Agor session identity is distinct from fork ancestry and the provider SDK thread ID.
 
 **Remote callbacks stay linked by default.** Sessions created with callbacks report after each completion until you unlink callbacks from the session relationship control. Unlinking stops delivery without deleting the relationship; select `once` when you only want the next completion. Spawned subsessions and `btw` side questions remain one-shot.
@@ -352,10 +376,29 @@ without creating a session, avoiding repeated retries while their configuration 
 
 ---
 
+## Conversation history
+
+Conversations open with the latest ten turns, showing user and assistant messages.
+Scroll up or select **Load older history** to read earlier turns.
+
+Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
+collapsed by default; inside an open group, file edits show their diffs. Expand
+**Reasoning** where available to read the agent's reasoning. Active turns show
+live activity, and approval requests remain available in the conversation.
+
+Hover over or focus a user prompt to see its metadata, such as model, duration,
+and token usage. On touch screens, tap the prompt to toggle the metadata; press
+Escape to dismiss it. Stopped and failed turns show a notice below their content,
+with an error explanation when available.
+
+Search covers loaded history only. Load earlier turns to include them in search;
+tool details become searchable after expansion.
+
 ## Related
 
 - [Branches](/guide/branches): The container for sessions
 - [Agor MCP Server](/guide/internal-mcp): How agents introspect and spawn each other programmatically
+- [Interrupt obsolete work with urgent information](/guide/internal-mcp#interrupt-obsolete-work-and-supply-urgent-information): Capture the active Task ID, enqueue and arrange the update, then conditionally stop only the original Task; termination and concurrency caveats
 - [Rich Chat UX](/guide/rich-chat-ux): Token accounting, context window viz, tool blocks, queueing
 - [In-Conversation Widgets](/guide/in-conversation-widgets): Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context
 - [SDK Comparison](/guide/sdk-comparison): What each agent SDK supports

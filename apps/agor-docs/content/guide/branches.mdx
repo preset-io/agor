@@ -83,6 +83,29 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 ---
 
+## Files and Git changes
+
+The branch's **Files** tab has three views:
+
+- **All files** browses the working directory, with combined Git status badges.
+- **Changes** lists unstaged changes, including untracked files and conflicts.
+  Text comparisons use the index as their base.
+- **Staged changes** lists index changes and compares staged text with HEAD,
+  independently of subsequent working-directory edits.
+
+Use **Refresh** to reload files and statuses. Badges identify added, modified,
+deleted, renamed, copied, untracked, conflicted, and ignored paths without relying
+on color alone. Deleted paths remain available in the change views. Text previews
+offer **File** and **Changes** modes; Markdown is rendered in File mode. Downloads
+are available from All files and contain working-directory bytes, not index bytes.
+
+Git enrichment is best-effort and bounded: if Git is unavailable or exceeds its
+read budget, ordinary browsing remains available without status badges. Binary
+or oversized comparisons are not text previews, and complex diffs show a limit
+notice rather than blocking the browser. Use local Git for complete diffs or
+unresolved conflicts whose working file is absent. Existing branch filesystem
+read permissions apply to all three views.
+
 ## Asynchronous filesystem readiness
 
 Branch creation records the branch and dispatches worktree or clone materialization asynchronously.
@@ -103,6 +126,30 @@ cancel or retry materialization; terminal failures return the refreshed branch a
 error. Client cancellation only stops further polling. No database transaction or connection is
 retained between reads; each individual read remains subject to the daemon's normal database query
 timeout.
+
+### Source ref resolution
+
+Agor resolves a branch creation's source ref before either worktree or clone materialization:
+
+- Remote-qualified branches such as `origin/main` or `upstream/feature`, full `refs/...` names,
+  tags, and commit SHAs are never prefixed or otherwise reinterpreted.
+- A bare branch name may match a local branch and any number of remote-tracking branches. Agor uses
+  local-first, then lexically sorted remote precedence only when every match points to the same commit.
+- If matching refs point to different commits, creation fails with an actionable error listing each
+  candidate and SHA. Qualify the intended ref rather than relying on a remote-name default.
+- A missing ref fails instead of being rewritten as `origin/<name>`.
+
+Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
+explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call
+waits only for this short resolution phase even when `waitForReady` is false; filesystem
+materialization remains asynchronous unless readiness waiting is requested.
+
+Existing remote-branch checkouts stay attached to the local branch at the resolved SHA and track
+the selected remote, including non-origin remotes. Clone creation also records the normalized remote
+source so restore can fall back to it if the destination branch has not been pushed and the cache
+is unavailable. This source record does not authorize managed credentials: those remain bounded to
+trusted repository/template metadata. Older branches without this source record may still need the
+original cache to reconstruct a non-origin source.
 
 ---
 

@@ -3870,6 +3870,7 @@ export function KnowledgePage({
                     operationType="edit"
                     oldContent={previousVersion.content_text ?? ''}
                     newContent={selectedVersion.content_text ?? ''}
+                    rawContentKind="full-file"
                     forceExpanded
                   />
                 ) : (

@@ -8,7 +8,7 @@
 import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
-import { PAGINATION } from '../config/constants';
+import { MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 
@@ -109,6 +109,9 @@ export function createQuerySchema<T extends TProperties>(properties: TObject<T>)
  */
 export const sessionQuerySchema = createQuerySchema(
   Type.Object({
+    // Session-only opt-out of exact totals; coerces REST boolean strings.
+    $count: Type.Optional(CommonSchemas.boolean),
+    include_usage: Type.Optional(CommonSchemas.boolean),
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(CommonSchemas.sessionStatus),
     agentic_tool: Type.Optional(CommonSchemas.persistedAgenticTool),
@@ -151,6 +154,7 @@ export const taskQuerySchema = Type.Intersect(
       session_id: Type.Optional(CommonSchemas.uuid),
       status: Type.Optional(
         Type.Union([
+          Type.Object({ $ne: Type.Literal('queued') }, { additionalProperties: false }),
           Type.Literal('queued'),
           Type.Literal('created'),
           Type.Literal('dispatching'),
@@ -181,6 +185,7 @@ export const taskQuerySchema = Type.Intersect(
               status: taskSortDirection,
               created_at: taskSortDirection,
               created_by: taskSortDirection,
+              queue_position: taskSortDirection,
             },
             { additionalProperties: false }
           )
@@ -234,6 +239,7 @@ const messageSelectableFieldSchema = Type.Union(
  */
 export const messageQuerySchema = Type.Object(
   {
+    transcript: Type.Optional(Type.Literal('lean')),
     message_id: Type.Optional(
       Type.Union([
         CommonSchemas.uuid,
@@ -255,7 +261,15 @@ export const messageQuerySchema = Type.Object(
         ),
       ])
     ),
-    task_id: Type.Optional(CommonSchemas.uuid),
+    task_id: Type.Optional(
+      Type.Union([
+        CommonSchemas.uuid,
+        Type.Object(
+          { $in: Type.Array(CommonSchemas.uuid, { maxItems: MESSAGE_PAGINATION.MAX_TASK_IDS }) },
+          { additionalProperties: false }
+        ),
+      ])
+    ),
     type: Type.Optional(messageTypeSchema),
     role: Type.Optional(messageRoleSchema),
     $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),

@@ -1,23 +1,30 @@
 import { EventEmitter } from 'node:events';
 import {
   BranchRepository,
+  branches as branchTable,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
   EnvironmentHealthRepository,
+  eq,
+  executeRaw,
   generateId,
   initializeDatabase,
+  lockRowForUpdate,
   RepoRepository,
   runWithTenantDatabaseScope,
+  sql,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { BranchID, TenantID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BranchesService } from './branches.js';
 import {
   DistributedHealthMonitor,
   type DistributedHealthMonitorOptions,
 } from './distributed-health-monitor.js';
+import { HealthMonitor } from './health-monitor.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -102,6 +109,64 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         (rawA as Database & { $client: { end: () => Promise<void> } }).$client.end(),
         (rawB as Database & { $client: { end: () => Promise<void> } }).$client.end(),
       ]);
+    });
+
+    it('legacy monitor releases the Branch row lock before the real service HTTP boundary', async () => {
+      const tenantId = `legacy-probe-${generateId()}` as TenantID;
+      const branch = await seedBranch(dbA, tenantId);
+      const params = { tenant: { tenant_id: tenantId, source: 'explicit' as const } };
+      let release!: () => void;
+      let entered!: () => void;
+      const probeEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const probeRelease = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const emitter = new EventEmitter();
+      const app = { service: () => emitter, get: () => undefined };
+      // Exercise the actual service's load/claim/probe/commit/release boundaries,
+      // replacing only HTTP transport and the unrelated Feathers projection loader.
+      const service = {
+        db: dbA,
+        app,
+        withTenantDatabase: (_params: unknown, work: () => Promise<unknown>) =>
+          runWithTenantDatabaseScope(dbA, tenantId, work),
+        getCanonicalBranch: () => new BranchRepository(dbA).findById(branch.branch_id),
+        fetchEnvironmentHealthObservation: async () => {
+          entered();
+          await probeRelease;
+          return { status: 'healthy', message: 'fixture', recordWhileStarting: true };
+        },
+      };
+      Object.assign(emitter, {
+        checkHealth: (...args: Parameters<BranchesService['checkHealth']>) =>
+          BranchesService.prototype.checkHealth.apply(service as unknown as BranchesService, args),
+      });
+      const monitor = new HealthMonitor(app as never, { db: dbA, defaultParams: params });
+      const checking = (
+        monitor as unknown as {
+          checkHealth(id: BranchID): Promise<void>;
+        }
+      ).checkHealth(branch.branch_id);
+      try {
+        await Promise.race([
+          probeEntered,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Probe never reached')), 5000)
+          ),
+        ]);
+        // No sleeps to guess transaction timing: HTTP is held open until this
+        // independent PostgreSQL transaction has acquired the same Branch lock.
+        await runWithTenantDatabaseScope(dbB, tenantId, async (tx) => {
+          await executeRaw(tx, sql`SET LOCAL lock_timeout = '250ms'`);
+          await lockRowForUpdate(tx, tx, branchTable, eq(branchTable.branch_id, branch.branch_id));
+        });
+      } finally {
+        release();
+        await checking;
+        await monitor.cleanup();
+      }
     });
 
     it('allows one live HTTP check across two apps and periodic discovery recovers a missed event', async () => {

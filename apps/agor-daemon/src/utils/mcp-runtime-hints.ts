@@ -6,6 +6,7 @@ import {
   runWithTenantContext,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
 import type { MCPRuntimeProviderCapability, Task, TaskID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
@@ -34,7 +35,15 @@ export function didMcpPrincipalRoleChange(
   );
 }
 
-export async function isMcpRuntimeRecoveryEnabled(db: TenantScopeAwareDatabase): Promise<boolean> {
+/**
+ * `TenantScopedDatabase` is accepted as well as the scope-aware handle because
+ * a caller with no ambient scope has to open one and pass what it opened —
+ * see `GatewayService.readInTenantScope`. This function only forwards to
+ * `getMCPEgressGatewayMode`, which already takes either.
+ */
+export async function isMcpRuntimeRecoveryEnabled(
+  db: TenantScopeAwareDatabase | TenantScopedDatabase
+): Promise<boolean> {
   const mode = await getMCPEgressGatewayMode(db);
   return mode === 'compatibility' || mode === 'enforced';
 }

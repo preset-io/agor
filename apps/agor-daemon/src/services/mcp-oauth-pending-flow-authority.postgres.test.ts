@@ -18,17 +18,27 @@ import {
   MCPOAuthPendingFlowRepository,
   MCPServerRepository,
   mcpOauthPendingFlows,
+  openBoundSecret,
   type RawDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  sealBoundSecret,
   shortId,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
+import type {
+  MCPOAuthAttemptID,
+  MCPOAuthClientRegistrationID,
+  MCPOAuthPendingFlowSealedMaterial,
+  MCPServerID,
+  SessionID,
+  TaskID,
+  UserID,
+} from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
@@ -151,8 +161,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         configFingerprint: 'a'.repeat(64),
         slackRecovery: {
           notice_id: 'notice-peer-callback',
-          task_id: 'task-peer-callback',
-          session_id: 'session-peer-callback',
+          task_id: 'task-peer-callback' as TaskID,
+          session_id: 'session-peer-callback' as SessionID,
           mcp_server_id: bound.serverId,
           recovery_generation: 7,
           recovery_request_id: 'request-peer-callback',
@@ -179,6 +189,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       if (!isMCPOAuthGrantBindingVersion(claimed.flow.configFingerprintVersion)) {
         throw new Error('Expected a supported grant binding version');
       }
+      const configFingerprintVersion = claimed.flow.configFingerprintVersion;
       const opened = authorityB.openClaim(claimed.flow, context.state);
       expect(opened.slackRecovery).toEqual({
         notice_id: 'notice-peer-callback',
@@ -200,7 +211,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             expiresAt: new Date(Date.now() + 3_600_000),
             grantBinding: {
               generation: claimed.flow.grantGeneration,
-              version: claimed.flow.configFingerprintVersion,
+              version: configFingerprintVersion,
               fingerprint: claimed.flow.configFingerprint,
               metadataUri: opened.context.metadataUrl,
               resourceUri: opened.context.resourceUri,
@@ -245,6 +256,234 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_refresh_token: 'peer-callback-refresh-token',
         grant_generation: claimed.flow.grantGeneration,
       });
+    });
+
+    /**
+     * Rewrite a live attempt's sealed material, resealed under the SAME
+     * envelope binding.
+     *
+     * This is what makes the version check meaningful: an attacker (or an
+     * older daemon) who can produce a correctly-bound envelope must still be
+     * refused when its contract version is not one this daemon accepts. A test
+     * that only tampered with the ciphertext would prove the AEAD works, not
+     * the version gate.
+     */
+    async function resealMaterial(
+      bound: TenantSeed,
+      attemptId: MCPOAuthAttemptID,
+      mutate: (material: MCPOAuthPendingFlowSealedMaterial) => Record<string, unknown>
+    ): Promise<void> {
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        const row = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT sealed_material, grant_generation, config_fingerprint
+                FROM ${mcpOauthPendingFlows} WHERE attempt_id = ${attemptId}`
+          )
+        )[0];
+        const binding = [
+          bound.tenantId,
+          bound.userId,
+          bound.serverId,
+          attemptId,
+          String(row.grant_generation),
+          String(row.config_fingerprint),
+        ].join('\0');
+        const material = JSON.parse(
+          openBoundSecret(String(row.sealed_material), masterSecret, 'pending-exchange', binding)
+        ) as MCPOAuthPendingFlowSealedMaterial;
+        const resealed = sealBoundSecret(
+          JSON.stringify(mutate(material)),
+          masterSecret,
+          'pending-exchange',
+          binding
+        );
+        await executeRaw(
+          scoped,
+          sql`UPDATE ${mcpOauthPendingFlows} SET sealed_material = ${resealed}
+              WHERE attempt_id = ${attemptId}`
+        );
+      });
+    }
+
+    async function startFlow(
+      bound: TenantSeed,
+      context: DurableMCPOAuthFlowContext,
+      slackConnect?: DurableMCPOAuthFlowCreate['slackConnect']
+    ): Promise<MCPOAuthAttemptID> {
+      return authorityA.create({
+        context,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        oauthMode: 'per_user',
+        configFingerprint: 'c'.repeat(64),
+        ...(slackConnect ? { slackConnect } : {}),
+      } satisfies DurableMCPOAuthFlowCreate);
+    }
+
+    it.each([3, 4])(
+      'opens a version %s Slack connect binding for the callback claimant',
+      async (version) => {
+        const bound = await seed('connect-binding');
+        const context = flowContext(crypto.randomUUID());
+        const slackConnect = {
+          delivery_id: 'delivery-connect-binding',
+          delivery_generation: 4,
+          widget_id: 'widget-connect-binding' as never,
+          session_id: 'session-connect-binding' as never,
+          mcp_server_id: bound.serverId,
+          gateway_channel_id: 'gateway-connect-binding',
+          gateway_config_generation: 7,
+          mcp_server_config_version: 3,
+        };
+        const attemptId = await startFlow(bound, context, slackConnect);
+        await resealMaterial(bound, attemptId, (material) => {
+          expect(material.version).toBe(4);
+          return { ...material, version };
+        });
+
+        const stored = await runWithTenantDatabaseScope(
+          dbB,
+          bound.tenantId,
+          async (scoped) =>
+            rowsOf(
+              await executeRaw(
+                scoped,
+                sql`SELECT sealed_material FROM ${mcpOauthPendingFlows}
+                WHERE attempt_id = ${attemptId}`
+              )
+            )[0]
+        );
+        // The routing is sealed, not stored in the clear beside the row.
+        expect(JSON.stringify(stored)).not.toContain('widget-connect-binding');
+
+        const claimed = await authorityB.claimForCallback(context.state);
+        if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+        const opened = authorityB.openClaim(claimed.flow, context.state);
+        expect(opened.slackConnect).toEqual(slackConnect);
+        expect(opened.slackRecovery).toBeUndefined();
+      }
+    );
+
+    it('seals the relay binding at v4 so pre-relay daemons cannot treat it as direct', async () => {
+      const bound = await seed('relay-v4');
+      const context = {
+        ...flowContext(crypto.randomUUID()),
+        relay: { cellId: 'cell-relay', cloudUserId: 'cloud-user-relay' },
+      };
+      const attemptId = await startFlow(bound, context);
+      await resealMaterial(bound, attemptId, (material) => {
+        expect(material.version).toBe(4);
+        expect(material.relay).toEqual(context.relay);
+        return { ...material };
+      });
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toEqual(
+        context.relay
+      );
+    });
+
+    it('still opens an in-flight version 2 envelope written by an older daemon', async () => {
+      const bound = await seed('v2-inflight');
+      const context = flowContext(crypto.randomUUID());
+      const attemptId = await startFlow(bound, context);
+      // Exactly what a pre-upgrade daemon would have sealed: v2, and by
+      // construction no connect binding to lose.
+      await resealMaterial(bound, attemptId, (material) => {
+        const { slackConnect: _slackConnect, ...rest } = material;
+        return { ...rest, version: 2 };
+      });
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      const opened = authorityB.openClaim(claimed.flow, context.state);
+      expect(opened.context.pkceVerifier).toBe(context.pkceVerifier);
+      expect(opened.slackConnect).toBeUndefined();
+    });
+
+    it.each<
+      readonly [string, (material: MCPOAuthPendingFlowSealedMaterial) => Record<string, unknown>]
+    >([
+      [
+        'a version 2 envelope that claims a connect binding',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          version: 2,
+          slackConnect: {
+            delivery_id: 'delivery-smuggled',
+            delivery_generation: 1,
+            widget_id: 'widget-smuggled',
+            session_id: 'session-smuggled',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-smuggled',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
+          },
+        }),
+      ],
+      [
+        'an unknown future envelope version',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({ ...material, version: 5 }),
+      ],
+      ...[2, 3].map(
+        (version) =>
+          [
+            `a version ${version} envelope that claims a relay binding`,
+            (material: MCPOAuthPendingFlowSealedMaterial) => ({
+              ...material,
+              version,
+              relay: { cellId: 'cell-smuggled', cloudUserId: 'user-smuggled' },
+            }),
+          ] as const
+      ),
+      [
+        'a connect binding missing its delivery generation',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          slackConnect: {
+            delivery_id: 'delivery-partial',
+            widget_id: 'widget-partial',
+            session_id: 'session-partial',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-partial',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
+          },
+        }),
+      ],
+      [
+        // Without these the callback has nothing to compare the workspace
+        // against, and the authority re-read would fall back to comparing the
+        // stored generation to itself — which is what shipped and could never
+        // refuse a revoked flow.
+        'a connect binding that cannot say what authorized it',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          slackConnect: {
+            delivery_id: 'delivery-unversioned',
+            delivery_generation: 2,
+            widget_id: 'widget-unversioned',
+            session_id: 'session-unversioned',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-unversioned',
+          },
+        }),
+      ],
+    ])('refuses %s', async (name, mutate) => {
+      const bound = await seed(`reject-${name.replace(/[^a-z]+/gi, '-').slice(0, 24)}`);
+      const context = flowContext(crypto.randomUUID());
+      const attemptId = await startFlow(bound, context);
+      await resealMaterial(bound, attemptId, mutate);
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      // Fail closed: an envelope this daemon does not fully understand is never
+      // opened, so no provider exchange can proceed on an unverified binding.
+      expect(() => authorityB.openClaim(claimed.flow, context.state)).toThrow(
+        /material is invalid/i
+      );
     });
 
     it('rejects cross-tenant/user reads and database-level cross-tenant bindings', async () => {
@@ -702,6 +941,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       const pending = await authorityA.getForUser(bound.tenantId, bound.userId, attemptId);
       if (!pending) throw new Error('Expected pending-flow fixture');
+      if (!isMCPOAuthGrantBindingVersion(pending.configFingerprintVersion)) {
+        throw new Error('Expected a supported grant binding version');
+      }
+      const configFingerprintVersion = pending.configFingerprintVersion;
       await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           bound.userId,
@@ -713,7 +956,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             clientSecret: context.clientSecret,
             grantBinding: {
               generation: pending.grantGeneration,
-              version: pending.configFingerprintVersion,
+              version: configFingerprintVersion,
               fingerprint,
               metadataUri: context.metadataUrl,
               resourceUri: context.resourceUri,

@@ -435,6 +435,37 @@ export class ThreadSessionMapRepository
     );
   }
 
+  /**
+   * Set one metadata flag exactly once, and report whether this caller set it.
+   *
+   * `mergeMetadata` always writes, so two daemons deciding "has this thread
+   * been warned yet?" from a pre-read snapshot would both write and both warn.
+   * The read and the write happen under one row lock here, so exactly one
+   * caller sees `true`. Used for notices that must appear once per
+   * (session, conversation) rather than once per event.
+   */
+  async claimMetadataFlag(id: ThreadSessionMapID, key: string, value: unknown): Promise<boolean> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const metadata = (row.metadata as Record<string, unknown>) ?? {};
+        if (metadata[key] !== undefined && metadata[key] !== null) return false;
+        await update(txDb, threadSessionMap)
+          .set({ metadata: { ...metadata, [key]: value } })
+          .where(eq(threadSessionMap.id, id))
+          .run();
+        return true;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
   /** Atomically complete the initial prompt for the event that owns the seed. */
   async completeSeedInitialPrompt(
     id: ThreadSessionMapID,

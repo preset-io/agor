@@ -1,10 +1,11 @@
 import { glob } from 'glob';
 import { defineConfig } from 'tsup';
 
-// Find all command files
-const commandFiles = glob.sync('src/commands/**/*.ts');
-const libFiles = glob.sync('src/lib/**/*.ts');
-const hookFiles = glob.sync('src/hooks/**/*.ts');
+// Production entries only; integration tests import other workspace sources.
+const sourceOptions = { ignore: ['**/*.test.ts', '**/*.spec.ts'] };
+const commandFiles = glob.sync('src/commands/**/*.ts', sourceOptions);
+const libFiles = glob.sync('src/lib/**/*.ts', sourceOptions);
+const hookFiles = glob.sync('src/hooks/**/*.ts', sourceOptions);
 const baseCommandFile = ['src/base-command.ts'];
 
 // Create entry points

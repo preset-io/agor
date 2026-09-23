@@ -111,10 +111,12 @@ async function seedSession(
     })
     .run();
 
+  const now = new Date();
   await insert(db, sessions)
     .values({
       session_id: opts.sessionId,
-      created_at: new Date(),
+      created_at: now,
+      updated_at: now,
       status: 'idle',
       agentic_tool: 'claude-code',
       branch_id: branchId,

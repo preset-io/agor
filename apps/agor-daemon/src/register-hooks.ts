@@ -1,4 +1,4 @@
-import { OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
+import { KNOWLEDGE_TRANSFER, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
 /**
  * Service Hooks Registration
  *
@@ -86,6 +86,7 @@ import type {
   GatewayChannel,
   HookContext,
   MCPServer,
+  Message,
   MessageID,
   Paginated,
   Params,
@@ -191,6 +192,7 @@ import {
 import {
   redactMcpRecoveryTopology,
   stripMcpSlackRecoveryNotice,
+  stripWidgetSlackConnectDelivery,
 } from './utils/mcp-recovery-redaction.js';
 import {
   didMcpPrincipalRoleChange,
@@ -542,6 +544,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'thread-session-map',
   'gateway-outbound-messages',
   'session-env-selections',
+  KNOWLEDGE_TRANSFER.path,
   'kb/namespaces',
   'kb/documents',
   'kb/graph',
@@ -687,7 +690,6 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'raw_sdk_response',
   'normalized_sdk_response',
   'computed_context_window',
-  'tool_use_count',
   'duration_ms',
   'agent_session_id',
   'error_message',
@@ -961,6 +963,37 @@ function redactMCPServerPayload(result: any): any {
  * property for a redaction gate. Which methods it is registered on is pinned
  * separately in `register-hooks.mcp-headers-redaction.test.ts`.
  */
+/**
+ * Keep the authoritative Message result intact while projecting the external
+ * caller response without the widget's Slack connect delivery state.
+ *
+ * Mirrors `createRedactTaskMcpRecoveryAfter`: `context.dispatch` is what the
+ * external caller receives, while `context.result` stays whole for
+ * audience-specific publishers (which do their own strip).
+ */
+export const redactMessageSlackConnect = async (context: HookContext): Promise<HookContext> => {
+  if (!context.params.provider) return context;
+  const project = (value: unknown): unknown =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? stripWidgetSlackConnectDelivery(value as Message)
+      : value;
+  let dispatch: unknown = context.result;
+  if (Array.isArray(context.result)) {
+    dispatch = (context.result as Message[]).map(project);
+  } else if (
+    context.result &&
+    typeof context.result === 'object' &&
+    Array.isArray((context.result as { data?: unknown }).data)
+  ) {
+    const page = context.result as { data: Message[] } & Record<string, unknown>;
+    dispatch = { ...page, data: page.data.map(project) };
+  } else {
+    dispatch = project(context.result);
+  }
+  context.dispatch = dispatch;
+  return context;
+};
+
 export const redactMCPServerSecretFields = async (context: HookContext) => {
   if (context.event) {
     context.dispatch = redactMCPServerPayload(context.result);
@@ -1885,6 +1918,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
+      all: [redactMessageSlackConnect],
       create: [gatewayRouteHook],
       patch: [
         async (context: HookContext<Board>) => {
@@ -2427,6 +2461,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       removeAcl: [requireMinimumRole(ROLES.MEMBER, 'manage knowledge namespace permissions')],
     },
   } as never);
+
+  safeService(KNOWLEDGE_TRANSFER.path)?.hooks({
+    before: { all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'transfer knowledge')] },
+    after: { create: [suppressKnowledgeCommandRealtimeEvent] },
+  });
 
   safeService('kb/documents')?.hooks({
     before: {
@@ -3460,6 +3499,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
   const redactTaskMcpRecoveryAfter = createRedactTaskMcpRecoveryAfter(sessionsRepository);
+  // Queue management has the same capability as tasks.remove: Branch Manager
+  // ('all'), not mere prompt access. MCP retains the acting user's provider.
+  const manageTaskQueueGuards = [
+    requireMinimumRole(ROLES.MEMBER, 'manage queued tasks'),
+    resolveSessionContext(),
+    loadSession(sessionsRepository),
+    loadBranchFromSession(branchRepository),
+    ensureBranchPermission('all', 'manage queued tasks', superadminOpts),
+  ];
   tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth],
@@ -3484,6 +3532,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         loadBranchFromSession(branchRepository),
         ensureCanPromptInSession({ ...superadminOpts, branchRepository }),
       ],
+      cancelQueued: manageTaskQueueGuards,
+      reorderQueued: manageTaskQueueGuards,
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],

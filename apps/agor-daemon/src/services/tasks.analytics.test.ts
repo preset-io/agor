@@ -15,7 +15,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
       end_index: 0,
       start_timestamp: '2026-01-01T00:00:00.000Z',
     },
-    tool_use_count: 0,
     git_state: {
       ref_at_start: 'main',
       sha_at_start: 'abc123',
@@ -79,6 +78,8 @@ describe('TasksService analytics lifecycle events', () => {
       { userId: task.created_by }
     );
     expect(track.mock.calls[0][1]).not.toHaveProperty('full_prompt');
+    expect(track.mock.calls[0][1]).not.toHaveProperty('tool_use_count');
+    expect(track.mock.calls[0][1]).toHaveProperty('recorded_tool_count', null);
   });
 
   it('emits task.started once when transitioning into running', async () => {
@@ -126,6 +127,7 @@ describe('TasksService analytics lifecycle events', () => {
       started_at: '2026-01-01T00:00:00.000Z',
       completed_at: '2026-01-01T00:00:05.000Z',
       duration_ms: 5000,
+      recorded_tool_count: 2,
     });
     const { service, sessionsService } = makeService({
       findById: vi.fn().mockResolvedValueOnce(runningTask).mockResolvedValueOnce(runningTask),
@@ -140,6 +142,7 @@ describe('TasksService analytics lifecycle events', () => {
         task_id: runningTask.task_id,
         status: TaskStatus.TIMED_OUT,
         duration_ms: 5000,
+        recorded_tool_count: 2,
       }),
       { userId: runningTask.created_by }
     );

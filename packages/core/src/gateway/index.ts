@@ -54,6 +54,7 @@ export {
   stripAgentMention as stripShortcutAgentMention,
 } from './connectors/shortcut';
 export type {
+  SlackAgorMessageMetadataEventType,
   SlackChannelHistoryRequest,
   SlackChannelHistoryResult,
   SlackFileInfo,
@@ -70,6 +71,8 @@ export {
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   parseThreadId as parseSlackThreadId,
+  SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
+  SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   SlackConnector,
 } from './connectors/slack';
 export type {

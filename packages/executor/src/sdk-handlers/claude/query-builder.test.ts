@@ -1024,6 +1024,33 @@ describe('setupQuery - Local Settings Support', () => {
     expect(mcpServers.jwtRemote.alwaysLoad).toBeUndefined();
   });
 
+  it.each(['claude-opus-5-5', 'claude-opus-5-5[1m]'])(
+    'passes %s unchanged to the bundled SDK runtime',
+    async (model) => {
+      const deps = createMockDeps();
+      const session = await deps.sessionsRepo.findById('test-session' as SessionID);
+      if (!session) throw new Error('Missing test session');
+      vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+        ...session,
+        model_config: {
+          mode: 'alias',
+          model,
+          effort: 'high',
+          updated_at: new Date().toISOString(),
+        },
+      });
+
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+      const { options } = claudeQuery.mock.calls[0][0];
+      expect(options.model).toBe(model);
+      expect(options.effort).toBe('high');
+      expect(options.pathToClaudeCodeExecutable).toBeUndefined();
+      expect(options.betas).toBeUndefined();
+      expect(options.fallbackModel).toBeUndefined();
+    }
+  );
+
   it('passes session advisorModel through the --advisor CLI flag, NOT settings', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({

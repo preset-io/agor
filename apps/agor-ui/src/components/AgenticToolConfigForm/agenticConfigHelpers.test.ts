@@ -19,19 +19,19 @@ describe('buildModelConfigFromFormValues', () => {
   it('stores an explicit effort beside the selected model', () => {
     expect(
       buildModelConfigFromFormValues({
-        modelConfig: { model: 'gpt-5.6-sol' },
+        modelConfig: { model: 'gpt-6-sol' },
         effort: 'medium',
       })
-    ).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+    ).toEqual({ model: 'gpt-6-sol', effort: 'medium' });
   });
 
   it('removes a stale nested effort when the form returns to inherited', () => {
     expect(
       buildModelConfigFromFormValues({
-        modelConfig: { model: 'gpt-5.6-sol', effort: 'high' },
+        modelConfig: { model: 'gpt-6-sol', effort: 'high' },
         effort: undefined,
       })
-    ).toEqual({ model: 'gpt-5.6-sol' });
+    ).toEqual({ model: 'gpt-6-sol' });
   });
 });
 

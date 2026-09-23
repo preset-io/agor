@@ -9,9 +9,12 @@ const PAGE_SIZE = 20;
 export function PagedSessions({
   sessions,
   children,
+  rowGap = 4,
 }: {
   sessions: Session[];
   children: (session: Session) => ReactNode;
+  /** Space between rows; flush lists (the teammate panel) pass 0. */
+  rowGap?: number;
 }) {
   const [requestedPage, setPage] = useState(1);
   // Archive/removal events can shrink the collection while a later page is open.
@@ -23,7 +26,7 @@ export function PagedSessions({
     <Flex vertical gap={4} className="nodrag nowheel">
       <Flex
         vertical
-        gap={4}
+        gap={rowGap}
         style={{ maxHeight: BRANCH_SESSION_VIEWPORT_HEIGHT, overflowY: 'auto' }}
         key={page}
       >

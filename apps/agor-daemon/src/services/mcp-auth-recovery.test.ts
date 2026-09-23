@@ -2,7 +2,11 @@ import { Conflict, Forbidden } from '@agor/core/feathers';
 import { asMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { describe, expect, it, vi } from 'vitest';
-import { classifyMCPAuthRecovery, recoveryForOAuthAttemptFailure } from './mcp-auth-recovery';
+import {
+  classifyMCPAuthRecovery,
+  MCPLinkAdmissionError,
+  recoveryForOAuthAttemptFailure,
+} from './mcp-auth-recovery';
 import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 describe('MCP auth recovery contract', () => {
@@ -28,6 +32,46 @@ describe('MCP auth recovery contract', () => {
       expect(JSON.stringify(recovery)).not.toContain('SENTINEL');
     }
   );
+
+  it('separates a link that was not admitted from an authority that changed', () => {
+    // The redemption lanes throw ONE generic message for every binding that
+    // moved, so the classifier is the only place left that can tell "this link
+    // is spent" from "your access changed". Reporting the first as the second
+    // sends the user to inspect permissions that are fine.
+    const refused = classifyMCPAuthRecovery(
+      new MCPLinkAdmissionError('This MCP connect action is invalid, expired, or superseded.'),
+      { mcpServerId: 'server-a' }
+    );
+
+    expect(refused).toMatchObject({
+      category: 'link_not_admitted',
+      action: 'request_new_link',
+      mcp_server_id: 'server-a',
+    });
+    expect(refused.message).toContain('new link');
+    expect(refused.message).not.toContain('authority');
+
+    // And an ordinary `Forbidden` — a real authority change — is untouched,
+    // even though the marker is one of its subclasses.
+    expect(classifyMCPAuthRecovery(new Forbidden('SENTINEL'))).toMatchObject({
+      category: 'permission_changed',
+      action: 'retry',
+    });
+  });
+
+  it('keeps the marker invisible to anything outside this process', () => {
+    // The whole point of the lanes' single generic message is that a redeemer
+    // learns nothing from a refusal. The distinction is Agor-owned, so it must
+    // not ride out on the wire: same status, same name, same serialization.
+    const refused = new MCPLinkAdmissionError(
+      'This MCP connect action is invalid, expired, or superseded.'
+    );
+    const plain = new Forbidden('This MCP connect action is invalid, expired, or superseded.');
+
+    expect(refused).toBeInstanceOf(Forbidden);
+    expect(JSON.stringify(refused)).toBe(JSON.stringify(plain));
+    expect(refused.code).toBe(403);
+  });
 
   it('maps DCR diagnostics to actionable public state without provider text', () => {
     const recovery = classifyMCPAuthRecovery(
@@ -143,6 +187,40 @@ describe('MCP auth recovery contract', () => {
     });
     expect(recoveryForOAuthAttemptFailure('callback_issuer_missing')).toMatchObject({
       failure_reason: 'profile_rejected',
+    });
+  });
+
+  it('names an unregistered redirect URI first when authorization never came back', () => {
+    const recovery = recoveryForOAuthAttemptFailure('authorization_never_returned', 'server-a');
+    expect(recovery).toMatchObject({
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      mcp_server_id: 'server-a',
+    });
+    // The proxy exists because the provider rejects a mismatched redirect URI
+    // front-channel, so Agor never observes it. The guidance has to lead with
+    // the cause the user cannot fix by trying again.
+    const message = recovery!.message;
+    expect(message).toContain('callback URL');
+    expect(message.indexOf('callback URL')).toBeLessThan(message.indexOf('closed'));
+    expect(message).not.toBe(
+      recoveryForOAuthAttemptFailure('authorization_timed_out', 'server-a')!.message
+    );
+  });
+
+  it('classifies an authorize-time redirect binding refusal as its own reason', () => {
+    expect(
+      classifyMCPAuthRecovery(
+        new OAuthConfigurationError(
+          'redirect_uri_mismatch',
+          'The OAuth client is registered under a different Agor callback URL.',
+          'redirect_uri_mismatch'
+        )
+      )
+    ).toMatchObject({
+      category: 'redirect_configuration_required',
+      action: 'configure_redirect',
+      failure_reason: 'redirect_uri_mismatch',
     });
   });
 

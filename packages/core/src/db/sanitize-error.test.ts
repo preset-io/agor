@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { RepositoryError } from './repositories/base';
 import {
   formatSanitizedDbError,
+  getPostgresSqlState,
   isDatabaseUniqueConstraintError,
   sanitizeDbError,
 } from './sanitize-error';
@@ -129,5 +130,28 @@ describe('isDatabaseUniqueConstraintError', () => {
       })
     ).toBe(false);
     expect(isDatabaseUniqueConstraintError(new Error('model validation failed'))).toBe(false);
+  });
+});
+
+describe('getPostgresSqlState', () => {
+  it('shares bounded, cycle-safe traversal with sanitized diagnostics', () => {
+    const wrapped = { cause: { cause: { code: '40P01' } } };
+    expect(getPostgresSqlState(wrapped)).toBe('40P01');
+    expect(sanitizeDbError(wrapped).code).toBe('40P01');
+    const cycle = { cause: {} };
+    cycle.cause = cycle;
+    expect(getPostgresSqlState(cycle)).toBeUndefined();
+    expect(sanitizeDbError(cycle).code).toBeUndefined();
+    let deep: unknown = { code: '40001' };
+    for (let i = 0; i < 8; i++) deep = { cause: deep };
+    expect(getPostgresSqlState(deep)).toBeUndefined();
+    expect(sanitizeDbError(deep).code).toBeUndefined();
+  });
+
+  it('does not interpret messages, SQLite codes or arbitrary metadata as PostgreSQL codes', () => {
+    expect(getPostgresSqlState(new Error('40P01 secret SQL'))).toBeUndefined();
+    expect(getPostgresSqlState({ code: 'SQLITE_BUSY' })).toBeUndefined();
+    expect(getPostgresSqlState({ code: '40P01\nsecret' })).toBeUndefined();
+    expect(sanitizeDbError({ code: 'SQLITE_BUSY' }).code).toBe('SQLITE_BUSY');
   });
 });

@@ -76,3 +76,5 @@ export const kbGraphEdges = schema.kbGraphEdges;
 
 // Re-export all types
 export type * from './schema.sqlite';
+
+export const kbImportReceipts = schema.kbImportReceipts;

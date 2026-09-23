@@ -6,9 +6,10 @@
  */
 
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
+import { LEAN_TRANSCRIPT_METADATA_FIELDS } from '../../types/message';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
 import { lockSessionBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
@@ -23,9 +24,16 @@ import {
 } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages, sessions, tasks } from '../schema';
 import { visibleSessionReferenceAccessExists } from './branch-access';
+import { invalidateRecordedToolCount } from './recorded-tool-count';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
+
+/** Keyset position in the MCP Slack connect due-work ordering. */
+export interface MCPSlackConnectDueCursor {
+  dueAt: Date;
+  messageId: string;
+}
 
 export type MessageFindPageOptions = {
   messageId?: MessageID;
@@ -34,6 +42,7 @@ export type MessageFindPageOptions = {
   sessionId?: SessionID;
   sessionIds?: SessionID[];
   taskId?: TaskID;
+  taskIds?: TaskID[];
   type?: Message['type'];
   role?: Message['role'];
   visibleToUserId?: UUID;
@@ -41,6 +50,8 @@ export type MessageFindPageOptions = {
   select?: readonly (keyof Message)[];
   limit?: number;
   skip?: number;
+  /** POC: SQL projection, not a promise to avoid reading the stored JSON blob. */
+  lean?: boolean;
 };
 
 /** Optional hook executed after a Message insert and before its transaction commits. */
@@ -61,6 +72,31 @@ export class MessageIdentifierIntegrityError extends Error {
     super(`${field} must be a canonical full UUID`);
     this.name = 'MessageIdentifierIntegrityError';
   }
+}
+
+/**
+ * The indexed due-work projection of a message's widget delivery record.
+ *
+ * Only a Slack-delivered `oauth` widget ever sets one. Kept beside the writes
+ * that use it — `create` and `mutateMetadataLocked` — so there is exactly one
+ * place the column's meaning is decided.
+ *
+ * Two sources, in strict precedence. A delivery record owns the column
+ * outright once it exists, because it is the thing that knows when the card
+ * is next due (and `undefined` there means "nothing to do", which must clear
+ * the column rather than fall back). Before it exists there is no record to
+ * ask, so a Slack-sourced mint stamps `slack_connect_due_at` and the sweep
+ * owns the first card from instant zero instead of depending on one
+ * in-process callback surviving.
+ */
+function mcpSlackConnectDueAt(metadata: Message['metadata']): Date | null {
+  const widget = metadata?.widget;
+  const dueAt = widget?.slack_connect
+    ? widget.slack_connect.next_repair_at
+    : widget?.slack_connect_due_at;
+  if (!dueAt) return null;
+  const parsed = new Date(dueAt);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
@@ -108,6 +144,9 @@ export class MessagesRepository {
       timestamp: new Date(row.timestamp).toISOString(),
       content_preview: row.content_preview || '',
       content: (row.data as { content: Message['content'] }).content,
+      ...((row.data as { has_deferred_reasoning?: boolean }).has_deferred_reasoning
+        ? { has_deferred_reasoning: true }
+        : {}),
       tool_uses: (row.data as { tool_uses?: Message['tool_uses'] }).tool_uses,
       parent_tool_use_id: row.parent_tool_use_id || undefined,
       metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
@@ -204,6 +243,13 @@ export class MessagesRepository {
       content_preview: contentPreview,
       parent_tool_use_id: message.parent_tool_use_id || null,
       data,
+      // Projected from the SANITIZED payload rather than from `message`, for
+      // the same reason the locked mutation projects from what it writes: the
+      // catch above can substitute an omission placeholder, and the column
+      // must never name a repair time the stored JSON does not carry.
+      mcp_slack_connect_due_at: mcpSlackConnectDueAt(
+        (data as { metadata?: Message['metadata'] }).metadata
+      ),
     };
   }
 
@@ -270,6 +316,7 @@ export class MessagesRepository {
           await this.assertSessionBelongsToTenant(tx, message.session_id);
           if (message.task_id) {
             await this.assertTaskBelongsToSession(tx, message.task_id, message.session_id);
+            await invalidateRecordedToolCount(tx, message.task_id);
           }
           const inserted = await insert(tx, messages).values(row).returning().one();
           const created = this.rowToMessage(inserted);
@@ -309,6 +356,12 @@ export class MessagesRepository {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          const parent = await select(txDb, { task_id: messages.task_id })
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (parent?.task_id)
+            await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, parent.task_id));
           await lockRowForUpdate(txDb, this.db, messages, eq(messages.message_id, messageId));
           const row = await select(txDb)
             .from(messages)
@@ -335,8 +388,16 @@ export class MessagesRepository {
             );
             sanitizedData = omittedMessageData(error.category);
           }
+          if (parent?.task_id) await invalidateRecordedToolCount(txDb, parent.task_id);
           const updatedRow = await update(txDb, messages)
-            .set({ data: sanitizedData })
+            .set({
+              data: sanitizedData,
+              // Projected from the JSON in the same statement that writes it,
+              // so the indexed due-work column can never name a repair time
+              // the metadata does not. Null for every message that is not a
+              // Slack-delivered `oauth` widget awaiting repair.
+              mcp_slack_connect_due_at: mcpSlackConnectDueAt(metadata),
+            })
             .where(eq(messages.message_id, messageId))
             .returning()
             .one();
@@ -345,6 +406,64 @@ export class MessagesRepository {
         { sqliteImmediate: true }
       )
     );
+  }
+
+  /**
+   * Page Slack-delivered `oauth` widgets whose card projection is due for
+   * bounded repair.
+   *
+   * The same shape as `TaskRepository.findMcpSlackRecoveryNoticePage`, for the
+   * same reason: a restart, a lost realtime event, or a daemon that died
+   * mid-delivery leaves a card that nothing else will ever revisit. `horizon`
+   * bounds how far back a sweep reaches so an abandoned row from last month
+   * cannot crowd out today's work, and the query rides the partial index
+   * rather than reading a table that holds every message ever sent.
+   *
+   * `after` continues the same ordering, so a caller with a page budget can
+   * reach work behind a full page of cards it could not advance. Without it
+   * one page is all a tenant ever sees, and anything that reliably occupies
+   * the oldest `limit` rows hides every card behind it indefinitely.
+   */
+  async findMcpSlackConnectDuePage(
+    options: { now?: Date; horizon?: Date; limit?: number; after?: MCPSlackConnectDueCursor } = {}
+  ): Promise<{ messages: Message[]; cursor?: MCPSlackConnectDueCursor }> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('MCP Slack connect repair limit must be between 1 and 100');
+    }
+    const now = options.now ?? new Date();
+    const horizon = options.horizon ?? new Date(now.getTime() - 24 * 60 * 60_000);
+    const after = options.after;
+    const rows = await select(this.db)
+      .from(messages)
+      .where(
+        and(
+          gte(messages.mcp_slack_connect_due_at, horizon),
+          lte(messages.mcp_slack_connect_due_at, now),
+          ...(after
+            ? [
+                or(
+                  gt(messages.mcp_slack_connect_due_at, after.dueAt),
+                  and(
+                    eq(messages.mcp_slack_connect_due_at, after.dueAt),
+                    gt(messages.message_id, after.messageId)
+                  )
+                ),
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(messages.mcp_slack_connect_due_at), asc(messages.message_id))
+      .limit(limit)
+      .all();
+    const last = rows.at(-1) as MessageRow | undefined;
+    const lastDueAt = last?.mcp_slack_connect_due_at;
+    return {
+      messages: rows.map((row: MessageRow) => this.rowToMessage(row)),
+      ...(last && lastDueAt
+        ? { cursor: { dueAt: new Date(lastDueAt), messageId: last.message_id } }
+        : {}),
+    };
   }
 
   /**
@@ -380,6 +499,58 @@ export class MessagesRepository {
   }
 
   /**
+   * POC read model. Never select the original data/preview alongside this.
+   * JSON extraction still reads the source blob in the database. It avoids
+   * transferring/deserializing tool payloads in the daemon and browser only.
+   * Pending permission requests retain their inputs: never ask for approval
+   * of hidden arguments, even if a historical task status is inconsistent.
+   * Full task hydration uses the unchanged authorized messages.find boundary.
+   */
+  private leanDataProjection(): SQL {
+    const metadataKeys = sql.join(
+      LEAN_TRANSCRIPT_METADATA_FIELDS.map((key) => sql`${key}`),
+      sql`, `
+    );
+    // Qualify the widget discriminator as table + identifier: Drizzle strips
+    // Column qualifiers in single-table SELECTs, but json_each also has a type column.
+    if (isSQLiteDatabase(this.db)) {
+      return sql`json_object(
+        'has_deferred_reasoning', EXISTS(SELECT 1 FROM json_each(CASE WHEN json_type(${messages.data}, '$.content') = 'array' THEN json_extract(${messages.data}, '$.content') ELSE '[]' END) WHERE json_extract(value, '$.type') = 'thinking'),
+        'content', json(CASE json_type(${messages.data}, '$.content')
+          WHEN 'array' THEN (SELECT json_group_array(json(value))
+            FROM json_each(${messages.data}, '$.content')
+            WHERE json_extract(value, '$.type') NOT IN ('tool_use', 'tool_result', 'thinking'))
+          WHEN 'object' THEN CASE WHEN ${messages.type} = 'permission_request'
+            THEN json_set(json_extract(${messages.data}, '$.content'), '$.tool_input', json(
+              CASE WHEN json_extract(${messages.data}, '$.content.status') = 'pending'
+                THEN COALESCE(json_extract(${messages.data}, '$.content.tool_input'), '{}') ELSE '{}' END))
+            ELSE json_extract(${messages.data}, '$.content') END
+          ELSE json_quote(json_extract(${messages.data}, '$.content')) END),
+        'metadata', json((SELECT json_group_object(key, json(json_extract(${messages.data}, '$.metadata') -> key))
+          FROM json_each(${messages.data}, '$.metadata')
+          WHERE key IN (${metadataKeys}) AND (key != 'widget' OR ${messages}.${sql.identifier('type')} = 'widget_request')))
+      )`.mapWith(messages.data);
+    }
+    return sql`jsonb_build_object(
+      'has_deferred_reasoning', EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${messages.data}::jsonb -> 'content') = 'array' THEN ${messages.data}::jsonb -> 'content' ELSE '[]'::jsonb END) AS b(block) WHERE block ->> 'type' = 'thinking'),
+      'content', CASE jsonb_typeof(${messages.data}::jsonb -> 'content')
+        WHEN 'array' THEN COALESCE((SELECT jsonb_agg(block ORDER BY ordinal)
+          FROM jsonb_array_elements(${messages.data}::jsonb -> 'content') WITH ORDINALITY AS b(block, ordinal)
+          WHERE block ->> 'type' NOT IN ('tool_use', 'tool_result', 'thinking')), '[]'::jsonb)
+        WHEN 'object' THEN CASE WHEN ${messages.type} = 'permission_request'
+          THEN jsonb_set(${messages.data}::jsonb -> 'content', '{tool_input}',
+            CASE WHEN ${messages.data}::jsonb -> 'content' ->> 'status' = 'pending'
+              THEN COALESCE(${messages.data}::jsonb -> 'content' -> 'tool_input', '{}'::jsonb)
+              ELSE '{}'::jsonb END)
+          ELSE ${messages.data}::jsonb -> 'content' END
+        ELSE ${messages.data}::jsonb -> 'content' END,
+      'metadata', COALESCE((SELECT jsonb_object_agg(key, value)
+        FROM jsonb_each(COALESCE(NULLIF(${messages.data}::jsonb -> 'metadata', 'null'::jsonb), '{}'::jsonb))
+        WHERE key IN (${metadataKeys}) AND (key != 'widget' OR ${messages}.${sql.identifier('type')} = 'widget_request')), '{}'::jsonb)
+    )`.mapWith(messages.data);
+  }
+
+  /**
    * Find one exact SQL page. The same predicate is applied to the count and
    * data queries so Feathers pagination never counts rows that the page cannot
    * return, and only the requested page's JSON rows are hydrated.
@@ -387,7 +558,7 @@ export class MessagesRepository {
   async findPage(
     opts: MessageFindPageOptions = {}
   ): Promise<{ data: Partial<Message>[]; total: number }> {
-    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+    if (opts.sessionIds?.length === 0 || opts.taskIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
     if (opts.messageId) conditions.push(eq(messages.message_id, opts.messageId));
@@ -396,6 +567,7 @@ export class MessagesRepository {
     if (opts.sessionId) conditions.push(eq(messages.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(messages.session_id, opts.sessionIds));
     if (opts.taskId) conditions.push(eq(messages.task_id, opts.taskId));
+    if (opts.taskIds) conditions.push(inArray(messages.task_id, opts.taskIds));
     if (opts.type) conditions.push(eq(messages.type, opts.type));
     if (opts.role) conditions.push(eq(messages.role, opts.role));
     if (opts.visibleToUserId) {
@@ -432,7 +604,12 @@ export class MessagesRepository {
       if (projection && column) projection[field] = column;
     }
 
-    let dataQuery = select(this.db, projection).from(messages);
+    // Identity-only membership probes select no JSON at all.
+    const leanProjection =
+      opts.lean && !selectedFields
+        ? { ...physicalColumns, content_preview: sql<string>`''`, data: this.leanDataProjection() }
+        : undefined;
+    let dataQuery = select(this.db, leanProjection ?? projection).from(messages);
     if (whereClause) dataQuery = dataQuery.where(whereClause);
 
     const sortColumns = {
@@ -483,12 +660,24 @@ export class MessagesRepository {
   /**
    * Get all messages for a session filtered by type (ordered by index)
    */
-  async findBySessionIdAndType(sessionId: SessionID, type: Message['type']): Promise<Message[]> {
-    const rows = await select(this.db)
+  /**
+   * All messages of one type in a session, oldest first.
+   *
+   * `options.newestFirst` with `options.limit` is for callers that only care
+   * about recent rows — a widget sweep, say — so the read stays bounded in a
+   * long-running session instead of growing with its whole history.
+   */
+  async findBySessionIdAndType(
+    sessionId: SessionID,
+    type: Message['type'],
+    options?: { limit?: number; newestFirst?: boolean }
+  ): Promise<Message[]> {
+    const ordering = options?.newestFirst ? desc(messages.index) : messages.index;
+    const query = select(this.db)
       .from(messages)
       .where(and(eq(messages.session_id, sessionId), eq(messages.type, type)))
-      .orderBy(messages.index)
-      .all();
+      .orderBy(ordering);
+    const rows = await (options?.limit ? query.limit(options.limit) : query).all();
 
     return rows.map((r: MessageRow) => this.rowToMessage(r));
   }
@@ -538,6 +727,15 @@ export class MessagesRepository {
       runDatabaseTransaction(
         this.db,
         async (tx) => {
+          // Task before Message matches create/terminalization lock ordering.
+          const parent = await select(tx, { task_id: messages.task_id })
+            .from(messages)
+            .where(eq(messages.message_id, messageId))
+            .one();
+          if (parent?.task_id) {
+            await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+            await invalidateRecordedToolCount(tx, parent.task_id);
+          }
           // PATCH reconstructs the JSON data column from the current logical
           // Message. Lock before reading it so concurrent patches to distinct
           // mutable fields cannot overwrite one another with stale data.
@@ -582,13 +780,42 @@ export class MessagesRepository {
    * Delete all messages for a session (cascades automatically via FK)
    */
   async deleteBySessionId(sessionId: SessionID): Promise<void> {
-    await deleteFrom(this.db, messages).where(eq(messages.session_id, sessionId)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const parents = await select(tx, { task_id: tasks.task_id })
+          .from(tasks)
+          .where(eq(tasks.session_id, sessionId))
+          .orderBy(asc(tasks.task_id))
+          .all();
+        for (const parent of parents) {
+          await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+          await invalidateRecordedToolCount(tx, parent.task_id);
+        }
+        await deleteFrom(tx, messages).where(eq(messages.session_id, sessionId)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
    * Delete a single message
    */
   async delete(messageId: MessageID): Promise<void> {
-    await deleteFrom(this.db, messages).where(eq(messages.message_id, messageId)).run();
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const parent = await select(tx, { task_id: messages.task_id })
+          .from(messages)
+          .where(eq(messages.message_id, messageId))
+          .one();
+        if (parent?.task_id) {
+          await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, parent.task_id));
+          await invalidateRecordedToolCount(tx, parent.task_id);
+        }
+        await deleteFrom(tx, messages).where(eq(messages.message_id, messageId)).run();
+      },
+      { sqliteImmediate: true }
+    );
   }
 }

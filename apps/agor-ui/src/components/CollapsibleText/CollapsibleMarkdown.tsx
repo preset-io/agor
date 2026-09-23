@@ -1,17 +1,18 @@
 import { theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
-import { TEXT_TRUNCATION } from '../../constants/ui';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { getMarkdownPreview, isLongMarkdown } from './markdownPreview';
 
 interface CollapsibleMarkdownProps {
   children: string;
-  maxLines?: number;
   className?: string;
   style?: React.CSSProperties;
   defaultExpanded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
   /**
-   * If true, uses Streamdown for incomplete markdown handling
+   * Whether this is an actively streaming message
    */
   isStreaming?: boolean;
 }
@@ -20,31 +21,32 @@ interface CollapsibleMarkdownProps {
  * CollapsibleMarkdown - Renders markdown with truncation support
  *
  * Unlike CollapsibleText which uses Ant Design's ellipsis (works well for plain text),
- * CollapsibleMarkdown renders markdown and uses line counting for truncation.
+ * CollapsibleMarkdown renders a bounded character preview, letting Streamdown
+ * repair incomplete syntax without estimating layout or scanning for fence ends.
  *
  * This allows full markdown rendering in both collapsed and expanded states.
  *
  * Usage:
  * ```tsx
- * <CollapsibleMarkdown maxLines={10}>
+ * <CollapsibleMarkdown>
  *   {longMarkdownContent}
  * </CollapsibleMarkdown>
  * ```
  */
 export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   children,
-  maxLines = TEXT_TRUNCATION.DEFAULT_LINES,
   className,
   style,
   defaultExpanded = false,
+  expanded: controlledExpanded,
+  onExpandedChange,
   isStreaming = false,
 }) => {
   const { token } = theme.useToken();
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [localExpanded, setExpanded] = useState(defaultExpanded);
+  const expanded = controlledExpanded ?? localExpanded;
 
-  const lines = children.split('\n');
-  // Add threshold to avoid truncating slightly-over-limit content
-  const shouldTruncate = lines.length > maxLines + 5;
+  const shouldTruncate = isLongMarkdown(children);
 
   if (!shouldTruncate) {
     return (
@@ -54,13 +56,18 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
     );
   }
 
-  // Smart truncation that respects code fences
-  const displayContent = expanded ? children : smartTruncate(children, maxLines);
-  const lineCount = lines.length;
+  const displayContent = expanded ? children : getMarkdownPreview(children);
 
   return (
     <div className={className} style={style}>
-      <MarkdownRenderer content={displayContent} isStreaming={isStreaming} />
+      <MarkdownRenderer
+        content={displayContent}
+        isStreaming={isStreaming}
+        isIncomplete={!expanded}
+        // Partial code/table exports would copy only the preview. The enclosing
+        // message copy action still owns the full source; expansion restores controls.
+        showControls={expanded}
+      />
 
       <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {!expanded && (
@@ -72,12 +79,16 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
               color: token.colorTextTertiary,
             }}
           >
-            ... ({lineCount - maxLines} more lines)
+            …
           </div>
         )}
         <button
           type="button"
-          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          onClick={() => {
+            setExpanded(!expanded);
+            onExpandedChange?.(!expanded);
+          }}
           style={{
             fontSize: token.fontSizeSM,
             cursor: 'pointer',
@@ -94,32 +105,3 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
     </div>
   );
 };
-
-/**
- * Smart truncation that avoids breaking code fences
- *
- * @param markdown - The markdown content
- * @param maxLines - Maximum lines to show
- * @returns Truncated markdown that respects code fence boundaries
- */
-function smartTruncate(markdown: string, maxLines: number): string {
-  const lines = markdown.split('\n');
-  let inCodeFence = false;
-  let truncateAt = maxLines;
-
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim().startsWith('```')) {
-      inCodeFence = !inCodeFence;
-    }
-
-    // If we're at max lines and inside code fence, extend to end of fence
-    if (i >= maxLines && inCodeFence) {
-      truncateAt = i + 1;
-    } else if (i >= maxLines && !inCodeFence) {
-      truncateAt = i;
-      break;
-    }
-  }
-
-  return lines.slice(0, truncateAt).join('\n');
-}

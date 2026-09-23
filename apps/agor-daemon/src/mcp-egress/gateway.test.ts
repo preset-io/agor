@@ -204,7 +204,6 @@ async function harness(options: HarnessOptions) {
     status: TaskStatus.RUNNING,
     message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
     git_state: { ref_at_start: 'main', sha_at_start: 'test' },
-    tool_use_count: 0,
     metadata: initialMcpRecovery ? { mcp_recovery: initialMcpRecovery } : undefined,
   });
   const server = await new MCPServerRepository(rawDb).create({

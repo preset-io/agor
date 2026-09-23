@@ -271,6 +271,12 @@ Runtime verification allows at most 30 seconds of ordinary clock skew while
 retaining the callback assertion's maximum 30-second signed lifetime. This does
 not extend durable attempt expiry or permit delivery/exchange retries.
 
+Upgrade callback-serving replicas before enabling relay mode. Relay-bound pending
+attempts use a newer sealed-envelope version so an older replica refuses them
+rather than completing them as direct OAuth. Existing direct attempts from the
+previous envelope versions remain readable; an interrupted relay attempt requires
+a fresh connection, not a replay. This does not migrate stored grants or app secrets.
+
 ### Trust and failure boundaries
 
 Tenant/user/server ownership, sealed state/PKCE, issuer/resource binding,

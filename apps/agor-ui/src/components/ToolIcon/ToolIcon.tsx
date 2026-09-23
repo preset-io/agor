@@ -21,6 +21,8 @@ export interface ToolIconProps {
   size?: number;
   /** Additional CSS class */
   className?: string;
+  /** Draw the thin plate outline (default: true); compact lists can drop it. */
+  bordered?: boolean;
 }
 
 const toolLogos: Record<string, string> = {
@@ -37,7 +39,12 @@ const toolLogos: Record<string, string> = {
 // biome-ignore lint/plugin/noHardcodedColorLiteral: exact brand-asset image plate
 const DARK_LOGO_PLATE = '#000000';
 
-export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
+export const ToolIcon: React.FC<ToolIconProps> = ({
+  tool,
+  size = 32,
+  className = '',
+  bordered = true,
+}) => {
   const { token } = useToken();
   const logoSrc = toolLogos[tool];
   const bg = DARK_LOGO_PLATE;
@@ -62,7 +69,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
           height: size,
           borderRadius: '50%',
           background: bg,
-          border: `1px solid ${token.colorBorder}`,
+          border: bordered ? `1px solid ${token.colorBorder}` : undefined,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -83,7 +90,7 @@ export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className =
         height: size,
         borderRadius: '50%',
         background: bg,
-        border: `1px solid ${token.colorBorder}`,
+        border: bordered ? `1px solid ${token.colorBorder}` : undefined,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

@@ -7,6 +7,7 @@ import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
 } from '@agor/core/types';
@@ -50,6 +51,7 @@ describe('realtimePublishPolicyFor', () => {
     'mcp-catalog/connect',
     'mcp-catalog/start-session',
     'mcp-slack-recovery',
+    KNOWLEDGE_TRANSFER.path,
     ...Object.values(OWNERSHIP_TRANSFER_SERVICES),
   ])('keeps %s replies private to the caller', (path) => {
     expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
@@ -64,23 +66,24 @@ describe('realtimePublishPolicyFor', () => {
 });
 
 describe('assertRealtimePublishPolicyCoverage', () => {
-  it.each([ENVIRONMENT_COMMAND_REPORT_SERVICE, BRANCH_DELETION_REPORT_SERVICE])(
-    'covers private report RPC %s even with no custom events',
-    (servicePath) => {
-      const app = feathers();
-      app.use(
-        servicePath,
-        {
-          async create() {
-            return {};
-          },
+  it.each([
+    ENVIRONMENT_COMMAND_REPORT_SERVICE,
+    BRANCH_DELETION_REPORT_SERVICE,
+    KNOWLEDGE_TRANSFER.path,
+  ])('covers private report RPC %s even with no custom events', (servicePath) => {
+    const app = feathers();
+    app.use(
+      servicePath,
+      {
+        async create() {
+          return {};
         },
-        { methods: ['create'], events: [] }
-      );
-      expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
-      expect(realtimePublishPolicyFor(servicePath)?.audience).toBe('none');
-    }
-  );
+      },
+      { methods: ['create'], events: [] }
+    );
+    expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
+    expect(realtimePublishPolicyFor(servicePath)?.audience).toBe('none');
+  });
 
   it('accepts an app whose services are all declared', () => {
     const app = { services: { sessions: {}, 'mcp-catalog/connect': {}, '/branches': {} } };
@@ -164,6 +167,7 @@ describe('source scan: every registered path is declared', () => {
         JSON.stringify(BRANCH_DELETION_REPORT_SERVICE)
       )
       .replace(/\bBRANCH_CLEANUP_REPORT_SERVICE\b/g, JSON.stringify(BRANCH_CLEANUP_REPORT_SERVICE))
+      .replace(/\bKNOWLEDGE_TRANSFER\.path\b/g, JSON.stringify(KNOWLEDGE_TRANSFER.path))
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];
     lines.forEach((line, index) => {
@@ -278,6 +282,7 @@ describe('source scan: every registered path is declared', () => {
     // otherwise turn this whole describe into a silent pass.
     const found = registeredPathsInSource();
     expect(found.has('sessions')).toBe(true);
+    expect(found.has(KNOWLEDGE_TRANSFER.path)).toBe(true);
     expect(found.has('mcp-catalog/connect')).toBe(true);
     expect(found.size).toBeGreaterThan(100);
   });

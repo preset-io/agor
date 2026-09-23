@@ -8,13 +8,12 @@
 import type { GlobalToken } from 'antd';
 import { Typography } from 'antd';
 import type React from 'react';
-import { TEXT_TRUNCATION } from '../../constants/ui';
 
 /**
  * Build a React node for the Bash tool header description.
  *
  * Shows the description text (if present) followed by the command
- * in a code tag, truncated to BASH_COMMAND_PREVIEW_CHARS.
+ * in a code tag, ellipsized only when it exceeds the available row width.
  *
  * Returns undefined when there is no command to display.
  */
@@ -26,8 +25,6 @@ export function buildBashDescriptionNode(
 
   const bashDesc = input.description ? String(input.description) : null;
   const cmd = String(input.command);
-  const maxLen = TEXT_TRUNCATION.BASH_COMMAND_PREVIEW_CHARS;
-  const truncatedCmd = cmd.length > maxLen ? `${cmd.slice(0, maxLen)}…` : cmd;
 
   return (
     <span
@@ -36,6 +33,7 @@ export function buildBashDescriptionNode(
         alignItems: 'baseline',
         gap: 4,
         minWidth: 0,
+        flex: 1,
         overflow: 'hidden',
       }}
     >
@@ -53,8 +51,8 @@ export function buildBashDescriptionNode(
           {bashDesc}
         </Typography.Text>
       )}
-      <Typography.Text code ellipsis style={{ fontSize: token.fontSizeSM - 1 }}>
-        {truncatedCmd}
+      <Typography.Text code ellipsis style={{ fontSize: token.fontSizeSM - 1, minWidth: 0 }}>
+        {cmd}
       </Typography.Text>
     </span>
   );
