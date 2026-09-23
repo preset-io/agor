@@ -116,6 +116,7 @@ export async function executeOpenCodeTask(params: {
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
   let managedScratch: ManagedOpenCodeNativeStateLayout | undefined;
+  let managedLayoutForErrors: ManagedOpenCodeNativeStateLayout | undefined;
   const committedGrant = params.managedOpenCodeAdmission;
   const managedPayloadCandidate =
     !!params.agenticToolContext &&
@@ -205,6 +206,7 @@ export async function executeOpenCodeTask(params: {
         taskId,
         storeId: committedGrant.attempt.store_id,
       });
+      managedLayoutForErrors = nativeState;
       const provider = session.model_config.provider.trim();
       const credentialField = hostedCredentialFieldForProvider(provider);
       if (!credentialField) {
@@ -443,6 +445,23 @@ export async function executeOpenCodeTask(params: {
     } as Partial<import('@agor/core/types').Task>);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
+    if (committedGrant && managedLayoutForErrors) {
+      // Preparation and restore can fail before OpenCode's own sanitizer is
+      // installed. Never persist private HOME/scratch paths in Task errors.
+      const sensitive = [
+        managedLayoutForErrors.homeDir,
+        managedLayoutForErrors.attemptsDir,
+        managedLayoutForErrors.scratchRoot,
+        managedLayoutForErrors.liveDbPath,
+        ...Object.values(managedLayoutForErrors.xdg),
+        managedLayoutForErrors.namespaceKey,
+      ]
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+      for (const value of sensitive) {
+        failure.message = failure.message.replaceAll(value, '[managed state]');
+      }
+    }
     console.error('[opencode] execution failed category=task_execution');
 
     if (managedPayloadCandidate && !committedGrant) {

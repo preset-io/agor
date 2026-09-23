@@ -262,6 +262,9 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         .where(eq(sessions.session_id, sessionId))
         .one();
       expect(before?.data.sdk_native_state_store_id).toBe(storeId);
+      const projected = await new SessionRepository(db).findById(sessionId);
+      expect(Object.hasOwn(projected ?? {}, 'sdk_native_state_store_id')).toBe(false);
+      expect(Object.hasOwn(projected ?? {}, 'opencode_cleanup_cursor')).toBe(false);
       await new SessionRepository(db).update(sessionId, { title: 'metadata only' });
       const after = await select(db).from(sessions).where(eq(sessions.session_id, sessionId)).one();
       expect(after?.data.sdk_native_state_store_id).toBe(storeId);
@@ -439,6 +442,12 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         },
         firstHolder
       );
+      await new SessionRepository(db).update(sessionId, { title: 'pointer-preserving metadata' });
+      const afterMetadata = await select(db)
+        .from(sessions)
+        .where(eq(sessions.session_id, sessionId))
+        .one();
+      expect(afterMetadata?.data.sdk_native_state).toEqual(firstManifest);
 
       const createNextTask = async () => {
         const created = await taskRepo.create({

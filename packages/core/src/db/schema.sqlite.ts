@@ -517,6 +517,12 @@ export const opencodeCheckpointAttempts = sqliteTable(
       table.retired_at,
       table.delete_retry_at
     ),
+    holderObservationIdx: index('opencode_checkpoint_attempts_holder_observation_idx').on(
+      table.tenant_id,
+      table.session_id,
+      table.holder_observation_retry_at,
+      table.attempt_no
+    ),
   })
 );
 

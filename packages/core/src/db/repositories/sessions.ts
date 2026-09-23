@@ -155,9 +155,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     const genealogyData = row.data.genealogy || { children: [] };
     // Older rows may still contain the former session-level git_state JSON.
     // Task snapshots are authoritative; do not expose the legacy projection.
-    const { git_state: _legacyGitState, ...sessionData } = row.data as typeof row.data & {
-      git_state?: unknown;
-    };
+    const {
+      git_state: _legacyGitState,
+      sdk_native_state_store_id: _internalStoreId,
+      opencode_cleanup_cursor: _internalCleanupCursor,
+      ...sessionData
+    } = row.data as typeof row.data & { git_state?: unknown };
     const sessionId = row.session_id as SessionID;
     const boardId = branchBoardId ?? null;
 
@@ -932,9 +935,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         const insertData = this.sessionToInsert(merged);
         // These native-state protocol fields are not part of the public Session
         // projection. Preserve them verbatim under the Session lock so an
-        // unrelated metadata patch cannot reset the immutable store/cursor.
+        // unrelated metadata patch cannot reset the immutable checkpoint,
+        // store identity, or cursor.
         insertData.data = {
           ...insertData.data,
+          ...(currentRow.data.sdk_native_state
+            ? { sdk_native_state: currentRow.data.sdk_native_state }
+            : {}),
           ...(currentRow.data.sdk_native_state_store_id
             ? { sdk_native_state_store_id: currentRow.data.sdk_native_state_store_id }
             : {}),

@@ -144,7 +144,11 @@ export class AgorExecutor {
             this.managedReconnectPending = true;
             return;
           }
-          void this.refreshTerminationState('reconnect');
+          void this.refreshTerminationState('reconnect').catch(() => {
+            // A transient read failure is not evidence of termination and must
+            // not become an unhandled rejection that kills an admitted holder.
+            console.warn('[executor.stop] event=reconnect_termination_read_deferred');
+          });
           void this.refreshDurableMcpRecovery();
         },
       });
@@ -241,6 +245,9 @@ export class AgorExecutor {
         // Managed attempts are settled only by the holder-aware OpenCode
         // handler after its I/O drain. A generic outer fallback cannot prove
         // a provider, checkpoint copy, or source read has closed.
+        if (!this.terminationRequest) {
+          await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+        }
         if (this.terminationRequest) {
           await this.reportTerminationComplete().catch(() => undefined);
         }
@@ -261,7 +268,7 @@ export class AgorExecutor {
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
             'code=0 reason=termination_recovered'
         );
-        process.exit(0);
+        process.exit(1);
         return;
       }
       console.error(

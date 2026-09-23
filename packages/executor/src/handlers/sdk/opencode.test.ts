@@ -633,6 +633,20 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     expect(mocks.runTurn).not.toHaveBeenCalled();
   });
 
+  it('redacts private managed paths from a preparation failure before persisting it', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    nativeState.prepare.mockRejectedValueOnce(
+      new Error(`EACCES: mkdir '/home/user/attempts/private' under /scratch/${taskId}/bad`)
+    );
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow(/\[managed state\]/);
+    const patch = state.services.tasks.patch.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(patch)).not.toContain('/home/user');
+    expect(JSON.stringify(patch)).not.toContain('/scratch/');
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+  });
+
   it('fails the turn as a missing credential when no reviewed key is saved', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
     state.services['config/resolve-api-key'].create.mockResolvedValueOnce({

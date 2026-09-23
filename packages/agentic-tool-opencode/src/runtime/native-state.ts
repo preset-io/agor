@@ -9,12 +9,10 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, createReadStream, createWriteStream } from 'node:fs';
+import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, rm, rmdir, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import type { OpenCodeNativeStateAttempt } from '@agor/core/types';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 
@@ -211,40 +209,41 @@ async function copyOpenedFile(
   sourcePath: string,
   targetPath: string
 ): Promise<{ digest: string; bytes: number }> {
-  const source = await openRegularFile(sourcePath);
   const directory = resolve(targetPath, '..');
   await ensureSafeDirectory(directory, false);
   const temp = join(directory, `.${basename(targetPath)}.tmp-${process.pid}-${randomUUID()}`);
-  const destination = await open(
-    temp,
-    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | NOFOLLOW,
-    0o600
-  );
+  const source = await openRegularFile(sourcePath);
+  let destination: Awaited<ReturnType<typeof open>> | undefined;
   const hash = createHash('sha256');
   let bytes = 0;
   let copyFailure: unknown;
-  let streamsFinished = false;
-  const digestTransform = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      hash.update(chunk);
-      bytes += chunk.length;
-      callback(null, chunk);
-    },
-  });
   try {
-    await pipeline(
-      createReadStream(sourcePath, { fd: source.fd, autoClose: false }),
-      digestTransform,
-      createWriteStream(temp, { fd: destination.fd, autoClose: false })
+    destination = await open(
+      temp,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | NOFOLLOW,
+      0o600
     );
-    streamsFinished = true;
+    // FileHandles retain descriptor ownership on every error path. Raw
+    // fd-backed streams may close the descriptor on destroy and then leave a
+    // FileHandle finalizer to close a reused descriptor later.
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const { bytesRead } = await source.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      bytes += bytesRead;
+      let offset = 0;
+      while (offset < bytesRead) {
+        const { bytesWritten } = await destination.write(buffer, offset, bytesRead - offset, null);
+        if (bytesWritten === 0) throw new Error('OpenCode checkpoint copy made no progress');
+        offset += bytesWritten;
+      }
+    }
     await destination.sync();
   } catch (error) {
     copyFailure = error;
   } finally {
-    // A failed pipeline destroys its streams, which close their raw fds even
-    // with autoClose:false. Closing FileHandles again can hit a reused fd.
-    if (streamsFinished) await Promise.allSettled([source.close(), destination.close()]);
+    await Promise.allSettled([source.close(), destination?.close() ?? Promise.resolve()]);
   }
   if (copyFailure) {
     await unlink(temp).catch(() => undefined);
@@ -357,16 +356,16 @@ export async function restoreOpenCodeAcceptedState(
     const handle = await openRegularFile(source);
     const hash = createHash('sha256');
     let bytes = 0;
-    let readFinished = false;
     try {
-      for await (const chunk of createReadStream(source, { fd: handle.fd, autoClose: false })) {
-        hash.update(chunk as Buffer);
-        bytes += (chunk as Buffer).length;
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+        bytes += bytesRead;
       }
-      readFinished = true;
     } finally {
-      // On read failure the iterator destroys/closes its stream fd.
-      if (readFinished) await handle.close();
+      await handle.close();
     }
     actual = { digest: `sha256:${hash.digest('hex')}`, bytes };
   } catch {
