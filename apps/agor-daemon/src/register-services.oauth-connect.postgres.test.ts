@@ -5,6 +5,7 @@ import {
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  executeRaw,
   GatewayChannelRepository,
   generateId,
   lockTenantExecutionFence,
@@ -17,6 +18,7 @@ import {
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   SessionRepository,
+  sql,
   TaskRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
@@ -324,7 +326,19 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const unvisited = await seed(a);
       const retired = await seed(a);
       const neighbor = await seed(b);
-      const boundary = await suspendAndReactivate(a);
+      await suspendAndReactivate(a);
+      // Pin a same-second millisecond boundary in the owned test database.
+      // Production writes the timestamp; controlling only this fixture's
+      // clock makes both sides of the strict comparison deterministic.
+      const boundary = await runWithTenantDatabaseScope(db, a, async (scoped) => {
+        await executeRaw(
+          scoped,
+          sql`UPDATE public.tenant_restrictions
+              SET updated_at = date_trunc('second', updated_at) + interval '500 milliseconds'
+              WHERE tenant_id = ${a} AND controller_id = 'r9-controller'`
+        );
+        return readTenantExecutionBoundary(scoped, a);
+      });
       expect(boundary.allowed).toBe(true);
       expect(boundary.resumeAfter).toBeDefined();
       await runWithTenantDatabaseScope(db, a, async (scoped) => {
@@ -373,22 +387,20 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       while (Date.now() <= boundary.resumeAfter!)
         await new Promise((resolve) => setTimeout(resolve, 1));
       const fresh = await seed(a);
-      if (boundary.resumeAfter! % 1_000 !== 999) {
-        // Unlike token iat, the widget timestamp retains milliseconds; a
-        // fresh event one millisecond after release in that SAME second wins.
-        await runWithTenantDatabaseScope(db, a, async (scoped) => {
-          await new MessagesRepository(scoped).mutateMetadataLocked(fresh.widgetId, (metadata) => ({
-            ...metadata,
-            widget: {
-              ...metadata!.widget!,
-              requested_at: new Date(boundary.resumeAfter! + 1).toISOString(),
-            },
-          }));
-        });
-        expect(Math.floor((boundary.resumeAfter! + 1) / 1_000)).toBe(
-          Math.floor(boundary.resumeAfter! / 1_000)
-        );
-      }
+      // Unlike token iat, the widget timestamp retains milliseconds; a
+      // fresh event one millisecond after release in that SAME second wins.
+      await runWithTenantDatabaseScope(db, a, async (scoped) => {
+        await new MessagesRepository(scoped).mutateMetadataLocked(fresh.widgetId, (metadata) => ({
+          ...metadata,
+          widget: {
+            ...metadata!.widget!,
+            requested_at: new Date(boundary.resumeAfter! + 1).toISOString(),
+          },
+        }));
+      });
+      expect(Math.floor((boundary.resumeAfter! + 1) / 1_000)).toBe(
+        Math.floor(boundary.resumeAfter! / 1_000)
+      );
       await expect(
         app.service('mcp-oauth-connect').create({ token: fresh.token }, fresh.params)
       ).resolves.toMatchObject({ state: 'connect_required' });
