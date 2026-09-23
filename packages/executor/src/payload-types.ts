@@ -962,6 +962,7 @@ export const BranchDeletePayloadSchema = BasePayloadSchema.extend({
     /** Existing tenant storage anchor; branch-homes itself is lazily created. */
     tenantDataRoot: z.string(),
     storageMode: z.enum(['clone', 'worktree']),
+    verifyDelegatedStorageMounts: z.boolean().optional(),
   }),
 });
 export type BranchDeletePayload = z.infer<typeof BranchDeletePayloadSchema>;

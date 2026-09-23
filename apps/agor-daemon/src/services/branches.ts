@@ -2102,11 +2102,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user) throw new NotAuthenticated('Authenticated branch management authority is required');
     const config = this.app.get('config');
-    if (
+    const externalExecutor =
       config.execution?.unix_user_mode === 'delegated' ||
-      config.execution?.executor_command_template ||
-      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external')
-    ) {
+      Boolean(config.execution?.executor_command_template) ||
+      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
+    if (externalExecutor && config.execution?.delegated_branch_deletion !== true) {
       throw new Conflict(
         'Permanent deletion requires a supported local storage executor. Delegated/external deletion containment is not available.'
       );
@@ -2190,6 +2190,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               branchHome: getBranchHomePath(branch.branch_id, tenantId),
               tenantDataRoot: getTenantDataRoot(tenantId),
               storageMode: branch.storage_mode ?? 'worktree',
+              verifyDelegatedStorageMounts: externalExecutor,
             },
           },
           {

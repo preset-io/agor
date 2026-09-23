@@ -359,7 +359,7 @@ Permanent deletion remains the separate full-resource workflow.
 
 V1 checks known task, upload and environment activity. Terminal closure is best-effort;
 detached/unmanaged processes are **not proven stopped**. Delegated/external execution
-is rejected until its containment is supported. Branch `updated_at` is metadata
+requires an explicitly supported storage mount contract. Branch `updated_at` is metadata
 activity, not evidence of filesystem inactivity. There is no scheduler or age cutoff.
 
 ### Deletion and retained data
@@ -401,8 +401,12 @@ executor. Operator reconciliation is required; do not clear private maintenance 
 to force a retry. An interrupted upload reservation likewise needs reconciliation,
 not automatic expiration while its writer could still be active.
 
-Deletion currently requires a local managed executor and available authoritative
-storage roots; delegated or external launchers are rejected. Historical SDK sessions
+Deletion requires available authoritative storage roots. Delegated launchers are
+rejected by default; operators may set `execution.delegated_branch_deletion: true`
+only when every deletion executor mounts the tenant's worktrees, base repositories,
+and `branch-homes` from the same persistent volume. The executor verifies that
+these roots are mounted separately from its container filesystem before deleting.
+Historical SDK sessions
 using a shared execution home also block deletion until their owned storage is
 reconciled; the shared user home is never recursively removed. Remote Git refs and
 shared base-repository Git history are retained. Missing ownership metadata or an

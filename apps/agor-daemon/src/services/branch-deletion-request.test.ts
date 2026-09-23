@@ -12,9 +12,7 @@ vi.mock('../utils/spawn-executor', async (original) => ({
   spawnExecutor: vi.fn(),
 }));
 
-test('public deletion durably admits exactly one full executor and returns deleting, never an immediate tombstone', async ({
-  db,
-}) => {
+test('public local deletion admits one executor and returns deleting', async ({ db }) => {
   vi.mocked(spawnExecutor).mockClear();
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const emit = vi.fn();
@@ -49,9 +47,80 @@ test('public deletion durably admits exactly one full executor and returns delet
     const payload = vi.mocked(spawnExecutor).mock.calls[0]![0];
     expect(payload).toMatchObject({
       command: 'branch.delete',
-      params: { branchId: branch.branch_id, branchPath: branch.path, generation: 1 },
+      params: {
+        branchId: branch.branch_id,
+        branchPath: branch.path,
+        generation: 1,
+        verifyDelegatedStorageMounts: false,
+      },
     });
     expect(await new BranchRepository(db).findById(branch.branch_id)).not.toBeNull();
     expect(emit.mock.calls.some((call) => call[0] === 'removed')).toBe(false);
+  });
+});
+
+test('capability-gated delegated deletion dispatches with mount verification', async ({ db }) => {
+  vi.mocked(spawnExecutor).mockClear();
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const app = {
+    get: () => ({
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launcher',
+        delegated_branch_deletion: true,
+      },
+    }),
+    emit: vi.fn(),
+    sessionTokenService: { generateCommandToken: vi.fn(async () => 'fixture-command-token') },
+    service: () => ({ emit: vi.fn() }),
+  } as unknown as Application;
+  const service = new BranchesService(db, app);
+  vi.spyOn(service, 'get').mockImplementation(
+    async () => (await new BranchRepository(db).findById(branch.branch_id))! as never
+  );
+  vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+    env: {},
+    branchFsAccess: 'write',
+    sandboxMounts: {},
+  } as never);
+  const params = {
+    provider: 'rest',
+    user,
+    tenant: { tenant_id: 'default' as TenantID, source: 'explicit' },
+  } as AuthenticatedParams;
+  await runWithTenantContext('default', async () => {
+    expect((await service.remove(branch.branch_id, params)).deletion_status).toBe('deleting');
+    expect(spawnExecutor).toHaveBeenCalledOnce();
+    expect(vi.mocked(spawnExecutor).mock.calls[0]![0]).toMatchObject({
+      command: 'branch.delete',
+      params: { branchId: branch.branch_id, verifyDelegatedStorageMounts: true },
+    });
+  });
+});
+
+test('delegated deletion without a storage capability leaves the branch unchanged', async ({
+  db,
+}) => {
+  vi.mocked(spawnExecutor).mockClear();
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const app = {
+    get: () => ({
+      execution: { unix_user_mode: 'delegated', executor_command_template: 'launcher' },
+    }),
+  } as unknown as Application;
+  const service = new BranchesService(db, app);
+  const params = {
+    provider: 'rest',
+    user,
+    tenant: { tenant_id: 'default' as TenantID, source: 'explicit' },
+  } as AuthenticatedParams;
+  await runWithTenantContext('default', async () => {
+    await expect(service.remove(branch.branch_id, params)).rejects.toThrow(
+      'supported local storage executor'
+    );
+    expect(
+      (await new BranchRepository(db).findById(branch.branch_id))?.deletion_status
+    ).toBeUndefined();
+    expect(spawnExecutor).not.toHaveBeenCalled();
   });
 });
