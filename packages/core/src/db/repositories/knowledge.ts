@@ -326,8 +326,10 @@ function makeSnippet(content: string | null | undefined, q: string): string | nu
 /**
  * SQL form of `canReadKnowledgeDocument`: readable namespaces plus the
  * visibility overlay (public, own, or admin). Returns null when nothing can be
- * read. `namespaceIds` undefined means no namespace restriction, which callers
- * must only pass for admins.
+ * read. `namespaceIds` undefined means no namespace restriction.
+ * `KnowledgeDocumentReadScope` (document lists) only allows that for admins;
+ * the older `KnowledgeSearchQuery` contract still treats the IDs as optional,
+ * and its service always supplies them for non-admins.
  */
 function knowledgeDocumentReadConditions(options: {
   asAdmin: boolean;
