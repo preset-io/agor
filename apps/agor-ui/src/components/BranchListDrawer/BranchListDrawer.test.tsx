@@ -57,4 +57,48 @@ describe('BoardSessionList', () => {
     expect(row).toHaveAccessibleName(/branch preset-io\/agor \/ feature\/panel-management/);
     expect(row).toContainElement(branchText);
   });
+
+  it('lists a remote-created session once, at its own branch when that branch is on the board', () => {
+    const creator = { ...branch, branch_id: 'branch-creator', name: 'creator' } as Branch;
+    const target = { ...session, session_id: 'remote-1', title: 'Remote child' } as Session;
+    // Same id under the creator's branch, as buildSessionMaps projects it for the card tree.
+    const surrogate = {
+      ...target,
+      branch_id: creator.branch_id,
+      remote_surrogate: {
+        source_session_id: 'creator-session',
+        source_branch_id: creator.branch_id,
+        target_branch_id: branch.branch_id,
+      },
+    } as unknown as Session;
+    const renderList = (branches: Branch[]) =>
+      render(
+        <BoardSessionList
+          board={board}
+          currentBoardId={board.board_id}
+          branchById={new Map(branches.map((b) => [b.branch_id, b]))}
+          repoById={new Map()}
+          sessionsByBranch={
+            new Map([
+              [creator.branch_id, [surrogate]],
+              [branch.branch_id, [target]],
+            ])
+          }
+          onSessionClick={vi.fn()}
+        />
+      );
+
+    const { unmount } = renderList([creator, branch]);
+    const rows = screen.getAllByRole('button', { name: /^Open session Remote child/ });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveAccessibleName(/branch feature\/panel-management/);
+    expect(screen.getByText('1 session', { exact: false })).toBeInTheDocument();
+    unmount();
+
+    // The home branch is on another board: the surrogate is its only row here.
+    renderList([creator, { ...branch, board_id: 'board-2' } as Branch]);
+    expect(screen.getByRole('button', { name: /^Open session Remote child/ })).toHaveAccessibleName(
+      /branch creator/
+    );
+  });
 });

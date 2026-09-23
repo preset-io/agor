@@ -98,17 +98,18 @@ const BoardSessionRow = memo(function BoardSessionRow({
   const branchLabel = branch ? (repo ? `${repo.slug} / ${branch.name}` : branch.name) : null;
   const state = getSessionRowStateLabel(session);
   const boardId = branch?.board_id;
+  const rowFill = failed
+    ? getSessionRowFill(token, { failed, selected: false })
+    : showActions
+      ? token.controlItemBgHover
+      : undefined;
 
   return (
     <div
       style={{
         position: 'relative',
         borderRadius: token.borderRadiusSM,
-        background: failed
-          ? getSessionRowFill(token, { failed, selected: false })
-          : showActions
-            ? token.controlItemBgHover
-            : undefined,
+        background: rowFill,
         // Long boards: skip layout/paint for off-screen rows.
         contentVisibility: 'auto',
         containIntrinsicSize: `auto ${token.controlHeight}px`,
@@ -228,9 +229,13 @@ const BoardSessionRow = memo(function BoardSessionRow({
             insetInlineEnd: token.paddingXXS,
             top: token.controlHeight / 2,
             transform: 'translateY(-50%)',
-            paddingInline: token.paddingXXS,
+            // Opaque row fill with a leading fade: covered branch text runs out, never shows through.
+            paddingInlineStart: token.paddingLG,
+            paddingInlineEnd: token.paddingXXS,
             borderRadius: token.borderRadiusSM,
-            background: `${token.colorBgContainer}e6`,
+            backgroundImage: [rowFill ?? token.colorBgContainer, token.colorBgContainer]
+              .map((fill) => `linear-gradient(to right, transparent, ${fill} ${token.paddingLG}px)`)
+              .join(', '),
             opacity: showActions ? 1 : 0,
             pointerEvents: showActions ? 'auto' : 'none',
             transition: `opacity ${token.motionDurationFast}`,
@@ -320,7 +325,17 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       }
     }
 
-    return boardBranchIds.flatMap((branchId) => sessionsByBranch.get(branchId) || []);
+    // Remote-created sessions also appear as same-id surrogates under the creator's branch; list each once, preferring the real row.
+    const byId = new Map<string, Session>();
+    for (const branchId of boardBranchIds) {
+      for (const session of sessionsByBranch.get(branchId) ?? []) {
+        const seen = byId.get(session.session_id);
+        if (!seen || (seen.remote_surrogate && !session.remote_surrogate)) {
+          byId.set(session.session_id, session);
+        }
+      }
+    }
+    return [...byId.values()];
   }, [sessionsByBranch, branchById, currentBoardId]);
 
   // One idle flag mounts every row's hover toolbar in a single commit.

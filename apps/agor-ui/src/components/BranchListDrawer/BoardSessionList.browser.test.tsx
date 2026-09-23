@@ -151,6 +151,10 @@ it('reveals time and the board locator on hover or focus and opens rows by keybo
   expect(within(toolbar).getByText('5m ago')).toBeVisible();
   expect(within(toolbar).getByRole('button', { name: 'Go to card on board' })).toBeVisible();
   expect(getComputedStyle(target.parentElement!).backgroundColor).not.toBe(TRANSPARENT);
+  // A leading fade lets covered branch text run out instead of cutting mid-word.
+  expect(getComputedStyle(toolbar).backgroundImage).toMatch(
+    new RegExp(`^linear-gradient\\(to right, ${TRANSPARENT.replace(/[()]/g, '\\$&')}`)
+  );
   // The toolbar sits on the row's first line, centered.
   const center = (rect: DOMRect) => rect.top + rect.height / 2;
   expect(

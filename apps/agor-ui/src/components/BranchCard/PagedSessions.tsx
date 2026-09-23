@@ -36,8 +36,7 @@ export function PagedSessions({
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!fillAvailableHeight || !root) return;
-    // The list remounts per page, so read it at call time; the root is the stable slot.
-    // Measure the rows, not scrollHeight: a flex slot reports its own height for short lists.
+    // Read refs at call time (the list remounts per page) and measure rows, not scrollHeight, which floors at the slot.
     const measure = () => {
       const list = listRef.current;
       const rows = rowsRef.current;
