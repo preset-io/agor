@@ -3385,6 +3385,9 @@ export const kbGraphNodes = pgTable(
   },
   (table) => ({
     tenantIdx: index('kb_graph_nodes_tenant_id_idx').on(table.tenant_id),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Deployed identity includes archived rows; repositories must
+    // restore them. Do not infer active-only uniqueness from this declaration.
     uriIdx: uniqueIndex('kb_graph_nodes_tenant_uri_unique')
       .on(table.tenant_id, table.uri)
       .where(sql`${table.archived} = false`),
@@ -3454,6 +3457,9 @@ export const kbGraphEdges = pgTable(
       table.target_node_id,
       table.edge_type
     ),
+    // Historical declaration drift: migration 0054 creates this index WITHOUT
+    // a predicate. Archived edge identities remain unique and must be restored.
+    // Keep the deployed constraint intact when reconciling migration metadata.
     sourceTargetTypeIdx: uniqueIndex('kb_graph_edges_tenant_source_target_type_unique')
       .on(table.tenant_id, table.source_node_id, table.target_node_id, table.edge_type)
       .where(sql`${table.archived} = false`),

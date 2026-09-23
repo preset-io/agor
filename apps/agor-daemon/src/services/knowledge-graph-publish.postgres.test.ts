@@ -298,17 +298,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         ).edges[0]
       ).toMatchObject({ edge_id: edges[0].edge_id, properties: { keep: true } });
       const sourceNode = await scope(() => graph.findNode(source));
-      await scope(async () => {
-        await update(db, kbGraphNodes)
-          .set({ archived: true, metadata: { retained: true } })
-          .where(eq(kbGraphNodes.node_id, sourceNode!.node_id))
-          .run();
-        expect(await graph.getOrCreateNode(source)).toMatchObject({
-          node_id: sourceNode!.node_id,
-          archived: false,
-          metadata: { retained: true },
+      for (const ref of [{ node_id: sourceNode!.node_id }, source]) {
+        await scope(async () => {
+          await update(db, kbGraphNodes)
+            .set({ archived: true, metadata: { retained: true } })
+            .where(eq(kbGraphNodes.node_id, sourceNode!.node_id))
+            .run();
+          await graph.link({ source: ref, target, edge_type: 'references' });
+          expect((await graph.neighbors({ node: ref })).center).toMatchObject({
+            node_id: sourceNode!.node_id,
+            archived: false,
+            metadata: { retained: true },
+          });
         });
-      });
+      }
       await runWithTenantDatabaseScope(db, 'other-concurrent-fixture', async () => {
         const isolated = await graph.link({ source, target, edge_type: 'references' });
         expect(isolated.edge_id).not.toBe(edges[0].edge_id);

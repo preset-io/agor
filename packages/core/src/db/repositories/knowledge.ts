@@ -1894,6 +1894,15 @@ export class KnowledgeGraphRepository {
     throw new RepositoryError('Unable to derive knowledge graph node URI');
   }
 
+  private async restoreNode(node: KnowledgeGraphNode): Promise<KnowledgeGraphNode> {
+    if (!node.archived) return node;
+    await update(this.db, kbGraphNodes)
+      .set({ archived: false, archived_at: null })
+      .where(eq(kbGraphNodes.node_id, node.node_id))
+      .run();
+    return { ...node, archived: false, archived_at: null };
+  }
+
   async getOrCreateNode(
     refInput: KnowledgeNodeRef,
     createdBy?: UserID | null
@@ -1902,7 +1911,7 @@ export class KnowledgeGraphRepository {
     const nodeId = firstPresent(ref, ['node_id']);
     if (nodeId) {
       const byId = await this.resolveNodeById(nodeId);
-      if (byId) return byId;
+      if (byId) return this.restoreNode(byId);
     }
 
     const uri = this.deriveNodeUri(ref);
@@ -1913,15 +1922,7 @@ export class KnowledgeGraphRepository {
       .where(eq(kbGraphNodes.uri, uri))
       .orderBy(asc(kbGraphNodes.archived), desc(kbGraphNodes.created_at))
       .one();
-    if (existing) {
-      if (existing.archived) {
-        await update(this.db, kbGraphNodes)
-          .set({ archived: false, archived_at: null })
-          .where(eq(kbGraphNodes.node_id, existing.node_id))
-          .run();
-      }
-      return this.rowToNode({ ...existing, archived: false, archived_at: null });
-    }
+    if (existing) return this.restoreNode(this.rowToNode(existing));
 
     const query = insert(this.db, kbGraphNodes).values(
       this.deriveNodeInsert({ ...ref, uri }, createdBy)
@@ -1986,7 +1987,9 @@ export class KnowledgeGraphRepository {
         WHERE ${kbGraphNodes.node_id} = ${sourceId} FOR NO KEY UPDATE`
       );
     }
-    // SQLite already owns the surrounding write transaction.
+    // SQLite already owns the surrounding write transaction. This lock covers
+    // outgoing edges, not earlier node creation/restoration: opposite-order
+    // acquisition of missing or archived nodes can still deadlock in PostgreSQL.
   }
 
   async link(input: KnowledgeGraphLinkInput): Promise<KnowledgeGraphEdge> {

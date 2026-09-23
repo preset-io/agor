@@ -1,4 +1,7 @@
+import { eq } from 'drizzle-orm';
 import { expect } from 'vitest';
+import { update } from '../database-wrapper';
+import { kbGraphNodes } from '../schema';
 import { dbTest } from '../test-helpers';
 import { KnowledgeGraphRepository } from './knowledge';
 
@@ -36,3 +39,25 @@ dbTest(
     });
   }
 );
+
+dbTest('restores archived nodes consistently by ID and URI when linking', async ({ db }) => {
+  const graph = new KnowledgeGraphRepository(db);
+  const source = await graph.getOrCreateNode({ uri: 'https://fixture.invalid/source' });
+  const target = { uri: 'https://fixture.invalid/target' };
+  for (const ref of [{ node_id: source.node_id }, { uri: source.uri }]) {
+    await update(db, kbGraphNodes)
+      .set({ archived: true, archived_at: new Date(), metadata: { retained: true } })
+      .where(eq(kbGraphNodes.node_id, source.node_id))
+      .run();
+    await graph.link({ source: ref, target, edge_type: 'references' });
+    const result = await graph.neighbors({ node: ref, direction: 'out' });
+    expect(result.center).toMatchObject({
+      node_id: source.node_id,
+      archived: false,
+      archived_at: null,
+      metadata: { retained: true },
+      created_at: source.created_at,
+    });
+    expect(result.edges).toHaveLength(1);
+  }
+});
