@@ -43,6 +43,7 @@ const sessions = [
   makeSession('waiting', 'Independent PostgreSQL QA for Teams gateway', {
     status: 'awaiting_permission',
   }),
+  makeSession('running', 'Implement Teams gateway retries', { status: 'running' }),
   makeSession('failed', 'Remediate Teams authority blockers', {
     status: 'failed',
     description: 'Snapshot migrations broke the authority check',
@@ -103,6 +104,17 @@ it('follows the teammate panel row grammar', async () => {
     within(row('Independent PostgreSQL QA')).getByRole('img', { name: 'Awaiting permission' })
   ).toHaveClass('status-dot-run');
   expect(row('Independent PostgreSQL QA')).toHaveAccessibleName(/; awaiting permission$/);
+  // Running is a spinner, centered on the row like the dots.
+  const spinner = within(row('Implement Teams')).getByRole('img', { name: 'Running' });
+  expect(spinner).toHaveClass('anticon-spin');
+  const middle = (rect: DOMRect) => rect.top + rect.height / 2;
+  expect(
+    Math.abs(
+      middle(spinner.getBoundingClientRect()) -
+        middle(row('Implement Teams').getBoundingClientRect())
+    )
+  ).toBeLessThan(1);
+  expect(row('Implement Teams')).toHaveAccessibleName(/; running$/);
   expect(row('Remediate')).toHaveAccessibleName(/branch preset-io\/agor \/ feature\/teams-gateway/);
 
   // Failed rows are tinted; read rows recede one step; attention rows stay full strength.

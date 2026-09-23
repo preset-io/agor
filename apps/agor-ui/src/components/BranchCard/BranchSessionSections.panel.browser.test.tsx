@@ -161,8 +161,9 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
   ).toBeCloseTo(expectedHeight, 0);
 
   expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
+  // Running is a spinner, distinct from the pulsing dots that wait on the user.
   expect(within(row('Availability fixes')).getByRole('img', { name: 'Running' })).toHaveClass(
-    'status-dot-run'
+    'anticon-spin'
   );
   expect(
     within(row('Execution security — implementation')).getByRole('img', {

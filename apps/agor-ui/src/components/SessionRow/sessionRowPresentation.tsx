@@ -1,6 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { isSessionExecuting, SessionStatus } from '@agor-live/client';
-import { ExclamationCircleOutlined } from '@ant-design/icons';
+import { ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';
@@ -50,7 +50,7 @@ const WAITING_LABELS: Partial<Record<Session['status'], string>> = {
 };
 
 /**
- * Tones follow getSessionStatusTone: running pulses green, awaiting input (processing)
+ * Tones follow getSessionStatusTone: running spins green, awaiting input (processing)
  * pulses in the primary color, awaiting permission/stopping (warning) pulse amber.
  */
 function getStatusMarkKind(session: Session): StatusMarkKind | null {
@@ -103,9 +103,9 @@ export const SessionRowLogo: React.FC<{ tool: string }> = ({ tool }) => (
 );
 
 /**
- * Trailing status: pulsing dot while running (green), awaiting input (primary) or
- * awaiting permission/stopping (amber); amber dot when timed out, primary dot when
- * ready, exclamation when failed.
+ * Trailing status: spinner while running (green); pulsing dot while awaiting input
+ * (primary) or awaiting permission/stopping (amber); amber dot when timed out,
+ * primary dot when ready, exclamation when failed.
  */
 export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) => {
   const { token } = theme.useToken();
@@ -122,8 +122,20 @@ export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) =
       />
     );
   }
+  if (kind === 'running') {
+    // Working, not waiting on the user: a spinner reads as progress where a dot reads as state.
+    return (
+      <LoadingOutlined
+        spin
+        role="img"
+        aria-label="Running"
+        title="Running"
+        style={{ color: token.colorSuccess, fontSize: token.fontSizeSM, flex: '0 0 auto' }}
+      />
+    );
+  }
   const label = getStatusMarkLabel(session, kind);
-  const pulsing = kind === 'running' || kind === 'input' || kind === 'waiting';
+  const pulsing = kind === 'input' || kind === 'waiting';
   return (
     <span
       role="img"
@@ -136,12 +148,7 @@ export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) =
         height: SESSION_STATUS_DOT_SIZE,
         borderRadius: '50%',
         flex: '0 0 auto',
-        background:
-          kind === 'running'
-            ? token.colorSuccess
-            : kind === 'ready' || kind === 'input'
-              ? token.colorPrimary
-              : token.colorWarning,
+        background: kind === 'ready' || kind === 'input' ? token.colorPrimary : token.colorWarning,
       }}
     />
   );
