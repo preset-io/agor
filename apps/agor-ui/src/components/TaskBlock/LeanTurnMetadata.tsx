@@ -2,7 +2,16 @@ import { Flex, theme } from 'antd';
 import { type ReactNode, useRef, useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
-/** Floating metadata; only opacity/transform animate, never transcript layout. */
+/**
+ * Turn metadata revealed on hover or focus of the prompt, floating in the gap
+ * below it so it covers neither the prompt nor the answer. It is end-aligned
+ * and the tool disclosure that follows a prompt is start-aligned, so the two
+ * clear each other. Absolutely positioned: only opacity and transform animate,
+ * never transcript layout.
+ *
+ * `reserveSpace` keeps it inside a strip held open above pending approval
+ * controls, the one case where the space below the prompt is spoken for.
+ */
 export function LeanTurnMetadata({
   metadata,
   background,
@@ -23,6 +32,7 @@ export function LeanTurnMetadata({
   const [dismissed, setDismissed] = useState(false);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const visible = !dismissed && (hovered || focused || pinned);
+
   return (
     <section
       // biome-ignore lint/a11y/noNoninteractiveTabindex: focus reveals metadata without turning the rich prompt (with links/buttons) into a nested button.
@@ -84,6 +94,10 @@ export function LeanTurnMetadata({
         align="center"
         style={{
           position: 'absolute',
+          // Below the prompt box entirely, in the inter-block gap. Absolute, so
+          // nothing is reserved while it is hidden and nothing shifts when it
+          // is revealed. `reserveSpace` instead keeps it inside the strip held
+          // open above the approval controls.
           top: reserveSpace ? undefined : '100%',
           bottom: reserveSpace ? 0 : undefined,
           insetInlineEnd: 0,
@@ -115,15 +129,24 @@ export function LeanTurnMetadata({
             height: token.controlHeight,
             display: 'flex',
             alignItems: 'center',
+            // One line that scrolls, never two that wrap: at narrow widths the
+            // values are wider than the viewport, and growing the chip taller
+            // would put it on the answer. Nothing here is width-conditional —
+            // where the values fit, there is simply nothing to scroll.
+            flexWrap: 'nowrap',
+            whiteSpace: 'nowrap',
             overflowX: 'auto',
             overflowY: 'hidden',
+            // Swiping to the end of the values does not then drag the
+            // transcript behind it.
+            overscrollBehaviorX: 'contain',
             scrollbarWidth: 'thin',
             background,
             borderRadius: token.borderRadiusSM,
           }}
         >
           {/* Auto margin right-aligns short rows but resolves to zero when
-              overflowing, so the first pill remains reachable on narrow screens. */}
+              overflowing, so the first value remains reachable on narrow screens. */}
           <div style={{ marginInlineStart: 'auto', flexShrink: 0 }}>{metadata}</div>
         </section>
       </Flex>

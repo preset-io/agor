@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatContextWindowSummary,
   getContextWindowGradient,
   getContextWindowPercentage,
   resolveContextWindowPercentage,
@@ -48,5 +49,34 @@ describe('contextWindow utils', () => {
     );
     // Green (0% bucket), 0% fill
     expect(gradient).toBe('linear-gradient(to right, normal 0%, transparent 0%)');
+  });
+});
+
+describe('formatContextWindowSummary', () => {
+  it('prints the absolute counts alongside the percentage', () => {
+    expect(formatContextWindowSummary(30_000, 200_000, null)).toBe(
+      'Context window · 30,000 / 200,000 tokens (15%)'
+    );
+  });
+
+  it("prefers the snapshot's own counts and percentage", () => {
+    expect(
+      formatContextWindowSummary(1, 2, {
+        totalTokens: 90_000,
+        maxTokens: 200_000,
+        percentage: 72,
+      })
+    ).toBe('Context window · 90,000 / 200,000 tokens (72%)');
+  });
+
+  it('falls back to the percentage alone when there is no limit to measure against', () => {
+    expect(
+      formatContextWindowSummary(undefined, undefined, {
+        totalTokens: 0,
+        maxTokens: 0,
+        percentage: 15,
+      })
+    ).toBe('Context window · 15% used');
+    expect(formatContextWindowSummary(40_000, 0, null)).toBe('Context window · 0% used');
   });
 });

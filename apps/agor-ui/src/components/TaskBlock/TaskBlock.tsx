@@ -46,6 +46,7 @@ import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
+import { ContextUsageRule } from './ContextUsageRule';
 import { LeanTurnMetadata } from './LeanTurnMetadata';
 import { TurnOutcome } from './TurnOutcome';
 
@@ -791,6 +792,16 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           (message.content as PermissionRequestContent)?.status === PermissionStatus.PENDING
       );
 
+    // The turn's values read as dimmed inline text, not a row of filled tags.
+    const plainPillStyle = {
+      background: 'transparent',
+      // The `border` shorthand, not a longhand: antd declares `border` with CSS
+      // variables, and an inline longhand beside it breaks style computation.
+      border: 'none',
+      color: token.colorTextTertiary,
+      paddingInline: 0,
+    };
+
     const metadataPills = (
       <Flex
         wrap={false}
@@ -799,6 +810,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         style={{ width: 'max-content', flexShrink: 0 }}
       >
         <TimerPill
+          style={plainPillStyle}
           status={task.status}
           startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
           endedAt={
@@ -812,10 +824,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           latestExecutorPulse={task.latest_executor_pulse}
         />
         {scheduledFromBranch && scheduledRunAt && (
-          <ScheduledRunPill scheduledRunAt={scheduledRunAt} />
+          <ScheduledRunPill style={plainPillStyle} scheduledRunAt={scheduledRunAt} />
         )}
         {task.created_by && (
           <CreatedByTag
+            style={plainPillStyle}
             createdBy={task.created_by}
             currentUserId={currentUserId}
             userById={userById}
@@ -824,6 +837,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         )}
         {normalized && (
           <TokenCountPill
+            style={plainPillStyle}
             count={normalized.tokenUsage.totalTokens}
             inputTokens={normalized.tokenUsage.inputTokens}
             outputTokens={normalized.tokenUsage.outputTokens}
@@ -833,6 +847,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         )}
         {hasContextWindowUsage && (
           <ContextWindowPill
+            style={plainPillStyle}
             used={contextWindowUsed}
             limit={contextWindowLimit || 0}
             taskMetadata={{
@@ -844,14 +859,16 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             }}
           />
         )}
-        {task.model && task.model !== sessionModel && <ModelPill model={task.model} />}
+        {task.model && task.model !== sessionModel && (
+          <ModelPill style={plainPillStyle} model={task.model} />
+        )}
         {task.git_state.sha_at_start && task.git_state.sha_at_start !== 'unknown' && (
           <Flex gap={token.sizeUnit / 2} align="center">
             <GitStatePill
               branch={task.git_state.ref_at_start}
               sha={task.git_state.sha_at_start}
               branchName={branchName}
-              style={{ fontSize: 11 }}
+              style={{ ...plainPillStyle, fontSize: 11 }}
             />
             {task.git_state.sha_at_end &&
               task.git_state.sha_at_end !== 'unknown' &&
@@ -865,7 +882,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     sha={task.git_state.sha_at_end}
                     branchName={branchName}
                     showDirtyIndicator={true}
-                    style={{ fontSize: 11 }}
+                    style={{ ...plainPillStyle, fontSize: 11 }}
                   />
                 </>
               )}
@@ -1231,7 +1248,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             {toolDisclosure}
           </>
         )}
-        {taskContent}
+        <ContextUsageRule
+          used={contextWindowUsed}
+          limit={contextWindowLimit}
+          snapshot={contextSnapshot}
+        >
+          {taskContent}
+        </ContextUsageRule>
         {isAuthorizationRevokedFailure(task) ? (
           <AuthorizationRevokedNotice task={task} />
         ) : isVerifiedRuntimeInterruption(task, isLatestTask) ? (
