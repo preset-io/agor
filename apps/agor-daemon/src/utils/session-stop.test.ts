@@ -227,6 +227,8 @@ describe('stopSessionPreserveQueue', () => {
       return { status: 'terminal', task: runningTask };
     });
     const params = { provider: 'rest' };
+    // Caller-supplied Stop reasons are user content and stay out of logs.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const result = await stopSessionPreserveQueue(
       {
@@ -242,6 +244,8 @@ describe('stopSessionPreserveQueue', () => {
       params,
       { reason: 'user requested' }
     );
+    expect(log.mock.calls.flat().join('\n')).not.toContain('user requested');
+    log.mockRestore();
 
     expect(result).toMatchObject({
       success: true,
