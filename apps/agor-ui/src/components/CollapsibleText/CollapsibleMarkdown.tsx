@@ -10,6 +10,8 @@ interface CollapsibleMarkdownProps {
   className?: string;
   style?: React.CSSProperties;
   defaultExpanded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
   /**
    * If true, uses Streamdown for incomplete markdown handling
    */
@@ -37,10 +39,13 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   className,
   style,
   defaultExpanded = false,
+  expanded: controlledExpanded,
+  onExpandedChange,
   isStreaming = false,
 }) => {
   const { token } = theme.useToken();
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [localExpanded, setExpanded] = useState(defaultExpanded);
+  const expanded = controlledExpanded ?? localExpanded;
 
   const lines = children.split('\n');
   // Add threshold to avoid truncating slightly-over-limit content
@@ -77,7 +82,11 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
         )}
         <button
           type="button"
-          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          onClick={() => {
+            setExpanded(!expanded);
+            onExpandedChange?.(!expanded);
+          }}
           style={{
             fontSize: token.fontSizeSM,
             cursor: 'pointer',

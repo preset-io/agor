@@ -27,6 +27,19 @@ Branch: "auth-feature"
 
 _A coordinator session fanned out to eight parallel security-review children, each its own introspectable conversation._
 
+## Reading conversation history
+
+Long user and assistant messages in older turns start collapsed, with **show more**
+to reveal the full text. The latest whole turn and live turns stay expanded; a new
+turn never automatically collapses text you were already reading. Your explicit
+**show more / show less** choices last while that conversation is mounted, including
+reconnects and tool-detail loading. Reopening it applies the history defaults again.
+
+This reuses the existing threshold: more than 15 source lines, showing 10 when
+collapsed (code fences can extend that preview). Wrapped single-paragraph prose
+is not counted as multiple source lines. All fetched text remains available for
+expansion and copying; this is a display preference, not a payload reduction.
+
 ---
 
 ## Three ways to branch

@@ -32,7 +32,7 @@ import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
-import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
+import { HistoryMarkdown } from '../ConversationView/HistoryMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
@@ -107,6 +107,7 @@ interface MessageBlockProps {
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   compact?: boolean;
+  defaultTextExpanded?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -340,6 +341,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   client = null,
   onOpenAgenticToolSettings,
   compact = false,
+  defaultTextExpanded = true,
 }) => {
   const { token } = theme.useToken();
 
@@ -741,20 +743,24 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         gap: token.sizeUnit,
                       }}
                     >
-                      {textBeforeTools.map((text) => {
+                      {textBeforeTools.map((text, textIndex) => {
                         // Use CollapsibleMarkdown for long text blocks (15+ lines)
                         const shouldTruncate = text.split('\n').length > 15;
 
                         return (
-                          <div key={`text-${text.length}-${text.substring(0, 32)}`}>
+                          // Text slots are ordered within a message; content changes while streaming.
+                          // biome-ignore lint/suspicious/noArrayIndexKey: stable slot, never key streamed text by its changing content.
+                          <div key={`text-${textIndex}`}>
                             {shouldTruncate ? (
-                              <CollapsibleMarkdown
-                                maxLines={10}
-                                defaultExpanded
+                              <HistoryMarkdown
+                                textKey={message.message_id}
+                                defaultExpanded={
+                                  isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
+                                }
                                 isStreaming={isStreaming}
                               >
                                 {text}
-                              </CollapsibleMarkdown>
+                              </HistoryMarkdown>
                             ) : (
                               <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
                             )}
@@ -891,13 +897,15 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         const shouldTruncate = combinedText.split('\n').length > 15;
 
                         return shouldTruncate ? (
-                          <CollapsibleMarkdown
-                            maxLines={10}
-                            defaultExpanded
+                          <HistoryMarkdown
+                            textKey={message.message_id}
+                            defaultExpanded={
+                              isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
+                            }
                             isStreaming={isStreaming}
                           >
                             {combinedText}
-                          </CollapsibleMarkdown>
+                          </HistoryMarkdown>
                         ) : (
                           <MarkdownRenderer
                             content={combinedText}

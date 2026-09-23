@@ -92,6 +92,7 @@ interface TaskBlockProps {
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
   latestActivity?: ToolExecutionState;
+  defaultTextExpanded?: boolean;
 }
 
 /**
@@ -665,6 +666,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     client = null,
     compact = false,
     latestActivity,
+    defaultTextExpanded = true,
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
@@ -1013,6 +1015,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 client={client}
                 onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                 compact={compact}
+                defaultTextExpanded={defaultTextExpanded}
               />
             );
             return (
