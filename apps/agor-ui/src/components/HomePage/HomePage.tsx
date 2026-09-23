@@ -1,8 +1,8 @@
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
+import { Button, Dropdown, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
   type AgorState,
@@ -17,21 +17,23 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
+import { HomeNeedsYouSection } from './HomeNeedsYouSection';
 import { HomeSessionsSection } from './HomeSessionsSection';
 import { HomeStatsBar } from './HomeStatsBar';
-import { glassCardStyle } from './homeStyles';
-import { JumpBackInSection } from './JumpBackInSection';
 import { OnboardingCard } from './OnboardingCard';
 import type { HomePageProps } from './types';
 
-const { Content } = Layout;
-const { Text, Title } = Typography;
+const { Title } = Typography;
 
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
-const SIDEBAR_STORAGE_KEY = 'agor:homepage-sidebar-width';
-const SIDEBAR_DEFAULT = 340;
-const SIDEBAR_MIN = 240;
-const SIDEBAR_MAX_RATIO = 0.5;
+const HOME_MAX_WIDTH = 1440;
+const HOME_BLOCK_GAP = 40;
+
+function greetingFor(hour: number): string {
+  if (hour < 5 || hour >= 18) return 'Good evening';
+  if (hour < 12) return 'Good morning';
+  return 'Good afternoon';
+}
 
 // Direct map-value iteration with an early exit — avoids materializing an array
 // of every session on each store notify just to test for one visible match.
@@ -101,7 +103,8 @@ const HomeOnboarding: React.FC<{
         label: 'Launch an AI session',
         done: hasSessions,
         cta: 'Start →',
-        onClick: onNewSession,
+        // Wrapped so the click event never reaches onNewSession as its type argument.
+        onClick: () => onNewSession(),
       },
       {
         id: 'mcp',
@@ -154,79 +157,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     props.currentUserId ? s.userById.get(props.currentUserId)?.name : undefined
   );
   const username = currentUserName || 'there';
-
-  // Resizable sidebar
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = Number(localStorage.getItem(SIDEBAR_STORAGE_KEY));
-      if (!Number.isFinite(stored) || stored <= 0) return SIDEBAR_DEFAULT;
-      const maxW =
-        typeof window !== 'undefined'
-          ? window.innerWidth * SIDEBAR_MAX_RATIO
-          : Number.POSITIVE_INFINITY;
-      return Math.min(Math.max(SIDEBAR_MIN, stored), Math.max(SIDEBAR_MIN, maxW));
-    } catch {
-      return SIDEBAR_DEFAULT;
-    }
-  });
-  const [sidebarVisible, setSidebarVisible] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth >= 992
-  );
-  const [dragHandleHovered, setDragHandleHovered] = useState(false);
-  const isDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const dragStartW = useRef(0);
-  const dragCleanupRef = useRef<(() => void) | null>(null);
-  const sidebarWidthRef = useRef(sidebarWidth);
-  sidebarWidthRef.current = sidebarWidth;
-
-  useEffect(() => {
-    const onResize = () => setSidebarVisible(window.innerWidth >= 992);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current = true;
-    dragStartX.current = e.clientX;
-    dragStartW.current = sidebarWidthRef.current;
-
-    const onMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return;
-      const maxW = window.innerWidth * SIDEBAR_MAX_RATIO;
-      const newW = Math.max(
-        SIDEBAR_MIN,
-        Math.min(maxW, dragStartW.current - (ev.clientX - dragStartX.current))
-      );
-      setSidebarWidth(newW);
-    };
-    function teardown() {
-      isDragging.current = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      dragCleanupRef.current = null;
-    }
-    function onUp() {
-      setSidebarWidth((w) => {
-        try {
-          localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)));
-        } catch {}
-        return w;
-      });
-      teardown();
-    }
-    dragCleanupRef.current = teardown;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, []);
-
-  // Tear down an in-progress drag if the page unmounts mid-drag.
-  useEffect(() => () => dragCleanupRef.current?.(), []);
+  const greeting = greetingFor(new Date().getHours());
 
   const defaultBoardId = useMemo(() => {
     const firstRecent = (props.recentBoardIds ?? []).find(
@@ -275,183 +206,122 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   return (
     <>
-      <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
-        <Layout hasSider style={{ height: '100%', background: 'transparent' }}>
-          <Content
+      <div style={{ height: '100%', overflowY: 'auto', background: homeBackground }}>
+        <div
+          style={{
+            // Centered, but wide enough for a dashboard: modest gutters on large screens.
+            maxWidth: HOME_MAX_WIDTH,
+            marginInline: 'auto',
+            padding: `${token.paddingXL}px ${token.paddingXL}px 96px`,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: HOME_BLOCK_GAP,
+          }}
+        >
+          {/* Greeting */}
+          <header
             style={{
-              overflowY: 'auto',
               display: 'flex',
-              flexDirection: 'column',
-              padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
+              alignItems: 'flex-end',
+              justifyContent: 'space-between',
+              gap: token.margin,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <Title level={3} style={{ margin: 0, fontWeight: 600, letterSpacing: '-0.02em' }}>
+                {greeting}, {username}
+              </Title>
+              {/* Workspace stats */}
+              <div style={{ marginTop: token.marginXS }}>
+                <HomeStatsBar currentUserId={props.currentUserId} />
+              </div>
+            </div>
+            <Dropdown
+              menu={{
+                items: NEW_MENU_ITEMS,
+                onClick: ({ key }) => {
+                  if (key === 'teammate' || key === 'branch') {
+                    handleNewSession(key);
+                  } else {
+                    props.onOpenCreateDialog(key as 'board');
+                  }
+                },
+              }}
+              trigger={['click']}
+            >
+              <Button type="primary" icon={<PlusOutlined />}>
+                New
+              </Button>
+            </Dropdown>
+          </header>
+
+          {/* Get started onboarding card — gate unmounted once dismissed */}
+          {!onboardingHidden && (
+            <HomeOnboarding
+              currentUserId={props.currentUserId}
+              onNewSession={handleNewSession}
+              onOpenCreateDialog={props.onOpenCreateDialog}
+              onOpenSettings={props.onOpenSettings}
+              onDismiss={() => {
+                localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
+                setOnboardingHidden(true);
+              }}
+            />
+          )}
+
+          {/* Boards grid */}
+          <HomeBoardsSection
+            recentBoardIds={props.recentBoardIds}
+            onBoardClick={props.onBoardClick}
+            onOpenCreateDialog={props.onOpenCreateDialog}
+          />
+
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: HOME_BLOCK_GAP,
+              alignItems: 'flex-start',
             }}
           >
             <div
               style={{
+                flex: '3 1 420px',
+                minWidth: 0,
                 display: 'flex',
                 flexDirection: 'column',
-                height: '100%',
-                minHeight: 0,
+                gap: HOME_BLOCK_GAP,
               }}
             >
-              {/* Greeting */}
-              <header
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 16,
-                  marginBottom: 24,
-                }}
-              >
-                <div>
-                  <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
-                    Hi, {username}! 👋
-                  </Title>
-                  <Text type="secondary" style={{ fontSize: 14 }}>
-                    Here's an overview of your workspace.
-                  </Text>
-                </div>
-                <Dropdown
-                  menu={{
-                    items: NEW_MENU_ITEMS,
-                    onClick: ({ key }) => {
-                      if (key === 'teammate' || key === 'branch') {
-                        handleNewSession(key);
-                      } else {
-                        props.onOpenCreateDialog(key as 'board');
-                      }
-                    },
-                  }}
-                  trigger={['click']}
-                >
-                  <Button type="primary" icon={<PlusOutlined />}>
-                    New
-                  </Button>
-                </Dropdown>
-              </header>
-
-              {/* Get started onboarding card — gate unmounted once dismissed */}
-              {!onboardingHidden && (
-                <HomeOnboarding
-                  currentUserId={props.currentUserId}
-                  onNewSession={handleNewSession}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                  onOpenSettings={props.onOpenSettings}
-                  onDismiss={() => {
-                    localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
-                    setOnboardingHidden(true);
-                  }}
-                />
-              )}
-
-              {/* Jump back in — awaiting sessions (renders nothing when none) */}
-              <JumpBackInSection
+              {/* Needs you — awaiting sessions (renders nothing when none) */}
+              <HomeNeedsYouSection
                 currentUserId={props.currentUserId}
                 onSessionClick={props.onSessionClick}
               />
-
-              {/* Workspace stats */}
-              <HomeStatsBar currentUserId={props.currentUserId} />
-
-              {/* My Sessions — flex: 1 fills remaining viewport height */}
               <HomeSessionsSection
                 currentUserId={props.currentUserId}
                 onSessionClick={props.onSessionClick}
               />
-
-              {/* Boards grid */}
-              <div style={{ marginTop: 24 }}>
-                <HomeBoardsSection
-                  recentBoardIds={props.recentBoardIds}
-                  onBoardClick={props.onBoardClick}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                />
-              </div>
             </div>
-          </Content>
-
-          {/* Resizable right sidebar — hidden below 992px */}
-          {sidebarVisible && (
-            <aside
+            <div
               style={{
-                width: sidebarWidth,
-                flexShrink: 0,
-                position: 'relative',
-                borderLeft: `1px solid ${token.colorBorderSecondary}`,
-                ...glassCardStyle(token, 0.5),
-                overflow: 'hidden',
+                flex: '2 1 300px',
+                minWidth: 0,
                 display: 'flex',
                 flexDirection: 'column',
+                gap: HOME_BLOCK_GAP,
               }}
             >
-              {/* Drag handle — biome-ignore lint/a11y/useSemanticElements: needs position:absolute full-height layout; <hr> can't serve as an interactive resize slider */}
-              {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle */}
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize sidebar"
-                aria-valuenow={Math.round(sidebarWidth)}
-                aria-valuemin={SIDEBAR_MIN}
-                aria-valuemax={Math.round(
-                  typeof window !== 'undefined'
-                    ? window.innerWidth * SIDEBAR_MAX_RATIO
-                    : SIDEBAR_DEFAULT
-                )}
-                tabIndex={0}
-                onMouseDown={handleDragStart}
-                onMouseEnter={() => setDragHandleHovered(true)}
-                onMouseLeave={() => setDragHandleHovered(false)}
-                onKeyDown={(e) => {
-                  const delta = e.key === 'ArrowLeft' ? 8 : e.key === 'ArrowRight' ? -8 : 0;
-                  if (delta) {
-                    e.preventDefault();
-                    setSidebarWidth((w) => {
-                      const maxW =
-                        typeof window !== 'undefined'
-                          ? window.innerWidth * SIDEBAR_MAX_RATIO
-                          : SIDEBAR_DEFAULT;
-                      const newW = Math.max(SIDEBAR_MIN, Math.min(maxW, w + delta));
-                      try {
-                        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(newW)));
-                      } catch {}
-                      return newW;
-                    });
-                  }
-                }}
-                title="Drag or use arrow keys to resize"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: 4,
-                  cursor: 'col-resize',
-                  zIndex: 10,
-                  background: dragHandleHovered ? token.colorPrimary : 'transparent',
-                  transition: 'background 0.15s',
-                }}
+              <HomeKnowledgeSection client={props.client} connected={props.connected} />
+              <HomeActivitySection
+                onBoardClick={props.onBoardClick}
+                onBranchClick={props.onBranchClick}
+                onSessionClick={props.onSessionClick}
               />
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                  padding: '16px 12px 16px 16px',
-                  gap: 32,
-                }}
-              >
-                <HomeActivitySection
-                  onBoardClick={props.onBoardClick}
-                  onBranchClick={props.onBranchClick}
-                  onSessionClick={props.onSessionClick}
-                />
-                <HomeKnowledgeSection client={props.client} connected={props.connected} />
-              </div>
-            </aside>
-          )}
-        </Layout>
+            </div>
+          </div>
+        </div>
       </div>
 
       <Modal

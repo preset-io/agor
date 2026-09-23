@@ -1,18 +1,18 @@
 import type { AgorClient } from '@agor-live/client';
-import { BulbOutlined, FileOutlined, SearchOutlined } from '@ant-design/icons';
-import { Card, Empty, Input, List, Space, Typography, theme } from 'antd';
+import { FileOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Input, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '../../utils/knowledgeRoutes';
 import { formatRelativeTime } from '../../utils/time';
-import { KnowledgeNamespacePill } from '../Pill';
-import { glassCardStyle } from './homeStyles';
+import { HomeBlock, HomeEmpty, HomeLink } from './HomeBlock';
+import { compactRelativeTime, HomeRow, HomeTime } from './HomeRow';
 import type { KnowledgeDocument } from './types';
 
-const { Text } = Typography;
-
 const HOME_KNOWLEDGE_LIMIT = 50;
+/** Home lists the latest few docs; filtering searches every loaded doc. */
+const HOME_KNOWLEDGE_PREVIEW = 6;
 
 const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
   Array.isArray(result) ? result : (result.data ?? []);
@@ -22,41 +22,31 @@ const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
   const navigate = useNavigate();
   const namespace = namespaceSlugFromUri(doc.uri);
   const path = buildKnowledgeRoutePath('/knowledge', namespace, doc.path);
+  const title = doc.title || doc.path;
+  const updated = doc.updated_at ? formatRelativeTime(doc.updated_at) : null;
   return (
-    <List.Item onClick={() => navigate(path)} style={{ cursor: 'pointer', padding: '10px 0' }}>
-      <List.Item.Meta
-        avatar={
-          doc.icon_emoji ? (
-            <span style={{ fontSize: 18, lineHeight: '22px' }}>{doc.icon_emoji}</span>
-          ) : (
-            <FileOutlined style={{ color: token.colorTextTertiary }} />
-          )
-        }
-        title={
-          <Space size={6} style={{ maxWidth: '100%' }}>
-            <Text ellipsis={{ tooltip: doc.title || doc.path }} style={{ minWidth: 0 }}>
-              {doc.title || doc.path}
-            </Text>
-            <KnowledgeNamespacePill
-              namespace={namespace || 'Knowledge'}
-              style={{ marginInlineEnd: 0 }}
-            />
-          </Space>
-        }
-        description={
-          <Space size={6} wrap>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {doc.path}
-            </Text>
-            {doc.updated_at && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                · {formatRelativeTime(doc.updated_at)}
-              </Text>
-            )}
-          </Space>
-        }
-      />
-    </List.Item>
+    <HomeRow
+      ariaLabel={`Open ${title}`}
+      onOpen={() => navigate(path)}
+      leading={
+        <span
+          style={{
+            width: 16,
+            display: 'inline-flex',
+            justifyContent: 'center',
+            fontSize: doc.icon_emoji ? 13 : token.fontSizeSM,
+            color: token.colorTextTertiary,
+          }}
+        >
+          {doc.icon_emoji || <FileOutlined />}
+        </span>
+      }
+      title={title}
+      tooltip={[title, `${namespace || 'Knowledge'} · ${doc.path}`, updated]
+        .filter(Boolean)
+        .join('\n')}
+      trailing={updated ? <HomeTime>{compactRelativeTime(updated)}</HomeTime> : undefined}
+    />
   );
 };
 
@@ -65,11 +55,20 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   connected,
 }) => {
   const { token } = theme.useToken();
-  const cardGlassStyle = glassCardStyle(token);
+  const navigate = useNavigate();
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  // Escape closes the field; focus returns to the button that replaces it.
+  const [refocusSearch, setRefocusSearch] = useState(false);
+  useEffect(() => {
+    if (!refocusSearch) return;
+    searchButtonRef.current?.focus();
+    setRefocusSearch(false);
+  }, [refocusSearch]);
 
   const filteredDocs = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -105,77 +104,71 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
       cancelled = true;
     };
   }, [client, connected]);
+  const trimmedQuery = query.trim();
+  const visibleDocs = trimmedQuery ? filteredDocs : filteredDocs.slice(0, HOME_KNOWLEDGE_PREVIEW);
+  const emptyMessage = error
+    ? error
+    : loading && docs.length === 0
+      ? 'Loading…'
+      : docs.length === 0 && !connected
+        ? 'Reconnect to refresh Knowledge'
+        : docs.length === 0
+          ? 'No Knowledge docs yet'
+          : filteredDocs.length === 0
+            ? 'No matching docs'
+            : null;
+
   return (
-    <section
-      aria-label="Knowledge base"
-      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    <HomeBlock
+      label="Knowledge"
+      surface
+      actions={
+        <>
+          {searchOpen || query ? (
+            <Input
+              autoFocus
+              size="small"
+              variant="filled"
+              placeholder="Search..."
+              aria-label="Search Knowledge docs"
+              prefix={<SearchOutlined style={{ color: token.colorTextQuaternary, fontSize: 11 }} />}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onBlur={() => setSearchOpen(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setQuery('');
+                  setSearchOpen(false);
+                  setRefocusSearch(true);
+                }
+              }}
+              allowClear
+              style={{ width: 160, fontSize: 12 }}
+            />
+          ) : (
+            <Tooltip title="Search Knowledge docs">
+              <Button
+                ref={searchButtonRef}
+                type="text"
+                size="small"
+                aria-label="Search Knowledge docs"
+                icon={<SearchOutlined />}
+                onClick={() => setSearchOpen(true)}
+                style={{ color: token.colorTextTertiary }}
+              />
+            </Tooltip>
+          )}
+          <HomeLink onClick={() => navigate('/knowledge')}>View all</HomeLink>
+        </>
+      }
     >
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 6 }}>
-        <BulbOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
-        <Text strong style={{ fontSize: 14, flex: 1 }}>
-          Knowledge
-        </Text>
-        <Input
-          size="small"
-          placeholder="Search..."
-          prefix={<SearchOutlined style={{ color: token.colorTextQuaternary, fontSize: 11 }} />}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          allowClear
-          style={{ flex: '0 1 120px', minWidth: 80, fontSize: 12 }}
-        />
-      </div>
-      <Card
-        loading={loading}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusLG,
-          ...cardGlassStyle,
-        }}
-        styles={{
-          body: {
-            padding: 0,
-            height: '100%',
-            overflow: 'auto',
-            background: 'transparent',
-          },
-        }}
-      >
-        {error ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={error}
-            style={{ padding: '24px 0' }}
-          />
-        ) : docs.length === 0 && !connected ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Reconnect to refresh Knowledge"
-            style={{ padding: '24px 0' }}
-          />
-        ) : docs.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No Knowledge docs yet"
-            style={{ padding: '24px 0' }}
-          />
-        ) : filteredDocs.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No matching docs"
-            style={{ padding: '24px 0' }}
-          />
+      <div style={trimmedQuery ? { maxHeight: 420, overflowY: 'auto' } : undefined}>
+        {emptyMessage ? (
+          <HomeEmpty>{emptyMessage}</HomeEmpty>
         ) : (
-          <List
-            rowKey="document_id"
-            dataSource={filteredDocs}
-            renderItem={(doc) => <KnowledgeDocRow doc={doc} />}
-            style={{ padding: '0 12px' }}
-          />
+          visibleDocs.map((doc) => <KnowledgeDocRow key={doc.document_id} doc={doc} />)
         )}
-      </Card>
-    </section>
+      </div>
+    </HomeBlock>
   );
 };

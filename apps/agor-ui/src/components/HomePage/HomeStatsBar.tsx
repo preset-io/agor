@@ -1,80 +1,9 @@
-import { RiseOutlined, TeamOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Tooltip, Typography, theme } from 'antd';
+import { LoadingOutlined } from '@ant-design/icons';
+import { Flex, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { getTimeMs } from '../../utils/entityTime';
-import { glassCardStyle } from './homeStyles';
-
-const { Text } = Typography;
-
-const StatCard: React.FC<{
-  icon: React.ReactNode;
-  value: number | string;
-  valueTooltip?: string;
-  label: string;
-  iconBg: string;
-  iconColor: string;
-}> = ({ icon, value, valueTooltip, label, iconBg, iconColor }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <div
-      style={{
-        flex: 1,
-        position: 'relative',
-        padding: '14px 16px',
-        ...glassCardStyle(token, 0.3),
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: token.borderRadiusLG,
-        minWidth: 0,
-        overflow: 'hidden',
-      }}
-    >
-      {/* Icon — top-right corner keeps number + label consistently anchored left */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 12,
-          width: 30,
-          height: 30,
-          borderRadius: token.borderRadiusSM,
-          background: iconBg,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: iconColor,
-          fontSize: 14,
-        }}
-      >
-        {icon}
-      </div>
-
-      {/* Number */}
-      <Tooltip title={valueTooltip}>
-        <div
-          style={{
-            fontSize: 28,
-            fontWeight: 700,
-            lineHeight: 1,
-            color: token.colorText,
-            marginBottom: 4,
-            paddingRight: 46,
-            cursor: valueTooltip ? 'default' : undefined,
-          }}
-        >
-          {value}
-        </div>
-      </Tooltip>
-
-      {/* Label */}
-      <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-        {label}
-      </Text>
-    </div>
-  );
-};
 
 export const HomeStatsBar: React.FC<{
   currentUserId?: string;
@@ -141,30 +70,32 @@ export const HomeStatsBar: React.FC<{
       ? `${myThisWeek} by you, ${activeThisWeek} by the team`
       : undefined;
 
+  const separator = <span style={{ color: token.colorTextQuaternary }}>·</span>;
+
+  // The three workspace stats as one quiet line under the greeting.
   return (
-    <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-      <StatCard
-        icon={<TeamOutlined />}
-        value={activeTeammates}
-        label="Teammates active this week"
-        iconBg={token.colorWarningBg}
-        iconColor={token.colorWarning}
-      />
-      <StatCard
-        icon={<ThunderboltOutlined />}
-        value={runningNow}
-        label="Sessions running now"
-        iconBg={token.colorPrimaryBg}
-        iconColor={token.colorPrimary}
-      />
-      <StatCard
-        icon={<RiseOutlined />}
-        value={weekValue}
-        valueTooltip={weekTooltip}
-        label="Sessions active this week"
-        iconBg={token.colorSuccessBg}
-        iconColor={token.colorSuccess}
-      />
-    </div>
+    <Flex
+      align="center"
+      gap={token.marginXS}
+      wrap
+      style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }}
+    >
+      {runningNow > 0 ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: token.marginXXS }}>
+          <LoadingOutlined spin style={{ color: token.colorSuccess, fontSize: 11 }} />
+          <span style={{ color: token.colorTextSecondary }}>{runningNow} running now</span>
+        </span>
+      ) : (
+        <span>Nothing running</span>
+      )}
+      {separator}
+      <Tooltip title={weekTooltip}>
+        <span>{weekValue} sessions active this week</span>
+      </Tooltip>
+      {separator}
+      <span>
+        {activeTeammates} teammate{activeTeammates !== 1 ? 's' : ''} active this week
+      </span>
+    </Flex>
   );
 };

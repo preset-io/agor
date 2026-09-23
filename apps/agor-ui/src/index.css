@@ -235,3 +235,27 @@
   flex: 1;
   min-height: 0;
 }
+
+/* Home: quiet header links and tile surfaces brighten on hover/focus only. */
+.agor-home-link {
+  color: var(--ant-color-text-tertiary);
+}
+.agor-home-link:hover,
+.agor-home-link:focus-visible {
+  color: var(--ant-color-text-secondary);
+}
+.agor-home-tile {
+  background-color: var(--ant-color-fill-quaternary);
+  border: var(--ant-line-width) var(--ant-line-type) var(--ant-color-border-secondary);
+  transition:
+    border-color var(--ant-motion-duration-fast),
+    background-color var(--ant-motion-duration-fast);
+}
+.agor-home-tile:hover {
+  border-color: var(--ant-color-border);
+  background-color: var(--ant-color-fill-tertiary);
+}
+.agor-home-tile:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: 2px;
+}

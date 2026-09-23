@@ -97,7 +97,7 @@ const INITIAL_LOAD_ITEMS = [
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 
 // First-paint bound for the global (non-board-scoped) sessions slice. Covers
-// Home's "My Sessions" + "Team activity" feeds (both show only recent items)
+// Home's "My sessions" list + "Activity" feed (both show only recent items)
 // and seeds enough of `sessionById` to resolve `/s/<id>` deep links. The FULL
 // session set is background-hydrated a beat later (see `fetchData`), so
 // genealogy / GlobalSearch / per-board counts converge without blocking the
