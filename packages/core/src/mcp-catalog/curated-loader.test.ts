@@ -398,6 +398,22 @@ ${block}
     const [entry] = parseCuratedCatalog(VALID_ENTRY);
     expect(entry.oauth).toBeUndefined();
   });
+
+  it('accepts an external configured app recipe but never catalog app secrets or ambiguous registration', () => {
+    const recipe = '      configured_client: true\n      dcr_mode: disabled';
+    expect(parseCuratedCatalog(withOAuth(recipe))[0].oauth).toEqual({
+      configured_client: true,
+      dcr_mode: 'disabled',
+    });
+    for (const extra of ['      client_id: public-client', '      client_secret: fixture-secret']) {
+      expect(() => parseCuratedCatalog(withOAuth(`${recipe}\n${extra}`))).toThrow(
+        CuratedCatalogError
+      );
+    }
+    expect(() => parseCuratedCatalog(withOAuth('      configured_client: true'))).toThrow(
+      CuratedCatalogError
+    );
+  });
 });
 
 describe('the shipped catalog', () => {
@@ -570,7 +586,9 @@ describe('the shipped catalog', () => {
     // defensively pending production validation, not claimed to have passed it.
     const entries = await loadCuratedCatalog();
     expect(
-      entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
+      entries
+        .filter((entry) => entry.oauth?.compatibility_mode !== undefined)
+        .map((entry) => [entry.name, entry.oauth])
     ).toEqual([
       ['com.monday/monday.com', { compatibility_mode: 'strict' }],
       ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
