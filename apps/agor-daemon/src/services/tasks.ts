@@ -125,6 +125,7 @@ function elapsedMs(from: string | undefined, to: string | undefined): number | '
 /**
  * Detection facts for a winning termination claim. Ages are measured against
  * the durable request time so daemon clock skew cannot distort them.
+ * `error_message` is deliberately omitted: a user Stop reason can reach it.
  */
 function terminationRequestDiagnostics(task: Task): string {
   const request = task.termination_request;
@@ -135,8 +136,7 @@ function terminationRequestDiagnostics(task: Task): string {
     `heartbeat_age_ms=${elapsedMs(task.last_executor_heartbeat_at, request?.requested_at)} ` +
     `last_pulse=${pulse?.kind ?? 'none'} ` +
     `last_pulse_age_ms=${elapsedMs(pulse?.observed_at, request?.requested_at)} ` +
-    `sdk_failure=${task.sdk_failure?.reason ?? 'none'} ` +
-    `detail=${JSON.stringify((request?.error_message ?? '').slice(0, 200))}`
+    `sdk_failure=${task.sdk_failure?.reason ?? 'none'}`
   );
 }
 
@@ -147,7 +147,7 @@ function terminationSettlementDiagnostics(task: Task): string {
     `cause=${request?.cause ?? 'unknown'} ` +
     `containment=${task.sdk_failure?.termination ?? 'unknown'} ` +
     `executor_quiesced=${request?.executor_quiesced_at ? 'true' : 'false'} ` +
-    `request_to_settle_ms=${elapsedMs(request?.requested_at, new Date().toISOString())}`
+    `request_to_settle_ms=${elapsedMs(request?.requested_at, task.completed_at)}`
   );
 }
 

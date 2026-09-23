@@ -9,6 +9,7 @@ import {
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  shortId,
   TaskRepository,
   type TaskRuntimeDiscoveryCursor,
   type TaskRuntimeDiscoveryRef,
@@ -321,11 +322,11 @@ export class TaskRuntimeReconciler {
     console.warn(
       `[distributed-work.task-runtime] event=heartbeat_stale` +
         ` instance_id=${JSON.stringify(this.options.workIdentity.instanceId)}` +
-        ` task_id=${JSON.stringify(task.task_id)}` +
-        ` session_id=${JSON.stringify(task.session_id)}` +
+        ` task_id=${shortId(task.task_id)}` +
+        ` session_id=${shortId(task.session_id)}` +
         ` status=${task.status}` +
         ` mode=${task.executor_mode ?? 'local'}` +
-        ` heartbeat_age_ms=${detectedAt.getTime() - Date.parse(task.last_executor_heartbeat_at)}` +
+        ` approx_heartbeat_age_ms=${detectedAt.getTime() - Date.parse(task.last_executor_heartbeat_at)}` +
         ` stale_after_ms=${this.options.config.stale_after_ms}` +
         ` last_pulse=${task.latest_executor_pulse?.kind ?? 'none'}` +
         ` tracked_pid=${tracked && tracked.taskId === task.task_id ? tracked.pid : 'none'}` +

@@ -350,13 +350,13 @@ heartbeat found by the reconciler, and any local/authoritative executor
 process exit while its Task is active (including the SIGTERM a standalone
 daemon sends on graceful shutdown). Correlate by `task_id`:
 
-| Log line                                                | Answers                                                                             |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `[executor.exit] event=process_exited`                  | pid, exit code, signal, and `daemon_shutdown` for every prompt-executor exit        |
-| `[distributed-work.task-runtime] event=heartbeat_stale` | heartbeat age vs threshold, last pulse, and whether the tracked process still lives |
-| `[executor.heartbeat] event=write_failed` / `recovered` | executor-side heartbeat write error class and outage length                         |
-| `[task.termination] event=request_committed`            | winning cause, connection state, heartbeat/pulse age, and the failure detail        |
-| `[task.termination] event=settled`                      | outcome, containment result, and request-to-settle time                             |
+| Log line                                                | Answers                                                                                                        |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `[executor.exit] event=process_exited`                  | pid, exit code, signal, and `daemon_shutdown` for every prompt-executor exit                                   |
+| `[distributed-work.task-runtime] event=heartbeat_stale` | approximate heartbeat age vs threshold (daemon clock), last pulse, and whether the tracked process still lives |
+| `[executor.heartbeat] event=write_failed` / `recovered` | executor-side heartbeat write error class and outage length                                                    |
+| `[task.termination] event=request_committed`            | winning cause, connection state, heartbeat/pulse age, and SDK failure reason                                   |
+| `[task.termination] event=settled`                      | outcome, containment result, and request-to-settle time                                                        |
 
 ## Change invariants
 
