@@ -676,7 +676,7 @@ it('keeps history text choices, keyboard disclosure and scroll anchors with mult
           ...Array.from(
             { length: 12 },
             (_, line) =>
-              `Paragraph ${turn}-${index}-${line}. ${'Long prose wraps naturally. '.repeat(5)}\n`
+              `Paragraph ${turn}-${index}-${line}. ${'Long prose wraps naturally. '.repeat(8)}\n`
           ),
           `Tail ${turn}-${index}`,
         ].join('\n'),
@@ -767,7 +767,10 @@ it('follows a long live response without clamping the current prompt or losing p
   const rows = messages.get(task.task_id)!;
   const prompt = {
     ...rows[0],
-    content: Array.from({ length: 20 }, (_, i) => `Live prompt ${i}`).join('\n\n'),
+    content: Array.from(
+      { length: 20 },
+      (_, i) => `Live prompt ${i}\n\n${'Synthetic prompt prose. '.repeat(6)}`
+    ).join('\n\n'),
   };
   const response = rows[1];
   state = {
@@ -783,7 +786,10 @@ it('follows a long live response without clamping the current prompt or losing p
   );
   const viewport = screen.getByTestId('conversation-scroll-container');
   for (const length of [5, 25, 35]) {
-    const content = Array.from({ length }, (_, i) => `Live answer ${i}`).join('\n\n');
+    const content = Array.from(
+      { length },
+      (_, i) => `Live answer ${i}\n\n${'Synthetic answer prose. '.repeat(6)}`
+    ).join('\n\n');
     act(() =>
       update({
         ...state,
@@ -828,11 +834,11 @@ it('follows a long live response without clamping the current prompt or losing p
   await page.screenshot({ path: `./.vitest/history-live-expanded-${window.innerWidth}.png` });
 });
 
-it('preserves fence-aware long code previews, table expansion and wrapped single-line prose', async () => {
+it('bounds long code, tables and single-line prose previews while preserving full expansion', async () => {
   const base = messages.get(tasks[0].task_id)![1];
   const code = [
     '```text',
-    ...Array.from({ length: 20 }, (_, i) => `code-line-${i}`),
+    ...Array.from({ length: 200 }, (_, i) => `code-line-${i}`),
     '```',
     '',
     'After code fence',
@@ -840,7 +846,7 @@ it('preserves fence-aware long code previews, table expansion and wrapped single
   const table = [
     '| Row | Value |',
     '| --- | --- |',
-    ...Array.from({ length: 20 }, (_, i) => `| row-${i} | value-${i} |`),
+    ...Array.from({ length: 200 }, (_, i) => `| row-${i} | value-${i} |`),
   ].join('\n');
   render(
     <div>
@@ -850,7 +856,7 @@ it('preserves fence-aware long code previews, table expansion and wrapped single
         defaultTextExpanded={false}
       />
       <MessageBlock
-        message={{ ...base, message_id: generateId(), content: 'Wrapped prose '.repeat(100) }}
+        message={{ ...base, message_id: generateId(), content: 'Wrapped prose '.repeat(200) }}
         defaultTextExpanded={false}
       />
       <MessageBlock
@@ -859,15 +865,20 @@ it('preserves fence-aware long code previews, table expansion and wrapped single
       />
     </div>
   );
-  await waitFor(() => expect(screen.getByText('code-line-19')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText('code-line-0')).toBeInTheDocument());
+  expect(screen.queryByText('code-line-199')).not.toBeInTheDocument();
   expect(screen.queryByText('After code fence')).not.toBeInTheDocument();
-  expect(screen.queryByText('row-19')).not.toBeInTheDocument();
-  expect(screen.getByText('Wrapped prose '.repeat(100).trim())).toBeInTheDocument();
+  expect(screen.queryByText('row-199')).not.toBeInTheDocument();
+  expect(screen.queryByText('Wrapped prose '.repeat(200).trim())).not.toBeInTheDocument();
   expect(screen.getByText('Short message')).toBeInTheDocument();
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(2);
+  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(3);
+  expect(screen.queryByRole('button', { name: 'Download file' })).not.toBeInTheDocument();
   await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
   expect(screen.getByText('After code fence')).toBeInTheDocument();
+  expect(screen.getByText('code-line-199')).toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  expect(screen.getByText('row-199')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'show more' }));
-  expect(screen.getByText('row-19')).toBeInTheDocument();
+  expect(screen.getByText('Wrapped prose '.repeat(200).trim())).toBeInTheDocument();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
 });

@@ -68,7 +68,10 @@ function message(
     index,
     timestamp: task.created_at,
     content_preview: '',
-    content: Array.from({ length: 20 }, (_, line) => `Message ${index} line ${line}`).join('\n\n'),
+    content: Array.from(
+      { length: 20 },
+      (_, line) => `Message ${index} line ${line}\n\n${'Synthetic paragraph text. '.repeat(6)}`
+    ).join('\n\n'),
   };
 }
 const messages = new Map(
@@ -203,7 +206,7 @@ describe('conversation history text defaults', () => {
     expect(tail(2)).toBeInTheDocument();
   });
 
-  it('resets on session navigation and leaves short and single-line prose unaffected', () => {
+  it('resets on session navigation, preserves short text and collapses long single-line prose', () => {
     const view = render(<ConversationView client={null} sessionId={sessionId} />);
     fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
     const originalState = state;
@@ -240,7 +243,8 @@ describe('conversation history text defaults', () => {
     const prose = { ...messages.get(tasks[0].task_id)![1], content: 'Long prose '.repeat(500) };
     update({ messagesByTask: new Map([[tasks[0].task_id, [short, prose]]]) });
     expect(screen.getByText('Short text')).toBeInTheDocument();
+    expect(screen.queryByText(prose.content.trim())).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'show more' }));
     expect(screen.getByText(prose.content.trim())).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
   });
 });

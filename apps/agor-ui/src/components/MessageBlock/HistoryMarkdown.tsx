@@ -24,7 +24,6 @@ export function HistoryMarkdown({
   const choice = history ? history.choices.get(textKey) : localChoice;
   return (
     <CollapsibleMarkdown
-      maxLines={10}
       expanded={choice ?? defaultExpanded}
       isStreaming={isStreaming}
       onExpandedChange={(expanded) => {

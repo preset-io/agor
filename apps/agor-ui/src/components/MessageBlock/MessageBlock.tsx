@@ -32,6 +32,7 @@ import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
+import { isLongMarkdown } from '../CollapsibleText/markdownPreview';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
@@ -744,8 +745,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                       }}
                     >
                       {textBeforeTools.map((text, textIndex) => {
-                        // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                        const shouldTruncate = text.split('\n').length > 15;
+                        const shouldTruncate = isLongMarkdown(text);
 
                         return (
                           // Text slots are ordered within a message; content changes while streaming.
@@ -894,7 +894,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     <div style={{ wordWrap: 'break-word' }}>
                       {(() => {
                         const combinedText = textAfterTools.join('\n\n');
-                        const shouldTruncate = combinedText.split('\n').length > 15;
+                        const shouldTruncate = isLongMarkdown(combinedText);
 
                         return shouldTruncate ? (
                           <HistoryMarkdown
