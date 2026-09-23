@@ -215,10 +215,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
               Array.isArray((boardFilter as { $in?: unknown }).$in)
             ? (boardFilter as { $in: BoardID[] }).$in
             : undefined;
-      const requestedLimit =
-        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
-      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
-      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const page = await this.boardRepo.findPage({
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         boardIds,

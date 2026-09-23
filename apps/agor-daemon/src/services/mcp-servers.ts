@@ -113,8 +113,7 @@ export class MCPServersService extends DrizzleService<
     }
 
     const sort = params?.query?.$sort as Record<string, 1 | -1> | undefined;
-    const limit = params?.query?.$limit ?? this.paginate?.default ?? 50;
-    const skip = params?.query?.$skip ?? 0;
+    const { limit, skip } = this.pageWindow(params?.query ?? {});
     const pageFilters: MCPServerFilters = { ...filters, limit, offset: skip, sort };
     const [total, data] = await Promise.all([
       this.mcpServerRepo.count(filters),

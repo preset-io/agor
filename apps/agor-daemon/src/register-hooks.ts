@@ -63,6 +63,7 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   messageQueryValidator,
@@ -2469,7 +2470,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('kb/documents')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [typedValidateQuery(knowledgeDocumentQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge documents')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
       update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],

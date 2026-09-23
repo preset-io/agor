@@ -132,6 +132,17 @@ export const PAGINATION = {
  * list resources. Keep each transport page small; callers that intentionally
  * need a complete Task transcript use the client's paginated `findAll()` loop.
  */
+/**
+ * Knowledge document list pages. Access is resolved per row in the service, so
+ * the whole corpus must never be returned (or hydrated) in one response.
+ * Callers that genuinely need every readable document (the Knowledge sidebar
+ * tree, CLI listings) walk pages with the client's `findAll()`.
+ */
+export const KNOWLEDGE_DOCUMENT_PAGINATION = {
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
+} as const;
+
 export const MESSAGE_PAGINATION = {
   /** Maximum task IDs in one session-scoped transcript query. */
   MAX_TASK_IDS: 100,

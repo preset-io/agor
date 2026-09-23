@@ -312,15 +312,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
     const query = (params?.query ?? {}) as Query;
-    const requestedLimit = query.$limit ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT;
-    const skip = query.$skip ?? 0;
-    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 0) {
+    if (query.$limit !== undefined && (!Number.isSafeInteger(query.$limit) || query.$limit < 0)) {
       throw new BadRequest('$limit must be a finite non-negative integer');
     }
+    const { limit, skip } = this.pageWindow(query);
     if (!Number.isSafeInteger(skip) || skip < 0) {
       throw new BadRequest('$skip must be a finite non-negative integer');
     }
-    const limit = Math.min(requestedLimit, this.paginate?.max ?? PAGINATION.MAX_LIMIT);
     const sort = query.$sort;
     if (sort) {
       for (const [field, direction] of Object.entries(sort)) {

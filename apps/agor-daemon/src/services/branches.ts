@@ -1798,10 +1798,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               Array.isArray((branchFilter as { $in?: unknown }).$in)
             ? (branchFilter as { $in: BranchID[] }).$in
             : undefined;
-      const requestedLimit =
-        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
-      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
-      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
