@@ -113,10 +113,12 @@ jobs:
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
 
-      # The tenant scope stores, driven across @agor/core's real dist entry
-      # points. Vitest resolves this package to source, so its duplicated-module
-      # cases are a model rather than the packaging contract — which is what hid
-      # F4 and what found B1 on built modules.
+      # Every @agor/core dist entry imported by plain Node, then the tenant
+      # scope stores driven across those entries. Vitest resolves this package
+      # to source with its own CJS interop, so it can see neither a named import
+      # Node's CJS lexer rejects (a daemon that cannot boot) nor the
+      # duplicated-module packaging contract — which is what hid F4 and what
+      # found B1 on built modules.
       - run: pnpm --filter @agor/core test:packaged
 
   unit:

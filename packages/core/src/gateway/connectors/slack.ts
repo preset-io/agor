@@ -25,7 +25,7 @@
 
 import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
-import { retryPolicies, WebClient, type WebClientOptions } from '@slack/web-api';
+import slackWebApi, { WebClient, type WebClientOptions } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
 import type {
@@ -887,6 +887,16 @@ export function isSlackFileSourceAllowed(
  * would turn a recoverable disconnect into a permanently dead listener.
  */
 const SLACK_WEB_API_TIMEOUT_MS = 15_000;
+/**
+ * `@slack/web-api` is CommonJS, and tsup leaves it external, so a built entry
+ * imports it through Node's ESM loader — which only sees the named exports its
+ * static lexer can detect. `WebClient` is one; `retryPolicies` is not, and
+ * naming it failed the daemon at link time. The default export is the whole
+ * `module.exports`, so the policy is read from there. Vitest does its own CJS
+ * interop and cannot observe this; `scripts/packaged-entry-import-smoke.mjs`
+ * imports the built entries under plain Node and does.
+ */
+const { retryPolicies } = slackWebApi;
 const SLACK_WEB_CLIENT_OPTIONS: WebClientOptions = {
   timeout: SLACK_WEB_API_TIMEOUT_MS,
   retryConfig: retryPolicies.fiveRetriesInFiveMinutes,
