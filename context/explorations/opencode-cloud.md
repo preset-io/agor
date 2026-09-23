@@ -1,6 +1,6 @@
 # OpenCode in Agor Cloud — design contract
 
-> Status: **Draft, implementation in progress, QA pending.** Canonical design for
+> Status (2026-09-23): **Local implementation and independent review in progress; hosted QA paused.** Canonical design for
 > running the OpenCode agentic tool inside Agor Cloud (hosted, delegated,
 > ephemeral executor Jobs). The public runtime (`preset-io/agor`) owns every
 > behavior described here; Agor Cloud (`preset-io/agor-cloud`) owns only
@@ -38,7 +38,9 @@ filesystem. This document specifies the smallest safe first release instead.
   session creation, and prompting.
 - Durable native conversation state across executor Jobs, with an explicit
   recovery-point semantic (section 6).
-- Stop, resume, disconnect, and deletion/portability of the new state.
+- Stop, resume, and disconnect. Destructive deletion and portability of affected
+  native state are deliberately unsupported until a separately authorized
+  whole-home process/queued-launch fence and state-transfer protocol exist.
 
 **Explicitly out of scope (deferred, guarded fail-closed)**
 
@@ -58,20 +60,22 @@ filesystem. This document specifies the smallest safe first release instead.
 
 ## 3. Trust and resource ownership
 
-| Resource                                                                                              | Owner / boundary                                                                                                                                                                                                                                                                                                                                                                                           | Persistence                                              | Delete / export                                                                                                                                                                                            |
-| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Provider API key                                                                                      | Tenant + user + tool. Existing encrypted per-tool credential store `users.data.agentic_tools.opencode` (AES via `AGOR_MASTER_SECRET`, `apps/agor-daemon/src/services/users.ts`)                                                                                                                                                                                                                            | Database row                                             | Deleted with the user row / tenant rows (existing)                                                                                                                                                         |
-| Projected credential at run time                                                                      | Task-scoped executor Job only. The executor pulls the session owner's OpenCode connection through the existing task-scoped daemon read (`config/resolve-api-key`, executor runtime JWT bound to the task), exactly as other SDK handlers pull their provider connection, and hands it to OpenCode as `OPENCODE_AUTH_CONTENT`. It never travels in the executor payload Secret or the generic user env loop | Process memory of one Job; never written to disk by Agor | Nothing to delete                                                                                                                                                                                          |
-| Live native database (`opencode.db` + WAL), logs, state locks, cache, generated config, git snapshots | One executor Job, one task. All four `XDG_*` roots and `OPENCODE_DB` live on the Job's local scratch (`emptyDir`-backed `/tmp/agor-opencode/<taskId>`)                                                                                                                                                                                                                                                     | Ephemeral                                                | Dies with the Job                                                                                                                                                                                          |
-| Published native checkpoint                                                                           | Session lineage. Immutable per-attempt directory under the caller's persistent executor home on the tenant claim: `$HOME/.local/share/agor/opencode/<namespaceKey>/sessions/<agorSessionId>/attempts/<taskId>/`                                                                                                                                                                                            | Tenant filesystem (FSx/EFS)                              | Inside the tenant root, so tenant delete / export / import / re-home cover it with no new lifecycle code; every attempt directory other than the accepted one is pruned at the next launch of that session |
-| Accepted checkpoint pointer                                                                           | Session row (`sessions.data.sdk_native_state`), written only by the task terminal transition                                                                                                                                                                                                                                                                                                               | Database                                                 | Moves with the session rows                                                                                                                                                                                |
-| OpenCode server password                                                                              | One Job, random per run                                                                                                                                                                                                                                                                                                                                                                                    | Process env                                              | n/a                                                                                                                                                                                                        |
+| Resource                                                                                              | Owner / boundary                                                                                                                                                                                                                                                                                                                                                                                           | Persistence                                              | Delete / export                                                                                                                                                                              |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider API key                                                                                      | Tenant + user + tool. Existing encrypted per-tool credential store `users.data.agentic_tools.opencode` (AES via `AGOR_MASTER_SECRET`, `apps/agor-daemon/src/services/users.ts`)                                                                                                                                                                                                                            | Database row                                             | Deleted with the user row / tenant rows (existing)                                                                                                                                           |
+| Projected credential at run time                                                                      | Task-scoped executor Job only. The executor pulls the session owner's OpenCode connection through the existing task-scoped daemon read (`config/resolve-api-key`, executor runtime JWT bound to the task), exactly as other SDK handlers pull their provider connection, and hands it to OpenCode as `OPENCODE_AUTH_CONTENT`. It never travels in the executor payload Secret or the generic user env loop | Process memory of one Job; never written to disk by Agor | Nothing to delete                                                                                                                                                                            |
+| Live native database (`opencode.db` + WAL), logs, state locks, cache, generated config, git snapshots | One executor Job, one task. All four `XDG_*` roots and `OPENCODE_DB` live on the Job's local scratch (`emptyDir`-backed `/tmp/agor-opencode/<taskId>`)                                                                                                                                                                                                                                                     | Ephemeral                                                | Dies with the Job                                                                                                                                                                            |
+| Published native checkpoint                                                                           | Immutable per-attempt object in the owner's persistent executor home at `$HOME/.local/share/agor/opencode/<namespaceKey>/sessions/<sessionId>/stores/<storeId>/attempts/<taskId>/`; `storeId` is immutable Session authority                                                                                                                                                                               | Tenant filesystem; authority and retirement ledger in DB | Exact DB-committed tombstone only; never inferred from age/order or directory enumeration. Affected deletion/export/import/re-home is rejected before destructive or materialization effects |
+| Accepted checkpoint pointer                                                                           | Session row plus same-tenant immutable attempt-ledger row; promoted only by the holder-qualified task completion transaction                                                                                                                                                                                                                                                                               | Database                                                 | Not independently portable; affected handoff is rejected until separately authorized and fenced                                                                                              |
+| OpenCode server password                                                                              | One Job, random per run                                                                                                                                                                                                                                                                                                                                                                                    | Process env                                              | n/a                                                                                                                                                                                          |
 
 Physical isolation of the persistent files is Cloud's per-user home `subPath`
 (`home/cp-<hash(userId)>`), not the namespace key: a payload replayed with
 another user's `namespaceKey` still resolves under the caller's own home and
 cannot reach the other user's attempts. The namespace key only separates
-tenants/users that could share one Unix home in local deployments.
+tenants/users that could share one Unix home in local deployments. V3 also
+binds every attempt to a DB-issued immutable `storeId`; task UUID order never
+grants deletion authority.
 
 Identity rules:
 
@@ -140,20 +144,11 @@ executor payload:
 ```jsonc
 // executorPayload (daemon → executor), OpenCode addition
 "agenticToolContext": {
-  "version": 2,
+  "version": 3,
   "mode": "managed-projection",          // or "native-file" with the legacy dataHome
   "namespaceKey": "<sha256>",
   "agorSessionId": "<uuid>",
-  "taskId": "<uuid>",
-  "accepted": null | {                    // accepted checkpoint to resume from
-    "version": 2,
-    "openCodeVersion": "<pinned runtime version>",
-    "attemptTaskId": "<canonical lowercase uuid>",
-    "bytes": 123456,
-    "openCodeSessionId": "ses_…",
-    "digest": "sha256:<hex>",
-    "publishedAt": "<iso>"
-  }
+  "taskId": "<uuid>"
 }
 ```
 
@@ -162,16 +157,16 @@ through `config/resolve-api-key` (tool `opencode`) after claiming the task and
 requires the selected session provider's saved key, and projects only that key
 into `OPENCODE_AUTH_CONTENT` on the managed server's environment; the
 existing `OPENCODE_CONFIG_CONTENT` / `OPENCODE_PERMISSION` interception values
-are set by the executor as today. Old executors that only understand
-`{ dataHome }` fail closed on the v2 context (parse error → task failed), which
-is the intended mixed-version behavior; daemon and executor images are one
-release. New checkpoint manifests/pointers use schema v2 and record the pinned
-OpenCode version. Legacy v1 pointers remain structurally readable but restore
-fails closed because their runtime version is unknown. A different runtime
-version also refuses restore; a rollout must retain the matching runtime or
-explicitly start a new session, not silently migrate the SQLite schema. Session
-and task UUIDs must use canonical lowercase spelling so path identity and prune
-ordering agree.
+are set by the executor as today. V3 payload carries no accepted pointer or
+filesystem authority. The outer executor generates a per-invocation holder ID,
+captures its immutable launch locator before payload environment application,
+and obtains the input pin, store, exact holder binding, and current phases from
+the daemon only after the DB admission transaction commits. Old managed v1/v2
+contexts and legacy/uncertain homes fail closed; no pointer is imported or
+silently reset. V3 manifests record the store ID, pinned OpenCode version, task,
+size, digest, native session ID, and publication time. A different runtime
+version refuses restore. Session/task/store IDs use canonical lowercase
+spelling; UUID ordering is never eligibility or deletion authority.
 
 Executor turn (managed-projection mode), across the executor adapter and
 `OpenCodeTool.runTurn`:
@@ -189,13 +184,16 @@ Executor turn (managed-projection mode), across the executor adapter and
    stall the next Job after a kill), cache, generated config, and the git
    snapshot object store are all Job-local. Cross-turn OpenCode "revert" is
    therefore not offered; Agor's own diff enrichment does not depend on it.
-   The persistent home holds only `sessions/<agorSessionId>/attempts/`.
-2. If `accepted` is set: copy `attempts/<attemptTaskId>/opencode.db` to the
-   scratch DB, verify size and sha256 against `manifest.json` and the payload
-   digest. Mismatch or absence → fail the turn before any provider call
-   ("native state unavailable"); never fall back to an empty database.
+   The persistent home holds immutable `sessions/<sessionId>/stores/<storeId>/attempts/`
+   objects. No output directory is created until the DB grant commits.
+2. The outer executor calls `begin` before SDK/heartbeat/task-settlement work.
+   A successful grant pins one DB-authoritative input object and reserves a
+   distinct output for the exact holder. Copy the pinned input to scratch,
+   verify the manifest/version/identity and copied bytes, close all source I/O,
+   then acknowledge read-close. Missing or mismatched input fails before any
+   provider call; it never starts an empty session.
 3. Start the loopback server (existing `startManagedOpenCodeServer`), resume
-   `accepted.openCodeSessionId` or create a new session, run the prompt with
+   the grant's accepted input session ID or create a new session, run the prompt with
    the existing permission interception. In managed mode the executor does
    **not** patch `sdk_session_id` at native-session creation; the id is
    published only with the accepted checkpoint.
@@ -213,48 +211,39 @@ Executor turn (managed-projection mode), across the executor adapter and
    then run the **durability barrier**: open the scratch DB with `node:sqlite`
    (available unflagged in the executor image's Node 22.13),
    `PRAGMA wal_checkpoint(TRUNCATE)`, `PRAGMA integrity_check`, close; write
-   `attempts/<taskId>/opencode.db` via temp file + `fsync(file)` + `rename`,
+   the exact granted store's `attempts/<taskId>/opencode.db` via temp file + `fsync(file)` + `rename`,
    then `manifest.json` (sha256, bytes, `openCodeSessionId`, OpenCode version,
    task id) the same way, then `fsync(directory)`. Any failure → the turn is
    reported **failed** ("checkpoint not durable"); nothing is published.
-5. Report completion to the daemon with the attempt pointer in a new
-   executor-managed task field (`native_state_attempt`, added to the executor
-   patch allowlist). The task terminal transition takes the **Session lock
-   first, then the Task lock** (the repository's documented order, shared with
-   `settleTermination`, so completion and Stop/heartbeat-loss settlement on
-   one task cannot deadlock) and writes `sessions.data.sdk_native_state =
-{ attemptTaskId, digest, openCodeSessionId, publishedAt }` plus
-   `sdk_session_id` in the same transaction as `status = completed`. Before
-   that transition the daemon re-resolves the capability resolver and admits a
-   pointer only from an executor-authenticated patch on a task whose session
-   uses OpenCode in `managed-projection` mode; any other executor is refused
-   with a client error and nothing is written. A terminal
-   task (stopped, failed, force-failed) never accepts a pointer, so a stale
-   executor's artifact is never referenced. This transition is the atomic,
-   authorized publication decision.
+5. Persist one immutable seal for the exact holder/manifest after all output
+   I/O drains. The only ordinary pointer promotion is the holder-qualified
+   completion transaction, taking Session before Task and ledger locks, and
+   atomically completing the Task with the Session pointer/SDK ID. A terminal
+   Task, duplicate/unadmitted holder, missing seal, changed locator, or retired
+   object cannot publish or affect another holder's heartbeat, quiescence, or
+   terminal result.
 6. On failure, Stop, or abort: no publication. The scratch root is discarded
    with the Job. The session resumes from the previously accepted checkpoint.
-7. Before step 2 the executor deletes attempt directories of this session that
-   are provably older than its launch pointer: task ids are UUIDv7, so only
-   entries that sort strictly below the accepted attempt (or, with no accepted
-   checkpoint, below the Job's own task id) are removed. Anything newer is left
-   alone because a force-failed Job does not prove process termination: a
-   stale Job that reaches this step late could otherwise delete a checkpoint a
-   later Job published and the daemon has since accepted, leaving the pointer
-   dangling. Orphans from lost completions (checkpoint written, completion
-   patch never accepted) are removed by the next launch once they are older
-   than the accepted pointer. Before any credential read, the executor probes
-   `node:sqlite` (failing early on an image older than Node 22.13) and resolves
-   the scratch layout, so an unpinned scratch root fails the turn before the
-   owner's keys enter executor memory.
+7. After the input is copied, cleanup asks the DB for at most one operation
+   when its bounded worker slot is ready. Only an already committed permanent
+   tombstone authorizes exact-object deletion; age, UUID ordering, missing
+   manifests, task terminality, and directory enumeration do not. Four
+   round-robin lanes cover new retirement, failed deletion, unresolved-holder
+   observation, and absent-object recheck. Healthy launches can reclaim
+   eligible orphans, but this is conditional—not a storage bound or SLA.
+   Unknown or stuck holders, idle Sessions, failed deletes, and tombstone
+   history may remain indefinitely. Cleanup cannot block provider completion;
+   a stuck worker is not reported closed and is not replaced in the same
+   invocation. Before credential read the executor probes `node:sqlite` and
+   resolves the scratch layout.
 
-Cloud-side realization (agor-cloud): no new endpoint, table, or storage class.
-The Job template already provides the immutable per-user home; an `emptyDir`
+Cloud-side realization (agor-cloud): the Job template provides the immutable
+per-user home; an `emptyDir`
 with a `sizeLimit` is added at `/tmp/agor-opencode` on agent-task Jobs (not
 shell pods). The kubelet enforces that limit by evicting the pod rather than
 returning ENOSPC to the writer, so a turn that fills scratch ends as an evicted
-pod and a failed run with no pointer published; a half-written attempt has no
-manifest and is pruned later. The workspace runtime config's ephemeral-storage
+pod and a failed run with no pointer published. A partial or manifest-less
+attempt has no deletion authority until the DB commits retirement. The workspace runtime config's ephemeral-storage
 limit is not guaranteed on legacy rows, which is why the volume carries its own
 bound. Network
 posture is unchanged (OpenCode binds `127.0.0.1` only; the pod has no
@@ -262,7 +251,15 @@ service-account token). Enablement uses the existing daemon config mechanism
 (section 8), not a Cell API/console field or provisioning-spec mapping. The
 hosting chart may supply this deployment policy by default; the generic runtime
 default stays absent. A configured value never bypasses the prerequisites in
-section 8 or supplies provider credentials.
+section 8 or supplies provider credentials. Cloud adds narrow daemon-side
+identity-resolution and native-state-observation actions to the existing
+runtime-internal route family; it never reads or deletes checkpoint bytes.
+An independent, request/time-bounded observer records exact Pod UID, Job UID,
+executor container ID, image identity, restart count, and termination time in
+protected CAS-merged metadata before the one-hour Job TTL where possible.
+Missing, stale, conflicting, or post-TTL evidence remains unknown and cannot
+close a holder pin. This pre-TTL capture is an availability objective, not a
+guarantee, and is detached from generic executor lifecycle reconciliation.
 
 Publication first requires an existing non-empty database with the native
 `session` table containing the completed session id; SQLite integrity alone is
@@ -287,14 +284,14 @@ Measured with the pinned `opencode` 1.14.33 executable and replayed on 1.18.31 (
 
 Comparison:
 
-|                     | A. Block PVC per session (RWOP)                                                                                                                     | B. Local DB + immutable checkpoint + DB-authorized publication (**selected**)                                            |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Live WAL location   | Block volume (supported)                                                                                                                            | Job-local disk (supported)                                                                                               |
-| Writer fence        | Attach controller only if the CSI honours RWOP; not a fence on `ontap-nas`/EFS; `gp2-enc-ebs` binds immediately to one AZ and pins every resume Job | Publication is refused for terminal tasks by the existing row lock; a stale Job can only write its own attempt directory |
-| Failed/stopped turn | Keeps partial native rows Agor calls failed                                                                                                         | Loses that turn's native rows; conversation returns to the last accepted checkpoint                                      |
-| Lifecycle           | New volume object per session: delete, export, re-home, quota all need new code                                                                     | Files sit in the tenant root already covered by delete/export/import/re-home                                             |
-| Per-turn cost       | Attach/detach per Job, zone pinning, attachment limits                                                                                              | Copy ≤ tens of MB in/out per turn; checkpoint ~ms                                                                        |
-| New infrastructure  | Storage class validation, RWOP support, cost model                                                                                                  | None                                                                                                                     |
+|                     | A. Block PVC per session (RWOP)                                                                                                                     | B. Local DB + immutable checkpoint + DB-authorized publication (**selected**)                                                                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live WAL location   | Block volume (supported)                                                                                                                            | Job-local disk (supported)                                                                                                                                                                                |
+| Writer fence        | Attach controller only if the CSI honours RWOP; not a fence on `ontap-nas`/EFS; `gp2-enc-ebs` binds immediately to one AZ and pins every resume Job | DB-committed per-invocation holder grants, exact immutable store/task identity, input pins, one writer, and irreversible tombstones; requires acknowledged-commit durability and single-writer DB history |
+| Failed/stopped turn | Keeps partial native rows Agor calls failed                                                                                                         | Loses that turn's native rows; conversation returns to the last accepted checkpoint                                                                                                                       |
+| Lifecycle           | New volume object per session: delete, export, re-home, quota all need new code                                                                     | Exact DB-authorized retirement only; affected destructive deletion/export/import/re-home is blocked pending separately authorized whole-home drain/fence                                                  |
+| Per-turn cost       | Attach/detach per Job, zone pinning, attachment limits                                                                                              | Copy ≤ tens of MB in/out per turn; checkpoint ~ms                                                                                                                                                         |
+| New infrastructure  | Storage class validation, RWOP support, cost model                                                                                                  | None                                                                                                                                                                                                      |
 
 Selected: **B**. Recovery-point semantic: a turn's native state becomes durable
 only when Agor records the turn as completed. External effects of a failed or
@@ -303,39 +300,39 @@ stopped turn (tool writes, commits, API calls) are **not** rolled back and are
 streamed. This is the same rule as today's runtime invariant "supervision does
 not imply prompt replay or exactly-once external effects".
 
-Not proven locally and deliberately left to Cloud QA: fsync semantics on the
+Not proven locally and deliberately left to future hosted QA/certification:
+actual DB acknowledged-commit durability and single-writer behavior, fsync semantics on the
 real FSx ONTAP / EFS mounts, cross-node resume, ephemeral-storage pressure
 (full disk during checkpoint must fail the turn, not publish), and Job
 replacement while a previous Job is unreachable.
 
 ## 7. Lifecycle, cancellation, and fencing
 
-- **Stop**: existing socket-first termination; the executor aborts the OpenCode
-  session, closes the server, reports quiescence. No checkpoint is published.
+- **Stop**: the admitted holder must drain provider and live-file I/O, close its
+  read pin/write state, and only then report holder-qualified quiescence. No
+  generic acknowledgement is valid for unadmitted duplicates or a stuck
+  cleanup child. Emergency exit leaves pins open for exact Cloud observation.
   Templated containment stays "remote executor quiescence"; the OpenCode
-  descriptor's `unverifiedTerminationReason` continues to mark server-side
-  termination as unverified. Because a stale Job cannot publish, force-fail
-  (`STOP` confirmation) is safe to use to unblock the session; the next prompt
-  launches a new Job that resumes the accepted checkpoint.
-- **Stale writer**: the fence is the task terminal state, not storage. A late
-  completion patch from an old Job is refused by the immutable terminal state;
-  its artifact directory is pruned at the next launch (every attempt other than
-  the accepted one is removed). Because all live native files are Job-local,
-  a stale Job that outlives a force-fail can only write its own scratch and its
-  own attempt directory; it cannot touch the accepted checkpoint or the new
-  Job's files. Its external effects (tool calls, commits) are not fenced; that
-  is the documented limit of force-fail for every tool.
+  descriptor's `unverifiedTerminationReason` continues to mark substrate
+  termination as unverified. Task terminality/force-fail is not process/I/O
+  closure and does not release a pin. A stale admitted holder writes only its
+  reserved object; the DB refuses its late publication once the Task is
+  terminal. Its external effects are not rolled back or replayed.
 - **Daemon death after launch, before executor claim**: unchanged (durable
   `dispatching` intent, reconciler warning, no automatic re-enqueue).
 - **Node partition**: unchanged; the session remains non-promptable until
   quiescence or force-fail. No replacement writer is authorized by timeout.
-- **Delete / revoke / offboard**: keys go with the user row; artifacts go with
-  the tenant filesystem root; the Job's payload Secret goes with the Job.
-  Revocation observed by heartbeat (`authorization_revoked`) contains the Job as
-  for any other tool.
-- **Portability / re-home**: artifacts and pointer move together (tenant files
-  - tenant rows). A restored session whose accepted artifact digest does not
-    match fails closed on the next prompt instead of resuming a different state.
+- **Delete / revoke / offboard**: affected Session/branch/user/tenant deletion
+  fails closed with `opencode_native_state_handoff_required` before destructive
+  effects if v3 ledger state (including tombstones), legacy pointers, or native
+  state evidence exists. Credential revocation remains independent and cannot
+  close filesystem pins. No complete erasure promise is made by this slice.
+- **Portability / re-home**: export/import/re-home containing affected native
+  state is unsupported and rejected before deletion or filesystem
+  materialization. Archives without native state retain existing behavior.
+  An operator recovery needs separately authorized whole-home process/queued-
+  launch drain or storage fence and a disjoint-store transfer; this design does
+  not claim that procedure is implemented.
 - **HA / two daemon replicas**: managed-projection has no daemon-local native
   state, so `opencode-auth`/`opencode-models` in that mode are database-backed
   and may be served by any replica; the constrained-HA gate becomes
@@ -398,6 +395,17 @@ account and delivered only to your own executor runs".
 8. Nothing here auto-replays prompts or claims exactly-once external effects.
 9. Local `native-file` behavior and every other agent's branch-home policy are
    unchanged.
+10. Every admitted persistent read/write has a durable exact-holder grant;
+    accepted pointers refer to sealed, nonretired ledger objects.
+11. Force-fail, heartbeat expiry, `/finish`, TTL, and missing evidence never
+    close pins. Retirement is permanent; deletion needs an exact tombstone and
+    no accepted pointer, open read pin, or writer.
+12. Transparent recovery requires one authoritative DB history that preserves
+    every acknowledged grant/pointer/tombstone and enforces a single writer.
+    Lossy/uncertain failover is fenced recovery, not transparent reconnect.
+13. Reclamation is conditional on later launches, exact death evidence, and
+    successful filesystem work. No bounded storage, quota, or cleanup SLA is
+    claimed.
 
 ## 10. Implementation sequence (slices, one branch per repository)
 
@@ -409,24 +417,30 @@ account and delivered only to your own executor runs".
    the encrypted per-tool store, OpenCode as a provider-connection tool,
    settings connect/disconnect in managed mode, executor pull and projection
    to `OPENCODE_AUTH_CONTENT`, redaction coverage, mode-conditional HA gate.
-3. **Native-state checkpointing** (runtime): v2 executor context, executor
-   copy-in/verify, durability barrier, publication through the task terminal
-   transition, session pointer, prune, executor patch-field allowlist.
-4. **Cloud realization** (agor-cloud): scratch `emptyDir`, doc/runbook updates
-   referencing this contract, executor Job template tests. Enablement remains
-   deployment-owned daemon configuration, which a hosting chart may default; no
-   per-Cell configuration surface is required.
-5. **Independent code/security review**, remediation, then formal QA (paused
-   pending explicit continuation).
+3. **DB coordination** (runtime): v3 attempt ledger, immutable store and
+   holder grants, input pins, sealing/publication, irreversible retirement,
+   first-use/legacy gates, deletion and portability barriers.
+4. **Outer executor lifecycle** (runtime): admission before SDK/heartbeat or
+   terminal settlement, exact holder-bound terminal/quiescence/heartbeat paths,
+   duplicate-loser no-effect behavior and real Stop/cancellation drain.
+5. **Native I/O and conditional cleanup** (runtime): verified copy, durability
+   barrier, exact permanent retirement tombstones, bounded fair launch-driven
+   worker, no unsafe deletion/handoff.
+6. **Cloud recovery** (agor-cloud): exact locator resolution, narrow observation
+   routes, protected per-container observations, detached budgeted pre-TTL
+   capture, fail-closed unknown state.
+7. **Lifecycle/docs and integrated local gates**: affected deletion/portability
+   blocks, both PRs, tests and independent whole-diff review loops. Local review
+   and validation do not prove deployed infrastructure safety. Formal hosted QA
+   remains paused; no per-Cell toggle or generic-default change is introduced.
 
 ## 11. Proof
 
-Developer checks (owner): colocated Vitest for the resolver, store/projection,
-checkpoint/publication (including terminal-task refusal, digest mismatch,
-disk-full failure via injected fs seam), executor context parsing (v1 vs v2),
-UI rendering of unsupported/saved states; typecheck and lint in both repos;
-Cloud pod-template tests for the scratch volume and config rendering; the local
-executable spike above (retained as `qa/specs/opencode-cloud/proof-log.md`).
+Developer checks: runtime ledger/outer lifecycle/native-I/O and Cloud exact
+observation tests, PostgreSQL/SQLite parity, typecheck/lint, chart checks, and
+the synthetic pinned-executable probe. These are local evidence only; they do
+not verify actual DB failover, hosted storage semantics, Cloud identity
+injection, or infrastructure rollout.
 
 Formal QA (not run; requires Richard's continuation): the scenarios in
 `qa/specs/opencode-cloud/` against a real Cell with the compatible executor
@@ -449,26 +463,42 @@ revision attestation.
   not fixed here; the OpenCode server is loopback-only and the pod has no
   service-account token.
 
-## 13. Decisions still owned by Richard (with recommended defaults)
+## 13. Approved support boundary and unverified prerequisites
 
-1. **Recovery-point semantic** — accept "a failed or stopped turn loses that
-   turn's native rows, external effects are neither rolled back nor replayed".
-   Recommended: accept; it is the cleaner semantic and matches the runtime's
-   existing supervision invariant. Implementation proceeds on this default;
-   choosing A instead changes slices 3–4 materially.
-2. **Reviewed provider set for the beta** — recommended: `anthropic` and
+1. **Durability/single writer**: support assumes one authoritative database
+   history that never loses acknowledged grants, pointers, or tombstones, plus
+   effective single-writer fencing. This is an implementation contract, not a
+   verified fact about any deployed Cell. Lossy/uncertain failover/PITR/rollback
+   requires fenced recovery.
+2. **Reclamation**: deletion is conditional and launch-driven, not bounded by
+   time/count/storage. Unknown death, idle Sessions, stuck I/O, and failed
+   filesystem operations may retain state indefinitely.
+3. **Compatibility**: only first-use v3 state and established-absence existing
+   Cells are eligible. Legacy or uncertain installations fail closed until a
+   separately authorized physical drain/migration decision; no importer is
+   included.
+4. **Deletion/portability**: affected deletion/export/import/re-home is blocked
+   until separately authorized whole-home fencing and transfer support.
+5. **No scope drift**: retain the Cloud chart's existing default, do not add a
+   per-Cell toggle, leave generic runtime defaults and other agents unchanged.
+6. **Reviewed provider set for the beta** — `anthropic` and
    `openai` (API key) from the pinned list, plus `kimi-for-coding`. The
    credential-less `opencode` (Zen) provider is not offered in managed
    projection: every hosted turn requires a saved reviewed key, so hosted
    discovery reports it unavailable and never suggests it. There is no per-Cell
    provider allowlist in this release.
-3. **Saved-unverified credential state** — recommended: accept, verify on
+7. **Saved-unverified credential state** — accepted; verify on
    first prompt.
-4. **Egress disclosure** — recommended: note the inherited agent-pod egress
+8. **Egress disclosure** — note the inherited agent-pod egress
    risk in the beta terms rather than blocking on the FQDN allowlist work.
 
 ## 14. Open technical unknowns (do not change accepted behavior)
 
+- Actual per-Cell DB topology, effective durability/single-writer/failover
+  configuration, historical managed-state/image execution, executor fencing,
+  and hosted filesystem durability/visibility are not established by local
+  tests or checked-in configuration. Activation/hosted QA needs separately
+  authorized operator evidence and certification.
 - Ephemeral-storage `sizeLimit` for the scratch root (DB, WAL, logs, snapshot
   objects, copy buffers); the pod-template test pins whatever value QA
   confirms.
@@ -482,8 +512,10 @@ field (section 5 step 5); credentials must use the executor's task-scoped pull,
 not the generic user env loop, with static env-safe field names (section 4);
 and the projected keys must be registered individually with the sanitizer
 (section 4). Medium findings adopted: all `XDG_*` roots on Job-local scratch,
-"prune all but accepted", the Cloud `emptyDir` `sizeLimit`, and the
-mode-conditional HA gate. Scenario additions from the review are in
+Cloud `emptyDir` `sizeLimit`, and the mode-conditional HA gate. The former
+"prune all but accepted" behavior is superseded by the coordinated v3 ledger
+and exact tombstones above. Scenario additions from the review are in
 `qa/specs/opencode-cloud/scenarios.md` (OC-16, OC-31, OC-43, OC-54, OC-62).
-The reviewer did not run code and did not verify NFS or executor-image
-behavior; those remain QA items.
+The historical reviewer did not run code or verify NFS/executor-image behavior;
+current implementation review is tracked separately, and formal hosted QA
+remains paused.
