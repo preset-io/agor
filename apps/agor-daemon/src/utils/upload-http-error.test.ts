@@ -1,6 +1,6 @@
 import multer from 'multer';
 import { describe, expect, it } from 'vitest';
-import { toUploadErrorResponse } from './upload-http-error.js';
+import { classifyUploadAuthFailure, toUploadErrorResponse } from './upload-http-error.js';
 
 describe('toUploadErrorResponse', () => {
   it.each(['INVALID_FIELD_NAME', 'LIMIT_FIELD_ARRAY_INDEX'])(
@@ -140,6 +140,36 @@ describe('toUploadErrorResponse', () => {
         requestId: 'request-7',
       },
       type: 'request',
+    });
+  });
+});
+
+describe('classifyUploadAuthFailure', () => {
+  it.each([
+    [{ message: 'jwt expired', data: { name: 'TokenExpiredError' } }, 'token_expired'],
+    [{ message: 'invalid signature', data: { name: 'JsonWebTokenError' } }, 'token_invalid'],
+    [{ message: 'JWT type is not valid for daemon API authentication' }, 'token_invalid'],
+    [
+      { className: 'not-authenticated', message: 'Session expired, please login again' },
+      'credentials_invalidated',
+    ],
+    [
+      { className: 'not-authenticated', message: 'Conflicting authenticated tenant authority' },
+      'tenant_rejected',
+    ],
+    [{ className: 'not-authenticated', message: 'Not authenticated' }, 'not_authenticated'],
+    [new Error('database unavailable'), 'authentication_error'],
+  ])('classifies %o as %s', (error, reason) => {
+    expect(classifyUploadAuthFailure(error).reason).toBe(reason);
+  });
+
+  it('keeps only bounded unverified token claims', () => {
+    expect(
+      classifyUploadAuthFailure(new Error('x'), { sub: 'user 1; drop', exp: Number.MAX_VALUE })
+    ).toEqual({
+      reason: 'authentication_error',
+      tokenSubject: undefined,
+      tokenExpiresAt: undefined,
     });
   });
 });

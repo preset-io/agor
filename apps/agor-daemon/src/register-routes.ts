@@ -124,6 +124,7 @@ import {
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import {
   gatewaySlackUploadExecutorCommandId,
@@ -298,7 +299,12 @@ import {
   getUploadLimits,
   type StagedMulterFile,
 } from './utils/upload.js';
-import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
+import {
+  classifyUploadAuthFailure,
+  toUploadErrorResponse,
+  type UploadAuthFailureDiagnostics,
+  type UploadFailureStage,
+} from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
@@ -806,6 +812,14 @@ export async function authenticateBearerHttpRequest(input: {
   };
 }
 
+/** Expose a bounded auth-failure reason to the upload route's failure log. */
+// biome-ignore lint/suspicious/noExplicitAny: Express 5 response locals
+function recordUploadAuthFailure(res: any, diagnostics: UploadAuthFailureDiagnostics): void {
+  res.locals ??= {};
+  res.locals.uploadFailureCode = `AUTH_${diagnostics.reason.toUpperCase()}`;
+  res.locals.uploadAuthFailure = diagnostics;
+}
+
 export function createUploadAuthMiddleware(input: {
   authentication: {
     create(
@@ -821,17 +835,27 @@ export function createUploadAuthMiddleware(input: {
       const authHeader = req.headers.authorization;
       const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
       if (!token) {
+        recordUploadAuthFailure(res, { reason: 'missing_bearer' });
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      req.feathers = await authenticateBearerHttpRequest({
-        authentication: input.authentication,
-        multiTenancy: input.multiTenancy,
-        headers: req.headers,
-        token,
-      });
+      try {
+        req.feathers = await authenticateBearerHttpRequest({
+          authentication: input.authentication,
+          multiTenancy: input.multiTenancy,
+          headers: req.headers,
+          token,
+        });
+      } catch (error) {
+        // Decoded without verification purely so the failure log can say
+        // whose token was stale and by how much; it grants nothing.
+        const unverified = jwt.decode(token, { json: true });
+        recordUploadAuthFailure(res, classifyUploadAuthFailure(error, unverified));
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       next();
-    } catch {
+    } catch (error) {
+      recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -2943,6 +2967,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           code: res.locals.uploadFailureCode ?? `HTTP_${res.statusCode}`,
           status: res.statusCode,
           type: res.locals.uploadFailureType ?? 'request',
+          route: '/sessions/:sessionId/upload',
+          session_id: typeof req.params?.sessionId === 'string' ? req.params.sessionId : undefined,
+          // Verified identity once authentication succeeded; otherwise the
+          // rejected token's unverified subject and expiry (if decodable).
+          user_id: (req as { feathers?: AuthenticatedParams }).feathers?.user?.user_id,
+          auth_reason: res.locals.uploadAuthFailure?.reason,
+          token_sub_unverified: res.locals.uploadAuthFailure?.tokenSubject,
+          token_expires_at: res.locals.uploadAuthFailure?.tokenExpiresAt,
         })
       );
     });

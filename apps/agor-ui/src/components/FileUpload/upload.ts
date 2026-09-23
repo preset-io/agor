@@ -1,5 +1,8 @@
 import { getUploadPolicyErrorDefinition, UPLOAD_REQUEST_ID_HEADER } from '@agor/core/types';
-import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
+import { createRestClient } from '@agor-live/client';
+import { isExpiringSoon } from '../../utils/jwtExpiry';
+import { refreshTokensSingleFlight } from '../../utils/singleFlightRefresh';
+import { ACCESS_TOKEN_KEY, getStoredRefreshToken } from '../../utils/tokenRefresh';
 
 export interface UploadedFile {
   ref: string;
@@ -28,6 +31,9 @@ export interface UploadFilesToSessionResult {
 }
 
 const MAX_UPLOAD_ERROR_LENGTH = 240;
+// Refresh a stored access token this close to expiry before spending an
+// upload on it; the daemon rejects expired bearers before reading the body.
+const UPLOAD_TOKEN_REFRESH_BUFFER_MS = 30_000;
 const SAFE_REQUEST_ID = /^[a-zA-Z0-9-]{1,64}$/;
 
 function boundedErrorMessage(value: unknown): string | undefined {
@@ -79,6 +85,27 @@ async function getUploadErrorMessage(response: Response): Promise<string> {
   return requestId ? `${message} (reference: ${requestId})` : message;
 }
 
+/**
+ * Rotate the browser's stored credentials through the shared single-flight
+ * refresh so the upload cannot race other recovery paths into a stale
+ * refresh token. Returns null when no refresh is possible; the caller then
+ * lets the daemon's 401 surface as the upload error.
+ */
+async function refreshStoredAccessToken(daemonUrl: string): Promise<string | null> {
+  const refreshToken = getStoredRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const client = await createRestClient(daemonUrl);
+    const result = await refreshTokensSingleFlight(client, refreshToken);
+    return result.accessToken;
+  } catch (error) {
+    // Unrecoverable refresh failures are handled centrally (useAuth logs the
+    // user out); transient ones leave the current token in place.
+    console.warn('[FileUpload] Token refresh before upload failed:', error);
+    return null;
+  }
+}
+
 export async function uploadFilesToSession({
   sessionId,
   daemonUrl,
@@ -97,25 +124,47 @@ export async function uploadFilesToSession({
   formData.append('message', message);
 
   const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
-  const accessToken =
-    explicitAccessToken === undefined
-      ? localStorage.getItem(ACCESS_TOKEN_KEY)
-      : explicitAccessToken;
-  const headers: HeadersInit = {};
+  // An explicit snapshot pins the initiating identity, so it is never swapped
+  // for whatever credential localStorage holds now. Only the ambient stored
+  // token participates in refresh-and-retry, like the socket/REST clients.
+  const usesStoredToken = explicitAccessToken === undefined;
+  let accessToken = usesStoredToken ? localStorage.getItem(ACCESS_TOKEN_KEY) : explicitAccessToken;
 
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`;
-  } else {
-    console.warn('[FileUpload] No access token found in localStorage');
+  if (
+    usesStoredToken &&
+    accessToken &&
+    isExpiringSoon(accessToken, UPLOAD_TOKEN_REFRESH_BUFFER_MS)
+  ) {
+    accessToken = (await refreshStoredAccessToken(daemonUrl)) ?? accessToken;
   }
 
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers,
-    body: formData,
-    signal,
-    // Bearer-only endpoint; do not send cookies/credentials.
-  });
+  const send = (token: string | null | undefined) => {
+    const headers: HeadersInit = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    } else {
+      console.warn('[FileUpload] No access token found in localStorage');
+    }
+    return fetch(uploadUrl, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal,
+      // Bearer-only endpoint; do not send cookies/credentials.
+    });
+  };
+
+  let response = await send(accessToken);
+
+  // The access token can expire while the tab's socket stays connected (the
+  // socket authenticated at handshake), so a 401 here usually means only this
+  // raw fetch holds a stale bearer. Refresh once and retry with the new token.
+  if (response.status === 401 && usesStoredToken) {
+    const refreshed = await refreshStoredAccessToken(daemonUrl);
+    if (refreshed && refreshed !== accessToken) {
+      response = await send(refreshed);
+    }
+  }
 
   if (!response.ok) {
     throw new Error(await getUploadErrorMessage(response));

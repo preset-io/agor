@@ -1,11 +1,121 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
+import { refreshTokensSingleFlight } from '../../utils/singleFlightRefresh';
+import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../../utils/tokenRefresh';
 import { uploadFilesToSession } from './upload';
+
+vi.mock('@agor-live/client', () => ({ createRestClient: vi.fn(async () => ({})) }));
+vi.mock('../../utils/singleFlightRefresh', () => ({ refreshTokensSingleFlight: vi.fn() }));
+
+function jwtExpiringInMs(ms: number): string {
+  const payload = btoa(JSON.stringify({ exp: Math.floor((Date.now() + ms) / 1000) }));
+  return `header.${payload.replace(/=+$/, '')}.signature`;
+}
+
+function okUploadResponse(): Response {
+  return new Response(JSON.stringify({ success: true, files: [] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function unauthorizedUploadResponse(): Response {
+  return new Response(JSON.stringify({ error: 'Authentication required' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json', 'x-agor-upload-request-id': 'request-401' },
+  });
+}
 
 describe('uploadFilesToSession', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
+    vi.mocked(refreshTokensSingleFlight).mockReset();
+  });
+
+  it('refreshes the stored token and retries once when the daemon returns 401', async () => {
+    const staleToken = jwtExpiringInMs(10 * 60_000);
+    localStorage.setItem(ACCESS_TOKEN_KEY, staleToken);
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
+    vi.mocked(refreshTokensSingleFlight).mockResolvedValue({
+      accessToken: 'fresh-token',
+      user: {} as never,
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(unauthorizedUploadResponse())
+      .mockResolvedValueOnce(okUploadResponse());
+
+    await expect(
+      uploadFilesToSession({
+        sessionId: 'session-1',
+        daemonUrl: 'https://daemon.example',
+        files: [new File(['image'], 'shot.png')],
+      })
+    ).resolves.toEqual({ success: true, files: [] });
+
+    expect(refreshTokensSingleFlight).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: `Bearer ${staleToken}` },
+    });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: { Authorization: 'Bearer fresh-token' },
+    });
+  });
+
+  it('refreshes an about-to-expire stored token before uploading', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtExpiringInMs(5_000));
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
+    vi.mocked(refreshTokensSingleFlight).mockResolvedValue({
+      accessToken: 'fresh-token',
+      user: {} as never,
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okUploadResponse());
+
+    await uploadFilesToSession({
+      sessionId: 'session-1',
+      daemonUrl: 'https://daemon.example',
+      files: [new File(['image'], 'shot.png')],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: 'Bearer fresh-token' },
+    });
+  });
+
+  it('surfaces the 401 reference when refresh cannot restore the session', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtExpiringInMs(10 * 60_000));
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'dead-refresh-token');
+    vi.mocked(refreshTokensSingleFlight).mockRejectedValue(new Error('refresh rejected'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(unauthorizedUploadResponse());
+
+    await expect(
+      uploadFilesToSession({
+        sessionId: 'session-1',
+        daemonUrl: 'https://daemon.example',
+        files: [new File(['image'], 'shot.png')],
+      })
+    ).rejects.toThrow('Upload failed (HTTP 401) (reference: request-401)');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('never swaps an explicit authentication snapshot for the stored token', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'other-user-token');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(unauthorizedUploadResponse());
+
+    await expect(
+      uploadFilesToSession({
+        sessionId: 'session-1',
+        daemonUrl: 'https://daemon.example',
+        files: [new File(['image'], 'shot.png')],
+        accessToken: 'initiating-user-token',
+      })
+    ).rejects.toThrow('Upload failed (HTTP 401)');
+    expect(refreshTokensSingleFlight).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses the initiating authentication snapshot and abort signal', async () => {

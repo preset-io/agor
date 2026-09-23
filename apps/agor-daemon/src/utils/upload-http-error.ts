@@ -117,3 +117,75 @@ export function toUploadErrorResponse(error: unknown, requestId: string): Upload
     type: isClientError ? 'request' : 'internal',
   };
 }
+
+export type UploadAuthFailureReason =
+  | 'missing_bearer'
+  | 'token_expired'
+  | 'token_invalid'
+  | 'credentials_invalidated'
+  | 'tenant_rejected'
+  | 'not_authenticated'
+  | 'authentication_error';
+
+export interface UploadAuthFailureDiagnostics {
+  reason: UploadAuthFailureReason;
+  /** Unverified `sub` claim; identifies whose stale token it was, never authority. */
+  tokenSubject?: string;
+  /** Unverified `exp` claim as an ISO timestamp, to measure how stale the token was. */
+  tokenExpiresAt?: string;
+}
+
+// ECMAScript Date range; larger values would make toISOString throw.
+const MAX_JWT_EXP_SECONDS = 8.64e12;
+
+type AuthErrorLike = {
+  name?: unknown;
+  className?: unknown;
+  message?: unknown;
+  data?: { name?: unknown } | null;
+};
+
+/**
+ * Classify a rejected upload bearer into a bounded reason for operational
+ * logs. The browser response stays generic; this only exists so a support
+ * reference can be tied to why authentication failed.
+ */
+export function classifyUploadAuthFailure(
+  error: unknown,
+  unverifiedPayload?: { sub?: unknown; exp?: unknown } | null
+): UploadAuthFailureDiagnostics {
+  const candidate = (error !== null && typeof error === 'object' ? error : {}) as AuthErrorLike;
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  const causeName = typeof candidate.data?.name === 'string' ? candidate.data.name : undefined;
+
+  let reason: UploadAuthFailureReason;
+  if (causeName === 'TokenExpiredError' || /jwt expired/i.test(message)) {
+    reason = 'token_expired';
+  } else if (
+    causeName === 'JsonWebTokenError' ||
+    causeName === 'NotBeforeError' ||
+    /jwt (malformed|audience|issuer)|invalid (signature|token)|JWT type is not valid/i.test(message)
+  ) {
+    reason = 'token_invalid';
+  } else if (/Session expired|credential metadata unavailable/i.test(message)) {
+    reason = 'credentials_invalidated';
+  } else if (/tenant/i.test(message)) {
+    reason = 'tenant_rejected';
+  } else if (candidate.className === 'not-authenticated' || candidate.name === 'NotAuthenticated') {
+    reason = 'not_authenticated';
+  } else {
+    reason = 'authentication_error';
+  }
+
+  const tokenSubject =
+    typeof unverifiedPayload?.sub === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(unverifiedPayload.sub)
+      ? unverifiedPayload.sub
+      : undefined;
+  const exp = unverifiedPayload?.exp;
+  const tokenExpiresAt =
+    typeof exp === 'number' && Number.isFinite(exp) && Math.abs(exp) <= MAX_JWT_EXP_SECONDS
+      ? new Date(exp * 1000).toISOString()
+      : undefined;
+
+  return { reason, tokenSubject, tokenExpiresAt };
+}
