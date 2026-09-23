@@ -129,10 +129,21 @@ export type UploadAuthFailureReason =
 
 export interface UploadAuthFailureDiagnostics {
   reason: UploadAuthFailureReason;
-  /** Unverified `sub` claim; identifies whose stale token it was, never authority. */
-  tokenSubject?: string;
-  /** Unverified `exp` claim as an ISO timestamp, to measure how stale the token was. */
-  tokenExpiresAt?: string;
+  /** The rejected token's claimed (unverified) `sub`; a diagnostic hint, never authority. */
+  claimedSubject?: string;
+  /** The rejected token's claimed (unverified) `exp` as an ISO timestamp. */
+  claimedExpiresAt?: string;
+}
+
+// Any UUID version: users created before UUIDv7 IDs still carry v4 IDs.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Log only identifier-shaped values from unauthenticated input; anything
+ * else is caller-controlled text and is omitted.
+ */
+export function uuidOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && UUID_RE.test(value) ? value : undefined;
 }
 
 // ECMAScript Date range; larger values would make toISOString throw.
@@ -177,15 +188,12 @@ export function classifyUploadAuthFailure(
     reason = 'authentication_error';
   }
 
-  const tokenSubject =
-    typeof unverifiedPayload?.sub === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(unverifiedPayload.sub)
-      ? unverifiedPayload.sub
-      : undefined;
+  const claimedSubject = uuidOrUndefined(unverifiedPayload?.sub);
   const exp = unverifiedPayload?.exp;
-  const tokenExpiresAt =
+  const claimedExpiresAt =
     typeof exp === 'number' && Number.isFinite(exp) && Math.abs(exp) <= MAX_JWT_EXP_SECONDS
       ? new Date(exp * 1000).toISOString()
       : undefined;
 
-  return { reason, tokenSubject, tokenExpiresAt };
+  return { reason, claimedSubject, claimedExpiresAt };
 }

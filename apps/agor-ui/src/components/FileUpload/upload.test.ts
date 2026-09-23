@@ -6,9 +6,15 @@ import { uploadFilesToSession } from './upload';
 vi.mock('@agor-live/client', () => ({ createRestClient: vi.fn(async () => ({})) }));
 vi.mock('../../utils/singleFlightRefresh', () => ({ refreshTokensSingleFlight: vi.fn() }));
 
-function jwtExpiringInMs(ms: number): string {
-  const payload = btoa(JSON.stringify({ exp: Math.floor((Date.now() + ms) / 1000) }));
+function jwtFor(sub: string, expiresInMs = 10 * 60_000, tenantId = 'default'): string {
+  const payload = btoa(
+    JSON.stringify({ sub, tenant_id: tenantId, exp: Math.floor((Date.now() + expiresInMs) / 1000) })
+  );
   return `header.${payload.replace(/=+$/, '')}.signature`;
+}
+
+function refreshResult(accessToken: string) {
+  return { accessToken, user: {} as never };
 }
 
 function okUploadResponse(): Response {
@@ -33,13 +39,11 @@ describe('uploadFilesToSession', () => {
   });
 
   it('refreshes the stored token and retries once when the daemon returns 401', async () => {
-    const staleToken = jwtExpiringInMs(10 * 60_000);
+    const staleToken = jwtFor('user-a');
+    const freshToken = jwtFor('user-a', 15 * 60_000);
     localStorage.setItem(ACCESS_TOKEN_KEY, staleToken);
     localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
-    vi.mocked(refreshTokensSingleFlight).mockResolvedValue({
-      accessToken: 'fresh-token',
-      user: {} as never,
-    });
+    vi.mocked(refreshTokensSingleFlight).mockResolvedValue(refreshResult(freshToken));
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(unauthorizedUploadResponse())
@@ -59,17 +63,42 @@ describe('uploadFilesToSession', () => {
       headers: { Authorization: `Bearer ${staleToken}` },
     });
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
-      headers: { Authorization: 'Bearer fresh-token' },
+      headers: { Authorization: `Bearer ${freshToken}` },
     });
   });
 
-  it('refreshes an about-to-expire stored token before uploading', async () => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, jwtExpiringInMs(5_000));
-    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
-    vi.mocked(refreshTokensSingleFlight).mockResolvedValue({
-      accessToken: 'fresh-token',
-      user: {} as never,
+  it('does not replay an upload after another user signs in mid-request', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtFor('user-a'));
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'user-a-refresh-token');
+    let resolveUpload!: (response: Response) => void;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveUpload = resolve;
+        })
+    );
+    // The shared refresh now rotates whichever user localStorage holds.
+    vi.mocked(refreshTokensSingleFlight).mockResolvedValue(refreshResult(jwtFor('user-b')));
+
+    const upload = uploadFilesToSession({
+      sessionId: 'session-1',
+      daemonUrl: 'https://daemon.example',
+      files: [new File(['image'], 'shot.png')],
     });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtFor('user-b'));
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'user-b-refresh-token');
+    resolveUpload(unauthorizedUploadResponse());
+
+    await expect(upload).rejects.toThrow('Upload failed (HTTP 401) (reference: request-401)');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes an about-to-expire stored token before uploading', async () => {
+    const freshToken = jwtFor('user-a', 15 * 60_000);
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtFor('user-a', 5_000));
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'refresh-token');
+    vi.mocked(refreshTokensSingleFlight).mockResolvedValue(refreshResult(freshToken));
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okUploadResponse());
 
     await uploadFilesToSession({
@@ -80,15 +109,14 @@ describe('uploadFilesToSession', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-      headers: { Authorization: 'Bearer fresh-token' },
+      headers: { Authorization: `Bearer ${freshToken}` },
     });
   });
 
   it('surfaces the 401 reference when refresh cannot restore the session', async () => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, jwtExpiringInMs(10 * 60_000));
+    localStorage.setItem(ACCESS_TOKEN_KEY, jwtFor('user-a'));
     localStorage.setItem(REFRESH_TOKEN_KEY, 'dead-refresh-token');
     vi.mocked(refreshTokensSingleFlight).mockRejectedValue(new Error('refresh rejected'));
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(unauthorizedUploadResponse());
 
     await expect(

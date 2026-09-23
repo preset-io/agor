@@ -304,6 +304,7 @@ import {
   toUploadErrorResponse,
   type UploadAuthFailureDiagnostics,
   type UploadFailureStage,
+  uuidOrUndefined,
 } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
 import { WidgetResolutionStore } from './widgets/resolution-store.js';
@@ -847,8 +848,8 @@ export function createUploadAuthMiddleware(input: {
           token,
         });
       } catch (error) {
-        // Decoded without verification purely so the failure log can say
-        // whose token was stale and by how much; it grants nothing.
+        // Decoded without verification purely so the failure log can report
+        // the token's claimed subject and expiry; it grants nothing.
         const unverified = jwt.decode(token, { json: true });
         recordUploadAuthFailure(res, classifyUploadAuthFailure(error, unverified));
         return res.status(401).json({ error: 'Authentication required' });
@@ -2968,13 +2969,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           status: res.statusCode,
           type: res.locals.uploadFailureType ?? 'request',
           route: '/sessions/:sessionId/upload',
-          session_id: typeof req.params?.sessionId === 'string' ? req.params.sessionId : undefined,
+          session_id: uuidOrUndefined(req.params?.sessionId),
           // Verified identity once authentication succeeded; otherwise the
-          // rejected token's unverified subject and expiry (if decodable).
+          // the rejected token's claimed (unverified) subject and expiry.
           user_id: (req as { feathers?: AuthenticatedParams }).feathers?.user?.user_id,
           auth_reason: res.locals.uploadAuthFailure?.reason,
-          token_sub_unverified: res.locals.uploadAuthFailure?.tokenSubject,
-          token_expires_at: res.locals.uploadAuthFailure?.tokenExpiresAt,
+          token_sub_unverified: res.locals.uploadAuthFailure?.claimedSubject,
+          token_expires_at_unverified: res.locals.uploadAuthFailure?.claimedExpiresAt,
         })
       );
     });

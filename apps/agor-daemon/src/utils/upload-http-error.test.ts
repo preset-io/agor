@@ -1,6 +1,10 @@
 import multer from 'multer';
 import { describe, expect, it } from 'vitest';
-import { classifyUploadAuthFailure, toUploadErrorResponse } from './upload-http-error.js';
+import {
+  classifyUploadAuthFailure,
+  toUploadErrorResponse,
+  uuidOrUndefined,
+} from './upload-http-error.js';
 
 describe('toUploadErrorResponse', () => {
   it.each(['INVALID_FIELD_NAME', 'LIMIT_FIELD_ARRAY_INDEX'])(
@@ -168,8 +172,21 @@ describe('classifyUploadAuthFailure', () => {
       classifyUploadAuthFailure(new Error('x'), { sub: 'user 1; drop', exp: Number.MAX_VALUE })
     ).toEqual({
       reason: 'authentication_error',
-      tokenSubject: undefined,
-      tokenExpiresAt: undefined,
+      claimedSubject: undefined,
+      claimedExpiresAt: undefined,
     });
+  });
+});
+
+describe('uuidOrUndefined', () => {
+  it('keeps UUIDs of any version and drops caller-controlled text', () => {
+    expect(uuidOrUndefined('4ba459df-7de6-454f-b5b0-1aed95bc5084')).toBe(
+      '4ba459df-7de6-454f-b5b0-1aed95bc5084'
+    );
+    expect(uuidOrUndefined('01a0cd36-b888-7751-9cdf-48839a04b609')).toBe(
+      '01a0cd36-b888-7751-9cdf-48839a04b609'
+    );
+    expect(uuidOrUndefined('not-a-session" injected=1')).toBeUndefined();
+    expect(uuidOrUndefined(undefined)).toBeUndefined();
   });
 });

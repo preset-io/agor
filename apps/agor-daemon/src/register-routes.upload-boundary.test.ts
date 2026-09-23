@@ -150,7 +150,9 @@ describe('browser upload route boundary ordering', () => {
     const expiredAtSeconds = 1_790_000_000;
     const unverifiedToken = [
       Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'access' })).toString('base64url'),
-      Buffer.from(JSON.stringify({ sub: 'user-1', exp: expiredAtSeconds })).toString('base64url'),
+      Buffer.from(
+        JSON.stringify({ sub: '4ba459df-7de6-454f-b5b0-1aed95bc5084', exp: expiredAtSeconds })
+      ).toString('base64url'),
       'signature',
     ].join('.');
     const expired = Object.assign(new Error('jwt expired'), {
@@ -173,8 +175,8 @@ describe('browser upload route boundary ordering', () => {
     expect(res.locals.uploadFailureCode).toBe('AUTH_TOKEN_EXPIRED');
     expect(res.locals.uploadAuthFailure).toEqual({
       reason: 'token_expired',
-      tokenSubject: 'user-1',
-      tokenExpiresAt: new Date(expiredAtSeconds * 1000).toISOString(),
+      claimedSubject: '4ba459df-7de6-454f-b5b0-1aed95bc5084',
+      claimedExpiresAt: new Date(expiredAtSeconds * 1000).toISOString(),
     });
   });
 
@@ -201,7 +203,8 @@ describe('browser upload route boundary ordering', () => {
       'user_id:',
       'auth_reason:',
       'token_sub_unverified:',
-      'token_expires_at:',
+      'token_expires_at_unverified:',
+      'uuidOrUndefined(req.params?.sessionId)',
     ]) {
       expect(logger).toContain(field);
     }
