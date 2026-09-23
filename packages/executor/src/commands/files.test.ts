@@ -264,6 +264,119 @@ describe('browseBranchFiles git status', () => {
     });
   });
 
+  it('compares staged bytes with HEAD and unstaged bytes with the index', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, 'mod.txt'), 'index version\n');
+    await git.add('mod.txt');
+    await writeFile(join(dir, 'mod.txt'), 'working version\n');
+    await expect(readBranchFile(dir, 'mod.txt', 'staged')).resolves.toMatchObject({
+      content: 'index version\n',
+      gitDiff: { baseContent: 'original\n' },
+    });
+    await expect(readBranchFile(dir, 'mod.txt', 'workingTree')).resolves.toMatchObject({
+      content: 'working version\n',
+      gitDiff: { baseContent: 'index version\n' },
+    });
+    await expect(readBranchFile(dir, 'mod.txt')).resolves.toMatchObject({
+      content: 'working version\n',
+      gitDiff: { baseContent: 'original\n' },
+    });
+  });
+
+  it('tags ignored directory descendants and preserves NUL-delimited rename paths', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, '.gitignore'), '*.log\ncache/\n');
+    await mkdir(join(dir, 'cache'));
+    await writeFile(join(dir, 'cache', 'entry.txt'), 'ignored');
+    const renamed = 'renamed "quoted"\nfile.txt';
+    await git.mv('keep.txt', renamed);
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'cache/entry.txt')).toMatchObject({
+      gitStatus: 'ignored',
+    });
+    await expect(readBranchFile(dir, renamed, 'staged')).resolves.toMatchObject({
+      content: 'unchanged\n',
+      gitDiff: { baseContent: 'unchanged\n', basePath: 'keep.txt' },
+    });
+  });
+
+  it.each(['combined', 'staged', 'workingTree'] as const)(
+    'rejects an ancestor symlink escape for %s',
+    async (source) => {
+      const outside = await mkdtemp(join(tmpdir(), 'agor-files-outside-'));
+      try {
+        await writeFile(join(outside, 'secret.txt'), 'private');
+        await symlink(outside, join(dir, 'outside'));
+        await expect(readBranchFile(dir, 'outside/secret.txt', source)).rejects.toThrow(
+          /escapes branch/i
+        );
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('previews a staged deletion even after a directory replaces the file', async () => {
+    const { git } = createGit(dir);
+    await git.rm('keep.txt');
+    await mkdir(join(dir, 'keep.txt'));
+    await writeFile(join(dir, 'keep.txt', 'child.txt'), 'new child');
+    await expect(readBranchFile(dir, 'keep.txt', 'staged')).resolves.toMatchObject({
+      content: '',
+      gitStatus: 'deleted',
+      gitDiff: { baseContent: 'unchanged\n' },
+    });
+  });
+
+  it('does not treat a NUL-containing working-tree text extension as a text diff', async () => {
+    await writeFile(join(dir, 'fresh.txt'), 'not\0text');
+    await expect(readBranchFile(dir, 'fresh.txt', 'workingTree')).rejects.toThrow(/previewable/i);
+  });
+
+  it('retains missing modify/delete conflicts in Changes', async () => {
+    const { git } = createGit(dir);
+    await git.add('.');
+    await git.commit('baseline');
+    await git.checkoutLocalBranch('other');
+    await writeFile(join(dir, 'keep.txt'), 'other side\n');
+    await git.add('keep.txt');
+    await git.commit('modify');
+    await git.checkout(['-']);
+    await git.rm('keep.txt');
+    await git.commit('delete');
+    await expect(git.merge(['other'])).rejects.toThrow();
+    await unlink(join(dir, 'keep.txt'));
+
+    expect((await browseBranchFiles(dir)).find((file) => file.path === 'keep.txt')).toMatchObject({
+      gitStatus: 'conflicted',
+      gitWorkingTreeStatus: 'conflicted',
+    });
+    await expect(readBranchFile(dir, 'keep.txt', 'workingTree')).rejects.toThrow(/conflict/i);
+  });
+
+  it('rejects binary and oversized staged deletions instead of returning an empty text preview', async () => {
+    const { git } = createGit(dir);
+    for (const [path, content] of [
+      ['binary.txt', 'binary\0content'],
+      ['large.txt', 'x'.repeat(1024 * 1024 + 1)],
+    ]) {
+      await writeFile(join(dir, path), content);
+      await git.add(path);
+      await git.commit('fixture');
+      await git.rm(path);
+      await expect(readBranchFile(dir, path, 'staged')).rejects.toThrow(/previewable/i);
+    }
+  });
+
+  it('uses canonical branch-relative paths for Git comparisons', async () => {
+    await expect(readBranchFile(dir, './mod.txt')).resolves.toMatchObject({
+      path: 'mod.txt',
+      gitStatus: 'modified',
+      gitDiff: { baseContent: 'original\n' },
+    });
+    await expect(readBranchFile(dir, '/mod.txt')).rejects.toThrow(/relative/i);
+  });
+
   it('leaves the file list intact for a non-git directory', async () => {
     const plainDir = await mkdtemp(join(tmpdir(), 'agor-files-plain-'));
     try {

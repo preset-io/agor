@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises';
 import { basename, extname, join, relative, sep } from 'node:path';
 import type {
@@ -6,7 +7,6 @@ import type {
   GitFileStatus,
   GitFileStatusSource,
 } from '@agor/core/types';
-import { createGit } from '../git/index.js';
 import type {
   BranchFilesBrowsePayload,
   BranchFilesReadPayload,
@@ -20,6 +20,7 @@ import {
   resolveExecutorBranch,
   resolvePathInsideBranch,
 } from './branch-filesystem.js';
+import { readBoundedGit } from './files-git.js';
 import type { CommandOptions } from './index.js';
 
 const MAX_FILES = 50000;
@@ -351,22 +352,23 @@ function resolvePorcelainEntries(
 
 async function readGitStatus(root: string): Promise<PorcelainEntry[] | null> {
   try {
-    const { git } = createGit(root);
-    const raw = await git.raw([
-      '-c',
-      `safe.directory=${root}`,
-      'status',
-      '--porcelain=v1',
-      '-z',
-      '--untracked-files=all',
-      '--ignored=matching',
-    ]);
-    return parsePorcelainZ(raw);
-  } catch (error) {
-    console.warn(
-      `[branch.files.browse] Skipping git status for ${root}:`,
-      error instanceof Error ? error.message : String(error)
+    const raw = await readBoundedGit(
+      root,
+      [
+        '-c',
+        `safe.directory=${root}`,
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        '--ignored=matching',
+      ],
+      8 * 1024 * 1024
     );
+    return parsePorcelainZ(raw);
+  } catch {
+    // Best effort; do not expose repository-controlled diagnostics or paths.
+    console.warn('[branch.files.browse] Git status unavailable or exceeded its read budget');
     return null;
   }
 }
@@ -395,7 +397,7 @@ async function applyGitStatus(root: string, files: FileListItem[]): Promise<void
   }
 
   const ignoredDirs: string[] = [];
-  const deletedPaths = new Set<string>();
+  const missingPaths = new Set<string>();
 
   for (const [path, pathEntries] of entriesByPath) {
     const existing = byPath.get(path);
@@ -413,8 +415,8 @@ async function applyGitStatus(root: string, files: FileListItem[]): Promise<void
       existing.gitStatus = resolved.gitStatus;
       existing.gitWorkingTreeStatus = resolved.gitWorkingTreeStatus;
       existing.gitStagedStatus = resolved.gitStagedStatus;
-    } else if (resolved.gitStatus === 'deleted') {
-      deletedPaths.add(path);
+    } else if (resolved.gitStatus === 'deleted' || resolved.gitStatus === 'conflicted') {
+      missingPaths.add(path);
     }
   }
 
@@ -428,9 +430,9 @@ async function applyGitStatus(root: string, files: FileListItem[]): Promise<void
     }
   }
 
-  // Surface deletions as synthetic entries (they are absent from the walk).
+  // Surface deletions and missing conflicts as synthetic entries.
   // Skip anything under an excluded directory to match the browse filter.
-  for (const path of deletedPaths) {
+  for (const path of missingPaths) {
     if (files.length >= MAX_FILES) break;
     if (path.split('/').some((part) => EXCLUDED_DIRECTORIES.has(part))) continue;
     const resolved = resolvePorcelainEntries(entriesByPath.get(path) ?? [], false);
@@ -441,7 +443,7 @@ async function applyGitStatus(root: string, files: FileListItem[]): Promise<void
       lastModified: '',
       isText: isTextFile(path, 0),
       mimeType: getMimeType(path),
-      gitStatus: 'deleted',
+      gitStatus: resolved?.gitStatus ?? 'deleted',
       ...(resolved?.gitWorkingTreeStatus
         ? { gitWorkingTreeStatus: resolved.gitWorkingTreeStatus }
         : {}),
@@ -458,25 +460,21 @@ export async function browseBranchFiles(branchRoot: string): Promise<FileListIte
   return files;
 }
 
-function normalizedRelativePath(input: string): string {
-  const normalized = input.replace(/\\/g, '/').replace(/^\/+/, '').trim();
-  if (!normalized) throw new Error('File path required');
-  if (normalized.includes('\0')) throw new Error('Invalid file path');
-  return normalized;
-}
-
 async function readGitText(
   root: string,
   object: string,
   displayPath: string
 ): Promise<{ content: string; size: number } | null> {
   try {
-    const { git } = createGit(root);
-    const safeDirectoryArgs = ['-c', `safe.directory=${root}`];
-    const sizeOutput = await git.raw([...safeDirectoryArgs, 'cat-file', '-s', object]);
-    const size = Number.parseInt(sizeOutput.trim(), 10);
-    if (!Number.isFinite(size) || !isTextFile(displayPath, size)) return null;
-    const content = await git.raw([...safeDirectoryArgs, 'show', object]);
+    // Pin the object before inspecting its size: HEAD/index can change between
+    // requests. Read blobs only, never `show` a tree as an unbounded listing.
+    const oid = (await readBoundedGit(root, ['rev-parse', '--verify', object], 128)).trim();
+    if (!/^[a-f0-9]{40,64}$/.test(oid)) return null;
+    const sizeOutput = await readBoundedGit(root, ['cat-file', '-s', oid], 128);
+    const size = Number(sizeOutput.trim());
+    if (!Number.isSafeInteger(size) || size < 0 || !isTextFile(displayPath, size)) return null;
+    const content = await readBoundedGit(root, ['cat-file', 'blob', oid], MAX_PREVIEW_SIZE);
+    if (content.includes('\0')) return null;
     return { content, size };
   } catch {
     // Missing HEAD/index entries and non-previewable objects are normal for
@@ -499,15 +497,39 @@ async function readIndexText(
   return readGitText(root, `:${filePath}`, filePath);
 }
 
+/** Bounded current-text read; do not trust an earlier size check during concurrent edits. */
+async function readWorkingTreeText(path: string): Promise<{ content: string; size: number }> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error('Requested path is not a file');
+    const buffer = Buffer.alloc(MAX_PREVIEW_SIZE + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    if (size > MAX_PREVIEW_SIZE || buffer.subarray(0, size).includes(0)) {
+      throw new Error('Working-tree file is not previewable as text');
+    }
+    return { content: buffer.subarray(0, size).toString('utf-8'), size };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readBranchFile(
   branchRoot: string,
   relativeFilePath: string,
   gitStatusSource: GitFileStatusSource = 'combined'
 ): Promise<FileDetail> {
-  const filePath = normalizedRelativePath(relativeFilePath);
-  const { absolute: requestedPath } = await resolvePathInsideBranch(branchRoot, filePath, {
-    mustExist: false,
-  });
+  const { absolute: requestedPath, relative: filePath } = await resolvePathInsideBranch(
+    branchRoot,
+    relativeFilePath,
+    {
+      mustExist: false,
+    }
+  );
 
   let stats: Awaited<ReturnType<typeof lstat>> | null = null;
   try {
@@ -517,7 +539,9 @@ export async function readBranchFile(
   }
 
   if (stats?.isSymbolicLink()) throw new Error('Access denied: symlinks not allowed');
-  if (stats && !stats.isFile()) throw new Error('Requested path is not a file');
+  if (stats && !stats.isFile() && gitStatusSource !== 'staged') {
+    throw new Error('Requested path is not a file');
+  }
 
   const statusEntries = await readGitStatus(branchRoot);
   const resolvedStatus = resolvePorcelainEntries(
@@ -546,6 +570,7 @@ export async function readBranchFile(
       stagedStatus === 'added'
         ? { content: '', size: 0 }
         : await readHeadText(branchRoot, basePath);
+    if (!base) throw new Error('Staged comparison is not previewable as text');
     return {
       path: filePath,
       title: basename(filePath),
@@ -574,18 +599,24 @@ export async function readBranchFile(
       throw new Error('Requested file has no working-tree change');
     }
 
+    if (!stats && workingTreeStatus === 'conflicted') {
+      throw new Error('Conflicted file is absent; resolve the conflict with Git');
+    }
     let current: { content: string; size: number } | null = null;
     if (stats) {
       if (!isTextFile(filePath, stats.size)) {
         throw new Error('Working-tree file is not previewable as text');
       }
-      current = { content: (await readFile(requestedPath)).toString('utf-8'), size: stats.size };
+      current = await readWorkingTreeText(requestedPath);
     }
 
     const base =
       workingTreeStatus === 'added' || workingTreeStatus === 'untracked'
         ? { content: '', size: 0 }
         : await readIndexText(branchRoot, filePath);
+    if (!base && workingTreeStatus !== 'conflicted') {
+      throw new Error('Working-tree comparison is not previewable as text');
+    }
     return {
       path: filePath,
       title: basename(filePath),

@@ -115,8 +115,8 @@ export interface FileDetail extends FileListItem {
   encoding: 'utf-8' | 'base64';
 
   /**
-   * Text content from HEAD used to compare the checked-out file with its
-   * committed version. Present only for previewable working-tree changes.
+   * Comparison text from HEAD (combined/staged) or the index (workingTree).
+   * Present only when the selected comparison is previewable as text.
    * Added/untracked files use an empty base; deleted files use empty current
    * `content` and retain their committed text here.
    */
@@ -124,7 +124,7 @@ export interface FileDetail extends FileListItem {
 }
 
 export interface FileGitDiff {
-  /** UTF-8 content of the file at HEAD (or an empty string for a new file). */
+  /** UTF-8 comparison content from HEAD/index, or empty for a new file. */
   baseContent: string;
 
   /** Original HEAD path when git reports a rename or copy. */

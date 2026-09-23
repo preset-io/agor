@@ -957,11 +957,13 @@ export function buildAuthenticatedGitTransportEnvironment(
 function createGitClient(
   baseDir: string | undefined,
   spawnEnv: Record<string, string>,
-  timeoutMs?: number
+  timeoutMs?: number,
+  abort?: AbortSignal
 ): { git: ReturnType<typeof simpleGit> } {
   const git = simpleGit({
     baseDir,
     binary: getGitBinary(),
+    abort,
     config: [],
     ...(timeoutMs === undefined ? {} : { timeout: { block: timeoutMs } }),
     unsafe: {
@@ -992,11 +994,17 @@ function createGitClient(
  */
 export function createGit(
   baseDir?: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  abort?: AbortSignal
 ): { git: ReturnType<typeof simpleGit> } {
   const localConfig: [string, string][] = [...FIXED_GIT_SECURITY_CONFIG];
   if (baseDir) localConfig.push(['safe.directory', baseDir]);
-  return createGitClient(baseDir, buildFixedGitEnvironment(localConfig, process.env), timeoutMs);
+  return createGitClient(
+    baseDir,
+    buildFixedGitEnvironment(localConfig, process.env),
+    timeoutMs,
+    abort
+  );
 }
 
 /**
