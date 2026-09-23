@@ -2,7 +2,7 @@ import { generateId } from '@agor/core/ids/browser';
 import { type ContentBlock, type Message, MessageRole } from '@agor-live/client';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { AgentChain } from './AgentChain';
 
 afterEach(cleanup);
@@ -22,7 +22,8 @@ function message(content: Message['content'], overrides: Partial<Message> = {}):
 }
 
 // ContentBlock's fields are unknown, not guaranteed strings. In particular,
-// Claude's processContentBlocks can produce thinking with undefined text.
+// Before the producer fix for #2810/#2809, Claude's processContentBlocks
+// persisted thinking without text. Historical rows still need this guard.
 it.each<ContentBlock>([
   { type: 'text' },
   { type: 'thinking', signature: 'synthetic-signature' },
@@ -90,6 +91,7 @@ it('preserves normalized and provider thinking, text, tool order, pairing and om
   await userEvent.click(second);
   expect(within(second.parentElement!).getByText('Second result')).toBeVisible();
   expect(within(second.parentElement!).queryByText('First result')).not.toBeInTheDocument();
+  await page.screenshot({ path: `./.vitest/reasoning-content-${window.innerWidth}.png` });
 });
 
 it('handles lean, partial and hydrated replacements without losing supported reasoning', async () => {
