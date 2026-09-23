@@ -148,7 +148,7 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   },
   'widgets/:id/oauth-resolve': {
     scopeClass: 'identity-only',
-    why: 'Waits on a provider round-trip before deciding; the grant/server re-reads each open their own unit rather than holding one across it.',
+    why: 'Makes no provider call: it re-reads persisted grant liveness, with one short settle wait while a refresh this daemon started is in flight. The grant/server re-reads each open their own unit rather than holding one across that wait.',
   },
   'widgets/:id/dismiss': {
     scopeClass: 'identity-only',
