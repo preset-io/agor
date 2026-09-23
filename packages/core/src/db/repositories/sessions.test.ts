@@ -173,8 +173,31 @@ describe('SessionRepository.create', () => {
     expect(created.title).toBe('Test Session');
     expect(created.description).toBe('Test description');
     expect(created.created_at).toBeDefined();
-    expect(created.last_updated).toBeDefined();
+    expect(created.last_updated).toBe(created.created_at);
     expect(created.sdk_home_scope).toBe('execution_home');
+  });
+
+  dbTest('initializes recency from creation time unless explicitly supplied', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const createdAt = '2025-01-01T00:00:00.000Z';
+    const updatedAt = '2025-02-01T00:00:00.000Z';
+    const initial = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        created_at: createdAt,
+      })
+    );
+    expect(initial.last_updated).toBe(createdAt);
+    const restored = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        created_at: createdAt,
+        last_updated: updatedAt,
+      })
+    );
+    expect(restored.created_at).toBe(createdAt);
+    expect(restored.last_updated).toBe(updatedAt);
   });
 
   dbTest('persists an explicitly admitted branch SDK-home scope', async ({ db }) => {

@@ -10,7 +10,11 @@ import { executeRaw, select } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { boards, branches } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
-import { boardCapabilityCondition, branchCapabilityCondition } from './branch-access';
+import {
+  boardCapabilityCondition,
+  branchCapabilityCondition,
+  inVisibleBranchSet,
+} from './branch-access';
 import { exerciseCapabilityPredicateParity } from './branch-access.parity-test-helpers';
 import { GroupRepository } from './groups';
 
@@ -72,6 +76,35 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           matchingSets.some((node) => node['Actual Loops'] === 1 && Number(node['Actual Rows']) > 0)
         ).toBe(true);
         for (const node of matchingSets) expect([0, 1]).toContain(node['Actual Loops']);
+        // The inventory path evaluates grant precedence once per configuration,
+        // not once per inheriting branch. Keep the point path above selective.
+        const inventoryPlans = await executeRaw(
+          scoped,
+          sql`EXPLAIN (ANALYZE, FORMAT JSON)
+          SELECT ${branches.branch_id} FROM ${branches}
+          WHERE ${inVisibleBranchSet(scoped, local.member, branches.branch_id)}`
+        );
+        const configScans: Record<string, unknown>[] = [];
+        const visitConfigs = (value: unknown): void => {
+          if (!value || typeof value !== 'object') return;
+          const node = value as Record<string, unknown>;
+          if (node.Alias === 'eligible_branch_configs') configScans.push(node);
+          for (const child of Object.values(node)) visitConfigs(child);
+        };
+        visitConfigs(inventoryPlans);
+        expect(configScans.length).toBeGreaterThan(0);
+        for (const node of configScans) expect([0, 1]).toContain(node['Actual Loops']);
+        expect(
+          await select(scoped)
+            .from(branches)
+            .where(
+              and(
+                eq(branches.branch_id, foreign.branchId),
+                inVisibleBranchSet(scoped, foreign.owner, branches.branch_id)
+              )
+            )
+            .all()
+        ).toEqual([]);
         for (const userId of [local.owner, local.member, local.admin, foreign.owner]) {
           for (const capability of BOARD_POLICY_CAPABILITIES) {
             expect(

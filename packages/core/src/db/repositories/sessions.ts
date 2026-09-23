@@ -219,6 +219,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   private sessionToInsert(session: Partial<Session>): SessionInsert {
     const now = Date.now();
+    const createdAt = new Date(session.created_at ?? now);
     const sessionId = session.session_id ?? generateId();
 
     if (!session.branch_id) {
@@ -230,8 +231,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
     return {
       session_id: sessionId,
-      created_at: new Date(session.created_at ? session.created_at : now),
-      updated_at: session.last_updated ? new Date(session.last_updated) : new Date(now),
+      created_at: createdAt,
+      updated_at: session.last_updated ? new Date(session.last_updated) : createdAt,
       status: session.status ?? SessionStatus.IDLE,
       agentic_tool: session.agentic_tool ?? 'claude-code',
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
