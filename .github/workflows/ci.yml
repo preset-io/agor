@@ -68,6 +68,7 @@ jobs:
 
       - run: pnpm check:agor-live-deps
       - run: pnpm check:agentic-tool-packages
+      - run: node --test scripts/verify-npm-release.test.mjs
       - run: pnpm check:shortid
       - run: pnpm check:multitenancy-boundaries
       - run: pnpm check:daemon-filesystem-boundaries
