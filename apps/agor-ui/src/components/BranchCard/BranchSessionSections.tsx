@@ -397,6 +397,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isMobileViewport = useIsMobileViewport();
   // One idle flag per list mounts every row's hover toolbar in a single commit.
   const rowActionsReady = useIdleReady();
+  // Compact chevron column and nesting step for Tree (its defaults are controlHeightSM).
+  const compactTreeTheme = useMemo(
+    () => ({
+      components: {
+        Tree: { switcherSize: token.controlHeightXS, indentSize: token.controlHeightXS },
+      },
+    }),
+    [token.controlHeightXS]
+  );
   const prefersReducedMotion = usePrefersReducedMotion();
   const [enteringRows, setEnteringRows] = useState(EMPTY_ENTERING_ROWS);
   const enteringRowsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -845,10 +854,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     border: 0,
     borderRadius: token.borderRadiusSM,
     paddingBlock: 0,
-    // A tight lead-in keeps the logo close to the chevron; the trailing status mark
-    // gets more room so it sits comfortably inside a selected or failed fill.
+    // Equal, tight insets: the logo sits close to the chevron and the status mark
+    // mirrors it inside a selected or failed fill, on the card's content grid.
     paddingInlineStart: token.paddingXXS,
-    paddingInlineEnd: token.paddingSM,
+    paddingInlineEnd: token.paddingXXS,
     minHeight: rowHeight,
     background: getSessionRowFill(token, {
       failed: isSessionRowFailed(session),
@@ -1049,7 +1058,14 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         <Flex
           align="center"
           justify="center"
-          style={{ display: 'flex', height: rowHeight, transform: 'none' }}
+          // The target overhangs the compact column; lift it above the row so its edges toggle.
+          style={{
+            display: 'flex',
+            height: rowHeight,
+            transform: 'none',
+            position: 'relative',
+            zIndex: 1,
+          }}
         >
           <Button
             type="text"
@@ -1057,6 +1073,16 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             aria-label={label}
             aria-expanded={expanded}
             icon={renderChevron(expanded)}
+            // Overhang only rightward into the row's empty lead-in (the tree viewport clips
+            // the left edge); inline-end padding keeps the glyph centered in the column.
+            style={{
+              width: token.controlHeightXS + token.paddingXXS,
+              minWidth: token.controlHeightXS + token.paddingXXS,
+              paddingInlineStart: 0,
+              paddingInlineEnd: token.paddingXXS,
+              marginInlineEnd: -token.paddingXXS,
+              flexShrink: 0,
+            }}
             onClick={(event) => {
               event.stopPropagation();
               toggleSessionCollapsed(String(key));
@@ -1065,7 +1091,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </Flex>
       );
     },
-    [rowHeight, renderChevron, toggleSessionCollapsed]
+    [rowHeight, renderChevron, toggleSessionCollapsed, token.controlHeightXS, token.paddingXXS]
   );
 
   const renderSessionNode = (node: SessionTreeNode) => {
@@ -1234,35 +1260,40 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     expandableKeys: React.Key[],
     onContentSizeChange: (contentHeight: number, viewportHeight: number) => void
   ) => (
-    <BranchSessionTree
-      className="agor-flat-tree agor-session-tree nodrag nowheel"
-      fillAvailableHeight={fillPanel}
-      onContentSizeChange={onContentSizeChange}
-      treeData={treeData}
-      expandedKeys={expandedKeys}
-      onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
-      showLine={false}
-      // Toggle instantly; Tree's height motion re-lays out the virtual list every frame.
-      motion={false}
-      switcherIcon={renderTreeSwitcherIcon}
-      showIcon={false}
-      blockNode
-      selectable={false}
-      titleRender={renderMemoSessionNode}
-      // Rows carry their own hover/selection fill, so Tree's 4px node gap is just air.
-      styles={TREE_ROW_STYLES}
-    />
+    <ConfigProvider theme={compactTreeTheme}>
+      <BranchSessionTree
+        className="agor-flat-tree agor-session-tree nodrag nowheel"
+        fillAvailableHeight={fillPanel}
+        onContentSizeChange={onContentSizeChange}
+        treeData={treeData}
+        expandedKeys={expandedKeys}
+        onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
+        showLine={false}
+        // Toggle instantly; Tree's height motion re-lays out the virtual list every frame.
+        motion={false}
+        switcherIcon={renderTreeSwitcherIcon}
+        showIcon={false}
+        blockNode
+        selectable={false}
+        titleRender={renderMemoSessionNode}
+        // Rows carry their own hover/selection fill, so Tree's 4px node gap is just air.
+        styles={TREE_ROW_STYLES}
+      />
+    </ConfigProvider>
   );
 
   const panelFlexStyle: React.CSSProperties | undefined = fillPanel
     ? { display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0 }
     : undefined;
+  // Compact tree metrics: the chevron column and each nesting step use AntD's smallest
+  // control size, so sessions don't sit behind wide gutters.
+  const treeColumn = token.controlHeightXS;
   // Section chevrons share the top-level tree chevron column.
   const sectionHeaderStyle: React.CSSProperties = { paddingInline: 0 };
   // Section bodies hang off a guide under the header's chevron; rows' own chevron
   // column starts right at the guide, so the indent doesn't stack with it.
   const sectionBodyGuide: React.CSSProperties = {
-    marginInlineStart: token.controlHeightSM / 2,
+    marginInlineStart: treeColumn / 2,
     paddingInlineStart: 0,
     borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
   };
@@ -1273,7 +1304,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <Flex
       align="center"
       justify="center"
-      style={{ width: token.controlHeightSM, marginInlineEnd: token.paddingXXS }}
+      style={{ width: treeColumn, marginInlineEnd: token.paddingXXS }}
     >
       {renderChevron(Boolean(isActive))}
     </Flex>
@@ -1353,7 +1384,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   // Scheduled rows keep their paging but sit in the tree's title column,
   // after the chevron column (Tree's switcher, whose margin/padding are dropped).
-  const flatRowInset = token.controlHeightSM;
+  const flatRowInset = treeColumn;
   const scheduledRunsContent = isScheduledRunsOpen ? (
     <PagedSessions key={branch.branch_id} sessions={scheduledSessions} rowGap={0}>
       {(session) => {

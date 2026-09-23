@@ -212,7 +212,7 @@ it('shows the agent logo on every row and hides only the implied spawn marker', 
 
 it('nests rows one level inside their section with one chevron style', () => {
   mount();
-  const step = theme.getDesignToken(config).controlHeightSM;
+  const step = theme.getDesignToken(config).controlHeightXS;
 
   const headerChevron = document.querySelector('.ant-collapse-expand-icon svg')!;
   const treeChevron = screen
@@ -230,6 +230,17 @@ it('nests rows one level inside their section with one chevron style', () => {
   const rootSwitcher = treeChevron.closest('.ant-tree-switcher')!.getBoundingClientRect();
   expect(rootSwitcher.left - guideX).toBeLessThanOrEqual(1);
   expect(tree.left + tree.width / 2 - rootSwitcher.left).toBeCloseTo(step / 2, 0);
+  // The chevron target spans the compact column plus the row's empty lead-in, and its
+  // whole area toggles: the overhang sits above the row and inside the tree viewport.
+  const chevronButton = screen.getByRole('button', { name: 'Collapse Security agor' });
+  const target = chevronButton.getBoundingClientRect();
+  const tokens = theme.getDesignToken(config);
+  expect(target.width).toBeCloseTo(tokens.controlHeightXS + tokens.paddingXXS, 0);
+  expect(target.height).toBeCloseTo(tokens.controlHeightSM, 0);
+  const midY = target.top + target.height / 2;
+  for (const x of [target.left + 1, target.right - 1]) {
+    expect(chevronButton.contains(document.elementFromPoint(x, midY))).toBe(true);
+  }
   // Rows stay visibly nested inside the section label.
   expect(
     row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left
@@ -471,7 +482,7 @@ it('re-renders memoized rows when a context-only input changes', async () => {
   expect(onOpenSessionSettings).not.toHaveBeenCalled();
 });
 
-it('tints failed rows, drops the logo outline, and gives the status mark trailing room', () => {
+it('tints failed rows, drops the logo outline, and mirrors row insets', () => {
   mount();
   const token = theme.getDesignToken(config);
   const probe = document.createElement('span');
@@ -492,7 +503,8 @@ it('tints failed rows, drops the logo outline, and gives the status mark trailin
   );
 
   const style = getComputedStyle(row('Security agor'));
-  expect(parseFloat(style.paddingRight)).toBe(token.paddingSM);
+  // Equal insets on both sides keep the status mark mirrored with the logo.
+  expect(parseFloat(style.paddingRight)).toBe(token.paddingXXS);
   expect(parseFloat(style.paddingLeft)).toBe(token.paddingXXS);
   probe.remove();
 });

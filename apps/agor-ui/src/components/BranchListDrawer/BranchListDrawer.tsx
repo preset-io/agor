@@ -150,7 +150,7 @@ const BoardSessionRow = memo(function BoardSessionRow({
           cursor: 'pointer',
           paddingBlock: 0,
           paddingInlineStart: token.paddingXS,
-          paddingInlineEnd: token.paddingSM,
+          paddingInlineEnd: token.paddingXS,
         }}
       >
         <Flex align="center" gap={token.marginXS} style={{ minHeight: token.controlHeight }}>

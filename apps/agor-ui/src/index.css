@@ -209,7 +209,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  inset-inline-end: calc(var(--ant-control-height-sm) / 2);
+  inset-inline-end: 50%;
   border-inline-end: var(--ant-line-width) var(--ant-line-type) var(--ant-color-border-secondary);
   content: "";
 }
