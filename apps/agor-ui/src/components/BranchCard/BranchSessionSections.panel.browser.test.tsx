@@ -544,3 +544,50 @@ it.each([
   const [a, b] = [channels(unselected), channels(selected)];
   expect(Math.max(...a.map((v, i) => Math.abs(v - b[i]!)))).toBeGreaterThan(10);
 });
+
+it('shares the fill-mode panel between sessions, scheduled runs, and gateway sessions', async () => {
+  const gatewaySource = {
+    channel_id: 'channel-1',
+    channel_type: 'slack',
+    channel_name: '#eng-deploys',
+    thread_id: 'thread-1',
+  };
+  const mixed = (scheduledCount: number) => [
+    ...Array.from({ length: 30 }, (_, i) => makeSession(`manual-${i}`, `Manual ${i}`)),
+    ...Array.from({ length: scheduledCount }, (_, i) =>
+      makeSession(`run-${i}`, `Scheduled ${i}`, {
+        scheduled_from_branch: true,
+        scheduled_run_at: 1_780_527_200_000 - i * 60_000,
+      })
+    ),
+    ...Array.from({ length: 20 }, (_, i) =>
+      makeSession(`gateway-${i}`, `Gateway ${i}`, {
+        custom_context: { gateway_source: { ...gatewaySource, thread_id: `thread-${i}` } },
+      } as Partial<Session>)
+    ),
+  ];
+  const section = (label: string) =>
+    screen.getByText(label).closest<HTMLElement>('.ant-collapse')!.getBoundingClientRect();
+  const labels = ['Sessions', 'Scheduled Runs', 'Gateway Sessions'];
+  const scheduledList = () =>
+    row('Scheduled 0').closest<HTMLElement>('.nowheel')!.firstElementChild as HTMLElement;
+
+  // Every section overflows: each gets an equal share, all fit, and each scrolls within.
+  mount(mixed(30), { fillAvailableHeight: true });
+  const panel = screen.getByTestId('panel').getBoundingClientRect();
+  await waitFor(() => {
+    const heights = labels.map((label) => section(label).height);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(2);
+    expect(section('Gateway Sessions').bottom).toBeLessThanOrEqual(panel.bottom);
+  });
+  expect(scheduledList().scrollHeight).toBeGreaterThan(scheduledList().clientHeight);
+  cleanup();
+
+  // A short scheduled list caps at its rows and hands the rest to its siblings.
+  mount(mixed(2), { fillAvailableHeight: true });
+  await waitFor(() => {
+    expect(scheduledList().scrollHeight).toBe(scheduledList().clientHeight);
+    expect(section('Scheduled Runs').height).toBeLessThan(section('Sessions').height - 32);
+    expect(section('Sessions').height).toBeCloseTo(section('Gateway Sessions').height, 0);
+  });
+});

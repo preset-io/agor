@@ -433,6 +433,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const fillPanel = isPanel && fillAvailableHeight;
   const manualTreeSection = useTreeSectionHeight();
   const gatewayTreeSection = useTreeSectionHeight();
+  const scheduledSection = useTreeSectionHeight();
   // Every collapsible node (sections + parent sessions in the tree) defaults
   // to expanded; only user-collapsed exceptions are kept. Board cards persist
   // them per branch in the shared collapsedBranchNodes store; the teammate
@@ -1386,7 +1387,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   // after the chevron column (Tree's switcher, whose margin/padding are dropped).
   const flatRowInset = treeColumn;
   const scheduledRunsContent = isScheduledRunsOpen ? (
-    <PagedSessions key={branch.branch_id} sessions={scheduledSessions} rowGap={0}>
+    <PagedSessions
+      key={branch.branch_id}
+      sessions={scheduledSessions}
+      rowGap={0}
+      fillAvailableHeight={fillPanel}
+      onContentSizeChange={scheduledSection.onContentSizeChange}
+    >
       {(session) => {
         const callbackToggle = getCallbackToggle(session);
         const remoteParentId = getRemoteParentId(session);
@@ -1622,6 +1629,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
           {scheduledSessions.length > 0 && (
             <Collapse
+              ref={scheduledSection.ref}
+              className={
+                fillPanel && isScheduledRunsOpen ? 'agor-panel-session-tree-section' : undefined
+              }
               activeKey={openSectionKeys}
               onChange={handleScheduledRunsChange}
               items={[
@@ -1629,21 +1640,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                   key: 'scheduled-runs',
                   label: scheduledRunsHeader,
                   children: scheduledRunsContent,
-                  styles: {
-                    header: sectionHeaderStyle,
-                    icon: sectionIconStyle,
-                    body: {
-                      background: 'transparent',
-                      paddingInline: 0,
-                      paddingTop: 0,
-                      ...sectionBodyGuide,
-                    },
-                  },
+                  style: panelFlexStyle,
+                  styles: treeBodyStyles,
                 },
               ]}
               ghost
               expandIcon={sectionExpandIcon}
-              style={{ marginTop: manualSessions.length > 0 ? 0 : 8, flexShrink: 0 }}
+              style={{
+                marginTop: manualSessions.length > 0 ? 0 : 8,
+                flexShrink: 0,
+                ...(isScheduledRunsOpen
+                  ? expandedPanelStyle(scheduledSection.maxHeight)
+                  : undefined),
+              }}
             />
           )}
 
