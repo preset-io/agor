@@ -68,7 +68,8 @@ export const sessions = pgTable(
     // Primary identity
     session_id: varchar('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),

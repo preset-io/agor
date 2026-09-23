@@ -103,6 +103,32 @@ function orderedIds(result: Awaited<ReturnType<SessionsService['find']>>): strin
 }
 
 describe('SessionsService.find — board_id pushdown', () => {
+  dbTest(
+    'lets bounded consumers opt out of exact counts without changing default pagination',
+    async ({ db }) => {
+      const service = createService(db);
+      const board = await createBoard(db);
+      const branch = await createBranchOnBoard(db, board);
+      await createSession(db, branch);
+      await createSession(db, branch);
+      const query = { board_id: board, $limit: 1, $skip: 1, $sort: { updated_at: -1 } };
+      const counted = await service.find({ query });
+      expect(Array.isArray(counted)).toBe(false);
+      const uncounted = await service.find({ query: { ...query, $count: false } });
+      expect(uncounted).toEqual(Array.isArray(counted) ? counted : counted.data);
+      expect(await service.find({ query: { ...query, $count: false, $limit: 0 } })).toEqual([]);
+      await expect(service.find({ query: { ...query, $count: 'false' } })).rejects.toThrow(
+        '$count must be a boolean'
+      );
+      await expect(
+        service.find({ query: { ...query, $count: false, $limit: -1 } })
+      ).rejects.toThrow('non-negative integer');
+      await expect(
+        service.find({ query: { ...query, $count: false, $select: ['session_id'] } })
+      ).rejects.toThrow('SQL-paginated');
+    }
+  );
+
   dbTest('returns only sessions whose branch is on the requested board', async ({ db }) => {
     const service = createService(db);
 

@@ -54,7 +54,8 @@ export const sessions = sqliteTable(
     // Primary identity
     session_id: text('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
