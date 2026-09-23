@@ -819,6 +819,16 @@ Why it is nonetheless the right trade here:
   entry nobody can connect is a curation bug somebody fixes; a disclosure
   missing its last sentence is one nobody notices.
 
+  **On every Connect button, not only the first.** The row does not store the
+  disclosure, and a later request naming the installed server by `mcpServerId`
+  supersedes the widget that carried it. So that path re-reads the entry named
+  by `catalog_entry_name` and carries its text the same way, under the same
+  length refusal. If the entry has left the catalog (or cannot be read) the
+  tool refuses before superseding anything, rather than mint a button with no
+  disclosure or a generic one: the text the install acknowledged no longer
+  exists to show, and the user can still connect from My Servers. An
+  already-connected server is still attached — no button, nothing to precede.
+
 - Pinning `mcp_server_id` at mint is what lets `/oauth-resolve` accept **no**
   caller-supplied destination at all. Deferring the install to the click would
   mean the resolve endpoint taking a server id from the browser, which is a

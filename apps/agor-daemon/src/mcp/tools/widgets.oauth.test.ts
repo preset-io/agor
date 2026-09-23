@@ -427,6 +427,90 @@ describe('agor_widgets_request_oauth — catalog install', () => {
   });
 });
 
+describe('agor_widgets_request_oauth — an existing catalog install requested by id', () => {
+  // `mcp-catalog/connect` stamps `catalog_entry_name` on the row it installs,
+  // so this is the same server the catalog path created.
+  const INSTALLED = { ...OAUTH_SERVER, catalog_entry_name: 'com.notion/mcp' };
+
+  it('carries the entry disclosure onto the widget that supersedes the first one', async () => {
+    // §5.4: the agent may acknowledge the disclosure on the user's behalf only
+    // because the text then reaches the user above the Connect button. A
+    // re-request by id supersedes the widget that carried it, so the
+    // replacement has to carry it too — or nobody ever reads it.
+    const { app, supersedeSpy } = makeApp({
+      server: INSTALLED,
+      connectResult: { mcp_server: INSTALLED, reused_existing_server: false },
+    });
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' });
+    const first = appendStub.mock.calls[0][0].metadata.widget;
+    expect(first.params.permissionDisclosure).toBe(NOTION_ENTRY.permission_disclosure);
+
+    superseded.rows = [pendingOAuthWidget('widget-first', 'srv-notion')];
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(supersedeSpy).toHaveBeenCalledWith('widget-first', expect.any(String));
+    const second = appendStub.mock.calls[1][0].metadata.widget;
+    expect(second.status).toBe('pending');
+    expect(second.params.catalogEntryName).toBe('com.notion/mcp');
+    expect(second.params.permissionDisclosure).toBe(NOTION_ENTRY.permission_disclosure);
+  });
+
+  it('refuses, before superseding anything, when the entry has left the catalog', async () => {
+    // Without the entry there is no text to show, and minting a Connect button
+    // with no disclosure is exactly the gap this closes. A generic notice is
+    // not what anybody acknowledged. Refusing leaves the pending widget (if
+    // any) in place and sends the user to the human path.
+    const { app, supersedeSpy } = makeApp({ server: INSTALLED, catalogEntry: null });
+    const tools = registerAndCapture({ app });
+    superseded.rows = [pendingOAuthWidget('widget-first', 'srv-notion')];
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    ).rejects.toThrow(/cannot show what it can access.*My Servers/s);
+    expect(supersedeSpy).not.toHaveBeenCalled();
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
+  it('still attaches an already-connected server whose entry has left the catalog', async () => {
+    // No Connect button is shown on this path, so there is nothing for the
+    // missing disclosure to precede; refusing would only strand a working
+    // connection.
+    livenessStub.mockResolvedValue({ live: true });
+    const { app, calls } = makeApp({ server: INSTALLED, catalogEntry: null });
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(payload(result).status).toBe('already_present');
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeDefined();
+  });
+
+  it('refuses an unshowable disclosure on this path too, rather than shortening it', async () => {
+    const { app } = makeApp({
+      server: INSTALLED,
+      catalogEntry: { ...NOTION_ENTRY, permission_disclosure: 'x'.repeat(4_001) },
+    });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    ).rejects.toThrow(/will not shorten what you are agreeing to/);
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the catalog for a server that was not installed from it', async () => {
+    const { app, calls } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(calls.find((c) => c.service === 'mcp-catalog')).toBeUndefined();
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure).toBeUndefined();
+  });
+});
+
 describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an install', () => {
   it('carries a long permission disclosure through whole', async () => {
     // The disclosure is the consent: §5.4 lets an agent satisfy

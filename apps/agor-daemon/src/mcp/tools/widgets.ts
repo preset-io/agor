@@ -325,7 +325,18 @@ function clampToSchemaMax(value: string, max: number): string {
  * provenance to show alongside it.
  */
 type OAuthWidgetTarget =
-  | { server: MCPServer; catalogEntryName?: string; permissionDisclosure?: string }
+  | {
+      server: MCPServer;
+      catalogEntryName?: string;
+      permissionDisclosure?: string;
+      /**
+       * Set when the server came from the catalog but its disclosure cannot be
+       * shown. Thrown only where a pending Connect button would be minted —
+       * an already-connected server shows no button, so there is nothing for
+       * the missing text to precede.
+       */
+      disclosureRefusal?: string;
+    }
   /** The endpoint turned out to need no sign-in; there is nothing to authorize. */
   | { short_circuit: true; server: MCPServer; reasonText: string };
 
@@ -360,7 +371,60 @@ async function loadExistingOAuthServer(
         `Use agor_widgets_request_env_vars for a key the user must paste, or connect it from the MCP Catalog.`
     );
   }
-  return { server, catalogEntryName: server.catalog_entry_name };
+  if (!server.catalog_entry_name) return { server };
+  return {
+    server,
+    catalogEntryName: server.catalog_entry_name,
+    ...(await installedCatalogDisclosure(ctx, server)),
+  };
+}
+
+/**
+ * The disclosure for a server installed from the catalog, re-read from the entry.
+ *
+ * §5.4 lets an agent satisfy `acknowledged_disclosure` at install time only
+ * because the text then reaches the human above the Connect button. The row
+ * does not store it, so a later request by `mcpServerId` — which supersedes the
+ * widget that carried it — has to fetch it again, or the replacement button
+ * appears with no disclosure at all and nobody ever reads it.
+ *
+ * An entry that has left the catalog, or cannot be read, yields a refusal
+ * rather than a button with no disclosure or a generic one: the contract is
+ * that the text the install acknowledged is the text the user reads, and there
+ * is no longer any text to show. The user can still connect the server
+ * themselves from My Servers. The same length refusal as the catalog path
+ * applies, for the same reason: Agor does not shorten what someone agrees to.
+ */
+async function installedCatalogDisclosure(
+  ctx: McpContext,
+  server: MCPServer
+): Promise<{ permissionDisclosure?: string; disclosureRefusal?: string }> {
+  const serverLabel = server.display_name || server.name;
+  let entry: MCPCatalogEntry;
+  try {
+    entry = (await ctx.app
+      .service('mcp-catalog')
+      .get(server.catalog_entry_name as string, ctx.baseServiceParams)) as MCPCatalogEntry;
+  } catch {
+    return {
+      disclosureRefusal:
+        `"${serverLabel}" was installed from the MCP Catalog entry "${server.catalog_entry_name}", ` +
+        `which Agor can no longer load, so it cannot show what it can access before you connect. ` +
+        `Connect it from My Servers in Agor instead.`,
+    };
+  }
+  if ((entry.permission_disclosure?.length ?? 0) > OAUTH_PERMISSION_DISCLOSURE_MAX) {
+    return { disclosureRefusal: disclosureTooLongMessage(entry) };
+  }
+  return entry.permission_disclosure ? { permissionDisclosure: entry.permission_disclosure } : {};
+}
+
+/** Refusal for a disclosure past {@link OAUTH_PERMISSION_DISCLOSURE_MAX}; see §5.4. */
+function disclosureTooLongMessage(entry: MCPCatalogEntry): string {
+  return (
+    `"${catalogDisplayName(entry)}" has a permission disclosure too long to show before ` +
+    `connecting, and Agor will not shorten what you are agreeing to; report this entry.`
+  );
 }
 
 /**
@@ -428,10 +492,7 @@ async function installCatalogOAuthServer(
     );
   }
   if ((entry.permission_disclosure?.length ?? 0) > OAUTH_PERMISSION_DISCLOSURE_MAX) {
-    throw new Error(
-      `"${catalogDisplayName(entry)}" has a permission disclosure too long to show before ` +
-        `connecting, and Agor will not shorten what you are agreeing to; report this entry.`
-    );
+    throw new Error(disclosureTooLongMessage(entry));
   }
   const permissionDisclosure = entry.permission_disclosure || undefined;
 
@@ -835,7 +896,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         // rendering a Connect button that would open a flow nobody asked for.
         return attachAndResume(ctx, targetSessionId, resolved.server, resolved.reasonText);
       }
-      const { server, catalogEntryName, permissionDisclosure } = resolved;
+      const { server, catalogEntryName, permissionDisclosure, disclosureRefusal } = resolved;
       const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared';
       const serverName = clampToSchemaMax(server.display_name || server.name, SERVER_NAME_MAX);
       const params: OAuthWidgetParams = oauthParamsSchema.parse({
@@ -881,6 +942,11 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           `[Agor] "${serverName}" was already connected for you. It is attached to this session; its tools are available on your next turn.`
         );
       }
+
+      // A Connect button is about to be minted, so the disclosure has to be
+      // showable — refused here, before anything is superseded, so the widget
+      // that still carries it stays live.
+      if (disclosureRefusal) throw new Error(disclosureRefusal);
 
       // One live Connect button per (session, server). A second request
       // supersedes the first rather than stacking buttons that all drive the
