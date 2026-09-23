@@ -173,11 +173,13 @@ describe('BranchSessionSections', () => {
     expect(screen.getByRole('button', { name: /new session/i })).toBeInTheDocument();
   });
 
-  it('keeps the labeled button and count badges on board cards', () => {
+  it('gives board cards the same icon-only action and plain counts as the panel', () => {
     renderSections({ sessions: [scheduledSession] });
 
-    expect(screen.getByRole('button', { name: /new session/i })).toHaveTextContent('New Session');
-    expect(document.querySelectorAll('.ant-badge').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /new session/i })).not.toHaveTextContent(
+      'New Session'
+    );
+    expect(document.querySelector('.ant-badge')).toBeNull();
   });
 
   it('uses an icon-only new-session action and plain counts in panel mode', () => {
@@ -275,9 +277,10 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Spawned child')).toBeInTheDocument();
     expect(screen.getByText('Remote child')).toBeInTheDocument();
     expect(screen.getAllByText('Team Slack')).toHaveLength(2);
-    for (const channelPill of screen.getAllByTitle('Team Slack')) {
-      expect(channelPill.getAttribute('style')).toContain('align-self: flex-start');
-      expect(channelPill.getAttribute('style')).toContain('max-width: 100%');
+    // The channel is quiet metadata on the title line, not a pill below it.
+    for (const channel of screen.getAllByTitle('Team Slack')) {
+      expect(channel.closest('.ant-tag')).toBeNull();
+      expect(channel.getAttribute('style')).toContain('white-space: nowrap');
     }
     expect(
       Array.from(container.querySelectorAll('[data-session-id]')).map((row) =>

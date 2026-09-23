@@ -36,7 +36,7 @@ const session = {
 } as unknown as Session;
 
 describe('BoardSessionList', () => {
-  it('renders a compact, non-interactive BranchPill for session branches', () => {
+  it('shows the branch as quiet metadata on the session row', () => {
     render(
       <BoardSessionList
         board={board}
@@ -48,12 +48,13 @@ describe('BoardSessionList', () => {
       />
     );
 
-    const pillText = screen.getByText('feature/panel-management');
-    expect(pillText).toBeInTheDocument();
-    expect(pillText.closest('.ant-tag')).toHaveAttribute(
-      'title',
-      'preset-io/agor / feature/panel-management'
-    );
-    expect(pillText.closest('button,a')).toBeNull();
+    const branchText = screen.getByText('feature/panel-management');
+    const metadata = branchText.closest('[title]')!;
+    expect(metadata).toHaveAttribute('title', 'preset-io/agor / feature/panel-management');
+    expect(branchText.closest('.ant-tag')).toBeNull();
+    // One row control; the branch is part of its accessible name, not a separate target.
+    const row = screen.getByRole('button', { name: /^Open session / });
+    expect(row).toHaveAccessibleName(/branch preset-io\/agor \/ feature\/panel-management/);
+    expect(row).toContainElement(branchText);
   });
 });

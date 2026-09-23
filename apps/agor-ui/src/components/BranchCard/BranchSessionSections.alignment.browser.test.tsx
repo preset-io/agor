@@ -4,6 +4,7 @@ import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import '../../index.css';
+import { isMobileViewport, MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { BranchSessionSections } from './BranchSessionSections';
 
 // biome-ignore lint/plugin/noHardcodedColorLiteral: browser-computed transparency sentinel, not a UI palette
@@ -73,44 +74,52 @@ function mount(titleHeight = 24) {
 }
 
 const centerY = (rect: DOMRect) => rect.top + rect.height / 2;
+const ZOOMS = [0.65, 1, 1.75];
+const rowName = (title: string) => new RegExp(`^Open session ${title}(;|$)`);
 
-it('centers hovered session borders and actions without changing row pitch at canvas zooms', async () => {
+it('keeps card rows, chevrons and hover actions aligned at canvas zooms', async () => {
   const { onSessionClick, onOpenSessionSettings } = mount();
+  const rowHeight = isMobileViewport()
+    ? MOBILE_TOUCH_TARGET
+    : theme.getDesignToken({ algorithm: theme.darkAlgorithm }).controlHeight;
   const rows = sessions.map((session) =>
-    screen.getByRole('button', { name: `Open session ${session.title}` })
+    screen.getByRole('button', { name: rowName(session.title!) })
   );
-  for (const zoom of [0.65, 1, 1.75]) {
+  for (const zoom of ZOOMS) {
     screen.getByTestId('canvas').style.transform = `scale(${zoom})`;
     for (const row of rows) {
       await act(async () => page.elementLocator(row).hover());
-      const surface = row.closest<HTMLElement>('.ant-tree-node-content-wrapper')!;
-      const node = row.closest<HTMLElement>('.ant-tree-treenode')!;
       const actions = row.parentElement!.lastElementChild as HTMLElement;
       await waitFor(() => {
-        const border = row.getBoundingClientRect();
-        const fill = surface.getBoundingClientRect();
-        expect(Math.abs(centerY(border) - centerY(fill))).toBeLessThan(0.1);
-        expect(Math.abs(centerY(border) - centerY(actions.getBoundingClientRect()))).toBeLessThan(
-          0.1
-        );
-        // Preserve the original 4px total inset and 4px inter-node gap.
-        expect((fill.height - border.height) / zoom).toBeCloseTo(4, 1);
-        expect(node.getBoundingClientRect().height / zoom).toBeCloseTo(border.height / zoom + 4, 1);
         expect(getComputedStyle(actions).opacity).toBe('1');
+        const bounds = row.getBoundingClientRect();
+        // Borderless single-line rows share the panel's row height and flush pitch.
+        expect(bounds.height / zoom).toBeCloseTo(rowHeight, 0);
+        expect(Math.abs(centerY(bounds) - centerY(actions.getBoundingClientRect()))).toBeLessThan(
+          0.5
+        );
       });
-      expect(getComputedStyle(surface).backgroundColor).not.toBe(TRANSPARENT);
+      expect(getComputedStyle(row).borderTopWidth).toBe('0px');
       const bounds = row.getBoundingClientRect();
       expect(
         row.contains(document.elementFromPoint(bounds.left + 10 * zoom, centerY(bounds)))
       ).toBe(true);
     }
-    const parentNode = rows[0].closest('.ant-tree-treenode')!.getBoundingClientRect();
-    const childNode = rows[1].closest('.ant-tree-treenode')!.getBoundingClientRect();
-    expect((childNode.top - parentNode.bottom) / zoom).toBeCloseTo(4, 1);
-    expect(getComputedStyle(rows[1]).outlineStyle).toBe('dashed');
-    expect(getComputedStyle(rows[0]).borderStyle).toBe('solid');
+    expect(
+      (rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().bottom) / zoom
+    ).toBeCloseTo(0, 0);
+    // The chevron is centered on its row, not on Tree's first line.
+    const chevron = screen.getByRole('button', { name: 'Collapse Parent' }).querySelector('svg')!;
+    expect(
+      Math.abs(centerY(chevron.getBoundingClientRect()) - centerY(rows[0].getBoundingClientRect()))
+    ).toBeLessThan(0.5);
+    // Selection is a fill, not the old dashed outline.
+    expect(getComputedStyle(rows[1]).outlineStyle).toBe('none');
+    expect(getComputedStyle(rows[1]).backgroundColor).not.toBe(TRANSPARENT);
+    expect(getComputedStyle(rows[0]).backgroundColor).toBe(TRANSPARENT);
   }
-  await page.screenshot({ path: `./.vitest/alignment-row-${window.innerWidth}.png` });
+  await page.screenshot({ path: `./.vitest/alignment-card-${window.innerWidth}.png` });
+
   const settings = rows[1]
     .parentElement!.querySelector('[aria-label="setting"]')!
     .closest('button')!;
@@ -125,51 +134,20 @@ it('centers hovered session borders and actions without changing row pitch at ca
   act(() => rows[1].blur());
   await waitFor(() => expect(getComputedStyle(actions).opacity).toBe('0'));
   expect(getComputedStyle(actions).pointerEvents).toBe('none');
-  expect(getComputedStyle(rows[1]).outlineStyle).toBe('dashed');
 });
 
-it.each([24, 32])(
-  'centers plus/minus glyphs in the hover backing and preserves connector and hit targets (line %ipx)',
-  async (titleHeight) => {
-    const { onSessionClick } = mount(titleHeight);
-    for (const zoom of [0.65, 1, 1.75]) {
-      screen.getByTestId('canvas').style.transform = `scale(${zoom})`;
-      const button = screen.getByRole('button', { name: 'Collapse Parent' });
-      await act(async () => page.elementLocator(button).hover());
-      const switcher = button.parentElement!;
-      const backing = getComputedStyle(switcher, '::before');
-      const glyph = button.querySelector('svg')!.getBoundingClientRect();
-      const bounds = switcher.getBoundingClientRect();
-      const backingCenter =
-        bounds.top + (parseFloat(backing.top) + parseFloat(backing.height) / 2) * zoom;
-      expect(Math.abs(centerY(glyph) - backingCenter)).toBeLessThan(0.1);
-      expect(
-        Math.abs(glyph.left + glyph.width / 2 - (bounds.left + bounds.width / 2))
-      ).toBeLessThan(0.1);
-      expect(backing.backgroundColor).not.toBe(TRANSPARENT);
-      expect(button.getBoundingClientRect().height / zoom).toBeCloseTo(titleHeight, 1);
-      expect(button.getBoundingClientRect().width).toBeCloseTo(bounds.width, 1);
-      // AntD's leaf connector meets the same first-line center, not the center of a tall row.
-      const leafLine = document.querySelector('.ant-tree-switcher-leaf-line')!;
-      expect(parseFloat(getComputedStyle(leafLine, '::after').height)).toBe(titleHeight / 2);
-      expect(parseFloat(getComputedStyle(leafLine, '::before').height)).toBe(titleHeight / 2);
-      await act(async () => page.elementLocator(button).click());
-      const expand = screen.getByRole('button', { name: 'Expand Parent' });
-      expect(
-        screen.queryByRole('button', { name: `Open session ${sessions[1].title}` })
-      ).toBeNull();
-      expect(
-        Math.abs(centerY(expand.querySelector('svg')!.getBoundingClientRect()) - backingCenter)
-      ).toBeLessThan(0.1);
-      await act(async () => userEvent.keyboard('{Enter}'));
-      expect(screen.getByRole('button', { name: 'Collapse Parent' })).toHaveFocus();
-      expect(
-        screen.getByRole('button', { name: `Open session ${sessions[1].title}` })
-      ).toBeVisible();
-    }
-    await page.screenshot({
-      path: `./.vitest/alignment-switcher-${titleHeight}-${window.innerWidth}.png`,
-    });
-    expect(onSessionClick).not.toHaveBeenCalled();
+it('toggles card subtrees with the chevron by mouse and keyboard at canvas zooms', async () => {
+  const { onSessionClick } = mount();
+  const child = () => screen.queryByRole('button', { name: rowName(sessions[1].title!) });
+  for (const zoom of ZOOMS) {
+    screen.getByTestId('canvas').style.transform = `scale(${zoom})`;
+    await act(async () => page.getByRole('button', { name: 'Collapse Parent' }).click());
+    expect(child()).toBeNull();
+    // Focus stays on the chevron, so Enter re-expands from the keyboard.
+    expect(screen.getByRole('button', { name: 'Expand Parent' })).toHaveFocus();
+    await act(async () => userEvent.keyboard('{Enter}'));
+    expect(screen.getByRole('button', { name: 'Collapse Parent' })).toHaveFocus();
+    expect(child()).toBeVisible();
   }
-);
+  expect(onSessionClick).not.toHaveBeenCalled();
+});
