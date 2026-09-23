@@ -2,13 +2,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClient } from '@libsql/client';
+import { is, sql } from 'drizzle-orm';
+import { getTableConfig, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './client';
+import { executeRaw, isSQLiteDatabase, rawRows } from './database-wrapper';
 import {
   classifyMigrationWatermark,
   pendingOfflineCutoverMigrations,
   preflightSQLiteCapabilityPolicyOwners,
+  runMigrations,
 } from './migrate';
+import * as sqliteSchema from './schema.sqlite';
 
 interface JournalEntry {
   idx: number;
@@ -1382,4 +1387,76 @@ describe('MCP stdio transport repair migrations', () => {
     expect(migration.match(/DROP POLICY "stdio_repair_0096_/g)).toHaveLength(6);
     expect(migration).toContain("SELECT set_config('agor.system_scope', '', true)");
   });
+});
+
+describe('SQLite index parity with the declared schema', () => {
+  // The SQLite table-rebuild dance (create `__new_x` → copy → DROP TABLE x →
+  // rename) drops the old table's indexes, so every rebuild has to re-list
+  // every index by hand. A rebuild that forgets one leaves a database that
+  // still satisfies its own migration history while quietly no longer matching
+  // schema.sqlite.ts, and nothing downstream notices: Drizzle builds queries
+  // from the declared schema whether or not the index behind it exists.
+  //
+  // `0009_reconcile-missing-columns` did exactly that and dropped
+  // `sessions_agentic_tool_idx` and `sessions_scheduled_flag_idx`;
+  // `0114_restore_session_indexes` puts them back. Migration-local tests cannot
+  // catch this class of drift — they compare the table before a rebuild to the
+  // table after it, and an index already missing from both sides looks fine.
+  // Only the whole chain measured against the declared schema does.
+  //
+  // Known divergences are listed rather than tolerated silently. Each is a
+  // pre-existing gap with its own history and its own fix; adding to this list
+  // means the schema is asking for an index no database has.
+  const KNOWN_MISSING_INDEXES = new Map([
+    [
+      'sessions.sessions_forked_idx',
+      // 0000 created this name; 0009 recreated the same single-column index on
+      // `forked_from_session_id` as `sessions_forked_from_idx`. The column is
+      // indexed, only the name diverges, so renaming it is a separate change.
+      'renamed to sessions_forked_from_idx by 0009_reconcile-missing-columns',
+    ],
+    [
+      'thread_session_map.idx_thread_map_thread_id',
+      // 0023 and 0026 both create the session_id and channel_status indexes and
+      // neither creates this one, so it has never existed on any database.
+      'never created by any migration (0023_tough_hercules onward)',
+    ],
+  ]);
+
+  it('creates every index schema.sqlite.ts declares', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-sqlite-index-parity-'));
+    const db = createDatabase({ url: `file:${join(directory, 'parity.db')}` });
+    if (!isSQLiteDatabase(db)) throw new Error('Expected a SQLite database');
+
+    try {
+      await runMigrations(db);
+      const live = new Set(
+        rawRows(await executeRaw(db, sql`SELECT name FROM sqlite_master WHERE type = 'index'`)).map(
+          (row) => String(row.name)
+        )
+      );
+
+      const missing: string[] = [];
+      for (const value of Object.values(sqliteSchema)) {
+        if (!is(value, SQLiteTable)) continue;
+        const { name: tableName, indexes } = getTableConfig(value);
+        for (const { config } of indexes) {
+          if (!live.has(config.name)) missing.push(`${tableName}.${config.name}`);
+        }
+      }
+
+      const reasons = [...KNOWN_MISSING_INDEXES]
+        .map(([name, reason]) => `${name}: ${reason}`)
+        .join('\n');
+      expect(
+        missing.filter((name) => !KNOWN_MISSING_INDEXES.has(name)),
+        `Declared but never created. Known divergences:\n${reasons}`
+      ).toEqual([]);
+      // The carve-outs have to stay real: a fixed one must leave this list.
+      expect(missing, `No longer missing:\n${reasons}`).toEqual([...KNOWN_MISSING_INDEXES.keys()]);
+    } finally {
+      (db as typeof db & { $client: { close(): void } }).$client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30000);
 });

@@ -45,7 +45,16 @@ it('backfills SQLite recency atomically without losing children, indexes or fiel
         await executeRaw(db, sql`SELECT * FROM tasks WHERE task_id = ${fixture.task.task_id}`)
       )
     ).toEqual(fixture.taskRows);
-    expect(await indexes()).toEqual(beforeIndexes);
+    // 0113 still preserves every index it inherited. `runMigrations` also runs
+    // 0114, which restores the two the 0009 rebuild dropped, so the set may
+    // only grow — and only by exactly those two.
+    const afterIndexes = await indexes();
+    expect(afterIndexes).toEqual(expect.arrayContaining(beforeIndexes));
+    expect(
+      afterIndexes
+        .filter(({ name }) => !beforeIndexes.some((before) => before.name === name))
+        .map(({ name }) => name)
+    ).toEqual(['sessions_agentic_tool_idx', 'sessions_scheduled_flag_idx']);
     expect(rawRows(await executeRaw(db, sql`PRAGMA foreign_key_check`))).toEqual([]);
     expect(rawRows(await executeRaw(db, sql`PRAGMA foreign_key_list(sessions)`))).toEqual(
       beforeForeignKeys
