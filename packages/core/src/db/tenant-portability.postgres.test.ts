@@ -869,6 +869,87 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(remaining).toHaveLength(1);
   });
 
+  it('blocks export before archive effects for files-only orphaned native state', async () => {
+    const tenantId = `tp-opencode-files-${generateId()}`;
+    const ownerId = await seedTenant(db, tenantId);
+    const filesystemRoot = join(scratch, `${tenantId}-filesystem`);
+    const orphan = join(
+      filesystemRoot,
+      'homes',
+      ownerId,
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy-store',
+      'snapshot.json'
+    );
+    await mkdir(join(orphan, '..'), { recursive: true });
+    await writeFile(orphan, '{"legacy":true}');
+    const archive = join(scratch, `${tenantId}-files-only-refused`);
+
+    try {
+      await expect(
+        exportTenant(db, tenantId, { archivePath: archive, filesystemRoot })
+      ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+      expect(existsSync(archive)).toBe(false);
+      expect(
+        await runWithTenantDatabaseScope(db, tenantId, async (scoped) =>
+          select(scoped, { session_id: pg.sessions.session_id })
+            .from(pg.sessions)
+            .where(eq(pg.sessions.tenant_id, tenantId))
+            .all()
+        )
+      ).toHaveLength(1);
+    } finally {
+      await rm(filesystemRoot, { recursive: true, force: true });
+      await deleteTenantData(db, tenantId);
+    }
+  });
+
+  it('blocks import before DB restore when destination has files-only native state', async () => {
+    const source = `tp-opencode-import-src-${generateId()}`;
+    const destination = `tp-opencode-import-dst-${generateId()}`;
+    await seedTenant(db, source);
+    const archive = join(scratch, `${source}-archive`);
+    await exportTenant(db, source, {
+      archivePath: archive,
+      filesystemRoot: join(scratch, `${source}-empty-filesystem`),
+    });
+    const filesystemRoot = join(scratch, `${destination}-filesystem`);
+    const orphan = join(
+      filesystemRoot,
+      'home',
+      'legacy-owner',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'orphan.json'
+    );
+    await mkdir(join(orphan, '..'), { recursive: true });
+    await writeFile(orphan, '{"legacy":true}');
+
+    try {
+      await expect(
+        importTenant(db, { archivePath: archive, tenantId: destination, filesystemRoot })
+      ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+      const destinationSessions = await runWithTenantDatabaseScope(
+        db,
+        destination,
+        async (scoped) =>
+          select(scoped, { session_id: pg.sessions.session_id })
+            .from(pg.sessions)
+            .where(eq(pg.sessions.tenant_id, destination))
+            .all()
+      );
+      expect(destinationSessions).toHaveLength(0);
+    } finally {
+      await rm(filesystemRoot, { recursive: true, force: true });
+      await deleteTenantData(db, source);
+    }
+  });
+
   it('re-homes OAuth server configuration but omits grants across master secrets', async () => {
     const source = `tpog-src-${generateId()}`;
     const rehomed = `tpog-dst-${generateId()}`;

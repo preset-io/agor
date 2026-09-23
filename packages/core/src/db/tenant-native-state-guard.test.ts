@@ -1,12 +1,16 @@
 import { eq } from 'drizzle-orm';
-import { expect } from 'vitest';
+import { expect, it } from 'vitest';
 import { select, update } from './database-wrapper';
 import { BranchRepository } from './repositories/branches';
 import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
 import { SessionRepository } from './repositories/sessions';
 import { sessions } from './schema';
+import type { TenantArchiveManifest } from './tenant-archive';
 import { TenantNativeStateHandoffRequiredError } from './tenant-deletion';
-import { assertTenantNativeStateHandoffClear } from './tenant-native-state-guard';
+import {
+  assertArchiveNativeStateAbsent,
+  assertTenantNativeStateHandoffClear,
+} from './tenant-native-state-guard';
 import { dbTest } from './test-helpers';
 
 dbTest(
@@ -38,3 +42,27 @@ dbTest(
     expect(await new BranchRepository(db).findById(branch.branch_id)).not.toBeNull();
   }
 );
+
+it('blocks a files-only native-state archive before reading session rows', async () => {
+  const manifest = {
+    database: { tables: [] },
+    filesystem: {
+      included: true,
+      entries: [
+        {
+          path: 'homes/owner-1/.local/share/agor/opencode/stores/orphan/state.json',
+          type: 'file',
+          size: 18,
+          sha256: '0'.repeat(64),
+          mode: 0o600,
+        },
+      ],
+      skippedSpecialCount: 0,
+      unsafeSymlinkCount: 0,
+    },
+  } as unknown as TenantArchiveManifest;
+
+  await expect(assertArchiveNativeStateAbsent('/not-read', manifest)).rejects.toBeInstanceOf(
+    TenantNativeStateHandoffRequiredError
+  );
+});

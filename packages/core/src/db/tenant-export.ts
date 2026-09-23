@@ -32,8 +32,13 @@ import {
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import { exportTenantTableRows } from './tenant-database-io';
-import { assertValidTenantId } from './tenant-deletion';
-import { copyTenantFilesystemInto, type TenantFilesystemEntry } from './tenant-filesystem';
+import { assertValidTenantId, TenantNativeStateHandoffRequiredError } from './tenant-deletion';
+import {
+  copyTenantFilesystemInto,
+  hasOpenCodeNativeStateFilesystemEntries,
+  type TenantFilesystemEntry,
+  walkTenantFilesystemTree,
+} from './tenant-filesystem';
 import { assertTenantNativeStateHandoffClear } from './tenant-native-state-guard';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
@@ -97,6 +102,19 @@ export async function exportTenant(
 
   const identity = await resolveTenantDatabaseIdentity(db);
   await assertTenantNativeStateHandoffClear(db, tenantId);
+  const includeFilesystem = typeof options.filesystemRoot === 'string';
+  const filesystemWalk = includeFilesystem
+    ? await walkTenantFilesystemTree(options.filesystemRoot as string)
+    : undefined;
+  if (
+    filesystemWalk &&
+    hasOpenCodeNativeStateFilesystemEntries(
+      filesystemWalk.entries,
+      filesystemWalk.unsafeSymlinkPaths
+    )
+  ) {
+    throw new TenantNativeStateHandoffRequiredError();
+  }
   await assertEmptyArchiveDestination(options.archivePath);
   await mkdir(databaseDir(options.archivePath), { recursive: true });
 
@@ -129,11 +147,11 @@ export async function exportTenant(
   let filesystemEntries: TenantFilesystemEntry[] = [];
   let skippedSpecialCount = 0;
   let unsafeSymlinkCount = 0;
-  const includeFilesystem = typeof options.filesystemRoot === 'string';
   if (includeFilesystem) {
     const walk = await copyTenantFilesystemInto(
       options.filesystemRoot as string,
-      filesDir(options.archivePath)
+      filesDir(options.archivePath),
+      filesystemWalk
     );
     filesystemEntries = walk.entries;
     skippedSpecialCount = walk.skippedSpecialCount;

@@ -10,6 +10,9 @@
  *   pnpm --filter @agor/core exec vitest run src/db/tenant-deletion.postgres.test.ts
  */
 
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
@@ -362,6 +365,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
 
     await deleteTenantData(db, tenantB);
     expect(await countTenantSessions(db, tenantB)).toBe(0);
+  });
+
+  it('blocks deletion when files-only legacy native state remains without DB pointers', async () => {
+    const tenantId = `td-native-files-${generateId()}`;
+    const root = await mkdtemp(join(tmpdir(), 'agor-tenant-native-delete-'));
+    await seedTenant(db, tenantId);
+    const orphan = join(
+      root,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy',
+      'checkpoint.json'
+    );
+    await mkdir(join(orphan, '..'), { recursive: true });
+    await writeFile(orphan, '{"orphan":true}');
+
+    try {
+      await expect(deleteTenantData(db, tenantId, { filesystemRoot: root })).rejects.toBeInstanceOf(
+        TenantNativeStateHandoffRequiredError
+      );
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await deleteTenantData(db, tenantId);
+    }
   });
 
   it('dry-run reports counts without deleting', async () => {

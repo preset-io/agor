@@ -20,8 +20,9 @@ import {
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import { snapshotTenantTableHashes } from './tenant-database-io';
-import { assertValidTenantId } from './tenant-deletion';
+import { assertValidTenantId, TenantNativeStateHandoffRequiredError } from './tenant-deletion';
 import {
+  hasOpenCodeNativeStateFilesystemEntries,
   type TenantFilesystemEntry,
   tenantFilesystemEntriesEqual,
   walkTenantFilesystemTree,
@@ -202,6 +203,9 @@ export async function verifyTenant(
   if (fsRequested && typeof options.filesystemRoot === 'string') {
     fsChecked = true;
     const walk = await walkTenantFilesystemTree(options.filesystemRoot);
+    if (hasOpenCodeNativeStateFilesystemEntries(walk.entries, walk.unsafeSymlinkPaths)) {
+      throw new TenantNativeStateHandoffRequiredError();
+    }
     const comparison = compareFilesystem(manifest, walk.entries, maxEvidence);
     fsMismatchCount = comparison.mismatchCount;
     fsMismatchedPaths = comparison.mismatchedPaths;

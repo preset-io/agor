@@ -49,6 +49,10 @@ import {
   GLOBAL_TABLES,
   type TenantDeletionTable,
 } from './tenant-deletion-manifest';
+import {
+  hasOpenCodeNativeStateFilesystemEntries,
+  walkTenantFilesystemTree,
+} from './tenant-filesystem';
 import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { assertTenantWriteGateGeneration } from './tenant-write-gate';
@@ -136,6 +140,12 @@ export interface TenantDeletionOptions {
    * acquired and confirmed still held. See {@link assertTenantWriteGateGeneration}.
    */
   assertGateGeneration?: string;
+  /**
+   * Optional runtime-resolved tenant root used only to refuse destructive
+   * deletion when native OpenCode files exist without a surviving DB pointer.
+   * The caller remains responsible for the root's tenant binding.
+   */
+  filesystemRoot?: string;
 }
 
 /** Wildcard-like characters that must never be accepted as a concrete tenant id. */
@@ -895,6 +905,16 @@ export async function deleteTenantData(
     throw new TenantDeletionUnsupportedError(
       'Tenant deletion requires a PostgreSQL (multi-tenant) database; the SQLite schema is single-tenant'
     );
+  }
+
+  // Check physical state before opening the destructive transaction. The DB
+  // ledger/pointer check below remains authoritative for protocol-owned writes;
+  // this catches orphaned/legacy native trees that have no surviving row.
+  if (options.filesystemRoot) {
+    const walk = await walkTenantFilesystemTree(options.filesystemRoot);
+    if (hasOpenCodeNativeStateFilesystemEntries(walk.entries, walk.unsafeSymlinkPaths)) {
+      throw new TenantNativeStateHandoffRequiredError();
+    }
   }
 
   const log = options.log ?? (() => {});

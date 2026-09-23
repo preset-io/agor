@@ -88,7 +88,10 @@ export default class TenantDelete extends Command {
         )
       );
 
-      const filesystem = flags['database-only'] ? null : await resolveTenantFilesystem(tenantId);
+      // Even database-only deletion resolves the configured tenant root for a
+      // read-only native-state safety preflight; the combined delete wrapper
+      // still skips every filesystem deletion when that flag is set.
+      const filesystem = await resolveTenantFilesystem(tenantId);
       if (!flags['database-only'] && !filesystem) {
         this.logToStderr(
           chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')

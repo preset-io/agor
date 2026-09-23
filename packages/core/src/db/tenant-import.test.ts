@@ -24,6 +24,7 @@ import {
   writeManifest,
 } from './tenant-archive';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
+import { TenantNativeStateHandoffRequiredError } from './tenant-deletion';
 import { UnsafeArchivePathError } from './tenant-filesystem';
 import { importTenant, validateArchivedMCPCompatibilityModes } from './tenant-import';
 
@@ -89,6 +90,44 @@ async function writeArchiveWithSymlink(root: string, linkTarget: string): Promis
   await writeManifest(root, manifest);
 }
 
+async function writeArchiveWithFilesOnlyNativeState(root: string): Promise<void> {
+  const entryPath = 'homes/owner-1/.local/share/agor/opencode/stores/orphan/state.json';
+  const payload = Buffer.from('{"legacy":true}', 'utf8');
+  const base: Pick<
+    TenantArchiveManifest,
+    'manifestVersion' | 'tenantId' | 'database' | 'filesystem'
+  > = {
+    manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+    tenantId: 'acme',
+    database: { identity, tables: [] },
+    filesystem: {
+      included: true,
+      entries: [
+        {
+          path: entryPath,
+          type: 'file',
+          size: payload.byteLength,
+          sha256: sha256Hex(payload),
+          mode: 0o600,
+        },
+      ],
+      skippedSpecialCount: 0,
+      unsafeSymlinkCount: 0,
+    },
+  };
+  const manifest: TenantArchiveManifest = {
+    ...base,
+    operationId: 'op-native-state',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    contentFingerprint: computeContentFingerprint(base),
+  };
+  const path = join(filesDir(root), entryPath);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, payload);
+  await mkdir(databaseDir(root), { recursive: true });
+  await writeManifest(root, manifest);
+}
+
 /** A `db` that fails the test loudly if importTenant touches it. */
 function untouchableDb(): Database {
   return new Proxy(
@@ -106,6 +145,13 @@ describe('importTenant pre-mutation validation ordering', () => {
     await writeArchiveWithSymlink(scratch, '../../../../etc/passwd');
     await expect(importTenant(untouchableDb(), { archivePath: scratch })).rejects.toBeInstanceOf(
       UnsafeArchivePathError
+    );
+  });
+
+  it('rejects a files-only native-state archive before any database access', async () => {
+    await writeArchiveWithFilesOnlyNativeState(scratch);
+    await expect(importTenant(untouchableDb(), { archivePath: scratch })).rejects.toBeInstanceOf(
+      TenantNativeStateHandoffRequiredError
     );
   });
 

@@ -4,6 +4,7 @@ import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import type { TenantArchiveManifest } from './tenant-archive';
 import { readTableJsonl } from './tenant-archive';
 import { TenantNativeStateHandoffRequiredError } from './tenant-deletion';
+import { hasOpenCodeNativeStateFilesystemEntries } from './tenant-filesystem';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 function firstRow(result: unknown): Record<string, unknown> | undefined {
@@ -61,6 +62,9 @@ export async function assertArchiveNativeStateAbsent(
   archivePath: string,
   manifest: TenantArchiveManifest
 ): Promise<void> {
+  if (hasOpenCodeNativeStateFilesystemEntries(manifest.filesystem.entries)) {
+    throw new TenantNativeStateHandoffRequiredError();
+  }
   if (manifest.database.tables.some((table) => table.name === 'opencode_checkpoint_attempts')) {
     throw new TenantNativeStateHandoffRequiredError();
   }
