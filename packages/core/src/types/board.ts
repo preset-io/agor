@@ -384,8 +384,8 @@ export function summarizeBoardImportSkips(
   if (unresolved) {
     parts.push(
       unresolved === 1
-        ? "1 referenced object doesn't exist in this workspace and couldn't be linked"
-        : `${unresolved} referenced objects don't exist in this workspace and couldn't be linked`
+        ? "1 referenced object isn't available to you in this workspace and couldn't be linked"
+        : `${unresolved} referenced objects aren't available to you in this workspace and couldn't be linked`
     );
   }
   if (unreadable) {

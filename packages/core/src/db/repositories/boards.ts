@@ -1327,7 +1327,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Validate an untrusted export blob and drop the objects import cannot use.
    * Structural problems (not an object, no name) still throw.
    */
-  async prepareBoardImport(
+  private async prepareBoardImport(
     blob: unknown,
     userId: string
   ): Promise<{ blob: BoardExportBlob; skipped: BoardImportSkippedObject[] }> {

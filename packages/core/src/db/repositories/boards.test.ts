@@ -1651,7 +1651,7 @@ describe('BoardRepository import object handling', () => {
   };
 
   dbTest(
-    'round-trips zones with triggers, markdown, and same-workspace artifact references',
+    'round-trips zones with triggers, markdown, apps, and same-workspace artifact references',
     async ({ db }) => {
       const repo = new BoardRepository(db);
       const original = await repo.create(
@@ -1677,9 +1677,20 @@ describe('BoardRepository import object handling', () => {
         locked: false,
         artifact_id: artifact.artifact_id,
       };
+      const app: BoardObject = {
+        type: 'app',
+        x: 10,
+        y: 20,
+        width: 600,
+        height: 400,
+        title: 'Inline app',
+        template: 'react',
+        files: { '/App.js': 'export default () => null;' },
+      };
       await repo.batchUpsertBoardObjects(original.board_id, {
         'zone-1770517487066': zone,
         'markdown-1789334120446': markdown,
+        'app-1': app,
         [`artifact-${artifact.artifact_id}`]: artifactObject,
       });
 
@@ -1692,6 +1703,7 @@ describe('BoardRepository import object handling', () => {
       expect(imported.objects).toEqual({
         'zone-1770517487066': zone,
         'markdown-1789334120446': markdown,
+        'app-1': app,
         [`artifact-${artifact.artifact_id}`]: artifactObject,
       });
       expect(imported.import_skipped).toBeUndefined();
@@ -1825,7 +1837,7 @@ describe('summarizeBoardImportSkips', () => {
   it('collapses many unavailable references into one sentence', () => {
     const skipped = Array.from({ length: 12 }, (_, i) => skip('unresolved_reference', i));
     expect(summarizeBoardImportSkips(skipped)).toBe(
-      "12 referenced objects don't exist in this workspace and couldn't be linked."
+      "12 referenced objects aren't available to you in this workspace and couldn't be linked."
     );
   });
 
@@ -1837,7 +1849,7 @@ describe('summarizeBoardImportSkips', () => {
         skip('unsupported_type', 2),
       ])
     ).toBe(
-      "1 referenced object doesn't exist in this workspace and couldn't be linked; 2 objects were unsupported or malformed and were skipped."
+      "1 referenced object isn't available to you in this workspace and couldn't be linked; 2 objects were unsupported or malformed and were skipped."
     );
   });
 });

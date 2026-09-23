@@ -505,22 +505,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
    * Import board from blob (JSON)
    */
   async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<BoardImportResult> {
-    // Hook chain enforces auth before we get here.
-    const userId = params!.user!.user_id;
-    // Unusable objects (malformed, unknown type, or artifact references that
-    // don't resolve for this user in this workspace) are skipped with a warning
-    // instead of failing the whole import.
-    const { blob: importable, skipped } = await this.boardRepo.prepareBoardImport(blob, userId);
-    const data = mapBoardExportBlobToCreateData(importable, userId);
-
-    // Create board through repository (not super.create to avoid double-emit issues)
-    const board: BoardImportResult = await this.boardRepo.create(data);
-    if (skipped.length) board.import_skipped = skipped;
-
-    // Note: Events must be emitted by the caller using app.service('boards').emit()
-    // this.emit() doesn't work reliably in custom methods due to execution context
-
-    return board;
+    // Hook chain enforces auth before we get here. The repository owns import
+    // (validation, skipping unusable objects, artifact resolution, create);
+    // after-hooks emit the `created` event.
+    return this.boardRepo.fromBlob(blob, params!.user!.user_id);
   }
 
   /**

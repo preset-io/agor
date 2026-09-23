@@ -51,7 +51,7 @@ const checks = [
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
-      'apps/agor-daemon/src/services/boards.ts': 2,
+      'apps/agor-daemon/src/services/boards.ts': 1,
       'apps/agor-daemon/src/services/repos.ts': 1,
       // Real REST + Socket.IO contract harness: the one authenticated test
       // connection is joined to a local-only channel so transport-level
