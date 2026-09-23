@@ -277,10 +277,15 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   return (
     <div>
       {/* Header — always visible, clickable to expand/collapse */}
-      <div
+      <Button
+        type="text"
+        aria-expanded={expanded}
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} diff ${filePath}`}
         onClick={() => setExpanded(!expanded)}
         style={{
           display: 'flex',
+          width: '100%',
+          height: 'auto',
           alignItems: 'center',
           gap: 6,
           minWidth: 0,
@@ -348,7 +353,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
             -{diff.stats.deletions}
           </span>
         )}
-      </div>
+      </Button>
 
       {/* Diff body */}
       {expanded && (
@@ -374,7 +379,9 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
 
           {/* Truncation notice */}
           {needsTruncation && (
-            <div
+            <Button
+              type="text"
+              block
               onClick={(e) => {
                 e.stopPropagation();
                 setShowAll(true);
@@ -390,7 +397,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
               }}
             >
               Show {diff.totalLines - TRUNCATE_SHOW_LINES} more lines
-            </div>
+            </Button>
           )}
 
           {/* Actions bar */}

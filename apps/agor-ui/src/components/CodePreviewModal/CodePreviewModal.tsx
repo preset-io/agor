@@ -26,7 +26,12 @@ export const CodePreviewModal = ({ file, open, onClose, loading }: CodePreviewMo
     }
   }, [file, open]);
 
-  if (!file) return null;
+  if (!file)
+    return loading ? (
+      <Modal title="Loading file…" open={open} onCancel={onClose} footer={null}>
+        <Spin aria-label="Loading file" />
+      </Modal>
+    ) : null;
 
   const language = getLanguageFromPath(file.path);
   const hasDiff = file.gitDiff !== undefined;

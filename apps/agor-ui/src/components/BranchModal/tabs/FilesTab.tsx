@@ -26,6 +26,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
 
   // Modal state
   const [selectedFile, setSelectedFile] = useState<FileDetail | null>(null);
@@ -85,11 +86,15 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
   // Fetch files when tab is opened or switches to a different branch.
   useEffect(() => {
+    setSelectedFile(null);
+    setModalOpen(false);
+    setLoadingDetail(false);
     void fetchFiles(true);
 
     return () => {
       // Ignore a response from a branch that is no longer being displayed.
       fileRequestIdRef.current += 1;
+      detailRequestIdRef.current += 1;
     };
   }, [fetchFiles]);
 
@@ -161,8 +166,10 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
       if (!currentClient) return;
 
       // If text file under size limit, preview in modal
-      if ('isText' in file && file.isText && file.size < 1024 * 1024) {
+      if (gitStatusSource !== 'combined' || (file.isText && file.size <= 1024 * 1024)) {
+        const requestId = ++detailRequestIdRef.current;
         try {
+          setSelectedFile(null);
           setLoadingDetail(true);
           setModalOpen(true);
 
@@ -174,13 +181,15 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
             },
           });
 
-          setSelectedFile(detail as FileDetail);
+          if (detailRequestIdRef.current === requestId) setSelectedFile(detail as FileDetail);
         } catch (err) {
           console.error('Failed to fetch file detail:', err);
-          showError('Failed to load file');
-          setModalOpen(false);
+          if (detailRequestIdRef.current === requestId) {
+            showError(err instanceof Error ? err.message : 'Failed to load file');
+            setModalOpen(false);
+          }
         } finally {
-          setLoadingDetail(false);
+          if (detailRequestIdRef.current === requestId) setLoadingDetail(false);
         }
       } else {
         // Download file directly
@@ -201,6 +210,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
   // Handle modal close - stable callback
   const handleModalClose = useCallback(() => {
+    detailRequestIdRef.current += 1;
     setModalOpen(false);
     setSelectedFile(null);
   }, []);
@@ -281,7 +291,6 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
                   files={workingTreeChanges}
                   loading={loading}
                   onFileClick={handleWorkingTreeFileClick}
-                  onDownload={downloadFile}
                   emptyMessage="No unstaged changes"
                   gitStatusSource="workingTree"
                 />
@@ -295,7 +304,6 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
                   files={stagedChanges}
                   loading={loading}
                   onFileClick={handleStagedFileClick}
-                  onDownload={downloadFile}
                   emptyMessage="No staged changes"
                   gitStatusSource="staged"
                 />
@@ -316,9 +324,4 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 };
 
 // Memoize FilesTab to prevent re-renders when parent re-renders with same branch
-export const FilesTab = memo(FilesTabInner, (prevProps, nextProps) => {
-  // Re-render if branch_id changes or if client availability changes (null -> non-null or vice versa)
-  // This ensures the fetch effect runs when client becomes available
-  const clientAvailabilityChanged = (prevProps.client === null) !== (nextProps.client === null);
-  return prevProps.branch.branch_id === nextProps.branch.branch_id && !clientAvailabilityChanged;
-});
+export const FilesTab = memo(FilesTabInner);

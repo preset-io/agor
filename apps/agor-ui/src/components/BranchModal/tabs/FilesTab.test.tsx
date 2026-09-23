@@ -43,7 +43,10 @@ vi.mock('../../FileCollection/FileCollection', () => ({
   ),
 }));
 
-vi.mock('../../CodePreviewModal/CodePreviewModal', () => ({ CodePreviewModal: () => null }));
+vi.mock('../../CodePreviewModal/CodePreviewModal', () => ({
+  CodePreviewModal: ({ file, open }: { file: { content: string } | null; open: boolean }) =>
+    open ? <div data-testid="preview">{file?.content}</div> : null,
+}));
 
 import { FilesTab } from './FilesTab';
 
@@ -125,6 +128,50 @@ describe('FilesTab', () => {
     expect(findAll).toHaveBeenLastCalledWith({
       query: { branch_id: branch.branch_id },
     });
+  });
+
+  it('never downloads working-tree bytes when opening a non-text staged snapshot', async () => {
+    findAll.mockResolvedValue([
+      {
+        path: 'large.txt',
+        title: 'large.txt',
+        size: 2000000,
+        isText: false,
+        gitStagedStatus: 'modified',
+        gitStatus: 'modified',
+      },
+    ]);
+    get.mockResolvedValue({ content: 'small staged version', isText: true, encoding: 'utf-8' });
+    render(<FilesTab branch={branch} client={client} />);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Staged changes (1)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open large.txt' }));
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith('large.txt', {
+        query: { branch_id: branch.branch_id, git_status_source: 'staged' },
+      })
+    );
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('ignores a preview response after switching branches', async () => {
+    let resolveDetail!: (value: unknown) => void;
+    get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve;
+        })
+    );
+    findAll.mockResolvedValue([
+      { path: 'private.txt', title: 'private.txt', size: 10, isText: true },
+    ]);
+    const { rerender } = render(<FilesTab branch={branch} client={client} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open private.txt' }));
+    rerender(
+      <FilesTab branch={{ ...branch, branch_id: 'other' as Branch['branch_id'] }} client={client} />
+    );
+    resolveDetail({ content: 'old branch bytes' });
+    await waitFor(() => expect(screen.queryByText('old branch bytes')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('preview')).not.toBeInTheDocument();
   });
 
   it('shows only unstaged or staged files in the corresponding sub-tabs', async () => {

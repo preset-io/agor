@@ -152,6 +152,8 @@ function buildTree(
   }
 
   // Group files by directory
+  // A deleted file can coexist with a new directory at the same path.
+  // Namespace folder keys with a trailing slash to retain both entries.
   const tree: Map<string, TreeNode> = new Map();
 
   for (const file of filteredFiles) {
@@ -167,11 +169,11 @@ function buildTree(
       currentPath = currentPath ? `${currentPath}/${part}` : part;
 
       // Create directory node if it doesn't exist
-      if (!tree.has(currentPath)) {
+      if (!tree.has(`${currentPath}/`)) {
         const folderStatus = dirStatus.get(currentPath);
         const folderColor = folderStatus ? statusMeta[folderStatus].color : undefined;
-        tree.set(currentPath, {
-          key: currentPath,
+        tree.set(`${currentPath}/`, {
+          key: `${currentPath}/`,
           title: (
             <span
               style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: folderColor }}
@@ -185,10 +187,10 @@ function buildTree(
         });
 
         // Link to parent if exists
-        if (parentPath && tree.has(parentPath)) {
-          const parent = tree.get(parentPath)!;
+        if (parentPath && tree.has(`${parentPath}/`)) {
+          const parent = tree.get(`${parentPath}/`)!;
           parent.children = parent.children || [];
-          parent.children.push(tree.get(currentPath)!);
+          parent.children.push(tree.get(`${currentPath}/`)!);
         }
       }
     }
@@ -258,6 +260,7 @@ function buildTree(
                     fontWeight: 600,
                     fontSize: 12,
                     lineHeight: 1,
+                    flexShrink: 0,
                     textDecoration: 'none',
                   }}
                 >
@@ -271,6 +274,7 @@ function buildTree(
                   size="small"
                   type="text"
                   icon={<CopyOutlined />}
+                  aria-label={`Copy path ${file.path}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (onCopyPath) {
@@ -285,6 +289,8 @@ function buildTree(
                     size="small"
                     type="text"
                     icon={<DownloadOutlined />}
+                    aria-label={`Download ${file.path}`}
+                    disabled={file.gitStatus === 'deleted'}
                     onClick={(e) => {
                       e.stopPropagation();
                       onDownload(file);
@@ -301,8 +307,8 @@ function buildTree(
     };
 
     // Link file to parent directory
-    if (currentPath && tree.has(currentPath)) {
-      const parent = tree.get(currentPath)!;
+    if (currentPath && tree.has(`${currentPath}/`)) {
+      const parent = tree.get(`${currentPath}/`)!;
       parent.children = parent.children || [];
       parent.children.push(fileNode);
     } else {
@@ -316,8 +322,8 @@ function buildTree(
   const allPaths = new Set(tree.keys());
 
   for (const [path, node] of tree.entries()) {
-    const parentPath = path.split('/').slice(0, -1).join('/');
-    if (!parentPath || !allPaths.has(parentPath)) {
+    const parentPath = path.replace(/\/$/, '').split('/').slice(0, -1).join('/');
+    if (!parentPath || !allPaths.has(`${parentPath}/`)) {
       roots.push(node);
     }
   }
@@ -392,8 +398,15 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
   // and stable callbacks
   const treeData = useMemo(
     () =>
-      buildTree(files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath),
-    [files, searchQuery, statusMeta, gitStatusSource, stableOnDownload, handleCopyPath]
+      buildTree(
+        files,
+        searchQuery,
+        statusMeta,
+        gitStatusSource,
+        onDownload ? stableOnDownload : undefined,
+        handleCopyPath
+      ),
+    [files, searchQuery, statusMeta, gitStatusSource, onDownload, stableOnDownload, handleCopyPath]
   );
 
   // Handle node selection - stable callback using ref
@@ -535,14 +548,4 @@ const FileCollectionInner: React.FC<FileCollectionProps> = ({
 };
 
 // Memoize the component to prevent re-renders when parent re-renders with same props
-export const FileCollection = memo(FileCollectionInner, (prevProps, nextProps) => {
-  // Custom comparison - only re-render if these specific props changed
-  return (
-    prevProps.loading === nextProps.loading &&
-    prevProps.emptyMessage === nextProps.emptyMessage &&
-    prevProps.gitStatusSource === nextProps.gitStatusSource &&
-    prevProps.files === nextProps.files
-    // Note: we intentionally don't compare onFileClick and onDownload
-    // since we use refs internally to always get the latest callback
-  );
-});
+export const FileCollection = memo(FileCollectionInner);
