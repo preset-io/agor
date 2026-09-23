@@ -111,7 +111,7 @@ describe('migration status introspection', () => {
         impact: {
           classification: 'schema',
           userAction: 'none',
-          rollbackCompatibility: 'compatible',
+          rollbackCompatibility: 'incompatible',
         },
       });
       expect(report.pendingMigrations[0]?.impact.summary).toContain('without CONCURRENTLY');

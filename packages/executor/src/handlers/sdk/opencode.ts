@@ -124,6 +124,7 @@ export async function executeOpenCodeTask(params: {
   let inputReadClosed = !committedGrant?.input;
   let managedIoSettled = false;
   let cleanupOperation: OpenCodeCleanupOperation | undefined;
+  const stopCleanupOnAbort = () => cleanupOperation?.stopScheduling();
 
   const closeInputAndAbandon = async (): Promise<void> => {
     if (!committedGrant) return;
@@ -265,6 +266,8 @@ export async function executeOpenCodeTask(params: {
         nativeState
       );
       cleanupOperation.start();
+      params.abortController.signal.addEventListener('abort', stopCleanupOnAbort, { once: true });
+      if (params.abortController.signal.aborted) stopCleanupOnAbort();
       managed = {
         authContent: projected.content,
         authSecrets: projected.secrets,
@@ -394,7 +397,10 @@ export async function executeOpenCodeTask(params: {
         manifest: publishedManifest,
       });
       managedIoSettled = true;
-      cleanupOperation?.stopScheduling();
+      // A short healthy turn still gives cleanup its bounded per-launch budget.
+      // Do not leave a committed delete worker behind task completion.
+      await cleanupOperation?.finishAndDrain();
+      if (params.abortController.signal.aborted) return;
     }
 
     const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
@@ -471,7 +477,8 @@ export async function executeOpenCodeTask(params: {
     }
     throw failure;
   } finally {
-    cleanupOperation?.stopScheduling();
+    params.abortController.signal.removeEventListener('abort', stopCleanupOnAbort);
+    await cleanupOperation?.stopAndDrain();
     globalPermissionManager.unregister(sessionId);
     if (managedScratch) {
       await (

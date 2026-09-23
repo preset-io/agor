@@ -462,6 +462,28 @@ describe('protectServerManagedTaskWrites', () => {
     ).resolves.toBeDefined();
   });
 
+  it('allows the holder proof only on a task-scoped executor patch', async () => {
+    const context = externalContext(
+      'patch',
+      {
+        status: TaskStatus.COMPLETED,
+        native_state_attempt: { version: 3 },
+        native_state_holder_instance_id: 'holder-1',
+      },
+      { taskId: 'task-1', executorTaskId: 'task-1' }
+    );
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { native_state_holder_instance_id: 'holder-1' },
+          { taskId: 'task-1' }
+        )
+      )
+    ).rejects.toThrow('executor token scoped to this task');
+  });
+
   it.each([TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT])(
     'allows a scoped executor to request resume from %s',
     async () => {

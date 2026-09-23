@@ -123,4 +123,17 @@ describe('createRestClient authorization', () => {
 
     expect(captured.at(-1)?.authorization).toBeUndefined();
   });
+
+  it('registers managed native-state custom methods on the real REST client', async () => {
+    const client = await createRestClient(baseUrl, 'api-key-value');
+    const native = client.service('opencode-native-state');
+    expect(native.begin).toEqual(expect.any(Function));
+    await native.begin({ task_id: 'task-1', holder_instance_id: 'holder-1' } as never);
+    expect(captured.at(-1)).toEqual(
+      expect.objectContaining({
+        serviceMethod: 'begin',
+        authorization: 'Bearer api-key-value',
+      })
+    );
+  });
 });

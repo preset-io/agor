@@ -654,20 +654,15 @@ export class AgorExecutor {
   ): Promise<void> {
     if (!this.client) return;
     let acknowledged = false;
-    const reportSdkHealthFailure = this.client.service('tasks')
-      .reportSdkHealthFailure as unknown as (
-      input: Omit<import('@agor/core/types').SdkHealthFailureInput, 'task_id'> & {
-        task_id: string;
-        holder_instance_id?: string;
-      }
-    ) => Promise<Task>;
-    const report = reportSdkHealthFailure({
-      ...evidence,
-      task_id: this.config.taskId,
-      ...(this.managedOpenCodeCandidate && this.managedOpenCodeAdmission
-        ? { holder_instance_id: this.managedOpenCodeAdmission.attempt.holder_instance_id }
-        : {}),
-    })
+    const report = this.client
+      .service('tasks')
+      .reportSdkHealthFailure({
+        ...evidence,
+        task_id: this.config.taskId,
+        ...(this.managedOpenCodeCandidate && this.managedOpenCodeAdmission
+          ? { holder_instance_id: this.managedOpenCodeAdmission.attempt.holder_instance_id }
+          : {}),
+      })
       .then((task) => {
         acknowledged = true;
         this.handleTaskLifecycleUpdate(task);

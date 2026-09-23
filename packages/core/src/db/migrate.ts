@@ -139,9 +139,9 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
       impact: defineMigrationImpact({
         classification: 'schema',
         userAction: 'none',
-        rollbackCompatibility: 'compatible',
+        rollbackCompatibility: 'incompatible',
         summary:
-          'Adds managed OpenCode checkpoint ledgers and Session/Task fields. Builds three unique indexes on existing tables without CONCURRENTLY; allow a bounded write-lock window.',
+          'Adds OpenCode checkpoint ledgers and JSON state. PostgreSQL builds three unique indexes without CONCURRENTLY, blocking writes during each build. Do not run older binaries afterward.',
       }),
     },
   ],

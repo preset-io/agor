@@ -699,22 +699,27 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
 
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
-const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
-  'status',
-  'completed_at',
-  'git_state',
-  'message_range',
-  'model',
-  'raw_sdk_response',
-  'normalized_sdk_response',
-  'computed_context_window',
-  'duration_ms',
-  'agent_session_id',
-  'error_message',
-  'report',
-  'permission_request',
-  'native_state_attempt'
-);
+const EXECUTOR_TASK_PATCH_FIELDS = new Set<string>([
+  ...taskFieldSet(
+    'status',
+    'completed_at',
+    'git_state',
+    'message_range',
+    'model',
+    'raw_sdk_response',
+    'normalized_sdk_response',
+    'computed_context_window',
+    'duration_ms',
+    'agent_session_id',
+    'error_message',
+    'report',
+    'permission_request',
+    'native_state_attempt'
+  ),
+  // Transport-only holder proof: TasksService.patch consumes it before the
+  // persisted Task DTO is built, then revalidates the exact managed holder.
+  'native_state_holder_instance_id',
+]);
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
 

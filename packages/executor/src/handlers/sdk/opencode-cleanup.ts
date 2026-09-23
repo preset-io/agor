@@ -70,6 +70,12 @@ export class OpenCodeCleanupOperation {
     await this.operation;
   }
 
+  /** Let a healthy launch finish its bounded budget before sealing the turn. */
+  async finishAndDrain(): Promise<void> {
+    await this.operation;
+    this.stopScheduling();
+  }
+
   private service(): OpenCodeNativeStateService {
     return this.client.service(
       'opencode-native-state' as string

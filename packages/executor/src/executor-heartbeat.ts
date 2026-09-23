@@ -1,5 +1,5 @@
 import { shortId } from '@agor/core/db';
-import type { ExecutorPulseKind, RuntimeTelemetryInput, Task, TaskID } from '@agor/core/types';
+import type { ExecutorPulseKind, Task, TaskID } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 export interface ExecutorHeartbeatOptions {
@@ -46,10 +46,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      const report = options.client.service('tasks').reportRuntimeTelemetry as unknown as (
-        input: RuntimeTelemetryInput & { holder_instance_id?: string }
-      ) => Promise<Task>;
-      const task = await report({
+      const task = await options.client.service('tasks').reportRuntimeTelemetry({
         task_id: options.taskId,
         ...(options.holderInstanceId ? { holder_instance_id: options.holderInstanceId } : {}),
         ...(latestPulse ? { pulse: latestPulse } : {}),

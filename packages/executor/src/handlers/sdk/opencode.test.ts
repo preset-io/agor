@@ -449,6 +449,70 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     expect(nativeState.discard).toHaveBeenCalledOnce();
   });
 
+  it('drains two cleanup reservations before a short healthy managed turn completes', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    let finishObservation!: () => void;
+    const observation = new Promise<void>((resolve) => {
+      finishObservation = resolve;
+    });
+    state.services['opencode-native-state'].prepareCleanup
+      .mockResolvedValueOnce({ kind: 'observe', attemptId: 'retired-attempt' })
+      .mockResolvedValue({ kind: 'none' });
+    state.services['opencode-native-state'].observe.mockReturnValueOnce(observation);
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+
+    const turn = execute(state.value, new AbortController(), managedContext, managedAdmission);
+    await vi.waitFor(() =>
+      expect(state.services['opencode-native-state'].observe).toHaveBeenCalledOnce()
+    );
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    finishObservation();
+    await turn;
+    expect(
+      state.services['opencode-native-state'].prepareCleanup.mock.calls.length
+    ).toBeGreaterThanOrEqual(2);
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'completed' })
+    );
+  });
+
+  it('waits for a committed cleanup operation on Stop without completing the task', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    let finishObservation!: () => void;
+    const observation = new Promise<void>((resolve) => {
+      finishObservation = resolve;
+    });
+    state.services['opencode-native-state'].prepareCleanup.mockResolvedValue({
+      kind: 'observe',
+      attemptId: 'retired-attempt',
+    });
+    state.services['opencode-native-state'].observe.mockReturnValueOnce(observation);
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    const abort = new AbortController();
+    let returned = false;
+    const turn = execute(state.value, abort, managedContext, managedAdmission).then(() => {
+      returned = true;
+    });
+    await vi.waitFor(() =>
+      expect(state.services['opencode-native-state'].observe).toHaveBeenCalledOnce()
+    );
+    abort.abort();
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    finishObservation();
+    await turn;
+    expect(state.services['opencode-native-state'].prepareCleanup).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
   it('fails before the provider turn when the executor runtime lacks node:sqlite', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
     nativeState.assertRuntime.mockRejectedValueOnce(new Error('runtime lacks node:sqlite'));

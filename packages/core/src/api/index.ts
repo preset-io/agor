@@ -118,6 +118,7 @@ const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
 const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
 const BRANCHES_SERVICE_EXTENDED = Symbol('agor.branchesServiceExtended');
 const TASKS_SERVICE_EXTENDED = Symbol('agor.tasksServiceExtended');
+const OPENCODE_NATIVE_STATE_SERVICE_EXTENDED = Symbol('agor.opencodeNativeStateServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
@@ -1429,6 +1430,26 @@ function extendTasksService(client: AgorClient): void {
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }
 
+function extendOpenCodeNativeStateService(client: AgorClient): void {
+  const service = client.service('opencode-native-state') as OpenCodeNativeStateService & {
+    [OPENCODE_NATIVE_STATE_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (service[OPENCODE_NATIVE_STATE_SERVICE_EXTENDED]) return;
+  if (typeof service.methods === 'function') {
+    service.methods(
+      'begin',
+      'closeRead',
+      'seal',
+      'abandon',
+      'prepareCleanup',
+      'observe',
+      'acknowledgeDelete'
+    );
+  }
+  service[OPENCODE_NATIVE_STATE_SERVICE_EXTENDED] = true;
+}
+
 function extendServiceFactory(client: AgorClient): void {
   const augmentedClient = client as AgorClient & {
     [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
@@ -1600,6 +1621,7 @@ export async function createRestClient(
   extendReposService(client);
   extendBranchesService(client);
   extendTasksService(client);
+  extendOpenCodeNativeStateService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
@@ -1720,6 +1742,7 @@ export function createClient(
   extendReposService(client);
   extendBranchesService(client);
   extendTasksService(client);
+  extendOpenCodeNativeStateService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 

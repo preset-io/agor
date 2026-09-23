@@ -796,6 +796,22 @@ describe('createClient', () => {
       );
     });
 
+    it('registers every task-scoped native-state method on the client', () => {
+      const client = createClient();
+      const service = client.service('opencode-native-state') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      expect(service.methods).toHaveBeenCalledWith(
+        'begin',
+        'closeRead',
+        'seal',
+        'abandon',
+        'prepareCleanup',
+        'observe',
+        'acknowledgeDelete'
+      );
+    });
+
     it('does not register custom methods on services without any', () => {
       const client = createClient();
       const sessionsService = client.service('sessions') as unknown as {

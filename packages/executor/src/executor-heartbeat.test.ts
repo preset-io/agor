@@ -1,7 +1,44 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createRestClient } from '@agor/core/api';
 import { describe, expect, it, vi } from 'vitest';
 import { startExecutorHeartbeat } from './executor-heartbeat';
 
 describe('startExecutorHeartbeat', () => {
+  it('reports through a bound custom method on a real Feathers client', async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => {
+      methods.push(String(request.headers['x-service-method']));
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ task_id: 'task-1', status: 'running' }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const client = await createRestClient(url, 'test-only-key');
+      let observed!: (task: unknown) => void;
+      const reported = new Promise<unknown>((resolve) => {
+        observed = resolve;
+      });
+      const handle = startExecutorHeartbeat({
+        client: client as never,
+        taskId: 'task-1',
+        intervalMs: 60_000,
+        onTask: observed,
+      });
+      try {
+        await expect(reported).resolves.toMatchObject({ task_id: 'task-1' });
+        expect(methods).toEqual(['reportRuntimeTelemetry']);
+      } finally {
+        handle.stop();
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
   it('writes immediately and then at the configured interval', async () => {
     vi.useFakeTimers();
     try {
