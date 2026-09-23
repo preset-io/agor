@@ -27,7 +27,13 @@ describe('tenant inventory planner predicate', () => {
   });
   it('leaves explicit system discovery governed by existing RLS', () => {
     tenantDatabaseScope.run(
-      { db, kind: 'system', systemReason: 'test', systemCapability: 'scheduler_discovery' },
+      {
+        db,
+        rootDb: db,
+        kind: 'system',
+        systemReason: 'test',
+        systemCapability: 'scheduler_discovery',
+      },
       () => {
         expect(tenantInventoryCondition(db, table)).toBeUndefined();
       }
