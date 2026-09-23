@@ -2,6 +2,7 @@ import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { getDaemonUrl } from '@/config/daemon';
 import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
@@ -310,7 +311,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
           To use it with the Agor CLI, run this and paste the key when prompted:
         </Typography.Paragraph>
         <Typography.Text code copyable style={{ fontSize: 12 }}>
-          {`agor login --url ${window.location.origin} --api-key`}
+          {`agor login --url ${getDaemonUrl()} --api-key`}
         </Typography.Text>
       </AdaptiveSettingsModal>
     </div>

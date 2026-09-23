@@ -309,7 +309,7 @@ export default class Login extends Command {
     if (me.tenant_id) this.log(chalk.dim('Workspace:'), me.tenant_id);
     this.log('');
     this.log(chalk.dim('API key saved to ~/.agor/cli-token (mode 0600)'));
-    this.log(chalk.dim('Delete the key in Settings → API Keys to revoke this login.'));
+    this.log(chalk.dim('Delete the key in User settings → API tokens to revoke this login.'));
     this.log('');
   }
 }
