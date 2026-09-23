@@ -223,14 +223,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * Convert Session to database insert format
    */
   private sessionToInsert(session: Partial<Session>): SessionInsert {
-    for (const key of [
-      'sdk_native_state',
-      'sdk_native_state_store_id',
-      'opencode_cleanup_cursor',
-    ] as const) {
-      if (Object.hasOwn(session, key))
-        throw new RepositoryError(`Session ${key} is server-managed`);
-    }
     const now = Date.now();
     const createdAt = new Date(session.created_at ?? now);
     const sessionId = session.session_id ?? generateId();
@@ -318,6 +310,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async create(data: Partial<Session>): Promise<Session> {
     try {
+      for (const key of [
+        'sdk_native_state',
+        'sdk_native_state_store_id',
+        'opencode_cleanup_cursor',
+      ] as const) {
+        if (Object.hasOwn(data, key)) throw new RepositoryError(`Session ${key} is server-managed`);
+      }
       const insertData = this.sessionToInsert(data);
       await runDatabaseTransaction(
         this.db,
