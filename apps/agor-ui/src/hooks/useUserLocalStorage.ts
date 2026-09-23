@@ -27,6 +27,18 @@ export function useUserLocalStorage<T>(
     setStoredValue(readStoredValue());
   }, [readStoredValue]);
 
+  // Keep per-user preferences consistent across tabs, including storage clears.
+  useEffect(() => {
+    if (!storageKey || typeof window === 'undefined') return;
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === storageKey || event.key === null) {
+        setStoredValue(readStoredValue());
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [readStoredValue, storageKey]);
+
   const setValue = useCallback((value: T | ((val: T) => T)) => {
     try {
       setStoredValue((prev) => {

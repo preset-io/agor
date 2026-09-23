@@ -173,8 +173,31 @@ describe('SessionRepository.create', () => {
     expect(created.title).toBe('Test Session');
     expect(created.description).toBe('Test description');
     expect(created.created_at).toBeDefined();
-    expect(created.last_updated).toBeDefined();
+    expect(created.last_updated).toBe(created.created_at);
     expect(created.sdk_home_scope).toBe('execution_home');
+  });
+
+  dbTest('initializes recency from creation time unless explicitly supplied', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const createdAt = '2025-01-01T00:00:00.000Z';
+    const updatedAt = '2025-02-01T00:00:00.000Z';
+    const initial = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        created_at: createdAt,
+      })
+    );
+    expect(initial.last_updated).toBe(createdAt);
+    const restored = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        created_at: createdAt,
+        last_updated: updatedAt,
+      })
+    );
+    expect(restored.created_at).toBe(createdAt);
+    expect(restored.last_updated).toBe(updatedAt);
   });
 
   dbTest('persists an explicitly admitted branch SDK-home scope', async ({ db }) => {
@@ -610,11 +633,88 @@ describe('SessionRepository.findAll', () => {
         limit: 1,
       });
       expect(hiddenStatusPage).toEqual({ data: [], total: 0 });
+      expect(
+        await repo.findPage({
+          visibleToUserId: userId,
+          branchId: hiddenBranch.branch_id,
+          limit: 1,
+          includeTotal: false,
+        })
+      ).toEqual({ data: [] });
+      expect(
+        await repo.findPage({ visibleToUserId: userId, limit: 10, includeTotal: false })
+      ).toEqual({ data: page.data });
     }
   );
 });
 
 describe('SessionRepository.findPage ordering', () => {
+  dbTest(
+    'omits count SQL only when explicitly requested and keeps bounded results',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      for (let i = 0; i < 3; i++)
+        await repo.create(createSessionData({ branch_id: branch.branch_id }));
+      const query = { branchId: branch.branch_id, limit: 1, skip: 1, sortUpdatedAt: -1 as const };
+      const counted = await repo.findPage(query);
+      const spy = vi.spyOn(db, 'select');
+      try {
+        const uncounted = await repo.findPage({ ...query, includeTotal: false });
+        expect(uncounted).toEqual({ data: counted.data });
+        expect(spy.mock.calls.some(([columns]) => columns && 'count' in columns)).toBe(false);
+        expect(await repo.findPage({ ...query, includeTotal: false, limit: 0 })).toEqual({
+          data: [],
+        });
+        await expect(repo.findPage({ includeTotal: false })).rejects.toThrow(
+          'require a non-negative integer limit'
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      expect(counted.total).toBe(3);
+    }
+  );
+
+  dbTest(
+    'sorts recency directly in both directions with stable continuation pages',
+    async ({ db }) => {
+      const repo = new SessionRepository(db);
+      const branch = await createTestBranch(db);
+      const entries = [];
+      for (const [index, recency] of ['2025-01-01', '2025-03-01', '2025-03-01'].entries()) {
+        entries.push(
+          await repo.create(
+            createSessionData({
+              session_id: `00000000-0000-7000-8000-00000000000${index + 1}` as UUID,
+              branch_id: branch.branch_id,
+              created_at: '2024-01-01T00:00:00.000Z',
+              last_updated: `${recency}T00:00:00.000Z`,
+            })
+          )
+        );
+      }
+      for (const direction of [1, -1] as const) {
+        const expected = direction === 1 ? entries : [entries[1], entries[2], entries[0]];
+        const first = await repo.findPage({
+          branchId: branch.branch_id,
+          sortUpdatedAt: direction,
+          limit: 2,
+        });
+        const last = await repo.findPage({
+          branchId: branch.branch_id,
+          sortUpdatedAt: direction,
+          limit: 2,
+          skip: 2,
+        });
+        expect(first.total).toBe(3);
+        expect([...first.data, ...last.data].map((row) => row.session_id)).toEqual(
+          expected.map((row) => row.session_id)
+        );
+      }
+    }
+  );
+
   dbTest('keeps offset pages deterministic when timestamps tie', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

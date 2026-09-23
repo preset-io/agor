@@ -15,7 +15,7 @@
  * - status: Task status (COMPLETED, FAILED, etc.)
  * - completedAt: ISO timestamp of completion
  * - messageCount: Number of messages in completed task
- * - toolUseCount: Number of tools used
+ * - recordedToolCount: Verified recorded tool count, absent/null when unknown
  * - lastAssistantMessage: Child's final assistant message content (optional)
  *
  * Renders via the shared `renderTemplate` helper in
@@ -33,7 +33,7 @@ const DEFAULT_TEMPLATE = `[Agor] Child session {{childSessionId}} has {{#if (eq 
 {{spawnPrompt}}
 
 {{/if}}**Status:** {{status}}
-**Stats:** {{messageCount}} messages, {{toolUseCount}} tool uses
+**Stats:** {{messageCount}} messages{{#if recordedToolCount includeZero=true}}, {{recordedToolCount}} tool calls{{/if}}
 
 {{#if lastAssistantMessage}}**Result:**
 {{lastAssistantMessage}}
@@ -54,7 +54,7 @@ export interface ChildCompletionContext {
   status: string; // Task status (COMPLETED, FAILED, etc.)
   completedAt: string; // ISO timestamp
   messageCount: number;
-  toolUseCount: number;
+  recordedToolCount?: number | null;
   lastAssistantMessage?: string; // Child's final assistant message content
 }
 

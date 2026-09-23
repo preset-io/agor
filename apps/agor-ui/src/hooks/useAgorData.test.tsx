@@ -839,7 +839,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
     const b1 = makeBranch({ branch_id: 'b-1' });
-    const { client } = makeMockClient({
+    const { client, fetchArguments } = makeMockClient({
       // Gated first paint sees only the recent slice; hydration sees the full set.
       'sessions:find': [s1],
       'sessions:findAll': [s1, s2],
@@ -847,6 +847,17 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
+    expect(fetchArguments('sessions', 'find')).toContainEqual({
+      query: {
+        archived: false,
+        $limit: 50,
+        $count: false,
+        $sort: { updated_at: -1 },
+      },
+    });
+    for (const args of fetchArguments('sessions', 'findAll')) {
+      expect((args as { query: Record<string, unknown> }).query.$count).toBeUndefined();
+    }
 
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     // s-2 was absent from first paint and only arrives via the hydration.

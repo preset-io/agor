@@ -11,11 +11,13 @@ import { SessionPanelContent } from './SessionPanelContent';
 
 // Keep the actual ConversationView scroll owner and split/queue UI. Only its
 // data feed and expensive transcript rows are replaced with deterministic data.
+const queueFeed = vi.hoisted(() => ({ tasks: [] as Task[] }));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({
     handle: null,
     state: {
       sessionId: 'session-1',
+      queuedTasks: queueFeed.tasks,
       tasks: Array.from({ length: 20 }, (_, i) => ({
         task_id: `history-${i}`,
         status: 'completed',
@@ -24,6 +26,7 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
       messagesByTask: new Map(),
       loadedTaskIds: new Set(),
       streamingMessages: new Map(),
+      toolsByTask: new Map(),
     },
   }),
 }));
@@ -44,7 +47,10 @@ const session = {
   status: 'running',
 } as Session;
 const noop = () => {};
-const remove = vi.fn().mockResolvedValue(undefined);
+const removedListeners = new Set<(id: string) => void>();
+const remove = vi.fn(async (id: string) => {
+  for (const listener of removedListeners) listener(id);
+});
 const patch = vi.fn().mockResolvedValue(undefined);
 const find = vi.fn();
 const client = { service: () => ({ remove, patch, find }) } as unknown as AgorClient;
@@ -74,6 +80,14 @@ function Harness({
 }) {
   const [queue, setQueue] = useState(() => tasks(count));
   useEffect(() => setQueue(tasks(count)), [count]);
+  useEffect(() => {
+    const onRemoved = (id: string) =>
+      setQueue((prev) => prev.filter((task) => task.task_id !== id));
+    removedListeners.add(onRemoved);
+    return () => {
+      removedListeners.delete(onRemoved);
+    };
+  }, []);
   return (
     <App>
       <AppActionsProvider value={{}}>
@@ -99,7 +113,6 @@ function Harness({
                 client={client}
                 session={failed ? { ...session, status: 'failed' } : session}
                 queuedTasks={queue}
-                setQueuedTasks={setQueue}
                 scrollToBottom={null}
                 scrollToTop={null}
                 setScrollToBottom={noop}
@@ -127,6 +140,20 @@ const queueList = () => screen.getByRole('region', { name: 'Queued task list' })
 const divider = () =>
   screen.getByRole('separator', { name: 'Resize conversation and queued tasks' });
 
+// Opening a conversation also requests a spring scroll, which takes nearly 1s
+// to settle even without CI frame delays. Keep the pixel tolerance strict, but
+// allow the real animation to finish rather than racing waitFor's 1s default.
+const expectBottom = () =>
+  waitFor(
+    () => {
+      const transcript = conversation();
+      expect(
+        Math.abs(transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop)
+      ).toBeLessThanOrEqual(3);
+    },
+    { timeout: 5000 }
+  );
+
 async function expectBounded() {
   await waitFor(() => {
     const transcript = conversation().getBoundingClientRect();
@@ -147,6 +174,7 @@ async function expectBounded() {
 
 afterEach(() => {
   cleanup();
+  queueFeed.tasks = [];
   vi.clearAllMocks();
 });
 
@@ -155,11 +183,7 @@ it('bounds 30 queued tasks, independently scrolls to the last action, and keeps 
   await expectBounded();
   const headerTop = screen.getByText('Queued Tasks (30)').getBoundingClientRect().top;
   const transcript = conversation();
-  await waitFor(() =>
-    expect(
-      Math.abs(transcript.scrollTop - (transcript.scrollHeight - transcript.clientHeight))
-    ).toBeLessThanOrEqual(3)
-  );
+  await expectBottom();
   const transcriptTop = transcript.scrollTop;
   const list = queueList();
   expect(list.scrollHeight).toBeGreaterThan(list.clientHeight * 3);
@@ -218,12 +242,18 @@ it('supports keyboard and pointer resizing without sacrificing the conversation 
 });
 
 const queueHeight = () => screen.getByRole('region', { name: 'Queued tasks' }).clientHeight;
-const expectBottom = () =>
+
+// A restored percentage can produce the expected height before ResizeObserver
+// has committed the new pixel-derived constraints. Do not send the next resize
+// key until the separator exposes bounds for the current viewport.
+const expectCurrentResizeBounds = () =>
   waitFor(() => {
-    const transcript = conversation();
-    expect(
-      Math.abs(transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop)
-    ).toBeLessThanOrEqual(3);
+    const available = conversation().clientHeight + queueHeight();
+    expect(divider()).toHaveAttribute('aria-valuemax', String(Math.round(100 - 8000 / available)));
+    expect(divider()).toHaveAttribute(
+      'aria-valuemin',
+      String(Math.round(Math.max(50, Math.min(240 / available, 0.6) * 100)))
+    );
   });
 
 it.each(['keyboard', 'pointer'])(
@@ -257,6 +287,7 @@ it.each(['keyboard', 'pointer'])(
     await waitFor(() => expect(Math.abs(queueHeight() - desired)).toBeLessThanOrEqual(1));
     await expectBottom();
     // A subsequent intentional resize replaces the remembered expansion.
+    await expectCurrentResizeBounds();
     act(() => divider().focus());
     await act(() => userEvent.keyboard('{End}'));
     await waitFor(() => expect(queueHeight()).toBe(80));
@@ -304,13 +335,8 @@ it('refreshes separator bounds on a constraint-only resize without remounting th
   const oldMaximum = divider().getAttribute('aria-valuemax');
   const proportions = divider().getAttribute('aria-valuenow');
   rerender(<Harness count={25} height={500} />);
+  await expectCurrentResizeBounds();
   await waitFor(() => {
-    const available = transcript.clientHeight + queueHeight();
-    expect(divider()).toHaveAttribute('aria-valuemax', String(Math.round(100 - 8000 / available)));
-    expect(divider()).toHaveAttribute(
-      'aria-valuemin',
-      String(Math.round(Math.max(50, Math.min(240 / available, 0.6) * 100)))
-    );
     expect(divider().getAttribute('aria-valuemax')).not.toBe(oldMaximum);
     expect(divider()).toHaveAttribute('aria-valuenow', proportions);
   });
@@ -325,9 +351,9 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
   await userEvent.click(await screen.findByRole('button', { name: 'Run next' }));
   expect(patch).toHaveBeenCalledTimes(2);
   remove.mockRejectedValueOnce(new Error('Try again'));
-  find.mockResolvedValueOnce({ data: tasks(25) });
   await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-  await waitFor(() => expect(find).toHaveBeenCalled());
+  await screen.findByText('Failed to remove queued task: Try again');
+  expect(find).not.toHaveBeenCalled();
   expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
 });
@@ -335,9 +361,12 @@ it('keeps failed-queue recovery and rollback actions reachable inside the bounde
 it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
   async (height) => {
+    queueFeed.tasks = tasks(30);
     const queueClient = {
+      io: { on: noop, off: noop },
       service: (path: string) => ({
         find: async () => ({ data: path.endsWith('/tasks/queue') ? tasks(30) : [] }),
+        get: async () => session,
         on: noop,
         off: noop,
         remove,

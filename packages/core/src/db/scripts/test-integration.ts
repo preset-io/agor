@@ -152,7 +152,6 @@ async function testTaskRepository(db: ReturnType<typeof createDatabase>, session
       sha_at_start: 'abc123',
     },
     model: 'claude-sonnet-4-6',
-    tool_use_count: 5,
   });
 
   console.log(`  ✅ Created task: ${shortId(task.task_id)}`);

@@ -372,13 +372,11 @@ describe('Task Repository Integration', () => {
         sha_at_start: 'abc123',
       },
       model: 'claude-sonnet-4-6',
-      tool_use_count: 5,
     });
 
     expect(task.task_id).toBeDefined();
     expect(task.session_id).toBe(session.session_id);
     expect(task.full_prompt).toBe('This is a test task');
-    expect(task.tool_use_count).toBe(5);
   });
 
   it('should find tasks by session', async () => {

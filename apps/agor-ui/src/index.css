@@ -166,6 +166,66 @@
   padding: 0;
 }
 
+/* Panel session titles are single-line; Tree exposes no semantic slot for the
+   content wrapper, so let it shrink below its content for the ellipsis. Rows
+   carry their own inline padding, so the chevron is followed by one standard
+   step instead of Tree's switcher margin plus title padding. */
+.agor-flat-tree.agor-panel-session-tree .ant-tree-node-content-wrapper {
+  min-width: 0;
+  padding-inline: 0;
+}
+.agor-flat-tree.agor-panel-session-tree .ant-tree-switcher {
+  margin-inline-end: 0;
+}
+
+/* Rows revealed by expanding a panel session fade and settle in. Tree's own
+   height motion re-lays out the virtual list every frame; this stays on the
+   compositor. JS also skips it for reduced motion or motion-off themes. */
+@keyframes agor-session-row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .agor-session-row-enter {
+    /* Duration and easing come inline from AntD motion tokens; these are fallbacks. */
+    animation: agor-session-row-enter 200ms ease-out both;
+  }
+}
+
+/* Plain level guides under each parent's chevron (no elbow connectors).
+   Unlike Tree's show-line mode, every level draws its guide, including under
+   a last sibling, so a whole subtree reads as one group. */
+.agor-flat-tree.agor-panel-session-tree .ant-tree-indent-unit {
+  position: relative;
+  height: 100%;
+}
+.agor-flat-tree.agor-panel-session-tree .ant-tree-indent-unit::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-end: calc(var(--ant-control-height-sm) / 2);
+  border-inline-end: var(--ant-line-width) var(--ant-line-type) var(--ant-color-border-secondary);
+  content: "";
+}
+
+/* The panel chevron is an AntD button with its own hover/focus; Tree's
+   first-line switcher backing would paint off-center on taller rows. */
+.agor-flat-tree.agor-panel-session-tree .ant-tree-switcher::before {
+  display: none;
+}
+
+/* The panel chevron rotates itself; Tree's closed-state svg rotation (made for
+   its default down caret) would point a collapsed chevron up. */
+.agor-flat-tree.agor-panel-session-tree .ant-tree-switcher-icon svg {
+  transform: none;
+}
+
 /* Collapse's motion wrapper has no semantic style prop. Carry the bounded
    teammate flex slot through it; never affect auto-sized canvas cards or
    override the hidden-panel display rule during collapse. */

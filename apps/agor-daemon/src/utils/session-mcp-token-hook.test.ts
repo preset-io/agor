@@ -67,10 +67,12 @@ async function seedSession(db: Database): Promise<Session> {
       data: { path: '/tmp/test/wt', git_state: { ref_at_start: 'main' } },
     })
     .run();
+  const now = new Date();
   await insert(db, sessions)
     .values({
       session_id: sessionId,
-      created_at: new Date(),
+      created_at: now,
+      updated_at: now,
       status: 'idle',
       agentic_tool: 'claude-code',
       branch_id: branchId,

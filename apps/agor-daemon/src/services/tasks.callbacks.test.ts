@@ -26,7 +26,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
       end_index: 2,
       start_timestamp: '2026-01-01T00:00:00.000Z',
     },
-    tool_use_count: 3,
+    recorded_tool_count: 3,
     git_state: {
       ref_at_start: 'main',
       sha_at_start: 'abc123',

@@ -19,12 +19,21 @@ import {
 } from '@agor-live/client';
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
+import { captureSessionPatchCommit } from '../store/realtimeBatch';
+
+export const ARCHIVE_REFRESH_WARNING =
+  'Session and same-branch children archived; refresh required to update the session list.';
+
+type ArchiveSessionResult = {
+  session: Session;
+  reconciliation: 'confirmed' | 'refresh-required';
+};
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
   unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
@@ -256,7 +265,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult | null> => {
     if (!client) {
       setError('Client not connected');
       return null;
@@ -264,10 +273,29 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
     try {
       setError(null);
+      const commit = captureSessionPatchCommit();
       const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
         session: Session;
+        affectedSessions?: Session[];
       };
-      return result.session;
+      // Do not depend on every descendant's realtime event arriving before the
+      // drawer updates. Only reconcile server-confirmed rows, never infer a
+      // cascade from the visible genealogy (which can include remote sessions).
+      // Their payloads may already be stale: the store refetches these IDs.
+      // affectedSessions contains changed rows only: an already-archived root
+      // is returned separately and will not produce another realtime patch.
+      const confirmed = new Map(
+        [result.session, ...(result.affectedSessions ?? [])].map((session) => [
+          session.session_id,
+          session,
+        ])
+      );
+      try {
+        await commit([...confirmed.values()], (id) => client.service('sessions').get(id));
+      } catch {
+        return { session: result.session, reconciliation: 'refresh-required' };
+      }
+      return { session: result.session, reconciliation: 'confirmed' };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to archive session';
       setError(message);

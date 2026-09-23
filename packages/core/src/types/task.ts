@@ -24,6 +24,12 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 /** Task states that have not yet crossed the daemon's durable dispatch fence. */
 export type TaskPendingDispatchStatus = typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
 
+/** Launch metadata only; does not confer ownership of a dispatch claim. */
+export type TaskLaunchFields = Pick<
+  Task,
+  'message_range' | 'git_state' | 'started_at' | 'executor_mode' | 'sdk_watchdog_mode'
+> & { status: typeof TaskStatus.DISPATCHING };
+
 export type ExecutorMode = 'local' | 'templated';
 
 export const ExecutorPulseKind = {
@@ -399,7 +405,10 @@ export interface Task {
   };
 
   // Tool usage
-  tool_use_count: number;
+  /** Server-derived terminal snapshot of distinct recorded tool IDs. Missing/null
+   * means unknown (including legacy turns); never substitute zero.
+   * Transcript mutations invalidate it. Not an executor/client-writable field. */
+  recorded_tool_count?: number | null;
 
   // Git state
   git_state: {
@@ -505,4 +514,25 @@ export interface Task {
   /** Immutable watchdog policy snapshot for this dispatch. */
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
+}
+
+/** Explicit Session queue commands; task IDs are full UUIDs, never ambiguous prefixes. */
+export interface CancelQueuedTasksInput {
+  session_id: SessionID;
+  task_ids: TaskID[];
+}
+
+export interface ReorderQueuedTasksInput {
+  session_id: SessionID;
+  /** Exact ordered snapshot observed by the caller. */
+  expected_task_ids: TaskID[];
+  /** Exact permutation of expected_task_ids, in desired dispatch order. */
+  task_ids: TaskID[];
+}
+
+/** Authoritative queue at the mutation's serialization point, not a reservation. */
+export interface TaskQueueMutationResult {
+  session_id: SessionID;
+  queue: Pick<Task, 'task_id' | 'queue_position'>[];
+  cancelled_task_ids: TaskID[];
 }

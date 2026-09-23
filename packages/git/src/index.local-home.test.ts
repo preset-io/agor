@@ -31,6 +31,7 @@ it('creates independent full-history persona homes, without touching source or s
         ref: 'template/builder',
         newBranchName: `private-${index}`,
         localHome: true,
+        expectedSha: sourceHead.trim(),
       });
       expect((await stat(join(home, '.git'))).isDirectory()).toBe(true);
       await expect(stat(join(home, '.git/objects/info/alternates'))).rejects.toMatchObject({

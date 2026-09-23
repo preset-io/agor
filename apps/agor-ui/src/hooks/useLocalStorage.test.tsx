@@ -71,4 +71,21 @@ describe('useLocalStorage', () => {
     );
     expect(offendingCalls).toEqual([]);
   });
+  it('handles cross-tab clear without treating sessionStorage as localStorage', () => {
+    window.localStorage.setItem(KEY, 'true');
+    const { result } = renderHook(() => useLocalStorage<boolean>(KEY, false));
+    window.localStorage.removeItem(KEY);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: KEY, storageArea: window.sessionStorage })
+      )
+    );
+    expect(result.current[0]).toBe(true);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: null, storageArea: window.localStorage })
+      )
+    );
+    expect(result.current[0]).toBe(false);
+  });
 });

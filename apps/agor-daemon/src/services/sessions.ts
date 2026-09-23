@@ -178,6 +178,7 @@ export type SessionParams = QueryParams<{
   status?: Session['status'];
   agentic_tool?: Session['agentic_tool'];
   board_id?: string;
+  include_usage?: boolean | 'true' | 'false';
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
   /** Marks a `remove` as the delete half of a "switch tool" swap (see `remove`). */
@@ -229,6 +230,7 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
     'branch_id',
     '$sort',
     '$limit',
+    '$count',
     '$skip',
   ]);
   for (const key of Object.keys(query)) {
@@ -1869,6 +1871,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const session = await super.get(id, params);
     const [enrichedSession] = await this.enrichRemoteRelationships([session]);
     const sessionWithRelationships = enrichedSession ?? session;
+    if (params?.query?.include_usage === true || params?.query?.include_usage === 'true') {
+      sessionWithRelationships.usage_summary = await this.taskRepo.getSessionUsage(
+        session.session_id
+      );
+    }
 
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {
@@ -1903,7 +1910,27 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // and the bounded slice wouldn't be ordered by recency. findPage does the
     // filter + recency sort + limit/offset in SQL instead.
     const query = params?.query as Record<string, unknown> | undefined;
-    if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
+    if (query?.$count !== undefined && typeof query.$count !== 'boolean') {
+      throw new BadRequest('$count must be a boolean');
+    }
+    const sqlPage = shouldSqlPageSessionQuery(
+      query,
+      !!params?._agorSqlSessionAccessUserId || query?.$count !== undefined
+    );
+    if (query?.$count !== undefined && !sqlPage) {
+      throw new BadRequest('$count is supported only for SQL-paginated session queries');
+    }
+    if (sqlPage) {
+      if (
+        query?.$count === false &&
+        ((query.$limit !== undefined &&
+          (!Number.isInteger(query.$limit) || (query.$limit as number) < 0)) ||
+          (query.$skip !== undefined &&
+            (!Number.isInteger(query.$skip) || (query.$skip as number) < 0)))
+      )
+        throw new BadRequest(
+          'No-count pagination requires non-negative integer limits and offsets'
+        );
       const sortSpec = query?.$sort as { updated_at?: 1 | -1; created_at?: 1 | -1 } | undefined;
       const branchFilter = query?.branch_id;
       const branchIds =
@@ -1918,6 +1945,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       );
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
+        includeTotal: query?.$count !== false,
         status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
@@ -1930,6 +1958,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         visibleToUserId: params?._agorSqlSessionAccessUserId,
       });
       const enriched = await this.enrichRemoteRelationships(data);
+      if (query?.$count === false) return markRemoteRelationshipsEnrichedResult(enriched);
+      if (total === undefined) throw new Error('Counted session page is missing its total');
       return markRemoteRelationshipsEnrichedResult({ total, limit, skip, data: enriched });
     }
 

@@ -150,7 +150,20 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           height="auto"
           title="Switch board"
           {...reducedMotionSurface(reduced)}
-          styles={{ body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' } }}
+          styles={{
+            // Auto height keeps short lists compact. Bound both flex ancestors
+            // so a long list scrolls in the body instead of growing offscreen.
+            wrapper: { maxHeight: '85dvh' },
+            section: { maxHeight: '85dvh' },
+            body: {
+              minHeight: 0,
+              overflowY: 'auto',
+              overscrollBehaviorY: 'contain',
+              touchAction: 'pan-y',
+              padding: 0,
+              paddingBottom: 'env(safe-area-inset-bottom)',
+            },
+          }}
         >
           <List
             dataSource={boardSwitcher.boards}
@@ -164,6 +177,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
                 <List.Item
                   {...pressableProps(select)}
                   aria-label={`Switch to ${board.name}`}
+                  aria-current={active ? 'true' : undefined}
                   style={{
                     cursor: 'pointer',
                     paddingInline: token.padding,

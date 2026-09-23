@@ -28,6 +28,7 @@ import {
 import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
+  inVisibleBranchSet,
   visibleBoardReferenceAccessExists,
   visibleBranchReferenceAccessExists,
 } from './branch-access';
@@ -91,7 +92,7 @@ export class BoardObjectRepository {
     return conditions;
   }
 
-  private buildVisibleToUserCondition(userId: UUID): SQL {
+  private buildVisibleToUserCondition(userId: UUID, inventory = false): SQL {
     return (
       and(
         // Board visibility is authoritative for the canvas itself. Access to a
@@ -101,7 +102,9 @@ export class BoardObjectRepository {
           isNull(boardObjects.branch_id),
           and(
             isNotNull(boardObjects.branch_id),
-            visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
+            inventory
+              ? inVisibleBranchSet(this.db, userId, boardObjects.branch_id)
+              : visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
           )
         )
       ) ?? sql`false`
@@ -177,7 +180,10 @@ export class BoardObjectRepository {
     try {
       const conditions = [
         ...this.buildFindConditions(filters),
-        this.buildVisibleToUserCondition(userId),
+        this.buildVisibleToUserCondition(
+          userId,
+          !filters.board_id && !filters.branch_id && !filters.card_id && !filters.zone_id
+        ),
       ];
       let query = select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
@@ -210,7 +216,10 @@ export class BoardObjectRepository {
     try {
       const conditions = [
         ...this.buildFindConditions(filters),
-        this.buildVisibleToUserCondition(userId),
+        this.buildVisibleToUserCondition(
+          userId,
+          !filters.board_id && !filters.branch_id && !filters.card_id && !filters.zone_id
+        ),
       ];
       const row = await select(this.db, { count: sql<number>`count(*)` })
         .from(boardObjects)

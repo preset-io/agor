@@ -918,7 +918,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       ...makeSlackChannel(),
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
       },
     } as unknown as GatewayChannel;
     const onUpdate = vi.fn();
@@ -935,7 +935,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'xhigh' },
       },
     });
   });
@@ -945,7 +945,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       ...makeSlackChannel(),
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
       },
       mcp_server_ids: ['mcp-server-1'],
     } as unknown as GatewayChannel;

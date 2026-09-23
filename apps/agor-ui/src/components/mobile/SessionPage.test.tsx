@@ -57,6 +57,7 @@ function renderAt(
               client={null}
               sessionById={sessionById}
               branchById={new Map<string, Branch>()}
+              boardById={new Map()}
               onSendPrompt={vi.fn()}
               onForkSession={noopAsync}
               onBtwForkSession={noopAsync}

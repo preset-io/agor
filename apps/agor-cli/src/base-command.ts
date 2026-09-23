@@ -20,6 +20,7 @@ import {
  */
 export abstract class BaseCommand extends Command {
   protected daemonUrl: string | null = null;
+  protected deploymentId: string | null = null;
 
   /**
    * Connect to daemon (checks if running first)
@@ -41,6 +42,7 @@ export abstract class BaseCommand extends Command {
     }
     const daemonUrl = target.url;
     this.daemonUrl = daemonUrl;
+    this.deploymentId = target.deploymentId;
     const probe = await probeAgorDaemon(daemonUrl);
 
     if (!probe.running) {

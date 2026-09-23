@@ -746,7 +746,12 @@ export function resolveSessionContext() {
     }
     // Tasks/Messages services - session_id is a foreign key
     else if (context.path === 'tasks' || context.path === 'messages') {
-      if (context.method === 'create') {
+      if (context.method === 'cancelQueued' || context.method === 'reorderQueued') {
+        if (typeof data?.session_id !== 'string' || !data.session_id) {
+          throw new BadRequest('Queue commands require an explicit session_id');
+        }
+        sessionId = data.session_id;
+      } else if (context.method === 'create') {
         sessionId = data?.session_id;
       } else if (
         context.method === 'get' ||

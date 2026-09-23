@@ -91,6 +91,15 @@ describe('MarkdownRenderer', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('repairs a stationary incomplete preview without marking it as actively generating', async () => {
+    render(
+      <MarkdownRenderer content={'```text\npreview code\n```\n\n**unfinished'} isIncomplete />
+    );
+    expect(await screen.findByText('preview code')).toBeInTheDocument();
+    // Incomplete parsing is independent of isAnimating, which disables controls.
+    expect(screen.getByRole('button', { name: 'Download file' })).toBeEnabled();
+  });
+
   it('renders links as new-tab anchors without a confirmation interstitial', async () => {
     render(<MarkdownRenderer content={'[Private PR #1](https://github.com/acme/repo/pull/1)'} />);
 

@@ -31,17 +31,150 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 ## Capabilities At a Glance
 
-| Domain                | What agents can do                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work |
-| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                       |
-| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup   |
-| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
-| **Tasks & Reports**   | Fetch task history, create follow-up tasks, log progress, generate reports                              |
-| **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                            |
-| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata                                        |
+| Domain                | What agents can do                                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work                      |
+| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
+| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
+| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
+| **Tasks & Reports**   | Fetch task history, cancel selected queued tasks, reorder pending work, generate reports                                     |
+| **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                                                 |
+| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata                                                             |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
+
+### Managing a Session's pending queue
+
+An orchestrator can revise a child's pending work while its current Task keeps
+running. Discover these tools in the **sessions** domain (search for `queued`):
+
+- `agor_tasks_list({ sessionId, status: "queued" })` returns pending Tasks in
+  dispatch order, including full `task_id`, `queue_position`, and prompt text.
+  Follow `nextOffset` while `hasMore` to read the complete queue.
+- `agor_tasks_cancel_queued({ sessionId, taskIds })` removes selected queued
+  Tasks in one atomic batch. Every ID must still be queued in that Session;
+  otherwise none are removed. This is removal, not a stopped/failed execution:
+  no completion callbacks or reports are generated.
+- `agor_tasks_reorder_queued({ sessionId, expectedTaskIds, taskIds })` changes
+  dispatch order. `expectedTaskIds` must equal the complete current queue in
+  its observed order; `taskIds` must be an exact permutation. No duplicate,
+  missing, foreign-Session, or nonqueued IDs are accepted. Empty lists are
+  valid only for an empty queue.
+
+Always name the target Session explicitly; the caller's current Session is
+not an implicit target. Task lists use **full UUIDs** returned by the list tool.
+Both mutations require workspace Member access and the existing **Branch
+Manager** capability used by Task deletion (normal administrator policy still
+applies). Prompt access alone is insufficient. Delegated Session credentials
+retain the acting user's permissions; child ancestry grants no additional
+rights, and no operation crosses the authenticated tenant boundary.
+
+For example, after listing a child's queue as `[A, B, C]` (replace these letters
+with the returned full Task UUIDs):
+
+```js
+// New data invalidates B. Active work is untouched.
+agor_tasks_cancel_queued({ sessionId: childId, taskIds: [B] });
+// Using the resulting queue [A, C], prioritize C.
+agor_tasks_reorder_queued({
+  sessionId: childId,
+  expectedTaskIds: [A, C],
+  taskIds: [C, A],
+});
+```
+
+Both return `{ session_id, queue: [{ task_id, queue_position }],
+cancelled_task_ids }`, authoritative at commit, not a reservation. Admission,
+dispatch, cancellation, or another reorder may change it immediately afterward.
+A stale order or ineligible ID produces an actionable conflict (HTTP 409,
+`TASK_QUEUE_CONFLICT` in the service error data). Reread the queue and reconsider
+priorities before retrying; do not silently reuse the old snapshot. Malformed
+or duplicate IDs are invalid input (HTTP 400).
+
+Only `queued` Tasks can change. Dispatching, running, permission/input waits,
+stopping, and finished Tasks are never stopped, edited, or deleted by these
+tools. New prompts append after the reordered tail. Failure-held queues remain
+held: these tools do not resume a Session. Existing realtime Task events update
+the UI; no separate queue UI or pause control is needed.
+
+The shared public Tasks service exposes the same operations as `cancelQueued`
+and `reorderQueued`, with `session_id`, `task_ids`, and (for reorder)
+`expected_task_ids`. Generic Task patches remain executor-only and
+`queue_position` remains server-owned.
+
+#### Interrupt obsolete work and supply urgent information
+
+Use the existing prompt, queue-management, and stop tools **in that order**.
+This is not an atomic stop-and-clear operation, nor an in-place injection into
+the running Task. Each tool retains its own authorization requirements.
+
+1. **Capture the original active Task ID** from `agor_tasks_list` for the child
+   before changing its queue. Keep this ID (`originalTaskId`) for the conditional
+   Stop; do not replace it with a successor's ID. **While the child is still
+   active**, call `agor_sessions_prompt` with
+   `mode: "continue"` and updated instructions. Inspect the result: continue
+   queues behind active work, but if the child has already become promptable,
+   the update may dispatch immediately. Do not assume it is still queued.
+2. **Inspect/re-read the pending queue** with
+   `agor_tasks_list({ sessionId: childId, status: "queued" })`, following all
+   pages. Cancel obsolete queued IDs with `agor_tasks_cancel_queued` as
+   appropriate. Use the resulting queue or re-read it after further changes.
+3. **Move the update to the front** with `agor_tasks_reorder_queued`:
+   `expectedTaskIds` is the exact observed order; `taskIds` contains the same
+   IDs with the update first. Handle any conflict by re-reading and reassessing,
+   not by blindly retrying the old snapshot.
+4. **ONLY THEN** call `agor_sessions_stop({ sessionId: childId, expectedTaskId: originalTaskId, reason: "New data
+invalidates the current task; prioritized updated instructions" })`.
+   **Stop preserves and drains the queue. Stopping before rearranging it risks
+   dispatching stale work.**
+
+For example, if the update returned Task ID `U` and a fresh queue read showed
+`[A, B, U]`, where `B` is obsolete (letters stand for full Task UUIDs):
+
+```js
+// First read the child's active Task and retain its ID as originalTaskId.
+agor_tasks_list({ sessionId: childId });
+// Then, while the child is active:
+agor_sessions_prompt({
+  sessionId: childId,
+  mode: 'continue',
+  prompt: 'New evidence invalidates the current approach. Preserve existing edits and ...',
+});
+// Confirm the returned update U is queued; read the complete current queue.
+agor_tasks_list({ sessionId: childId, status: 'queued' });
+// Only if that read shows [A, B, U], and B is still obsolete:
+agor_tasks_cancel_queued({ sessionId: childId, taskIds: [B] });
+// Only if the resulting/current queue is [A, U]:
+agor_tasks_reorder_queued({
+  sessionId: childId,
+  expectedTaskIds: [A, U],
+  taskIds: [U, A],
+});
+// Only after successful rearrangement and reassessing the current active work:
+agor_sessions_stop({
+  sessionId: childId,
+  expectedTaskId: originalTaskId,
+  reason: 'Obsolete approach; update U prioritized',
+});
+```
+
+After **verified termination**, the prioritized update can run as the next turn,
+provided it is still the queue head. Delivery is **not guaranteed instantaneous**.
+An accepted/pending stop is **not confirmed termination**; inspect the stop
+outcome and re-read Session/Task state rather than treating acceptance as proof
+that the old executor has stopped. Existing edits made by the running Task are
+preserved: stopping does **not** roll them back.
+
+There is **no atomic guarantee across these separate calls**. Active work may
+finish, another task may dispatch, or another caller may change the queue
+between any steps—even between a successful reorder and stop. On unexpected
+dispatch or queue changes, re-read and reconsider which work should be stopped
+before proceeding. The optional `expectedTaskId` accepts a full UUID or short
+ID and restricts Stop to the original execution. If the original completed and
+`U` started, Stop returns `condition_changed` without terminating `U`. On that
+mismatch, **never fall back to an unconditional Stop** or substitute `U`'s ID.
+An already-idle Session remains an idempotent `already_idle` result. Queue tools
+cannot cancel or reorder a Task that has already left `queued`.
 
 ### Progressive tool discovery
 

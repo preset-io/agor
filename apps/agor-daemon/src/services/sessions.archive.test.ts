@@ -1,5 +1,6 @@
 import {
   BranchRepository,
+  createTenantScopedDatabaseProxy,
   generateId,
   RepoRepository,
   SessionRelationshipRepository,
@@ -343,6 +344,39 @@ describe('SessionsService archive routes', () => {
     expect((await service.archive(root.session_id)).count).toBe(1);
     expect((await service.archive(root.session_id)).count).toBe(0);
     expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest('returns an already-archived root separately from changed descendants', async ({ db }) => {
+    const emit = vi.fn();
+    const app = { service: () => ({ emit }) } as unknown as Application;
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      app
+    );
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+    const child = await createSession(db, branchId, {
+      genealogy: { parent_session_id: root.session_id, children: [] },
+    });
+    const independentlyArchived = await service.archive(root.session_id, {
+      includeChildren: false,
+    });
+    emit.mockClear();
+
+    const result = await service.archive(root.session_id);
+
+    expect(result.session).toEqual(independentlyArchived.session);
+    expect(result.session.archived).toBe(true);
+    expect(result.affectedSessions.map((session) => session.session_id)).toEqual([
+      child.session_id,
+    ]);
+    expect(result.count).toBe(1);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(
+      'patched',
+      expect.objectContaining({ session_id: child.session_id }),
+      expect.objectContaining({ path: 'sessions', id: child.session_id })
+    );
   });
 
   dbTest('uses BTW and branch causes without overwriting independent reasons', async ({ db }) => {

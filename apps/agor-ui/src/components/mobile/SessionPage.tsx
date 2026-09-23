@@ -1,14 +1,15 @@
 import type {
   AgorClient,
+  Board,
   Branch,
   PermissionMode,
   Session,
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { Alert, Spin } from 'antd';
-import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Alert, Button, Flex, Spin } from 'antd';
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useAgorStore } from '../../store/agorStore';
@@ -17,12 +18,13 @@ import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
-import { useMobileBack } from './useMobileBack';
+import { sessionBoardId } from './sessionBoardId';
 
 interface SessionPageProps {
   client: AgorClient | null;
   sessionById: Map<string, Session>;
   branchById: Map<string, Branch>;
+  boardById: Map<string, Board>;
   currentUser?: User | null;
   onSendPrompt?: (
     sessionId: string,
@@ -46,12 +48,13 @@ const EMPTY_MCP_IDS: string[] = [];
  * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
  * (which owns the whole composer: model / effort / permission / MCP / attach /
  * fork / spawn / btw / stop) so mobile has full feature parity; the previous
- * lossy `MobilePromptInput` is gone. Back returns to the actual parent route.
+ * lossy `MobilePromptInput` is gone. Close exits to the owning board, not history.
  */
 export const SessionPage: React.FC<SessionPageProps> = ({
   client,
   sessionById,
   branchById,
+  boardById,
   currentUser,
   onSendPrompt,
   onForkSession,
@@ -81,7 +84,14 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
     ) ?? EMPTY_MCP_IDS;
 
-  const goBack = useMobileBack('/m/sessions');
+  const navigate = useNavigate();
+  const loading = useAgorStore((state) => state.loading);
+  const boardId = sessionBoardId(session, branchById, boardById);
+  // X is an exit, not browser Back. Replace this detail entry so a cold link
+  // also closes inside Agor. Earlier deliberate navigations remain in history.
+  const closeSession = useCallback(() => {
+    navigate(boardId ? `/m/board/${boardId}` : '/m', { replace: true });
+  }, [navigate, boardId]);
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -94,7 +104,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       onUpdateSession,
       onDeleteSession: (id: string) => {
         onDeleteSession(id);
-        goBack();
+        closeSession();
       },
       onPermissionDecision: handlePermissionDecision,
       onOpenBranch,
@@ -109,7 +119,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
       onSpawnSession,
       onUpdateSession,
       onDeleteSession,
-      goBack,
+      closeSession,
       handlePermissionDecision,
       onOpenBranch,
       onOpenAgenticToolSettings,
@@ -126,16 +136,20 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   if (!session) {
     return (
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Spin size="large" />
-      </div>
+      <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
+        {loading ? (
+          <Spin size="large" />
+        ) : (
+          // Bootstrap may be complete while the data owner fetches an uncached
+          // session. Do not infer a failed request from its absence in the store.
+          <Alert
+            type="info"
+            title="Session not loaded"
+            description="It may still be loading or may no longer be available."
+          />
+        )}
+        <Button onClick={closeSession}>Back to home</Button>
+      </Flex>
     );
   }
 
@@ -149,7 +163,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           currentUserId={currentUser?.user_id}
           sessionMcpServerIds={sessionMcpServerIds}
           open
-          onClose={goBack}
+          onClose={closeSession}
         />
       </div>
       <SessionSettingsModal

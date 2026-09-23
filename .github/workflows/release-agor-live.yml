@@ -6,8 +6,13 @@
 #      Stable versions use `latest`; SemVer prereleases use `next`.
 #
 # workflow_dispatch is a non-publishing preflight on the selected ref. Retry a
-# failed tag release with GitHub's "Re-run failed jobs" so it reuses the same
-# validated artifacts and cannot accidentally publish from a branch.
+# failed publish only after investigation: "Re-run failed jobs" re-enters publish.
+# For visibility-only failures, run scripts/verify-npm-release.mjs read-only with
+# VERSION TAG and the downloaded agor-live-release artifact directory instead.
+# --registry-only checks public bytes against registry shasums, not CI artifacts.
+# Verification defaults to one shared 600s deadline; repo variable
+# NPM_VERIFY_TIMEOUT_SECONDS can raise it to 1200s. Prior 0.26.4 visibility took
+# about 11 minutes: the 10-minute default is a budget, not a propagation guarantee.
 name: Release agor-live
 
 on:
@@ -71,6 +76,7 @@ jobs:
     needs: [metadata, validate]
     if: needs.metadata.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: npm
     permissions:
       contents: read
@@ -78,6 +84,8 @@ jobs:
     env:
       NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: '24.19.0'
@@ -136,6 +144,7 @@ jobs:
           (cd "$RELEASE" && sha256sum "${expected[@]}")
 
       - name: Preflight trusted publishers and publish exact artifacts
+        timeout-minutes: 20
         env:
           NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
@@ -237,51 +246,9 @@ jobs:
           done
 
       - name: Verify registry release
+        timeout-minutes: 22
         env:
           NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
-        run: |
-          set -euo pipefail
-          packages=(
-            @agor-live/claude @agor-live/codex @agor-live/copilot \
-            @agor-live/gemini @agor-live/opencode @agor-live/cursor \
-            @agor-live/client agor-live
-          )
-          remaining=("${packages[@]}")
-
-          # npm publish can return before a new version is visible through
-          # every registry read path. Force npm to revalidate its metadata
-          # cache and retry the complete missing set rather than reporting a
-          # successful publish as failed immediately.
-          for attempt in {1..13}; do
-            next=()
-            for package in "${remaining[@]}"; do
-              actual=$(npm view --prefer-online "$package@$VERSION" version 2>/dev/null || true)
-              if [[ "$actual" == "$VERSION" ]]; then
-                echo "✓ $package@$VERSION is visible"
-              else
-                next+=("$package")
-              fi
-            done
-
-            if [[ "${#next[@]}" -eq 0 ]]; then
-              break
-            fi
-            if [[ "$attempt" -eq 13 ]]; then
-              echo "::error::npm versions were not visible after 60 seconds: ${next[*]}"
-              exit 1
-            fi
-
-            echo "Waiting for npm registry propagation: ${next[*]}"
-            remaining=("${next[@]}")
-            sleep 5
-          done
-
-          for package in "${packages[@]}"; do
-            tagged=$(npm view --prefer-online "$package@$NPM_TAG" version 2>/dev/null || true)
-            if [[ "$tagged" != "$VERSION" ]]; then
-              echo "::error::$package@$NPM_TAG resolved to ${tagged:-<missing>}, expected $VERSION"
-              exit 1
-            fi
-            echo "✓ $package@$NPM_TAG resolves to $VERSION"
-          done
+          NPM_VERIFY_TIMEOUT_SECONDS: ${{ vars.NPM_VERIFY_TIMEOUT_SECONDS || '600' }}
+        run: node scripts/verify-npm-release.mjs "$VERSION" "$NPM_TAG" "$RUNNER_TEMP/release"

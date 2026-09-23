@@ -195,6 +195,28 @@ function json(response, status, body) {
 
 export function createDevLauncher(options) {
   const publicOrigin = new URL(options.publicOrigin).origin;
+  // Fixed operator-owned fixture metadata, never request Host/form authority.
+  // Keep this standalone sidecar origin-only, matching the runtime claim contract.
+  const tenantOrigins = Object.fromEntries(
+    ['acme', 'globex'].map((tenant) => {
+      const value = options.tenantOrigins?.[tenant] ?? publicOrigin;
+      if (
+        typeof value !== 'string' ||
+        value.length > 2048 ||
+        !/^https?:\/\/[^/?#@\\\s]+\/?$/i.test(value) ||
+        Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+      )
+        throw new Error('Invalid development tenant public origin');
+      let origin;
+      try {
+        origin = new URL(value).origin;
+      } catch {
+        throw new Error('Invalid development tenant public origin');
+      }
+      return [tenant, origin];
+    })
+  );
+  const formOrigins = [...new Set(Object.values(tenantOrigins))].join(' ');
   const issuer = options.issuer;
   const audience = options.audience;
   const instanceId = options.instanceId;
@@ -234,8 +256,7 @@ export function createDevLauncher(options) {
         response.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
-          'content-security-policy':
-            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+          'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self' ${formOrigins}; base-uri 'none'; frame-ancestors 'none'`,
         });
         return response.end(renderPicker(publicOrigin, url.searchParams.get('return_to')));
       }
@@ -249,9 +270,15 @@ export function createDevLauncher(options) {
         const timestamp = now();
         preparePendingCodes(timestamp);
         const launchCode = randomBytes(24).toString('base64url');
-        codes.set(launchCode, { persona, expiresAt: timestamp + codeTtlMs });
+        const tenantOrigin = tenantOrigins[persona.tenantId];
+        codes.set(launchCode, {
+          persona,
+          publicBaseUrl: tenantOrigin,
+          issuedAt: Math.floor(timestamp / 1000),
+          expiresAt: timestamp + codeTtlMs,
+        });
         response.writeHead(303, {
-          location: buildLaunchRedirect(publicOrigin, form.get('return_to'), launchCode),
+          location: buildLaunchRedirect(tenantOrigin, form.get('return_to'), launchCode),
           'cache-control': 'no-store',
         });
         return response.end();
@@ -273,7 +300,7 @@ export function createDevLauncher(options) {
           return json(response, 401, { error: 'Invalid or expired launch code' });
         }
 
-        const issuedAt = Math.floor(now() / 1000);
+        const issuedAt = record.issuedAt;
         const persona = record.persona;
         const assertion = signHs256(
           {
@@ -286,6 +313,7 @@ export function createDevLauncher(options) {
             instance_id: instanceId,
             provider: 'agor-ha-dev-launcher',
             tenant_id: persona.tenantId,
+            public_base_url: record.publicBaseUrl,
             email: persona.email,
             email_verified: true,
             name: persona.name,
@@ -309,6 +337,10 @@ export function startDevLauncherFromEnvironment(env = process.env) {
   const port = Number.parseInt(env.PORT ?? '4000', 10);
   const launcher = createDevLauncher({
     publicOrigin: env.AGOR_HA_PUBLIC_ORIGIN ?? 'http://localhost:3030',
+    tenantOrigins: {
+      acme: env.AGOR_HA_ACME_ORIGIN || undefined,
+      globex: env.AGOR_HA_GLOBEX_ORIGIN || undefined,
+    },
     issuer: env.AGOR_EXTERNAL_LAUNCH_ISSUER ?? 'http://dev-launcher:4000',
     audience: env.AGOR_EXTERNAL_LAUNCH_AUDIENCE ?? 'agor-runtime:ha-dev',
     instanceId: env.AGOR_EXTERNAL_LAUNCH_INSTANCE_ID ?? 'agor-ha-dev',

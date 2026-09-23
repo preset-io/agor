@@ -40,6 +40,7 @@ import {
   resolveBranchId,
   resolveMcpServerId,
   resolveSessionId,
+  resolveTaskId,
 } from '../resolve-ids.js';
 import {
   mcpListLimit,
@@ -691,7 +692,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_prompt',
     {
       description:
-        'Prompt an existing session to continue work. Supports four modes: continue (append to conversation), fork (branch at decision point), subsession (delegate to child agent), or btw (ephemeral fork — ask a side question without disrupting the target session, even if running). Configuration is inherited from parent session or user defaults.',
+        'Prompt an existing session to continue work. Supports four modes: continue (append to conversation), fork (branch at decision point), subsession (delegate to child agent), or btw (ephemeral fork — ask a side question without disrupting the target session, even if running). Configuration is inherited from parent session or user defaults. For urgent information that invalidates active work: capture the original active task ID before any queue changes, then use mode=continue to enqueue updated instructions while the child is active; inspect/re-read agor_tasks_list with status=queued, cancel obsolete pending work with agor_tasks_cancel_queued, and move the update to the front with agor_tasks_reorder_queued using expectedTaskIds. ONLY THEN call agor_sessions_stop with expectedTaskId set to that original active task ID and a reason: stop preserves/drains the queue, so stopping first risks dispatching stale work. The update is a next turn after verified termination, not in-place injection or guaranteed instantaneous delivery. Accepted/pending stop is not confirmed termination. If the original finishes and the update starts, expectedTaskId protects the update: on condition_changed re-read and reassess, never fall back to an unconditional stop. These separate calls are not atomic; on conflicts or unexpected dispatch/queue changes re-read and reassess. Existing running-task edits are preserved, not rolled back.',
       inputSchema: z.object({
         sessionId: mcpRequiredId(
           'sessionId',
@@ -1705,10 +1706,15 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence. A stop can also be accepted as pending (outcome "pending" with a pendingCode such as "awaiting_remote_executor" while a remote executor has not connected yet, or an HA coordination code); the request is durable and settles later without another call. Only an "unverified" outcome leaves the task guarded in stopping and requires an owner/admin force-fail. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
+        'Request that a running session stop. The session becomes idle only after Agor verifies executor quiescence or process absence. A stop can also be accepted as pending (outcome "pending" with a pendingCode such as "awaiting_remote_executor" while a remote executor has not connected yet, or an HA coordination code); the request is durable and settles later without another call. Only an "unverified" outcome leaves the task guarded in stopping and requires an owner/admin force-fail. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input). Stop preserves/drains queued work and preserves existing running-task edits; it does not roll back changes or clear the queue. To replace obsolete work with urgent information, capture the original active task ID, then FIRST enqueue updated instructions with agor_sessions_prompt (mode=continue) while the child is active, inspect/re-read agor_tasks_list with status=queued, cancel obsolete queued tasks with agor_tasks_cancel_queued, and move the update to the front with agor_tasks_reorder_queued using expectedTaskIds. ONLY THEN stop with expectedTaskId set to that original active task ID and a reason; stopping first risks dispatching stale work. The update is a next turn after verified termination, not in-place injection or guaranteed instantaneous delivery. Accepted/pending stop is not confirmed termination. If the original finishes and the update starts, expectedTaskId protects the update: on condition_changed re-read and reassess, never fall back to an unconditional stop. These separate calls are not atomic; on conflicts or unexpected dispatch/queue changes re-read and reassess.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),
+        expectedTaskId: mcpOptionalId(
+          'expectedTaskId',
+          'Task',
+          'Original active Task ID (UUIDv7 or short ID). Stop only that execution; a successor yields condition_changed. Never retry a mismatch with an unconditional stop.'
+        ),
         reason: mcpOptionalString(
           'reason',
           'Audit log reason for the stop (e.g. "timeout", "user requested", "safety gate")'
@@ -1718,12 +1724,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const sessionId = await resolveSessionId(ctx, args.sessionId);
 
-      const result = await ctx.app
-        .service('/sessions/:id/stop')
-        .create(
-          { ...(args.reason ? { reason: args.reason } : {}) },
-          { ...ctx.baseServiceParams, route: { id: sessionId } }
-        );
+      const expectedTaskId = args.expectedTaskId
+        ? await resolveTaskId(ctx, args.expectedTaskId)
+        : undefined;
+      const result = await ctx.app.service('/sessions/:id/stop').create(
+        {
+          ...(args.reason ? { reason: args.reason } : {}),
+          ...(expectedTaskId ? { expected_task_id: expectedTaskId } : {}),
+        },
+        { ...ctx.baseServiceParams, route: { id: sessionId } }
+      );
 
       const stopResult = result as {
         success: boolean;
@@ -1759,6 +1769,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         sessionId,
+        ...(stopResult.outcome ? { outcome: stopResult.outcome } : {}),
         status: stopResult.status,
         ...(args.reason ? { reason: args.reason } : {}),
         note: stopResult.reason || 'Session stopped successfully.',

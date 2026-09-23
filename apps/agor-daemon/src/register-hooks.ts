@@ -1,4 +1,4 @@
-import { OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
+import { KNOWLEDGE_TRANSFER, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/types';
 /**
  * Service Hooks Registration
  *
@@ -542,6 +542,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'thread-session-map',
   'gateway-outbound-messages',
   'session-env-selections',
+  KNOWLEDGE_TRANSFER.path,
   'kb/namespaces',
   'kb/documents',
   'kb/graph',
@@ -687,7 +688,6 @@ const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
   'raw_sdk_response',
   'normalized_sdk_response',
   'computed_context_window',
-  'tool_use_count',
   'duration_ms',
   'agent_session_id',
   'error_message',
@@ -2428,6 +2428,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   } as never);
 
+  safeService(KNOWLEDGE_TRANSFER.path)?.hooks({
+    before: { all: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'transfer knowledge')] },
+    after: { create: [suppressKnowledgeCommandRealtimeEvent] },
+  });
+
   safeService('kb/documents')?.hooks({
     before: {
       all: [requireAuth],
@@ -3460,6 +3465,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
   const redactTaskMcpRecoveryAfter = createRedactTaskMcpRecoveryAfter(sessionsRepository);
+  // Queue management has the same capability as tasks.remove: Branch Manager
+  // ('all'), not mere prompt access. MCP retains the acting user's provider.
+  const manageTaskQueueGuards = [
+    requireMinimumRole(ROLES.MEMBER, 'manage queued tasks'),
+    resolveSessionContext(),
+    loadSession(sessionsRepository),
+    loadBranchFromSession(branchRepository),
+    ensureBranchPermission('all', 'manage queued tasks', superadminOpts),
+  ];
   tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth],
@@ -3484,6 +3498,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         loadBranchFromSession(branchRepository),
         ensureCanPromptInSession({ ...superadminOpts, branchRepository }),
       ],
+      cancelQueued: manageTaskQueueGuards,
+      reorderQueued: manageTaskQueueGuards,
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],

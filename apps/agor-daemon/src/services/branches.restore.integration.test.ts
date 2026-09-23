@@ -196,7 +196,7 @@ for (const scenario of [
     );
     initMcpTokens({ db, multiTenancy: resolveMultiTenancyConfig(config) });
     tokens.setJwtSecret('board-metadata-disposable-test-secret');
-    const server = await boardMetadataTestApp(db, config, true, false, async (app) => {
+    const server = await boardMetadataTestApp(db, config, true, false, false, async (app) => {
       Object.assign(app, { sessionTokenService: tokens });
       (app.service('authentication') as unknown as AuthenticationService).register(
         'jwt',

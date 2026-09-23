@@ -287,22 +287,14 @@ export class HealthMonitor {
         // check also uses the service's unwrapped canonical loader; explicit
         // user/MCP status requests retain the normal authorization hooks.
         //
-        // This direct custom service call bypasses Feathers around hooks, so
-        // when the monitor has a db handle and tenant params, enter the same
-        // tenant DB/ALS scope the scheduler uses before mutating branch
-        // environment state and emitting realtime patches.
-        const branch =
-          this.db && params?.tenant?.tenant_id
-            ? await runWithTenantDatabaseScope(this.db, params.tenant.tenant_id, () =>
-                branchesService.checkHealth(branchId, params as never, {
-                  signal: controller.signal,
-                  intent: 'automatic',
-                })
-              )
-            : await branchesService.checkHealth(branchId, params as never, {
-                signal: controller.signal,
-                intent: 'automatic',
-              });
+        // Carry tenant identity, not a transaction, across the HTTP probe.
+        // checkHealth owns short tenant DB units for load/claim/commit/release.
+        // An outer scope here is a PostgreSQL transaction: nested units join it
+        // and retain the Branch claim's row lock for the entire HTTP timeout.
+        const branch = await branchesService.checkHealth(branchId, params as never, {
+          signal: controller.signal,
+          intent: 'automatic',
+        });
 
         // Keep the monitor's self-cleanup contract: a lifecycle change can
         // commit without its realtime hint reaching this replica. The canonical

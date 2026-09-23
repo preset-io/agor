@@ -14,7 +14,7 @@ const createMockTask = (overrides = {}) => ({
     end_index: 10,
     start_timestamp: new Date().toISOString(),
   },
-  tool_use_count: 5,
+  recorded_tool_count: 5,
   git_state: {
     ref_at_start: 'main',
     sha_at_start: 'abc123',
@@ -68,4 +68,14 @@ describe('TaskListItem', () => {
     render(<TaskListItem task={task} />);
     expect(screen.getByText('report')).toBeInTheDocument();
   });
+});
+
+it('omits unknown tool counts but preserves a verified zero', () => {
+  const { rerender } = render(<TaskListItem task={createMockTask()} />);
+  expect(screen.getByText('5')).toBeInTheDocument();
+  rerender(<TaskListItem task={createMockTask({ recorded_tool_count: null })} />);
+  expect(screen.queryByText('5')).toBeNull();
+  expect(screen.queryByText('0')).toBeNull();
+  rerender(<TaskListItem task={createMockTask({ recorded_tool_count: 0 })} />);
+  expect(screen.getByText('0')).toBeInTheDocument();
 });

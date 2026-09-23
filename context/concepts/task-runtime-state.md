@@ -14,7 +14,7 @@ safe release.
 ```text
 Prompt
   |
-  `-- durable admission --> QUEUED
+  `-- durable admission --> QUEUED (or directly DISPATCHING when idle)
                                |
                      queue-head/Session claim
                                v
@@ -106,9 +106,14 @@ still block admission until it is dispatched or settled.
 Queue materialization and draining are documented separately in
 [task-queueing.md](task-queueing.md).
 
-Prompt admission normally enters through `queued` even for an idle Session, so
-ordering and idle-vs-waiting are one database decision. `created` remains for
-the explicit create-then-run API and scheduled compatibility/reconciliation.
+Fresh ordinary prompts can be admitted directly as `dispatching` when the
+locked Session is eligible and has no unfinished Tasks. Admission inserts the
+Task and projects the Session atomically; only its caller may launch after
+commit. Busy/pending Sessions and stable-ID producers retain `queued` admission.
+`created` remains for the explicit create-then-run API and scheduled
+compatibility/reconciliation. Direct admission has the same dispatch
+connection timeout/recovery contract: a crash after commit never silently
+requeues or replays a possibly launched prompt.
 
 ## The runtime facts stored on a task
 

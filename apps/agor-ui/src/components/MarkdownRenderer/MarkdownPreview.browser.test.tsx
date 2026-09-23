@@ -148,3 +148,20 @@ it('uses the secondary text token in dark/custom themes', () => {
   );
   expect(getComputedStyle(screen.getByText('Themed preview')).color).toBe('rgb(123, 145, 167)');
 });
+
+it.each([false, true])('trims only the final paragraph margin (streaming=%s)', (isStreaming) => {
+  const { rerender } = render(
+    <MarkdownRenderer
+      content={'First paragraph\n\nLast paragraph'}
+      inline
+      isStreaming={isStreaming}
+    />
+  );
+  expect(
+    parseFloat(getComputedStyle(screen.getByText('First paragraph')).marginBottom)
+  ).toBeGreaterThan(0);
+  expect(getComputedStyle(screen.getByText('Last paragraph')).marginBottom).toBe('0px');
+  rerender(<MarkdownRenderer content="Pong" inline isStreaming={isStreaming} />);
+  expect(getComputedStyle(screen.getByText('Pong')).marginBottom).toBe('0px');
+  expect(getComputedStyle(screen.getByText('Pong')).paddingBottom).toBe('0px');
+});

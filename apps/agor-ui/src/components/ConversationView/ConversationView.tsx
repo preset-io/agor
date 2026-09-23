@@ -10,6 +10,7 @@
  * - Auto-scrolling to latest content
  */
 
+import { isTaskExecuting } from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
@@ -21,12 +22,13 @@ import type {
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
+import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
@@ -128,18 +130,13 @@ export interface ConversationViewProps {
    */
   teammateEmoji?: string;
 
-  /**
-   * When true, all task blocks are force-expanded (used by in-session search)
-   */
-  forceExpandAll?: boolean;
-
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
   /** Use the denser, full-width task treatment for phone-sized session routes. */
   compact?: boolean;
 }
 
-export const ConversationView = React.memo<ConversationViewProps>(
+const ConversationViewInner = React.memo<ConversationViewProps>(
   ({
     client,
     sessionId,
@@ -156,7 +153,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     teammateEmoji,
-    forceExpandAll = false,
     onOpenAgenticToolSettings,
     compact = false,
   }) => {
@@ -178,25 +174,34 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // The hook observes content growth, not changes to the scroll viewport.
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
-    const viewportObserverRef = useRef<ResizeObserver | null>(null);
+    const viewportCleanupRef = useRef<(() => void) | null>(null);
     const setScrollViewport = useCallback(
       (element: HTMLDivElement | null) => {
-        viewportObserverRef.current?.disconnect();
+        viewportCleanupRef.current?.();
+        viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
         let height = element.clientHeight;
+        let resizeGeneration = 0;
+        let guardedDifference = 0;
         const observer = new ResizeObserver(() => {
           const nextHeight = element.clientHeight;
           if (nextHeight === height) return;
           const difference = nextHeight - height;
           height = nextHeight;
+          const generation = ++resizeGeneration;
           // Share the hook's resize guard: growing the viewport can make the
           // browser clamp scrollTop upward before its deferred scroll handler.
           // That is layout, not a reader escaping the bottom lock.
           state.resizeDifference = difference;
+          guardedDifference = difference;
           requestAnimationFrame(() => {
             setTimeout(() => {
-              if (state.resizeDifference === difference) state.resizeDifference = 0;
+              // Consecutive frames can resize by the same number of pixels.
+              // An older timer must not clear the newer frame's scroll guard.
+              if (resizeGeneration === generation && state.resizeDifference === difference) {
+                state.resizeDifference = 0;
+              }
             }, 1);
           });
           if (state.isAtBottom && !state.escapedFromLock) {
@@ -204,7 +209,11 @@ export const ConversationView = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
-        viewportObserverRef.current = observer;
+        viewportCleanupRef.current = () => {
+          ++resizeGeneration;
+          observer.disconnect();
+          if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
+        };
       },
       [scrollRef, scrollToBottom, state]
     );
@@ -220,7 +229,10 @@ export const ConversationView = React.memo<ConversationViewProps>(
       // Clearing the escape on an explicit go-to-bottom intent lets the pin
       // survive until the round-tripped/streamed content actually arrives.
       state.escapedFromLock = false;
-      scrollToBottom();
+      // initial/resize options do not apply to this explicit call: without
+      // animation it springs through history. Late code-block shrinkage can
+      // then look like upward user scrolling and cancel the initial bottom lock.
+      scrollToBottom({ animation: 'instant' });
     }, [state, scrollToBottom]);
 
     // Scroll to top. While content is still streaming/growing, the library's
@@ -247,7 +259,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       sessionId,
       {
         enabled: isActive,
-        reactiveOptions: { taskHydration: 'lazy' },
+        reactiveOptions: { taskHydration: 'lean' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
@@ -266,95 +278,53 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [currentReactiveState?.tasks]
     );
 
+    const allStreamingMessages =
+      currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
+    const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
+
+    const [textChoices, setTextChoices] = useState(() => new Map<string, boolean>());
+    const setTextChoice = useCallback((key: string, expanded: boolean) => {
+      setTextChoices((choices) => new Map(choices).set(key, expanded));
+    }, []);
+    const textChoiceContext = useMemo(
+      () => ({ choices: textChoices, setChoice: setTextChoice }),
+      [textChoices, setTextChoice]
+    );
+    const [protectedTurns, setProtectedTurns] = useState(() => new Set<string>());
+    // Lean hydration commits the ordered task page and messages atomically.
+    // Realtime events also advance lastSyncedAt before that commit. Only loading
+    // tracks initial readiness; ordinary reconnects leave it false.
+    const initialHydrationPending = !!currentReactiveState?.loading;
+    const latestTaskId = !initialHydrationPending ? tasks.at(-1)?.task_id : undefined;
+    const liveIds = tasks
+      .filter((task) => isTaskExecuting(task) || streamingMessagesByTask.has(task.task_id))
+      .map((task) => task.task_id);
+    const newlyProtected = [...liveIds, ...(latestTaskId ? [latestTaskId] : [])].filter(
+      (id) => !protectedTurns.has(id)
+    );
+    // Render-time state adjustment prevents a full-text flash/collapse. Protection
+    // is monotonic for this mount, including messages arriving late in a turn.
+    if (newlyProtected.length) setProtectedTurns(new Set([...protectedTurns, ...newlyProtected]));
+
     // Land at the bottom on panel open / session switch — but only once real
     // content is mounted. On a cold open ConversationView early-returns <Spin/>
     // (scrollRef/contentRef unmounted), so firing before tasks exist is a no-op
     // that never re-runs; gating on tasks.length>0 fires it when the container
     // mounts. handleScrollToBottom also clears the escape so the library's
     // persistent observer reliably follows lazy/streamed growth from there.
-    const hasContent = tasks.length > 0;
+    const hasContent = tasks.length > 0 && !initialHydrationPending;
     useEffect(() => {
       if (isActive && sessionId && hasContent) {
         handleScrollToBottom();
       }
     }, [isActive, sessionId, hasContent, handleScrollToBottom]);
 
-    const allStreamingMessages =
-      currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = currentReactiveState ? currentReactiveState.loading : !!sessionId;
     const error = currentReactiveState?.error || null;
     const isTerminalError = !!currentReactiveState?.terminal;
     const [isReloading, setIsReloading] = useState(false);
 
-    const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
-
-    // Track which tasks are expanded (default: last task expanded)
-    const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(() => {
-      if (tasks.length > 0) {
-        return new Set([tasks[tasks.length - 1].task_id]);
-      }
-      return new Set();
-    });
-
-    // When a new task arrives (i.e. the *last* task id changes), expand it.
-    // If the user is still at the bottom, collapse older tasks and follow the
-    // new one; if the user has scrolled away, preserve what they were reading.
-    // Following is handled by the library's persistent observer — a new last
-    // task while `isAtBottom` re-pins automatically, so we only need to manage
-    // the expand state here. We deliberately depend on `lastTaskId` rather than
-    // `tasks` so that:
-    //   1. unrelated re-renders don't fire this effect (`tasks` still gets
-    //      a new reference whenever any task patch lands — the useMemo bails
-    //      out only when the *upstream* `reactiveState.tasks` array is
-    //      identity-stable), and
-    //   2. if the user collapses the current last task, we don't immediately
-    //      re-open it — that "auto re-expand on empty" behavior fought the
-    //      user and showed up as a flicker.
-    const lastTaskId = tasks.length > 0 ? tasks[tasks.length - 1].task_id : null;
-    useEffect(() => {
-      if (!isActive || !lastTaskId) return;
-      // Read the library's SYNCHRONOUS live state, not the returned `isAtBottom`
-      // React value. The returned value lags a render and also counts
-      // "near bottom" as pinned — both would mis-classify a user who just
-      // scrolled up moments before a task arrives, collapsing the tasks they're
-      // reading. `state.escapedFromLock` is mutated synchronously the instant
-      // the user scrolls away from the bottom lock, restoring the old
-      // `userScrolledUpRef` semantics exactly.
-      const userScrolledUp = state.escapedFromLock;
-      setExpandedTaskIds((prev) => {
-        if (prev.has(lastTaskId)) return prev;
-        if (userScrolledUp) {
-          // User has scrolled away — just expand the new task, keep older ones
-          // visible so we don't disturb what they're reading.
-          const next = new Set(prev);
-          next.add(lastTaskId);
-          return next;
-        }
-        // At bottom — collapse older tasks and focus the new one.
-        return new Set([lastTaskId]);
-      });
-    }, [isActive, lastTaskId, state]);
-
-    // Handle task expand/collapse. Single stable callback shared by every
-    // TaskBlock — the callback takes `taskId` so we don't need to mint a
-    // per-task closure (which previously rebuilt on every render and broke
-    // TaskBlock's React.memo for the entire task list).
-    const handleTaskExpandChange = useCallback((taskId: string, expanded: boolean) => {
-      setExpandedTaskIds((prev) => {
-        const next = new Set(prev);
-        if (expanded) {
-          next.add(taskId);
-        } else {
-          next.delete(taskId);
-        }
-        return next;
-      });
-    }, []);
-
-    // Stable load/unload callbacks. The previous inline arrows were minted on
-    // every ConversationView render → every TaskBlock saw new `onLoadTaskMessages`
-    // / `onUnloadTaskMessages` refs → memo bailout failed for every TaskBlock,
-    // including ones whose messages weren't changing.
+    // Stable task-scoped detail loading; the transcript itself never collapses.
     const handleLoadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
@@ -363,19 +333,68 @@ export const ConversationView = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
-    const handleUnloadTaskMessages = useCallback(
-      (taskId: string) => {
-        if (!reactiveSession) return;
-        reactiveSession.unloadTaskMessages(taskId);
-      },
-      [reactiveSession]
-    );
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const olderInflight = useRef<object | null>(null);
+    const previousScrollTop = useRef(0);
+    const olderAnchor = useRef<{
+      element: HTMLElement;
+      top: number;
+      sessionId: SessionID | null;
+    } | null>(null);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: reset view-local paging ownership when the session handle changes.
+    useLayoutEffect(() => {
+      olderInflight.current = null;
+      olderAnchor.current = null;
+      previousScrollTop.current = 0;
+      setLoadingOlder(false);
+      return () => {
+        olderInflight.current = null;
+        olderAnchor.current = null;
+      };
+    }, [reactiveSession]);
+    const loadOlder = useCallback(async () => {
+      if (!reactiveSession || olderInflight.current || !currentReactiveState?.hasOlderTasks) return;
+      const viewport = scrollRef.current;
+      if (!viewport) return;
+      stopScroll();
+      const anchor = Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
+        (element) => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top
+      );
+      if (anchor)
+        olderAnchor.current = {
+          element: anchor,
+          top: anchor.getBoundingClientRect().top,
+          sessionId,
+        };
+      const request = {};
+      olderInflight.current = request;
+      setLoadingOlder(true);
+      try {
+        await reactiveSession.loadOlderTasks();
+      } catch {
+        /* Existing history stays visible; the state carries a retryable error. */
+      } finally {
+        if (olderInflight.current === request) {
+          olderInflight.current = null;
+          setLoadingOlder(false);
+        }
+      }
+    }, [reactiveSession, currentReactiveState?.hasOlderTasks, scrollRef, stopScroll, sessionId]);
+    useLayoutEffect(() => {
+      const anchor = olderAnchor.current;
+      if (!anchor || loadingOlder || !scrollRef.current) return;
+      if (anchor.sessionId === sessionId && anchor.element.isConnected) {
+        scrollRef.current.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
+        previousScrollTop.current = scrollRef.current.scrollTop;
+      }
+      olderAnchor.current = null;
+    }, [loadingOlder, scrollRef, sessionId]);
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent
     // ResizeObserver — no manual scroll listeners or streaming effect needed.
 
-    if (error) {
+    if (error && (isTerminalError || tasks.length === 0)) {
       // Deterministic escape hatch when auto-recovery (socket-reconnect resync,
       // TOKENS_REFRESHED_EVENT listener, visibility-change listener in
       // useSharedReactiveSession) didn't catch the error — e.g. the user
@@ -409,7 +428,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
       );
     }
 
-    if (loading && tasks.length === 0) {
+    if (loading && (tasks.length === 0 || initialHydrationPending)) {
       return (
         <div
           style={{
@@ -507,6 +526,16 @@ export const ConversationView = React.memo<ConversationViewProps>(
       <div
         ref={setScrollViewport}
         data-testid="conversation-scroll-container"
+        onWheel={(event) => {
+          // At the top (including an underfilled page), upward intent cannot
+          // produce a scroll event. Fetch one page; loadOlder coalesces bursts.
+          if (event.deltaY < 0 && event.currentTarget.scrollTop <= 0) void loadOlder();
+        }}
+        onScroll={(event) => {
+          const top = event.currentTarget.scrollTop;
+          if (top < previousScrollTop.current && top < 80) void loadOlder();
+          previousScrollTop.current = top;
+        }}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -514,44 +543,55 @@ export const ConversationView = React.memo<ConversationViewProps>(
           minHeight: 0,
         }}
       >
-        <div ref={contentRef}>
-          {/* Genealogy Banner */}
-          <GenealogyBanner />
+        <HistoryTextChoices.Provider value={textChoiceContext}>
+          <div ref={contentRef}>
+            {/* Genealogy Banner */}
+            <GenealogyBanner />
 
-          {/* Task-organized conversation */}
-          {tasks.map((task, taskIndex) => (
-            <TaskBlock
-              key={task.task_id}
-              task={task}
-              agentic_tool={agentic_tool}
-              sessionModel={sessionModel}
-              userById={userById}
-              currentUserId={currentUserId}
-              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
-              onExpandChange={handleTaskExpandChange}
-              sessionId={sessionId}
-              onPermissionDecision={onPermissionDecision}
-              branchName={branchName}
-              scheduledFromBranch={scheduledFromBranch}
-              scheduledRunAt={scheduledRunAt}
-              streamingMessages={streamingMessagesByTask.get(task.task_id)}
-              taskMessages={
-                currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-              }
-              taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-              onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={handleUnloadTaskMessages}
-              teammateEmoji={teammateEmoji}
-              isLatestTask={taskIndex === tasks.length - 1}
-              client={client}
-              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-              compact={compact}
-            />
-          ))}
-        </div>
+            {error && <Alert type="error" title={error} />}
+            {currentReactiveState?.hasOlderTasks && (
+              <Button loading={loadingOlder} onClick={() => void loadOlder()}>
+                Load older history
+              </Button>
+            )}
+            {/* Task-organized conversation */}
+            {tasks.map((task, taskIndex) => (
+              <TaskBlock
+                key={task.task_id}
+                task={task}
+                latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
+                agentic_tool={agentic_tool}
+                sessionModel={sessionModel}
+                userById={userById}
+                currentUserId={currentUserId}
+                sessionId={sessionId}
+                onPermissionDecision={onPermissionDecision}
+                branchName={branchName}
+                scheduledFromBranch={scheduledFromBranch}
+                scheduledRunAt={scheduledRunAt}
+                streamingMessages={streamingMessagesByTask.get(task.task_id)}
+                taskMessages={
+                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
+                }
+                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+                onLoadTaskMessages={handleLoadTaskMessages}
+                teammateEmoji={teammateEmoji}
+                isLatestTask={taskIndex === tasks.length - 1}
+                client={client}
+                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                compact={compact}
+                defaultTextExpanded={protectedTurns.has(task.task_id)}
+              />
+            ))}
+          </div>
+        </HistoryTextChoices.Provider>
       </div>
     );
   }
 );
 
+// A session switch is a new mounted conversation, including text choices and scroll ownership.
+export const ConversationView = React.memo<ConversationViewProps>((props) => (
+  <ConversationViewInner key={props.sessionId} {...props} />
+));
 ConversationView.displayName = 'ConversationView';

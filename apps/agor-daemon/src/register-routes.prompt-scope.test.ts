@@ -8,8 +8,22 @@ import { assertTaskExecutorPrincipal, resolveQueuedTaskActor } from './register-
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
 
+  it('places prompt error sanitization outside tenant admission hooks', () => {
+    const registrar = source.slice(
+      source.indexOf('const registerLongAuthenticatedRoute:'),
+      source.indexOf('// Long routes carry')
+    );
+    expect(registrar).toContain("path === '/sessions/:id/prompt'");
+    expect(registrar.indexOf('[promptDatabaseErrorAround]')).toBeLessThan(
+      registrar.indexOf('tenantIdentityAround')
+    );
+  });
+
   it('uses long-route admission and short Task repository units without a duplicate gate check', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart - 100, promptEnd);
 
@@ -26,14 +40,17 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('rechecks branch prompt RBAC inside the durable Task-admission transaction', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, promptEnd);
 
     // The check must run before the durable Task admission — otherwise a
     // 'session'-tier collaborator prompting another user's session would be
     // admitted (and run under the owner's identity/home) instead of 403'd.
-    const transaction = prompt.indexOf('runWithTenantDatabaseTransaction(');
+    const transaction = prompt.indexOf('runPromptAdmissionTransaction(');
     const authorityLock = prompt.indexOf('lockTenantAuthorizationFence(operationDb, params)');
     const rbacCheck = prompt.lastIndexOf('assertCurrentPromptAuthority(');
     const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).createPending(');
@@ -52,7 +69,10 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('restores only the explicitly prompted archived session', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, promptEnd);
 
@@ -82,7 +102,10 @@ describe('prompt and widget transaction scopes', () => {
   });
 
   it('routes prompt admission and explicit Task runs through server-owned provenance', () => {
-    const promptStart = source.indexOf("'/sessions/:id/prompt'");
+    const promptStart = source.indexOf(
+      "'/sessions/:id/prompt'",
+      source.indexOf('// Long routes carry')
+    );
     const runStart = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, runStart);
     const run = source.slice(runStart, source.indexOf("'/sessions/:id/spawn-prompt'", runStart));

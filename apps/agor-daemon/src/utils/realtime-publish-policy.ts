@@ -2,6 +2,7 @@ import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  KNOWLEDGE_TRANSFER,
   OWNERSHIP_TRANSFER_SERVICES,
   type UserRole,
 } from '@agor/core/types';
@@ -220,6 +221,10 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'kb/document-edits': { audience: 'knowledge', why: 'created is suppressed outright.' },
   'kb/indexing/reindex': { audience: 'knowledge', why: 'created is suppressed outright.' },
+  [KNOWLEDGE_TRANSFER.path]: {
+    audience: 'none',
+    why: 'Transfer replies are caller-private; imports emit through kb/documents and kb/namespaces.',
+  },
 
   // ---------------------------------------------------------------------------
   // Silent: services that already opted out with their own `.publish(() => [])`.

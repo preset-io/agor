@@ -2078,6 +2078,7 @@ function AppContent() {
   // (desktop already shows it above its app content).
   const onboardingBanners = (
     <OnboardingBanners
+      authenticationGeneration={authenticationGeneration}
       user={currentUser}
       mcpServerCount={mcpServerCount}
       gatewayChannelCount={gatewayChannelCount}

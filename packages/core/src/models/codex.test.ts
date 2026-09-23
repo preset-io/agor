@@ -21,12 +21,13 @@ describe('Codex model registry', () => {
 
     expect(selectableIds.slice(0, 4)).toEqual([
       'gpt-6-astra',
-      'gpt-5.6-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
       'gpt-5.6-terra',
-      'gpt-5.6-luna',
     ]);
-    expect(CODEX_MODEL_METADATA['gpt-6-astra'].availability).toBe('provider-dependent');
-    expect(CODEX_MODEL_REGISTRY['gpt-5.6'].replacement).toBe('gpt-5.6-sol');
+    for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'] as const) {
+      expect(CODEX_MODEL_METADATA[model].availability).toBe('provider-dependent');
+    }
     expect(selectableIds).toContain('gpt-5.5');
     expect(selectableIds).toContain('gpt-5.4-mini');
     expect(selectableIds).toContain('gpt-5.4');
@@ -53,15 +54,15 @@ describe('Codex model registry', () => {
     expect(getCodexModelLifecycle('gpt-5.4-mini-2026-01-01')).toBe(
       CODEX_MODEL_REGISTRY['gpt-5.4-mini']
     );
-    expect(getCodexModelLifecycle('gpt-5.6-luna-2026-07-09')).toBe(
-      CODEX_MODEL_REGISTRY['gpt-5.6-luna']
+    expect(getCodexModelLifecycle('gpt-6-luna-2026-09-04')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-6-luna']
     );
   });
 
   it('flags only known unsupported Agor Codex aliases', () => {
     expect(isUnsupportedAgorCodexModel('gpt-5-codex')).toBe(true);
     expect(isUnsupportedAgorCodexModel('gpt-5-codex-mini')).toBe(true);
-    expect(isUnsupportedAgorCodexModel('gpt-5.6-sol')).toBe(false);
+    expect(isUnsupportedAgorCodexModel('gpt-6-sol')).toBe(false);
     expect(isUnsupportedAgorCodexModel('internal-model-v1')).toBe(false);
   });
 
@@ -76,7 +77,9 @@ describe('Codex model registry', () => {
 
   it('accepts curated aliases and rejects unknown alias selections actionably', () => {
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-astra' })).toBeUndefined();
-    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.6-sol' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-sol' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-luna' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.6-terra' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.4' })).toBeUndefined();
 
     const error = getCodexModelSelectionError({
@@ -89,7 +92,7 @@ describe('Codex model registry', () => {
   });
 
   it('requires dated provider snapshots to use exact mode', () => {
-    const snapshot = 'gpt-5.6-sol-2026-07-09';
+    const snapshot = 'gpt-6-sol-2026-09-04';
 
     expect(getCodexModelSelectionError({ mode: 'alias', model: snapshot })).toContain(
       'mode "exact"'
@@ -100,12 +103,12 @@ describe('Codex model registry', () => {
   it('rejects non-canonical alias casing instead of persisting it unchanged', () => {
     const error = getCodexModelSelectionError({
       mode: 'alias',
-      model: 'GPT-5.6-SOL',
+      model: 'GPT-6-SOL',
     });
 
     expect(error).toContain('canonical registry casing');
-    expect(error).toContain('"gpt-5.6-sol"');
-    expect(getCodexModelSelectionError({ mode: 'exact', model: 'GPT-5.6-SOL' })).toBeUndefined();
+    expect(error).toContain('"gpt-6-sol"');
+    expect(getCodexModelSelectionError({ mode: 'exact', model: 'GPT-6-SOL' })).toBeUndefined();
   });
 
   it('allows unknown exact provider IDs but still rejects known unsupported aliases', () => {

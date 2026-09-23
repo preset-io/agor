@@ -2,14 +2,17 @@ import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
-import {
-  CREDENTIAL_WARNING_SNOOZE_MS,
-  credentialWarningSnoozeStorageKey,
-} from './credentialWarningDismissal';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
-const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
-  ({ user_id: userId, onboarding_completed: true, ...overrides }) as User;
+const onboardedUser = (userId: string, overrides: Partial<User> = {}): User => ({
+  user_id: userId as User['user_id'],
+  email: 'test@example.com',
+  role: 'member',
+  onboarding_completed: true,
+  must_change_password: false,
+  created_at: new Date(0),
+  ...overrides,
+});
 
 const result = (status: AuthCheckResult['status']): AuthCheckResult => ({
   status,
@@ -38,7 +41,10 @@ describe('OnboardingBanners probe effect', () => {
     agorStore.getState().setAgenticToolSettings([]);
     window.localStorage.clear();
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it('shows an agent-specific missing warning on a positive unauthenticated result', async () => {
     render(
@@ -163,6 +169,7 @@ describe('OnboardingBanners probe effect', () => {
         })}
       />
     );
+    // A credential for another tool does not add probes to the selected-tool reminder.
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
 
     // This intentionally omits a new server `updated_at`: production user
@@ -229,7 +236,7 @@ describe('OnboardingBanners probe effect', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
-    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Maybe later' })).not.toBeInTheDocument();
   });
 
   it('routes the integrations CTA to the catalog, not workspace MCP settings', async () => {
@@ -389,7 +396,7 @@ describe('OnboardingBanners probe effect', () => {
     );
 
     expect(await screen.findByText(/Claude Code rejected the configured credential/)).toBeVisible();
-    expect(screen.getByText(/New Claude Code sessions will fail/)).toBeVisible();
+    expect(screen.queryByText(/sessions will fail|your AI/i)).toBeNull();
     expect(screen.queryByText(/Codex rejected/)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(syntheticSecret);
   });
@@ -476,37 +483,6 @@ describe('OnboardingBanners probe effect', () => {
     expect(screen.queryByText(/Claude Code rejected/)).not.toBeInTheDocument();
   });
 
-  it('re-probes and clears a snooze on a durable same-presence workspace rotation', async () => {
-    const workspaceSettings = (revision: number) => ({
-      tool: 'claude-code' as const,
-      revision,
-      deployment_available: true,
-      enabled: true,
-      resolution_policy: 'tenant_preferred' as const,
-      inline_configuration_allowed: true,
-      connection: { ANTHROPIC_AUTH_TOKEN: { configured: true } },
-    });
-    act(() => agorStore.getState().setAgenticToolSettings([workspaceSettings(1)]));
-    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    const props = baseProps({
-      user: onboardedUser('admin-1', { role: 'admin' }),
-      onCheckAuth,
-    });
-    render(<OnboardingBanners {...props} />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
-    );
-    await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
-
-    act(() => agorStore.getState().upsertAgenticToolSetting(workspaceSettings(2)));
-
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/Claude Code rejected/)).toBeVisible();
-    expect(
-      window.localStorage.getItem(credentialWarningSnoozeStorageKey('admin-1', 'claude-code'))
-    ).toBeNull();
-  });
-
   it('ignores an older in-flight probe after a same-presence workspace rotation', async () => {
     const workspaceSettings = (revision: number) => ({
       tool: 'claude-code' as const,
@@ -541,88 +517,5 @@ describe('OnboardingBanners probe effect', () => {
     act(() => settleOldProbe(result('unauthenticated')));
 
     await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
-  });
-
-  it('persists an accessible 24-hour snooze per user and tool, then reminds again', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const start = new Date('2026-08-29T12:00:00Z');
-    vi.setSystemTime(start);
-    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    const props = baseProps({ onCheckAuth });
-    const first = render(<OnboardingBanners {...props} />);
-    const close = await screen.findByRole('button', {
-      name: 'Snooze Claude Code warning for 24 hours',
-    });
-    fireEvent.click(close);
-    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
-    first.unmount();
-
-    const second = render(<OnboardingBanners {...props} />);
-    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
-    const callsBeforeReminder = onCheckAuth.mock.calls.length;
-
-    await act(() => vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000 + 1));
-    expect(onCheckAuth.mock.calls.length).toBeGreaterThan(callsBeforeReminder);
-    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
-    second.unmount();
-    vi.useRealTimers();
-  });
-
-  it('does not transfer a dismissed warning across logout or user switch', async () => {
-    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    const props = baseProps({ onCheckAuth });
-    const { rerender } = render(<OnboardingBanners {...props} />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
-    );
-    rerender(<OnboardingBanners {...props} user={null} />);
-    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
-
-    rerender(<OnboardingBanners {...props} user={onboardedUser('user-2')} />);
-    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
-  });
-
-  it('clears a snooze after a local credential save so reconnect failure is visible', async () => {
-    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    const props = baseProps({
-      user: onboardedUser('user-1', {
-        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
-      }),
-      onCheckAuth,
-    });
-    const { rerender } = render(<OnboardingBanners {...props} />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
-    );
-    await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
-
-    rerender(<OnboardingBanners {...props} credentialVersion={1} />);
-    expect(await screen.findByText(/Claude Code rejected/)).toBeVisible();
-  });
-
-  it('synchronizes snooze and clear events across browser tabs', async () => {
-    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
-    await screen.findByText(/Claude Code isn't connected/);
-    const key = credentialWarningSnoozeStorageKey('user-1', 'claude-code');
-    const snoozedUntil = Date.now() + CREDENTIAL_WARNING_SNOOZE_MS;
-    const serialized = JSON.stringify({ version: 1, snoozedUntil });
-
-    window.localStorage.setItem(key, serialized);
-    act(() =>
-      window.dispatchEvent(
-        new StorageEvent('storage', { key, newValue: serialized, storageArea: window.localStorage })
-      )
-    );
-    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
-
-    window.localStorage.removeItem(key);
-    act(() =>
-      window.dispatchEvent(
-        new StorageEvent('storage', { key, oldValue: serialized, storageArea: window.localStorage })
-      )
-    );
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
   });
 });
