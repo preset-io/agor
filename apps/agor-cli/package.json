@@ -1,6 +1,6 @@
 {
   "name": "@agor/cli",
-  "version": "0.26.4",
+  "version": "0.26.5",
   "private": true,
   "type": "module",
   "bin": {

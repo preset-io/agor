@@ -33,6 +33,35 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.5 (2026-09-23)
+
+Release preparation covers merged changes from `v0.26.4` (`15c779d5`) through `e4a88198`: [compare changes](https://github.com/preset-io/agor/compare/v0.26.4...e4a88198ab2090c563c2a239be0cb464cd5c43ed).
+
+### Breaking
+
+- **Recorded tool counts replace the legacy counter** — API clients must replace `tool_use_count` with nullable `recorded_tool_count`; custom callback templates must replace `toolUseCount` with `recordedToolCount`. Missing counts mean unknown, not zero; use `{{#if recordedToolCount includeZero=true}}` to include a verified zero in a template. ([#2806](https://github.com/preset-io/agor/pull/2806))
+
+### Features
+
+- **Move Knowledge namespaces with a plan-first CLI** — `agor kb export` and `agor kb import` support dry runs, hash-verified incremental copying, resumable transfers, and reference reconciliation; read-only namespace and document discovery helps inspect the source and destination. Import requires `--apply` and creates a new private, caller-owned namespace rather than copying source permissions. ([#2821](https://github.com/preset-io/agor/pull/2821))
+  - The directory adapter requires Linux. Transfers cover current Markdown documents, not a full backup: history, archived documents, asset bytes, manually authored graph edges, and credentials are excluded. Export requires workspace-admin access; review imported links and content before sharing.
+- **Lighter, paged conversations** — sessions initially load the latest ten turns, with older history and recorded tool details loaded on demand. Batched transcript reads and on-demand usage accounting reduce redundant work; search covers loaded history and expanded tool details only. ([#2806](https://github.com/preset-io/agor/pull/2806), [#2808](https://github.com/preset-io/agor/pull/2808))
+- **New model choices** — adds Claude Opus 5.5, including its 1M-context choice, and GPT-6 Sol and Luna to the supported model selectors. ([#2816](https://github.com/preset-io/agor/pull/2816))
+
+### Security
+
+- **Prompt failures do not expose database details** — database errors return sanitized messages while retaining bounded operator diagnostics; completion fanout runs after prompt locks are released. ([#2807](https://github.com/preset-io/agor/pull/2807))
+- **Tenant links use verified launch routing** — generated links and HA identity-picker redirects use trusted tenant origins, including packaged runtime paths, rather than accepting unconfigured destinations. ([#2789](https://github.com/preset-io/agor/pull/2789))
+
+### Fixes
+
+- **Branch sources no longer assume an `origin` remote** — branch creation and restoration resolve source refs while preserving source provenance and remote tracking, including repositories with differently named remotes. ([#2622](https://github.com/preset-io/agor/pull/2622))
+- **Streaming tool activity stays together** — live tool activity remains in one contiguous disclosure without duplicate ownership, routine tool errors stay out of activity summaries, and AgentChain text and reasoning blocks are extracted safely. ([#2818](https://github.com/preset-io/agor/pull/2818), [#2813](https://github.com/preset-io/agor/pull/2813))
+- **Reconnects tolerate partial board data** — comments and user initials render safely while missing content or identity fields are still being rehydrated, avoiding a session-panel crash. ([#2812](https://github.com/preset-io/agor/pull/2812))
+- **Session navigation and scrolling stay stable** — repairs mobile session exit, primary-teammate navigation, and board-switcher scrolling; preserves resize guards across consecutive frames and aligns session-tree hover surfaces and collapse controls. ([#2796](https://github.com/preset-io/agor/pull/2796), [#2797](https://github.com/preset-io/agor/pull/2797), [#2793](https://github.com/preset-io/agor/pull/2793))
+- **Archived teammate descendants reconcile correctly** — confirmed archive results refresh descendant sessions without overwriting newer state, with bounded refresh work and warnings when reconciliation cannot complete. ([#2786](https://github.com/preset-io/agor/pull/2786))
+- **Credential reminders respect multiple tools and dismissals** — onboarding handles multi-tool credential states and remembers explicit opt-outs; integrations reminders retain their separate snooze behavior. ([#2628](https://github.com/preset-io/agor/pull/2628), [#2796](https://github.com/preset-io/agor/pull/2796))
+
 ## 0.26.4 (2026-09-20)
 
 ### Breaking
