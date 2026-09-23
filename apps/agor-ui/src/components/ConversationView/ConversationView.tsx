@@ -10,6 +10,7 @@
  * - Auto-scrolling to latest content
  */
 
+import { isTaskExecuting } from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
@@ -27,8 +28,8 @@ import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
+import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
-import { HistoryTextChoices } from './HistoryMarkdown';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -288,20 +289,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     );
     const [protectedTurns, setProtectedTurns] = useState(() => new Set<string>());
     // Lean hydration commits the ordered task page and messages atomically.
-    // Do not classify a partial realtime task list before that first commit.
-    const initialHydrationPending =
-      !!currentReactiveState?.loading && !currentReactiveState.lastSyncedAt;
+    // Realtime events also advance lastSyncedAt before that commit. Only loading
+    // tracks initial readiness; ordinary reconnects leave it false.
+    const initialHydrationPending = !!currentReactiveState?.loading;
     const latestTaskId = !initialHydrationPending ? tasks.at(-1)?.task_id : undefined;
     const liveIds = tasks
-      .filter(
-        (task) =>
-          task.status === TaskStatus.RUNNING ||
-          task.status === TaskStatus.STOPPING ||
-          task.status === TaskStatus.DISPATCHING ||
-          task.status === TaskStatus.AWAITING_PERMISSION ||
-          task.status === TaskStatus.AWAITING_INPUT ||
-          streamingMessagesByTask.has(task.task_id)
-      )
+      .filter((task) => isTaskExecuting(task) || streamingMessagesByTask.has(task.task_id))
       .map((task) => task.task_id);
     const newlyProtected = [...liveIds, ...(latestTaskId ? [latestTaskId] : [])].filter(
       (id) => !protectedTurns.has(id)

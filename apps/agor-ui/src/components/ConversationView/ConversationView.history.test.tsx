@@ -61,7 +61,7 @@ function message(
 ): Message {
   return {
     message_id: generateId(),
-    session_id: sessionId,
+    session_id: task.session_id,
     task_id: task.task_id,
     role,
     type: role,
@@ -120,6 +120,10 @@ describe('conversation history text defaults', () => {
   it('waits for initial ordered hydration, and collapses late older messages without changing current text', () => {
     state = { ...state, loading: true, tasks: [tasks[0]] };
     render(<ConversationView client={null} sessionId={sessionId} />);
+    expect(screen.queryByText('Message 0 line 0')).not.toBeInTheDocument();
+    // A realtime task/message event advances this timestamp before the ordered
+    // snapshot commits. It must not make the partial history render-ready.
+    update({ lastSyncedAt: '2026-09-01T00:00:01Z' });
     expect(screen.queryByText('Message 0 line 0')).not.toBeInTheDocument();
     update({
       loading: false,
@@ -202,11 +206,36 @@ describe('conversation history text defaults', () => {
   it('resets on session navigation and leaves short and single-line prose unaffected', () => {
     const view = render(<ConversationView client={null} sessionId={sessionId} />);
     fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+    const originalState = state;
     const otherId = generateId();
     view.rerender(<ConversationView client={null} sessionId={otherId} />);
     expect(tail(0)).not.toBeInTheDocument();
+    const otherTasks = tasks.slice(0, 2).map((task) => ({
+      ...task,
+      task_id: generateId(),
+      session_id: otherId,
+    }));
+    update({
+      sessionId: otherId,
+      tasks: otherTasks,
+      messagesByTask: new Map(
+        otherTasks.map((task, i) => [
+          task.task_id,
+          [message(task, 100 + i * 2, MessageRole.USER), message(task, 101 + i * 2)],
+        ])
+      ),
+    });
+    expect(screen.getByText('Message 100 line 0')).toBeInTheDocument();
+    expect(tail(100)).not.toBeInTheDocument();
+    expect(tail(102)).toBeInTheDocument();
+    expect(tail(103)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+    expect(tail(100)).toBeInTheDocument();
     view.rerender(<ConversationView client={null} sessionId={sessionId} />);
+    expect(tail(100)).not.toBeInTheDocument();
+    update(originalState);
     expect(tail(0)).not.toBeInTheDocument();
+    expect(tail(29)).toBeInTheDocument();
     const short = { ...messages.get(tasks[0].task_id)![0], content: 'Short text' };
     const prose = { ...messages.get(tasks[0].task_id)![1], content: 'Long prose '.repeat(500) };
     update({ messagesByTask: new Map([[tasks[0].task_id, [short, prose]]]) });

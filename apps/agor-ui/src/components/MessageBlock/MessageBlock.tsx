@@ -32,7 +32,6 @@ import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
-import { HistoryMarkdown } from '../ConversationView/HistoryMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
@@ -52,6 +51,7 @@ import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { HistoryMarkdown } from './HistoryMarkdown';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
