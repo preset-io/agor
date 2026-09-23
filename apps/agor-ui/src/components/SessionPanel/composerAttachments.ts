@@ -1,16 +1,11 @@
 import {
   buildUploadAttachmentPrompt,
   formatUploadBytes,
+  normalizeUploadMimeType,
+  UPLOAD_PREVIEW_IMAGE_MIME_TYPES,
   type UploadIngressPolicy,
 } from '@agor/core/types';
 import type { UploadedFile } from '../FileUpload';
-
-export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-]);
 
 const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
   ['.png', 'image/png'],
@@ -53,12 +48,8 @@ export interface ComposerFileRejection {
   reason: string;
 }
 
-function normalizeMimeType(mimeType: string): string {
-  return mimeType.split(';')[0].trim().toLowerCase();
-}
-
 function inferComposerUploadMimeType(file: File): string {
-  const normalizedMime = normalizeMimeType(file.type || '');
+  const normalizedMime = normalizeUploadMimeType(file.type);
   if (normalizedMime) return normalizedMime;
 
   const normalizedName = file.name.toLowerCase();
@@ -73,7 +64,7 @@ function inferComposerUploadMimeType(file: File): string {
 
 function normalizeComposerUploadFile(file: File): File {
   const inferredMime = inferComposerUploadMimeType(file);
-  const normalizedMime = normalizeMimeType(file.type || '');
+  const normalizedMime = normalizeUploadMimeType(file.type);
 
   if (!inferredMime || normalizedMime) return file;
 
@@ -84,7 +75,7 @@ function normalizeComposerUploadFile(file: File): File {
 }
 
 export function isPreviewableComposerImage(file: File): boolean {
-  return COMPOSER_PREVIEW_IMAGE_MIME_TYPES.has(inferComposerUploadMimeType(file));
+  return UPLOAD_PREVIEW_IMAGE_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
 export function validateComposerFileIntake(

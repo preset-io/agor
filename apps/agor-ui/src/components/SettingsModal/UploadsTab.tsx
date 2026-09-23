@@ -1,3 +1,4 @@
+import { resolveUploadServeType } from '@agor/core/types';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Empty, Popconfirm, Space, Table, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
@@ -183,15 +184,17 @@ export function UploadsTab({
             key: 'actions',
             render: (_, row) => (
               <SettingsActionGroup>
-                <Tooltip title="Preview upload">
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label={`Preview ${row.displayName}`}
-                    icon={<EyeOutlined />}
-                    onClick={() => void openBlob(row, false)}
-                  />
-                </Tooltip>
+                {resolveUploadServeType(row.mimeType).inline && (
+                  <Tooltip title="Preview upload">
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label={`Preview ${row.displayName}`}
+                      icon={<EyeOutlined />}
+                      onClick={() => void openBlob(row, false)}
+                    />
+                  </Tooltip>
+                )}
                 <Tooltip title="Download upload">
                   <Button
                     type="text"

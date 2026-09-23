@@ -67,18 +67,25 @@ export interface UploadPromptAttachment {
 export const UPLOAD_VIRTUAL_URL_PREFIX = 'https://agor.live/_uploads/';
 
 /**
- * Upload media types that may be displayed from the Agor origin. Any file type
- * may be uploaded, so the declared MIME is client-controlled: everything
- * outside this set (HTML, SVG, XML, JS, ...) is served as an opaque
- * `application/octet-stream` attachment so it can never render as active
- * content under the Agor origin (stored XSS). SVG is excluded because it can
- * carry script.
+ * Raster image types the browser may preview (thumbnails, inline display).
+ * SVG is excluded because it can carry script.
  */
-export const UPLOAD_INLINE_MIME_TYPES: ReadonlySet<string> = new Set([
+export const UPLOAD_PREVIEW_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/png',
   'image/jpeg',
   'image/gif',
   'image/webp',
+]);
+
+/**
+ * Upload media types that may be displayed from the Agor origin. Any file type
+ * may be uploaded, so the declared MIME is client-controlled: everything
+ * outside this set (HTML, SVG, XML, JS, ...) is served as an opaque
+ * `application/octet-stream` attachment so it can never render as active
+ * content under the Agor origin (stored XSS).
+ */
+export const UPLOAD_INLINE_MIME_TYPES: ReadonlySet<string> = new Set([
+  ...UPLOAD_PREVIEW_IMAGE_MIME_TYPES,
   'application/pdf',
 ]);
 
