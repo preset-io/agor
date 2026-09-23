@@ -26,11 +26,12 @@ import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/ico
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
-import { MessageBlock } from '../MessageBlock';
+import { getMessageSpeaker, MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
@@ -722,6 +723,30 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       return -1;
     }, [blocks]);
 
+    // One avatar per run of consecutive messages from the same speaker. A
+    // repeated avatar down a column of agent replies carries no information
+    // and is the transcript's loudest bit of noise; the messages after the
+    // first in a run keep gutter alignment with a spacer instead. Anything
+    // that isn't a plain speaker bubble (agent chains, SDK status notices,
+    // permission prompts) ends the run, so the next message re-introduces
+    // its speaker.
+    const groupedAvatarMessageIds = useMemo(() => {
+      const grouped = new Set<string>();
+      let previousSpeaker: ReturnType<typeof getMessageSpeaker> = null;
+      for (const block of blocks) {
+        if (block.type !== 'message' || isSdkStatusMessage(block.message)) {
+          previousSpeaker = null;
+          continue;
+        }
+        const speaker = getMessageSpeaker(block.message);
+        if (speaker !== null && speaker === previousSpeaker) {
+          grouped.add(block.message.message_id);
+        }
+        previousSpeaker = speaker;
+      }
+      return grouped;
+    }, [blocks]);
+
     const activityIsRecorded =
       !!latestActivity &&
       messages.some((message) => messageHasTool(message, latestActivity.toolUseId));
@@ -1016,6 +1041,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                 compact={compact}
                 defaultTextExpanded={defaultTextExpanded}
+                showAvatar={!groupedAvatarMessageIds.has(block.message.message_id)}
               />
             );
             return (
@@ -1118,14 +1144,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
         {runtimeLive && (
-          <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
+          <div data-conversation-block style={{ margin: `${token.marginSM}px 0` }}>
             <Bubble
               placement="start"
               avatar={
                 teammateEmoji ? (
                   <AgorAvatar>{teammateEmoji}</AgorAvatar>
                 ) : agentic_tool ? (
-                  <ToolIcon tool={agentic_tool} size={32} />
+                  <ToolIcon tool={agentic_tool} size={IDENTITY_AVATAR_SIZE} />
                 ) : (
                   <AgorAvatar
                     icon={<RobotOutlined />}
@@ -1135,7 +1161,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               }
               loading={true}
               content=""
-              variant="outlined"
+              variant="borderless"
             />
           </div>
         )}
@@ -1185,7 +1211,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       </div>
     );
     return (
-      <div data-task-block={task.task_id}>
+      // A turn boundary is the biggest break in the transcript, so it gets more
+      // room than the gaps between blocks inside one. Collapses against the
+      // neighbouring turn rather than summing with it.
+      <div data-task-block={task.task_id} style={{ marginBlockStart: token.margin }}>
         {!firstPromptId && (
           <>
             {task.full_prompt && (

@@ -19,6 +19,7 @@ import { App, ConfigProvider, Flex, theme } from 'antd';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { AgentChain } from '../AgentChain';
 import { MessageBlock } from '../MessageBlock';
 import { ContextWindowPill, ModelPill } from '../Pill';
@@ -238,7 +239,7 @@ it('keeps a long user prompt and its full-size avatar within the transcript widt
   );
   const root = container.querySelector('.ant-bubble')!;
   const avatar = root.querySelector('.ant-avatar')!;
-  expect(avatar.getBoundingClientRect().width).toBe(40);
+  expect(avatar.getBoundingClientRect().width).toBe(IDENTITY_AVATAR_SIZE);
   expect(avatar.getBoundingClientRect().right).toBeLessThanOrEqual(
     root.getBoundingClientRect().right + 1
   );
