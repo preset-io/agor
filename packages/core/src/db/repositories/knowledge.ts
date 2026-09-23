@@ -137,12 +137,17 @@ export interface KnowledgeDocumentPageOptions {
   offset: number;
   /** Feathers `$sort`; keys outside KNOWLEDGE_DOCUMENT_SORT_FIELDS are ignored. */
   sort?: Record<string, 1 | -1>;
-  /** Admins read every document, in every namespace, at any visibility. */
-  readable_as_admin: boolean;
-  readable_by_user_id?: UserID;
-  /** Namespaces the caller can read; omitted only for admins. */
-  readable_namespace_ids?: KnowledgeNamespaceID[];
+  read: KnowledgeDocumentReadScope;
 }
+
+/**
+ * Who a document list is read for. Admins read every document; everyone else
+ * must name the namespaces they can read, so omitting them cannot silently
+ * drop the namespace restriction.
+ */
+export type KnowledgeDocumentReadScope =
+  | { as_admin: true }
+  | { as_admin: false; user_id?: UserID; namespace_ids: KnowledgeNamespaceID[] };
 
 export interface CreateKnowledgeDocumentInput extends Partial<KnowledgeDocument> {
   namespace_slug?: string;
@@ -316,6 +321,32 @@ function makeSnippet(content: string | null | undefined, q: string): string | nu
   const start = Math.max(0, index - 80);
   const end = Math.min(content.length, index + needle.length + 160);
   return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`;
+}
+
+/**
+ * SQL form of `canReadKnowledgeDocument`: readable namespaces plus the
+ * visibility overlay (public, own, or admin). Returns null when nothing can be
+ * read. `namespaceIds` undefined means no namespace restriction, which callers
+ * must only pass for admins.
+ */
+function knowledgeDocumentReadConditions(options: {
+  asAdmin: boolean;
+  userId?: UserID;
+  namespaceIds?: readonly KnowledgeNamespaceID[];
+}): SQL[] | null {
+  const conditions: SQL[] = [];
+  if (options.namespaceIds) {
+    if (options.namespaceIds.length === 0) return null;
+    conditions.push(inArray(kbDocuments.namespace_id, [...options.namespaceIds]));
+  }
+  if (!options.asAdmin) {
+    conditions.push(
+      options.userId
+        ? or(eq(kbDocuments.visibility, 'public'), eq(kbDocuments.created_by, options.userId))!
+        : eq(kbDocuments.visibility, 'public')
+    );
+  }
+  return conditions;
 }
 
 function knowledgeDraftVisibilityCondition(options: {
@@ -1386,32 +1417,22 @@ export class KnowledgeDocumentRepository
   }
 
   /**
-   * One page of documents with read access, sort, LIMIT/OFFSET and the total
-   * all evaluated in SQL. `readable_namespace_ids` (null = admin, unrestricted)
-   * plus the visibility overlay mirror `canReadKnowledgeDocument`, so the
-   * database never returns rows the caller could not read.
+   * One page of documents the caller can read. Read access, sort,
+   * LIMIT/OFFSET and the total (a separate COUNT) are all evaluated in SQL, so
+   * the database never returns rows the caller could not read.
    */
   async findPage(
     filters: KnowledgeDocumentFilters,
     page: KnowledgeDocumentPageOptions
   ): Promise<{ total: number; data: KnowledgeDocument[] }> {
     const conditions = await this.documentConditions(filters);
-    if (!conditions) return { total: 0, data: [] };
-    if (page.readable_namespace_ids) {
-      if (page.readable_namespace_ids.length === 0) return { total: 0, data: [] };
-      conditions.push(inArray(kbDocuments.namespace_id, page.readable_namespace_ids));
-    }
-    if (!page.readable_as_admin) {
-      conditions.push(
-        page.readable_by_user_id
-          ? or(
-              eq(kbDocuments.visibility, 'public'),
-              eq(kbDocuments.created_by, page.readable_by_user_id)
-            )!
-          : eq(kbDocuments.visibility, 'public')
-      );
-    }
-    const where = and(...conditions);
+    const readConditions = knowledgeDocumentReadConditions(
+      page.read.as_admin
+        ? { asAdmin: true }
+        : { asAdmin: false, userId: page.read.user_id, namespaceIds: page.read.namespace_ids }
+    );
+    if (!conditions || !readConditions) return { total: 0, data: [] };
+    const where = and(...conditions, ...readConditions);
 
     const countRow = await select(this.db, { count: sql<number>`count(*)` })
       .from(kbDocuments)
@@ -1680,14 +1701,16 @@ export class KnowledgeSearchRepository {
       if (!namespaceId) return [];
     }
 
-    const conditions = [];
+    const readConditions = knowledgeDocumentReadConditions({
+      asAdmin: query.readable_as_admin === true,
+      userId: query.readable_by_user_id,
+      namespaceIds: query.readable_namespace_ids,
+    });
+    if (!readConditions) return [];
+    const conditions = [...readConditions];
     if (!query.include_archived) {
       conditions.push(eq(kbDocuments.archived, false));
       conditions.push(eq(kbNamespaces.archived, false));
-    }
-    if (query.readable_namespace_ids) {
-      if (query.readable_namespace_ids.length === 0) return [];
-      conditions.push(inArray(kbDocuments.namespace_id, query.readable_namespace_ids));
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {
@@ -1705,16 +1728,6 @@ export class KnowledgeSearchRepository {
       includeOtherUserDrafts: query.include_other_user_drafts ?? query.includeOtherUserDrafts,
     });
     if (draftCondition) conditions.push(draftCondition);
-    if (!query.readable_as_admin) {
-      conditions.push(
-        query.readable_by_user_id
-          ? or(
-              eq(kbDocuments.visibility, 'public'),
-              eq(kbDocuments.created_by, query.readable_by_user_id)
-            )!
-          : eq(kbDocuments.visibility, 'public')
-      );
-    }
 
     const needle = q.toLowerCase();
     const terms = needle

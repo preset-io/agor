@@ -97,10 +97,12 @@ const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
  *
  * `sortFields` narrows `$sort` to the columns a service can order by in SQL;
  * without it any field name is accepted (in-memory adapter sorting).
+ * `maxSkip` lifts the default offset ceiling for services that page in SQL
+ * and whose complete listings are walked page by page with `findAll()`.
  */
 export function createQuerySchema<T extends TProperties>(
   properties: TObject<T>,
-  options: { sortFields?: readonly string[] } = {}
+  options: { sortFields?: readonly string[]; maxSkip?: number } = {}
 ) {
   const sort = options.sortFields
     ? Type.Object(
@@ -115,7 +117,9 @@ export function createQuerySchema<T extends TProperties>(
       properties,
       Type.Object({
         $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_LIMIT })),
-        $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_SKIP })),
+        $skip: Type.Optional(
+          Type.Integer({ minimum: 0, maximum: options.maxSkip ?? PAGINATION.MAX_SKIP })
+        ),
         $sort: Type.Optional(sort),
         $select: Type.Optional(Type.Array(Type.String())),
       }),
@@ -488,7 +492,9 @@ export const knowledgeDocumentQuerySchema = createQuerySchema(
       Type.Union([Type.Integer({ minimum: 1 }), Type.String({ minLength: 1, maxLength: 64 })])
     ),
   }),
-  { sortFields: KNOWLEDGE_DOCUMENT_SORT_FIELDS }
+  // Page size stays bounded; the offset does not, so a findAll() walk over a
+  // large Knowledge base can continue past PAGINATION.MAX_SKIP.
+  { sortFields: KNOWLEDGE_DOCUMENT_SORT_FIELDS, maxSkip: Number.MAX_SAFE_INTEGER }
 );
 
 /**

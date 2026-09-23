@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KNOWLEDGE_DOCUMENT_PAGINATION, PAGINATION } from '../config/constants';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 import {
   boardObjectQueryValidator,
@@ -373,6 +374,18 @@ describe('knowledgeDocumentQueryValidator', () => {
         $sort: { content_text: 1, title: 1 },
       })
     ).toEqual({ $sort: { title: 1 } });
+  });
+
+  it('accepts findAll() continuation offsets past the shared skip ceiling', async () => {
+    const continuation = PAGINATION.MAX_SKIP + KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT;
+    await expect(
+      knowledgeDocumentQueryValidator({
+        $limit: String(KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT),
+        $skip: String(continuation),
+      })
+    ).resolves.toEqual({ $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT, $skip: continuation });
+    // Schemas without an override keep the shared ceiling.
+    await expect(boardQueryValidator({ $skip: continuation })).rejects.toThrow();
   });
 
   it.each([

@@ -20,6 +20,7 @@ import {
 } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
+import { ROLES } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KnowledgeDocumentsService } from './knowledge-documents.js';
 import { KnowledgeSearchService } from './knowledge-search.js';
@@ -194,6 +195,57 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         ).resolves.toEqual([]);
         await expect(search.find(params(b.user, { q: 'Assistant' }))).resolves.toEqual([]);
       });
+    });
+
+    it("pages and counts only the active tenant's documents, including for admins", async () => {
+      const tenantA = `knowledge-page-a-${generateId()}`;
+      const tenantB = `knowledge-page-b-${generateId()}`;
+      const documents = new KnowledgeDocumentsService(db);
+      const seedTenant = (tenant: string, paths: string[]) =>
+        runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+          const users = new UsersRepository(scoped);
+          const member = (await users.create({
+            email: `member-${generateId()}@${tenant}.test`,
+            name: `${tenant} member`,
+          })) as User;
+          const admin = (await users.create({
+            email: `admin-${generateId()}@${tenant}.test`,
+            name: `${tenant} admin`,
+            role: ROLES.ADMIN,
+          })) as User;
+          const namespace = await new KnowledgeNamespaceRepository(scoped).create({
+            slug: `paging-${generateId()}`,
+            display_name: 'Paging',
+            owner_user_id: member.user_id,
+            others_can: 'read',
+          });
+          const repo = new KnowledgeDocumentRepository(scoped);
+          for (const docPath of paths) {
+            await repo.create({
+              namespace_id: namespace.namespace_id,
+              path: docPath,
+              title: docPath,
+              visibility: 'public',
+              content_text: `# ${docPath}`,
+              created_by: member.user_id as UserID,
+            });
+          }
+          return { member, admin };
+        });
+      const a = await seedTenant(tenantA, ['a-1.md', 'a-2.md']);
+      await seedTenant(tenantB, ['b-1.md', 'b-2.md', 'b-3.md']);
+
+      for (const user of [a.member, a.admin]) {
+        const page = await runWithTenantDatabaseScope(db, tenantA, () =>
+          documents.find(params(user, { $limit: 1, $sort: { path: 1 } }))
+        );
+        expect(page).toMatchObject({ total: 2, limit: 1, skip: 0 });
+        expect(page.data.map((doc) => doc.path)).toEqual(['a-1.md']);
+        const all = await runWithTenantDatabaseScope(db, tenantA, () =>
+          documents.find(params(user, { $sort: { path: 1 } }))
+        );
+        expect(all.data.map((doc) => doc.path)).toEqual(['a-1.md', 'a-2.md']);
+      }
     });
 
     it('does not broaden an author lookup when a historical ID is invisible under RLS', async () => {

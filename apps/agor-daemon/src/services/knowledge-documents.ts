@@ -565,11 +565,15 @@ export class KnowledgeDocumentsService extends DrizzleService<
       limit,
       offset: skip,
       sort: query.$sort,
-      readable_as_admin: isAdmin,
-      readable_by_user_id: user?.user_id as UserID | undefined,
-      readable_namespace_ids: isAdmin
-        ? undefined
-        : await this.namespaces.findReadableNamespaceIds(String(user?.user_id ?? '')),
+      read: isAdmin
+        ? { as_admin: true }
+        : {
+            as_admin: false,
+            user_id: user?.user_id as UserID | undefined,
+            namespace_ids: await this.namespaces.findReadableNamespaceIds(
+              String(user?.user_id ?? '')
+            ),
+          },
     });
     return {
       total,
