@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0115_opencode_checkpoint_attempts',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Adds managed OpenCode checkpoint ledgers and Session/Task fields. Builds three unique indexes on existing tables without CONCURRENTLY; allow a bounded write-lock window.',
+      }),
+    },
+  ],
+  [
     '0113_session_recency_not_null',
     {
       requiresOfflineCutover: false,

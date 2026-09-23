@@ -99,6 +99,25 @@ describe('migration status introspection', () => {
     expect(sqliteMigration?.impact).toBe(postgresqlMigration?.impact);
   });
 
+  it('classifies the additive checkpoint migration in both dialects', () => {
+    for (const dialect of ['sqlite', 'postgresql'] as const) {
+      const report = introspectMigrationStatus(dialect, {
+        applied: ['0000_init'],
+        pending: ['0115_opencode_checkpoint_attempts'],
+        dbAheadOfBinary: false,
+      });
+      expect(report.pendingMigrations[0]).toMatchObject({
+        requiresOfflineCutover: false,
+        impact: {
+          classification: 'schema',
+          userAction: 'none',
+          rollbackCompatibility: 'compatible',
+        },
+      });
+      expect(report.pendingMigrations[0]?.impact.summary).toContain('without CONCURRENTLY');
+    }
+  });
+
   it('requires offline acknowledgement for the SQLite RBAC cutover on an existing database', () => {
     const report = introspectMigrationStatus('sqlite', {
       applied: ['0000_init'],

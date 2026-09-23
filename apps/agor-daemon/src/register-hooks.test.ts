@@ -1552,66 +1552,69 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     ]);
   });
 
-  it('populates getCurrentTenantId() for a claude-auth/oauth call via the registered hook', async () => {
-    type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
-    const captured: AroundHook[] = [];
-    const app = {
-      service(path: string) {
-        return {
-          hooks(hooks: { around?: { all?: AroundHook[] } }) {
-            if (path.replace(/^\//, '') === 'claude-auth/oauth') {
-              captured.push(...(hooks.around?.all ?? []));
-            }
-          },
-        };
-      },
-      use() {},
-      publish() {},
-    };
+  it.each(['claude-auth/oauth', 'opencode-native-state'])(
+    'populates getCurrentTenantId() for %s via the registered hook',
+    async (servicePath) => {
+      type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
+      const captured: AroundHook[] = [];
+      const app = {
+        service(path: string) {
+          return {
+            hooks(hooks: { around?: { all?: AroundHook[] } }) {
+              if (path.replace(/^\//, '') === servicePath) {
+                captured.push(...(hooks.around?.all ?? []));
+              }
+            },
+          };
+        },
+        use() {},
+        publish() {},
+      };
 
-    registerHooks({
-      db: {} as RegisterHooksContext['db'],
-      app: app as RegisterHooksContext['app'],
-      config: {
-        database: { dialect: 'postgresql' },
-        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-      } as RegisterHooksContext['config'],
-      jwtSecret: 'registration-test-secret',
-      requireAuth: async (context) => context,
-      superadminOpts: { allowSuperadmin: true },
-      sessionsService: {} as RegisterHooksContext['sessionsService'],
-      messagesService: {} as RegisterHooksContext['messagesService'],
-      boardsService: undefined,
-      branchRepository: {} as RegisterHooksContext['branchRepository'],
-      usersRepository: {} as RegisterHooksContext['usersRepository'],
-      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
-      deployment: { mode: 'standalone' },
-    });
+      registerHooks({
+        db: {} as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: {} as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: {} as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
 
-    // The service must actually receive an around hook — an empty capture is the
-    // exact production failure (no ambient identity), so assert it is wired.
-    expect(captured.length).toBeGreaterThan(0);
+      // The service must actually receive an around hook — an empty capture is the
+      // exact production failure (no ambient identity), so assert it is wired.
+      expect(captured.length).toBeGreaterThan(0);
 
-    const context = {
-      path: 'claude-auth/oauth',
-      method: 'create',
-      data: {},
-      params: { provider: 'rest', user: { user_id: 'registration-test-user', role: 'member' } },
-    } as HookContext;
-    // `next` runs where the service body runs; it must see the ambient tenant.
-    let tenantDuringCall: string | undefined;
-    const next = async () => {
-      tenantDuringCall = getCurrentTenantId() ?? undefined;
-    };
-    const invoke = captured.reduceRight<() => Promise<void>>(
-      (downstream, hook) => () => hook(context, downstream),
-      next
-    );
-    await invoke();
+      const context = {
+        path: servicePath,
+        method: 'create',
+        data: {},
+        params: { provider: 'rest', user: { user_id: 'registration-test-user', role: 'member' } },
+      } as HookContext;
+      // `next` runs where the service body runs; it must see the ambient tenant.
+      let tenantDuringCall: string | undefined;
+      const next = async () => {
+        tenantDuringCall = getCurrentTenantId() ?? undefined;
+      };
+      const invoke = captured.reduceRight<() => Promise<void>>(
+        (downstream, hook) => () => hook(context, downstream),
+        next
+      );
+      await invoke();
 
-    expect(context.params.tenant?.tenant_id).toBe('registration-test');
-    expect(tenantDuringCall).toBe('registration-test');
-  });
+      expect(context.params.tenant?.tenant_id).toBe('registration-test');
+      expect(tenantDuringCall).toBe('registration-test');
+    }
+  );
 
   it('keeps gateway channel provider probes outside the request transaction', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('gateway-channels');

@@ -600,6 +600,9 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'claude-auth/logout',
   'opencode-auth',
   'opencode-models',
+  // Checkpoint RPC crosses a trusted Cloud observer process boundary. Carry
+  // executor tenant identity, then open only short tenant DB units per call.
+  'opencode-native-state',
   'claude-models',
   'copilot-models',
   'cursor-models',

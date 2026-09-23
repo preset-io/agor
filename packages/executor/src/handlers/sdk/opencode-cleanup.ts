@@ -35,8 +35,10 @@ interface OpenCodeNativeStateService {
 }
 
 /**
- * A launch may issue another operation while the one worker slot is idle and
- * the short selection budget remains. Nothing is reserved ahead of dispatch.
+ * A launch issues two sequential operations even when the first delete worker
+ * is slow: one delete and its eventual recheck must not consume more than one
+ * healthy turn of cleanup capacity. Further work is bounded by time and count.
+ * Nothing is reserved ahead of dispatch.
  */
 export class OpenCodeCleanupOperation {
   private operation: Promise<void> | undefined;
@@ -75,9 +77,13 @@ export class OpenCodeCleanupOperation {
   }
 
   private async reserveAndDispatch(): Promise<void> {
-    const deadline = Date.now() + 250;
+    const deadline = Date.now() + 2_000;
     const service = this.service();
-    for (let issued = 0; issued < 4 && !this.stopped && Date.now() < deadline; issued += 1) {
+    for (
+      let issued = 0;
+      issued < 4 && !this.stopped && (issued < 2 || Date.now() < deadline);
+      issued += 1
+    ) {
       const work = await service.prepareCleanup({
         task_id: this.taskId,
         holder_instance_id: this.holderId,

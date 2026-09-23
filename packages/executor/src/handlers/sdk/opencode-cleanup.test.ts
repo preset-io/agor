@@ -37,6 +37,36 @@ function operationFor(service: object) {
 }
 
 describe('OpenCodeCleanupOperation', () => {
+  it('completes two sequential deletes even when the first worker exceeds the old 250 ms budget', async () => {
+    deleteWorker.mockReset().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { outcome: 'deleted' };
+    });
+    const service = {
+      prepareCleanup: vi
+        .fn()
+        .mockResolvedValueOnce({
+          kind: 'delete' as const,
+          object: { storeId: layout.storeId, taskId: 'due-retirement' },
+        })
+        .mockResolvedValueOnce({
+          kind: 'delete' as const,
+          object: { storeId: layout.storeId, taskId: 'due-recheck' },
+        })
+        .mockResolvedValue({ kind: 'none' as const }),
+      observe: vi.fn(),
+      acknowledgeDelete: vi.fn().mockResolvedValue(undefined),
+    };
+    const operation = operationFor(service);
+    operation.start();
+    await vi.waitFor(() => expect(service.acknowledgeDelete).toHaveBeenCalledTimes(2), {
+      timeout: 3_000,
+    });
+    await operation.stopAndDrain();
+    expect(deleteWorker).toHaveBeenCalledTimes(2);
+    expect(service.prepareCleanup.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
   it('uses an idle worker slot again within the bounded launch budget', async () => {
     deleteWorker.mockReset().mockResolvedValue({ outcome: 'deleted' });
     const third = deferred<{ kind: 'none' }>();

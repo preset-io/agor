@@ -52,6 +52,14 @@ describe('registration-time tenant scope classification', () => {
     ).not.toThrow();
   });
 
+  it('classifies task-scoped native-state RPC as identity-only', () => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('opencode-native-state');
+    expect(tenantServiceClassificationFor('opencode-native-state')?.scopeClass).toBe(
+      'identity-only'
+    );
+    expect(() => assertTenantServiceClassification(appWith('opencode-native-state'))).not.toThrow();
+  });
+
   it('admits a baselined service and the Express mounts that are not services', () => {
     expect(() =>
       assertTenantServiceClassification(appWith('repos/clone', ...NON_SERVICE_REGISTERED_PATHS))

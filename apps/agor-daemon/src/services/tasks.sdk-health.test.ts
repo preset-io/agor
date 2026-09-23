@@ -30,6 +30,7 @@ function serviceFor(current = task, observationAccepted = true) {
   service.get = vi.fn().mockResolvedValue(current);
   Object.defineProperty(service, 'taskRepo', {
     value: {
+      assertManagedExecutorHolder: vi.fn().mockResolvedValue(undefined),
       recordSdkHealthObservation: vi.fn(async (_id: string, failure: SdkFailure) =>
         observationAccepted ? { ...current, sdk_failure: failure } : null
       ),

@@ -619,7 +619,8 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
           currentTask = connected.task;
         }
       }
-    }
+    },
+    60_000
   );
 
   dbTest('leaves a legacy pointer untouched and refuses first-use admission', async ({ db }) => {

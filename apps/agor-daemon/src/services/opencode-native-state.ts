@@ -204,17 +204,25 @@ async function runObserver(
     let stdout = '';
     let settled = false;
     let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const finish = (error?: Error, value?: ObserverResponse) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (error) reject(error);
       else resolve(value!);
     };
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      const killTimer = setTimeout(() => child.kill('SIGKILL'), 250);
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        // A command wrapper may leave a descendant holding stdout open, so
+        // `close` is not guaranteed even after the shell is killed. Refuse the
+        // request at the deadline rather than hanging admission indefinitely.
+        finish(new Conflict('Trusted Cloud observer helper timed out'));
+      }, 250);
       killTimer.unref?.();
     }, timeoutMs);
     timer.unref?.();

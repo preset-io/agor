@@ -49,11 +49,8 @@ import {
   GLOBAL_TABLES,
   type TenantDeletionTable,
 } from './tenant-deletion-manifest';
-import {
-  hasOpenCodeNativeStateFilesystemEntries,
-  walkTenantFilesystemTree,
-} from './tenant-filesystem';
 import { IMPERATIVE_TENANT_TABLES, type ImperativeTenantTable } from './tenant-imperative-tables';
+import { hasTenantNativeStateFilesystemTree } from './tenant-native-state-filesystem-preflight';
 import { getCurrentTenantDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { assertTenantWriteGateGeneration } from './tenant-write-gate';
 
@@ -911,8 +908,7 @@ export async function deleteTenantData(
   // ledger/pointer check below remains authoritative for protocol-owned writes;
   // this catches orphaned/legacy native trees that have no surviving row.
   if (options.filesystemRoot) {
-    const walk = await walkTenantFilesystemTree(options.filesystemRoot);
-    if (hasOpenCodeNativeStateFilesystemEntries(walk.entries, walk.unsafeSymlinkPaths)) {
+    if (await hasTenantNativeStateFilesystemTree(options.filesystemRoot)) {
       throw new TenantNativeStateHandoffRequiredError();
     }
   }
