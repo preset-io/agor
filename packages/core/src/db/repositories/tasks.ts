@@ -203,6 +203,7 @@ export interface TerminationClaimInput {
   cause: TerminationCause;
   errorMessage: string;
   sdkFailure?: SdkFailure;
+  holderInstanceId?: string;
   expectedStatus?: Task['status'];
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
@@ -1738,6 +1739,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async claimTermination(input: TerminationClaimInput): Promise<TerminationClaimResult> {
     return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
       const current = this.rowToTask(row);
+      if (input.cause === 'sdk_health_failure' && row.data.managed_opencode_protocol === 3) {
+        await this.requireManagedOpenCodeHolder(txDb, row, input.holderInstanceId);
+      }
       if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
 
       const staleBefore = input.heartbeatStaleBefore

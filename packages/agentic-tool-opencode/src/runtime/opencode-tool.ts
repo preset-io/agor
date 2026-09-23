@@ -690,6 +690,10 @@ export class OpenCodeTool {
     const preliminarySanitizer = createOpenCodeSanitizer([
       input.mcpToken ?? '',
       input.dataHome ?? '',
+      input.managed?.nativeState.homeDir ?? '',
+      input.managed?.nativeState.attemptsDir ?? '',
+      input.managed?.nativeState.scratchRoot ?? '',
+      input.managed?.nativeState.liveDbPath ?? '',
       ...(input.managed?.authSecrets ?? []),
     ]);
     let resolvedInvocationConfig: OpenCodeInvocationConfig;
@@ -727,6 +731,10 @@ export class OpenCodeTool {
             configContent,
             invocationConfig,
             ...(input.managed?.authSecrets ?? []),
+            input.managed?.nativeState.homeDir ?? '',
+            input.managed?.nativeState.attemptsDir ?? '',
+            input.managed?.nativeState.scratchRoot ?? '',
+            input.managed?.nativeState.liveDbPath ?? '',
           ],
         },
         {

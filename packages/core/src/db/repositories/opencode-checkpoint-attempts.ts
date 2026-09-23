@@ -11,7 +11,10 @@ import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { and, asc, eq, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCoordinatedOpenCodeNativeStateAttempt } from '../../types/opencode-native-state.js';
-import { lockSessionBranchForAdmission } from '../branch-admission';
+import {
+  lockSessionBranchForAdmission,
+  lockSessionBranchForExistingWork,
+} from '../branch-admission';
 import type { Database } from '../client';
 import {
   insert,
@@ -748,7 +751,7 @@ export class OpenCodeCheckpointAttemptRepository {
     await runDatabaseTransaction(
       this.db,
       async (tx) => {
-        await lockSessionBranchForAdmission(tx, route.session_id);
+        await lockSessionBranchForExistingWork(tx, route.session_id);
         await lockRowForUpdate(tx, this.db, sessions, eq(sessions.session_id, route.session_id));
         const session = await select(tx)
           .from(sessions)
@@ -854,7 +857,7 @@ export class OpenCodeCheckpointAttemptRepository {
     await runDatabaseTransaction(
       this.db,
       async (tx) => {
-        await lockSessionBranchForAdmission(tx, route.session_id);
+        await lockSessionBranchForExistingWork(tx, route.session_id);
         await lockRowForUpdate(tx, this.db, sessions, eq(sessions.session_id, route.session_id));
         const session = await select(tx)
           .from(sessions)
@@ -910,7 +913,9 @@ export class OpenCodeCheckpointAttemptRepository {
               // Recheck an acknowledged absence once, not on every healthy
               // launch forever. The irreversible tombstone remains in the ledger.
               delete_retry_at: lockedTarget.delete_observed_at
-                ? null
+                ? lockedTarget.delete_retry_at && lockedTarget.delete_retry_at <= now
+                  ? null
+                  : lockedTarget.delete_retry_at
                 : new Date(now.getTime() + 24 * 60 * 60 * 1_000),
               delete_last_error: null,
               updated_at: now,
@@ -972,7 +977,7 @@ export class OpenCodeCheckpointAttemptRepository {
     await runDatabaseTransaction(
       this.db,
       async (tx) => {
-        await lockSessionBranchForAdmission(tx, route.session_id);
+        await lockSessionBranchForExistingWork(tx, route.session_id);
         await lockRowForUpdate(tx, this.db, sessions, eq(sessions.session_id, route.session_id));
         await lockRowForUpdate(tx, this.db, tasks, eq(tasks.task_id, taskId));
         const task = await select(tx).from(tasks).where(eq(tasks.task_id, taskId)).one();

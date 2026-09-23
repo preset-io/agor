@@ -223,6 +223,7 @@ async function copyOpenedFile(
   const hash = createHash('sha256');
   let bytes = 0;
   let copyFailure: unknown;
+  let streamsFinished = false;
   const digestTransform = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       hash.update(chunk);
@@ -236,11 +237,14 @@ async function copyOpenedFile(
       digestTransform,
       createWriteStream(temp, { fd: destination.fd, autoClose: false })
     );
+    streamsFinished = true;
     await destination.sync();
   } catch (error) {
     copyFailure = error;
   } finally {
-    await Promise.allSettled([source.close(), destination.close()]);
+    // A failed pipeline destroys its streams, which close their raw fds even
+    // with autoClose:false. Closing FileHandles again can hit a reused fd.
+    if (streamsFinished) await Promise.allSettled([source.close(), destination.close()]);
   }
   if (copyFailure) {
     await unlink(temp).catch(() => undefined);
@@ -351,17 +355,20 @@ export async function restoreOpenCodeAcceptedState(
   let actual: { digest: string; bytes: number } | undefined;
   try {
     const handle = await openRegularFile(source);
+    const hash = createHash('sha256');
+    let bytes = 0;
+    let readFinished = false;
     try {
-      const hash = createHash('sha256');
-      let bytes = 0;
       for await (const chunk of createReadStream(source, { fd: handle.fd, autoClose: false })) {
         hash.update(chunk as Buffer);
         bytes += (chunk as Buffer).length;
       }
-      actual = { digest: `sha256:${hash.digest('hex')}`, bytes };
+      readFinished = true;
     } finally {
-      await handle.close();
+      // On read failure the iterator destroys/closes its stream fd.
+      if (readFinished) await handle.close();
     }
+    actual = { digest: `sha256:${hash.digest('hex')}`, bytes };
   } catch {
     actual = undefined;
   }
@@ -529,6 +536,9 @@ export async function deleteRetiredOpenCodeAttempt(
     );
   }
   const directory = join(layout.attemptsDir, object.taskId);
+  // Absence of HOME/store/attempts is not proof the retired leaf is gone: a
+  // transiently unavailable mount must remain retryable, never acknowledged.
+  await ensureSafeDirectory(layout.attemptsDir, false);
   try {
     await ensureSafeDirectory(directory, false);
   } catch (error) {
@@ -615,6 +625,7 @@ async function main() {
   if (!v || Object.keys(v).length !== 5 || !UUID.test(v.sessionId) || !UUID.test(v.storeId) || !UUID.test(v.taskId) || !/^[0-9a-f]{64}$/.test(v.namespaceKey) || !path.isAbsolute(v.homeDir)) throw new Error('identity');
   const attempts = path.join(v.homeDir,'.local','share','agor','opencode',v.namespaceKey,'sessions',v.sessionId,'stores',v.storeId,'attempts');
   const dir = path.join(attempts,v.taskId);
+  try { await safeDir(attempts); } catch (e) { if (e && e.code === 'ENOENT') throw new Error('ancestor'); throw e; }
   try { await safeDir(dir); } catch (e) { if (e && e.code === 'ENOENT') { process.stdout.write(JSON.stringify({version:1,outcome:'deleted'})); return; } throw e; }
   const names = await fs.readdir(dir);
   const allowed = new Set(['opencode.db','manifest.json']);
@@ -640,7 +651,7 @@ async function main() {
   await fsyncDir(dir); await fs.rmdir(dir); await fsyncDir(attempts);
   process.stdout.write(JSON.stringify({version:1,outcome:'deleted'}));
 }
-main().catch(e => fail(e && e.message === 'unknown' ? 'UNKNOWN_ENTRY' : e && e.message === 'unsafe' ? 'UNSAFE_PATH' : e && e.message === 'identity' ? 'INVALID_IDENTITY' : 'FILESYSTEM_ERROR'));
+main().catch(e => fail(e && e.message === 'unknown' ? 'UNKNOWN_ENTRY' : e && e.message === 'unsafe' ? 'UNSAFE_PATH' : e && e.message === 'identity' ? 'INVALID_IDENTITY' : e && e.message === 'ancestor' ? 'ANCESTOR_MISSING' : 'FILESYSTEM_ERROR'));
 `;
 
 /**

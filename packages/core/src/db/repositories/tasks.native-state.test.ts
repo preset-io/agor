@@ -121,6 +121,37 @@ async function attemptFor(
 }
 
 describe('TaskRepository.completeWithNativeStatePublication', () => {
+  dbTest(
+    'fences an SDK-health termination claim with the holder inside its write',
+    async ({ db }) => {
+      const sessionId = await createSession(db);
+      const task = await runningTask(db, sessionId);
+      const { holderId } = await attemptFor(db, task, sessionId);
+      const taskRepo = new TaskRepository(db);
+      await expect(
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'sdk_health_failure',
+          errorMessage: 'stalled',
+        })
+      ).rejects.toThrow(/holder/);
+      await expect(
+        taskRepo.claimTermination({
+          taskId: task.task_id,
+          cause: 'sdk_health_failure',
+          errorMessage: 'stalled',
+          holderInstanceId: generateId(),
+        })
+      ).rejects.toThrow(/holder/);
+      const claim = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'sdk_health_failure',
+        errorMessage: 'stalled',
+        holderInstanceId: holderId,
+      });
+      expect(claim).toMatchObject({ outcome: 'claimed', task: { status: TaskStatus.STOPPING } });
+    }
+  );
   dbTest('publishes the pointer and native session id together with completion', async ({ db }) => {
     const sessionId = await createSession(db);
     const task = await runningTask(db, sessionId);

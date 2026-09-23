@@ -505,4 +505,14 @@ describe('OpenCodeTool managed projection', () => {
     expect(publishOpenCodeCheckpoint).not.toHaveBeenCalled();
     expect(persistOpenCodeSessionId).not.toHaveBeenCalled();
   });
+
+  it('redacts managed checkpoint paths from a failed publication', async () => {
+    const { publishOpenCodeCheckpoint } = await import('./native-state.js');
+    vi.mocked(publishOpenCodeCheckpoint).mockRejectedValueOnce(
+      new Error("EEXIST: mkdir '/home/user/attempts/private-task'")
+    );
+    const { run } = await managedTurn('completes');
+    await expect(run).rejects.toThrow(/\[REDACTED\]/);
+    await expect(run).rejects.not.toThrow(/\/home\/user\/attempts/);
+  });
 });

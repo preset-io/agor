@@ -53,8 +53,6 @@ CREATE UNIQUE INDEX "opencode_checkpoint_attempts_session_no_unique" ON "opencod
 --> statement-breakpoint
 CREATE INDEX "opencode_checkpoint_attempts_tenant_idx" ON "opencode_checkpoint_attempts" ("tenant_id");
 --> statement-breakpoint
-CREATE INDEX "opencode_checkpoint_attempts_session_order_idx" ON "opencode_checkpoint_attempts" ("tenant_id", "session_id", "attempt_no");
---> statement-breakpoint
 CREATE INDEX "opencode_checkpoint_attempts_live_input_idx" ON "opencode_checkpoint_attempts" ("tenant_id", "session_id", "input_store_id", "input_task_id") WHERE "input_task_id" IS NOT NULL AND "input_read_closed_at" IS NULL;
 --> statement-breakpoint
 CREATE INDEX "opencode_checkpoint_attempts_retirement_retry_idx" ON "opencode_checkpoint_attempts" ("tenant_id", "session_id", "retired_at", "delete_retry_at");

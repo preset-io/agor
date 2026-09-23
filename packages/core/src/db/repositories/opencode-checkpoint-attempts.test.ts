@@ -5,7 +5,7 @@ import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
-import { opencodeCheckpointAttempts, sessions, tasks as taskRows } from '../schema';
+import { branches, opencodeCheckpointAttempts, sessions, tasks as taskRows } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { dbTest, ensureTestUser } from '../test-helpers';
 import { BranchMaintenanceRepository } from './branch-maintenance';
@@ -112,6 +112,48 @@ function manifest(taskId: string, storeId: string) {
 }
 
 describe('OpenCodeCheckpointAttemptRepository', () => {
+  dbTest('allows an admitted holder to abandon during Branch maintenance', async ({ db }) => {
+    const { ownerId, sessionId, task } = await newTask(db);
+    const attempts = new OpenCodeCheckpointAttemptRepository(db);
+    const storeId = generateId();
+    const holderId = generateId();
+    await attempts.begin({
+      taskId: task.task_id,
+      holderInstanceId: holderId,
+      storeId,
+      binding: binding(sessionId, task.task_id, storeId, holderId, ownerId),
+    });
+    const route = await select(db, { branch_id: sessions.branch_id })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    if (!route) throw new Error('Session missing');
+    const branch = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, route.branch_id))
+      .one();
+    if (!branch) throw new Error('Branch missing');
+    await update(db, branches)
+      .set({
+        data: {
+          ...branch.data,
+          maintenance: {
+            branch_id: route.branch_id,
+            operation_id: generateId(),
+            generation: 1,
+            kind: 'cleanup',
+          },
+        },
+      })
+      .where(eq(branches.branch_id, route.branch_id))
+      .run();
+    await expect(attempts.abandon(task.task_id, holderId)).resolves.toBeUndefined();
+    const row = await select(db)
+      .from(opencodeCheckpointAttempts)
+      .where(eq(opencodeCheckpointAttempts.task_id, task.task_id))
+      .one();
+    expect(row?.write_state).toBe('abandoned');
+  });
   dbTest(
     'serializes concurrent distinct holders before either receives a grant',
     async ({ db }) => {
@@ -505,6 +547,20 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         .one();
       expect(saved?.retired_at).not.toBeNull();
       expect(saved?.delete_observed_at).toEqual(new Date(now.getTime() + 2_000));
+      expect(saved?.delete_retry_at).toEqual(
+        new Date(now.getTime() + 24 * 60 * 60 * 1_000 + 2_000)
+      );
+      await attempts.acknowledgeDelete(
+        collector.task_id,
+        collectorHolder,
+        tombstone.object,
+        { outcome: 'deleted' },
+        new Date(now.getTime() + 2_001)
+      );
+      saved = await select(db)
+        .from(opencodeCheckpointAttempts)
+        .where(eq(opencodeCheckpointAttempts.task_id, firstTask.task_id))
+        .one();
       expect(saved?.delete_retry_at).toEqual(
         new Date(now.getTime() + 24 * 60 * 60 * 1_000 + 2_000)
       );

@@ -31,12 +31,27 @@ export function assertBranchActivityAllowed(branch: typeof branches.$inferSelect
 
 /** Resolve membership before taking the Branch lock; never lock Session first. */
 export async function lockSessionBranchForAdmission(db: Database, sessionId: string) {
+  return lockSessionBranch(db, sessionId, true);
+}
+
+/** Closure of already-admitted work must remain possible during maintenance/deletion. */
+export async function lockSessionBranchForExistingWork(db: Database, sessionId: string) {
+  return lockSessionBranch(db, sessionId, false);
+}
+
+async function lockSessionBranch(db: Database, sessionId: string, requireActivity: boolean) {
   const session = await select(db, { branch_id: sessions.branch_id })
     .from(sessions)
     .where(eq(sessions.session_id, sessionId))
     .one();
   if (!session) throw new EntityNotFoundError('Session', sessionId);
-  const branch = await lockBranchForAdmission(db, session.branch_id);
+  await lockRowForUpdate(db, db, branches, eq(branches.branch_id, session.branch_id));
+  const branch = await select(db)
+    .from(branches)
+    .where(eq(branches.branch_id, session.branch_id))
+    .one();
+  if (!branch) throw new EntityNotFoundError('Branch', session.branch_id);
+  if (requireActivity) assertBranchActivityAllowed(branch);
   await lockRowForUpdate(db, db, sessions, eq(sessions.session_id, sessionId));
   const current = await select(db, { branch_id: sessions.branch_id })
     .from(sessions)

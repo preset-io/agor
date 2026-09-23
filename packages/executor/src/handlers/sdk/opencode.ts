@@ -294,6 +294,19 @@ export async function executeOpenCodeTask(params: {
 
     const assistantMessageId = generateId() as MessageID;
     const permissionLocks = new Map<SessionID, Promise<void>>();
+    const permissionTasksService = committedGrant
+      ? {
+          get: (id: string) => repos.tasksService.get(id),
+          patch: (id: string, data: Partial<import('@agor/core/types').Task>) => {
+            if (id !== taskId) throw new Error('Permission patch is not scoped to this task');
+            return repos.tasksService.patch(id, {
+              ...data,
+              native_state_holder_instance_id: committedGrant.attempt.holder_instance_id,
+            } as Partial<import('@agor/core/types').Task>);
+          },
+          emit: (event: string, data: unknown) => repos.tasksService.emit(event, data),
+        }
+      : repos.tasksService;
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
         const reporter = collectWithheldMcpServers();
@@ -325,7 +338,7 @@ export async function executeOpenCodeTask(params: {
       createPermissionCallback: (targetSessionId, targetTaskId) =>
         createCanUseToolCallback(targetSessionId, targetTaskId, {
           permissionService,
-          tasksService: repos.tasksService,
+          tasksService: permissionTasksService,
           messagesRepo: repos.messages,
           messagesService: repos.messagesService,
           sessionsService: repos.sessionsService,
@@ -399,7 +412,7 @@ export async function executeOpenCodeTask(params: {
       managedIoSettled = true;
       // A short healthy turn still gives cleanup its bounded per-launch budget.
       // Do not leave a committed delete worker behind task completion.
-      await cleanupOperation?.finishAndDrain();
+      await cleanupOperation?.finishWithin(2_000);
       if (params.abortController.signal.aborted) return;
     }
 

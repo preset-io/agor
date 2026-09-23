@@ -155,6 +155,22 @@ describe('SessionRepository row mapping', () => {
 // ============================================================================
 
 describe('SessionRepository.create', () => {
+  dbTest('rejects server-owned native state on direct repository creation', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    for (const key of [
+      'sdk_native_state',
+      'sdk_native_state_store_id',
+      'opencode_cleanup_cursor',
+    ]) {
+      await expect(
+        repo.create({
+          ...createSessionData({ branch_id: branch.branch_id }),
+          [key]: { version: 3 },
+        } as never)
+      ).rejects.toThrow(/server-managed/);
+    }
+  });
   dbTest('should create session with all fields', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

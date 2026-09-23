@@ -70,9 +70,21 @@ export class OpenCodeCleanupOperation {
     await this.operation;
   }
 
-  /** Let a healthy launch finish its bounded budget before sealing the turn. */
-  async finishAndDrain(): Promise<void> {
-    await this.operation;
+  /** Give healthy cleanup a bounded opportunity without delaying provider completion forever. */
+  async finishWithin(budgetMs: number): Promise<void> {
+    if (!this.operation) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.operation,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, budgetMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     this.stopScheduling();
   }
 

@@ -1879,11 +1879,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
-    await (
-      this.taskRepo as unknown as {
-        assertManagedExecutorHolder(taskId: string, holderId?: string): Promise<void>;
-      }
-    ).assertManagedExecutorHolder(data.task_id, holderInstanceId);
     const session = await this.app.service('sessions').get(current.session_id, params);
     const failure: SdkFailure = {
       reason: data.reason,
@@ -1927,6 +1922,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params,
       signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
       sdkFailure: failure,
+      holderInstanceId,
       runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
     });
   }

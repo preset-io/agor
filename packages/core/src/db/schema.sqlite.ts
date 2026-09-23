@@ -508,11 +508,6 @@ export const opencodeCheckpointAttempts = sqliteTable(
       table.session_id,
       table.attempt_no
     ),
-    sessionAttemptOrderIdx: index('opencode_checkpoint_attempts_session_order_idx').on(
-      table.tenant_id,
-      table.session_id,
-      table.attempt_no
-    ),
     liveInputIdx: index('opencode_checkpoint_attempts_live_input_idx')
       .on(table.tenant_id, table.session_id, table.input_store_id, table.input_task_id)
       .where(sql`${table.input_task_id} IS NOT NULL AND ${table.input_read_closed_at} IS NULL`),

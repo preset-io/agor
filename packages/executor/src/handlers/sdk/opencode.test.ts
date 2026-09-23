@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   runTurn: vi.fn(),
   createUserMessage: vi.fn(),
   messagesCreate: vi.fn(),
+  messagesPatch: vi.fn(),
   taskMessagesFind: vi.fn(),
   nextMessageIndex: vi.fn(),
   branchFind: vi.fn(),
@@ -12,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   openCodeConstructor: vi.fn(),
   getMcpServersForSession: vi.fn(),
   tasksGet: vi.fn(),
+  tasksPatch: vi.fn(),
   sessionsGet: vi.fn(),
+  sessionsPatch: vi.fn(),
 }));
 
 vi.mock('@agor/core/mcp', async (importOriginal) => ({
@@ -73,17 +76,25 @@ vi.mock('../../db/feathers-repositories.js', () => ({
       findInitialUserMessagesByTaskId: mocks.taskMessagesFind,
       getNextIndexBySessionId: mocks.nextMessageIndex,
     },
-    messagesService: { create: mocks.messagesCreate },
+    messagesService: { create: mocks.messagesCreate, patch: mocks.messagesPatch },
     sessionMCP: {},
     mcpServers: {},
     mcpOAuthAuthHeaders: {},
-    tasksService: { get: mocks.tasksGet },
-    sessionsService: { get: mocks.sessionsGet },
+    tasksService: {
+      get: mocks.tasksGet,
+      patch: mocks.tasksPatch,
+      emit: vi.fn(),
+    },
+    sessionsService: { get: mocks.sessionsGet, patch: mocks.sessionsPatch },
   }),
 }));
 
 vi.mock('../../permissions/permission-service.js', () => ({
-  PermissionService: class {},
+  PermissionService: class {
+    emitRequest = vi.fn();
+    waitForDecision = vi.fn(async () => ({ allow: true, timedOut: false, remember: false }));
+    cancelPendingRequests = vi.fn();
+  },
 }));
 
 vi.mock('../../permissions/permission-manager.js', () => ({
@@ -124,6 +135,7 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
     messages: {
       find: vi.fn(async () => ({ total: 0, limit: 1, skip: 0, data: [] })),
       create: vi.fn(async () => ({})),
+      patch: vi.fn(async () => ({})),
     },
     'config/resolve-api-key': {
       create: vi.fn(async () => ({
@@ -373,6 +385,53 @@ describe('OpenCode executor adapter', () => {
 });
 
 describe('OpenCode executor adapter (hosted managed projection)', () => {
+  it('keeps permission status patches bound to the admitted holder', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.nextMessageIndex.mockResolvedValue(2);
+    mocks.tasksPatch.mockImplementation(async (_id, data) => {
+      if (data.native_state_holder_instance_id !== managedAdmission.attempt.holder_instance_id) {
+        throw new Error('Managed OpenCode lifecycle requires an admitted holder');
+      }
+      return {};
+    });
+    mocks.runTurn.mockImplementationOnce(async () => {
+      const options = mocks.openCodeConstructor.mock.calls[0][0] as {
+        createPermissionCallback: (
+          sessionId: string,
+          taskId: string
+        ) => (
+          tool: string,
+          input: Record<string, unknown>,
+          options: { signal: AbortSignal }
+        ) => Promise<{ behavior: string }>;
+      };
+      const decision = await options.createPermissionCallback(sessionId, taskId)(
+        'Bash',
+        { command: 'true' },
+        { signal: new AbortController().signal }
+      );
+      expect(decision.behavior).toBe('allow');
+      return {
+        nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+        finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      };
+    });
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+    expect(mocks.tasksPatch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({
+        status: 'awaiting_permission',
+        native_state_holder_instance_id: managedAdmission.attempt.holder_instance_id,
+      })
+    );
+    expect(mocks.tasksPatch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({
+        status: 'running',
+        native_state_holder_instance_id: managedAdmission.attempt.holder_instance_id,
+      })
+    );
+  });
   it('has no managed side effects without a committed outer-executor grant', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
 
@@ -478,6 +537,44 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       taskId,
       expect.objectContaining({ status: 'completed' })
     );
+  });
+
+  it('publishes a finished turn after the cleanup budget but keeps the worker fenced until drain', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    let finishObservation!: () => void;
+    const observation = new Promise<void>((resolve) => {
+      finishObservation = resolve;
+    });
+    state.services['opencode-native-state'].prepareCleanup.mockResolvedValue({
+      kind: 'observe',
+      attemptId: 'stalled-observation',
+    });
+    state.services['opencode-native-state'].observe.mockReturnValueOnce(observation);
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    let returned = false;
+    const turn = execute(state.value, new AbortController(), managedContext, managedAdmission).then(
+      () => {
+        returned = true;
+      }
+    );
+    await vi.waitFor(() =>
+      expect(state.services['opencode-native-state'].observe).toHaveBeenCalledOnce()
+    );
+    await vi.waitFor(
+      () =>
+        expect(state.services.tasks.patch).toHaveBeenCalledWith(
+          taskId,
+          expect.objectContaining({ status: 'completed' })
+        ),
+      { timeout: 3_500 }
+    );
+    expect(returned).toBe(false);
+    finishObservation();
+    await turn;
+    expect(state.services['opencode-native-state'].prepareCleanup).toHaveBeenCalledOnce();
   });
 
   it('waits for a committed cleanup operation on Stop without completing the task', async () => {

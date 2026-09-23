@@ -223,6 +223,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * Convert Session to database insert format
    */
   private sessionToInsert(session: Partial<Session>): SessionInsert {
+    for (const key of [
+      'sdk_native_state',
+      'sdk_native_state_store_id',
+      'opencode_cleanup_cursor',
+    ] as const) {
+      if (Object.hasOwn(session, key))
+        throw new RepositoryError(`Session ${key} is server-managed`);
+    }
     const now = Date.now();
     const createdAt = new Date(session.created_at ?? now);
     const sessionId = session.session_id ?? generateId();
@@ -266,9 +274,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       data: {
         agentic_tool_version: session.agentic_tool_version,
         ...(session.sdk_session_id !== undefined ? { sdk_session_id: session.sdk_session_id } : {}),
-        ...(session.sdk_native_state !== undefined
-          ? { sdk_native_state: session.sdk_native_state }
-          : {}),
         mcp_token: session.mcp_token, // MCP authentication token for Agor self-access
         title: session.title,
         description: session.description,

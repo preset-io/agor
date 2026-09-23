@@ -1,4 +1,4 @@
-import { link, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -246,6 +246,7 @@ describe('OpenCode hosted native state', () => {
   it('treats an already-absent exact tombstone as an idempotent worker deletion', async () => {
     const layout = layoutFor(TASK_A);
     await prepareOpenCodeScratch(layout);
+    await mkdir(layout.attemptsDir, { recursive: true });
 
     await expect(
       deleteRetiredOpenCodeAttemptInWorker(layout, {
@@ -253,6 +254,16 @@ describe('OpenCode hosted native state', () => {
         taskId: TASK_A,
       })
     ).resolves.toEqual({ outcome: 'deleted' });
+  });
+
+  it('never acknowledges a missing HOME or ancestor as deletion proof', async () => {
+    const layout = layoutFor(TASK_A);
+    await expect(
+      deleteRetiredOpenCodeAttempt(layout, { storeId: STORE, taskId: TASK_A })
+    ).rejects.toThrow();
+    await expect(
+      deleteRetiredOpenCodeAttemptInWorker(layout, { storeId: STORE, taskId: TASK_A })
+    ).resolves.toEqual({ outcome: 'failed', errorCode: 'ANCESTOR_MISSING' });
   });
 
   it('refuses symlink and hardlinked accepted payloads', async () => {
