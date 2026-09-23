@@ -879,6 +879,7 @@ export async function handleGitBranchAdd(
   let client: AgorClient | null = null;
   let materializationWritesSettled = false;
   let localHome = false;
+  let filesystemRecovery = false;
 
   try {
     // Connect to daemon
@@ -897,6 +898,17 @@ export async function handleGitBranchAdd(
       throw new Error('Branch materialization is not admitted');
     if (branchRecord.repo_id !== payload.params.repoId) {
       throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
+    }
+
+    // Recovery policy comes from the tenant-scoped, authorized row, not the
+    // caller's restoreMode hint. The admission check above binds this intent to
+    // the current provisioning attempt; ordinary remote restore stays unchanged.
+    filesystemRecovery = branchRecord.provisioning_operation === 'restore';
+    if (
+      filesystemRecovery &&
+      (!payload.params.restoreMode || !payload.params.provisioningAttemptId)
+    ) {
+      throw new Error('Filesystem recovery requires its admitted restore attempt');
     }
 
     // Fetch per-user git credentials via Feathers RPC
@@ -927,7 +939,9 @@ export async function handleGitBranchAdd(
       );
     }
     localHome = getTeammateConfig(branchRecord)?.localHome === true;
-    const existingRestore = restoreMode ? await validateExistingRestore(branchRecord, repo) : false;
+    const existingRestore = filesystemRecovery
+      ? await validateExistingRestore(branchRecord, repo)
+      : false;
     if (
       localHome &&
       !existingRestore &&
@@ -1114,7 +1128,8 @@ export async function handleGitBranchAdd(
         env,
         baseRemoteUrl,
         refType || 'branch',
-        remoteUrl
+        remoteUrl,
+        filesystemRecovery
       );
       if (!result.success) {
         throw new Error(`restoreBranchFilesystem failed: ${result.error}`);
@@ -1213,6 +1228,7 @@ export async function handleGitBranchAdd(
       fallbackPath &&
       !materializationWritesSettled &&
       !localHome &&
+      !filesystemRecovery &&
       !payload.params.restoreMode
     ) {
       // Step 1: Ensure directory exists

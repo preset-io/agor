@@ -385,7 +385,11 @@ are not proof that the workspace is usable.
 The executor validates existing Git refs and repository linkage before readiness.
 For a missing worktree, a retained local branch is reattached at its exact SHA,
 including local-only and unpushed commits. Remote/base reconstruction is used only
-when no local branch is retained. Clone recovery requires an actual local `.git`
+when no local branch is retained. This preservation policy is tied to the admitted
+filesystem-recovery attempt, not a caller-supplied Git option. Ordinary remote
+restore still fast-forwards behind local refs and refuses ahead or diverged refs.
+If a local ref appears during reconstruction, recovery refuses to replace it;
+retry after inspecting the retained history. Clone recovery requires an actual local `.git`
 directory; symlinks and separate Git directories are not adopted.
 Broken or foreign linkage fails without overwriting files. Local teammate homes
 are personal directories and need not have Git metadata; missing or empty homes

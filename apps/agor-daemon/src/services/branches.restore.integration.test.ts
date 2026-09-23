@@ -60,9 +60,14 @@ for (const scenario of [
   'active-rollback',
   'interrupted',
   'deleted-git',
+  'retained-ahead',
+  'missing-retained-ahead',
+  'missing-retained-local',
   'clone',
   'foreign-origin',
   'invalid-link',
+  'invalid-backlink',
+  'foreign-owner',
   'missing-git',
   'wrong-ref',
   'local-home',
@@ -82,7 +87,22 @@ for (const scenario of [
     await git.add('.');
     await git.commit('fixture');
     await git.raw(['worktree', 'add', '-b', 'home', path]);
+    const retained = scenario.includes('retained');
+    let remote: string | undefined;
+    if (scenario.endsWith('ahead')) {
+      remote = join(root, 'remote.git');
+      await mkdir(remote);
+      await createGit(remote).git.init(true);
+      await git.addRemote('origin', remote);
+      await git.push('origin', 'main');
+      await git.push('origin', 'home');
+    }
     await writeFile(join(path, 'personal.md'), 'irreplaceable memory');
+    if (retained) {
+      await createGit(path).git.add('personal.md');
+      await createGit(path).git.commit('retain personal history');
+    }
+    const retainedSha = (await createGit(path).git.revparse(['HEAD'])).trim();
     await mkdir(join(path, 'build'));
     await writeFile(join(path, 'build', 'ignored'), 'build output');
     const user = await new UsersRepository(raw).create({
@@ -95,6 +115,7 @@ for (const scenario of [
       repo_type: 'local',
       local_path: base,
       default_branch: 'main',
+      ...(remote ? { remote_url: remote } : {}),
     });
     const rows = new BranchRepository(raw);
     const branch = await rows.create({
@@ -151,6 +172,15 @@ for (const scenario of [
     if (scenario.startsWith('active')) await rows.update(branch.branch_id, { archived: false });
     if (scenario === 'invalid-link')
       await writeFile(join(path, '.git'), `gitdir: ${join(root, 'missing-git-dir')}\n`);
+    if (scenario === 'invalid-backlink' || scenario === 'foreign-owner') {
+      const gitDir = (await createGit(path).git.revparse(['--absolute-git-dir'])).trim();
+      await writeFile(
+        join(gitDir, scenario === 'invalid-backlink' ? 'gitdir' : 'agor-branch-id'),
+        scenario === 'invalid-backlink'
+          ? `${join(root, 'unrelated', '.git')}\n`
+          : `${generateId()}\n`
+      );
+    }
     if (scenario === 'missing-git') await rm(join(path, '.git'));
     if (scenario === 'wrong-ref') await createGit(path).git.checkoutLocalBranch('different');
     if (scenario === 'local-home' || scenario === 'missing-home') {
@@ -162,6 +192,7 @@ for (const scenario of [
     }
     if (scenario === 'missing-home' || scenario === 'missing-workspace')
       await rm(path, { recursive: true });
+    if (scenario.startsWith('missing-retained')) await git.raw(['worktree', 'remove', path]);
     if (scenario === 'deleted-git') {
       await git.raw(['worktree', 'remove', '--force', path]);
       await git.addRemote('origin', base);
@@ -179,6 +210,8 @@ for (const scenario of [
     const shouldFail = [
       'foreign-origin',
       'invalid-link',
+      'invalid-backlink',
+      'foreign-owner',
       'missing-git',
       'wrong-ref',
       'missing-home',
@@ -311,6 +344,7 @@ for (const scenario of [
           { filesystem_status: 'ready' },
           { provisioning_attempt_id: 'forged' },
           { provisioning_operation: 'create' },
+          { provisioning_operation: 'restore' },
         ]) {
           const spoof = await fetch(`${server.url}/branches/${branch.branch_id}`, {
             method: 'PATCH',
@@ -405,6 +439,10 @@ for (const scenario of [
         expect((await rows.findById(branch.branch_id))?.archived_at).toBeUndefined();
         expect((await rows.findById(branch.branch_id))?.archived_by).toBeUndefined();
       });
+      if (retained) {
+        expect((await git.revparse(['refs/heads/home'])).trim()).toBe(retainedSha);
+        expect((await createGit(path).git.revparse(['HEAD'])).trim()).toBe(retainedSha);
+      }
       if (scenario === 'missing-home' || scenario === 'missing-workspace') {
         await expect(readFile(join(path, 'personal.md'))).rejects.toThrow();
         await expect(import('node:fs/promises').then(({ lstat }) => lstat(path))).rejects.toThrow();

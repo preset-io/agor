@@ -432,4 +432,29 @@ describe('resolveGitRef', () => {
     });
     expect((await git.revparse(['topic'])).trim()).toBe(secondSha);
   });
+
+  it('refuses diverged ordinary restore without moving the local ref or creating a checkout', async () => {
+    const git = simpleGit(repoPath);
+    await git.branch(['topic', secondSha]);
+    await git.commit('independent remote work', ['--allow-empty']);
+    await git.push('origin', 'main:refs/heads/topic');
+    const target = join(root, 'diverged');
+    await expect(
+      restoreBranchFilesystem(
+        repoPath,
+        target,
+        'topic',
+        'main',
+        {},
+        undefined,
+        'branch',
+        join(root, 'origin.git')
+      )
+    ).resolves.toMatchObject({
+      success: false,
+      error: expect.stringContaining('refusing to discard local work'),
+    });
+    expect((await git.revparse(['refs/heads/topic'])).trim()).toBe(secondSha);
+    expect((await git.raw(['worktree', 'list', '--porcelain'])).includes(target)).toBe(false);
+  });
 });
