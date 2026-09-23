@@ -255,16 +255,37 @@ async function canConfigureSessionMcpServers(ctx: WidgetSubmitCtx): Promise<bool
   const session = await (
     ctx.app.service('sessions') as unknown as WidgetGateGetService<Session>
   ).get(ctx.sessionId, { provider: undefined });
+  return mayConfigureSessionMcpServers(
+    { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+    session as Pick<Session, 'created_by'>
+  );
+}
+
+/**
+ * D6's one question, shared by every path that attaches a connected server:
+ * the resolve path above and the tool's already-connected / no-auth shortcut.
+ * `checkSessionOwnerOrAdmin` is what the attach route reduces to for these
+ * callers, so asking it first is asking the route.
+ */
+export function mayConfigureSessionMcpServers(
+  user: { user_id: string; role: string | undefined },
+  session: Pick<Session, 'created_by'>
+): boolean {
   try {
-    checkSessionOwnerOrAdmin(
-      { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-      session as Pick<Session, 'created_by'>
-    );
+    checkSessionOwnerOrAdmin(user, session);
     return true;
   } catch (error) {
     if (error instanceof Forbidden) return false;
     throw error;
   }
+}
+
+/** What the agent is told when a connected server could not be attached (D6). */
+export function oauthNotAttachedGuidance(name: string): string {
+  return (
+    `only the session owner or an admin can change this session's MCP servers. ` +
+    `Ask them to attach "${name}", then continue.`
+  );
 }
 
 /**
@@ -504,8 +525,7 @@ export const oauthWidget: WidgetRegistryEntry<OAuthWidgetParams, never, OAuthWid
     if (!rm.attached) {
       return (
         `[Agor] User connected "${name}", but it could not be attached to this session — ` +
-        `only the session owner or an admin can change this session's MCP servers. ` +
-        `Ask them to attach "${name}", then continue.`
+        oauthNotAttachedGuidance(name)
       );
     }
     return (

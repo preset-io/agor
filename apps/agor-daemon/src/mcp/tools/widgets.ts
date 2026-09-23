@@ -74,8 +74,11 @@ import {
   isSupportedGatewayTokenChannelType,
 } from '../../widgets/gateway-token/index.js';
 import {
+  mayConfigureSessionMcpServers,
   OAUTH_PERMISSION_DISCLOSURE_MAX,
   type OAuthWidgetParams,
+  type OAuthWidgetResultMeta,
+  oauthNotAttachedGuidance,
   oauthParamsSchema,
 } from '../../widgets/oauth/index.js';
 import {
@@ -185,6 +188,8 @@ async function mintWidgetMessage(
      * — see `GatewayService.deliverMcpSlackConnectCard`.
      */
     gatewayCard?: boolean;
+    /** Outcome for a row minted already terminal (the oauth shortcut's D6 `attached`). */
+    resultMeta?: unknown;
   }
 ): Promise<MessageID> {
   const params = parseWidgetMintParams(input.widgetType as WidgetType, input.params);
@@ -218,6 +223,7 @@ async function mintWidgetMessage(
           status: input.status,
           requested_at: requestedAt,
           ...(terminal ? { resolved_at: requestedAt } : {}),
+          ...(terminal && input.resultMeta !== undefined ? { result_meta: input.resultMeta } : {}),
           auto_resume: input.autoResume,
           widget_id: widgetId,
           // Written in the SAME row insert as the widget, so the repair sweep
@@ -338,7 +344,7 @@ type OAuthWidgetTarget =
       disclosureRefusal?: string;
     }
   /** The endpoint turned out to need no sign-in; there is nothing to authorize. */
-  | { short_circuit: true; server: MCPServer; reasonText: string };
+  | { short_circuit: true; server: MCPServer; label: string };
 
 /** Load and validate an MCP server the agent named directly. */
 async function loadExistingOAuthServer(
@@ -359,11 +365,7 @@ async function loadExistingOAuthServer(
   }
   const authType = server.auth?.type ?? 'none';
   if (authType === 'none') {
-    return {
-      short_circuit: true,
-      server,
-      reasonText: `[Agor] "${server.display_name || server.name}" needs no sign-in. It is attached to this session; its tools are available on your next turn.`,
-    };
+    return { short_circuit: true, server, label: server.display_name || server.name };
   }
   if (authType !== 'oauth') {
     throw new Error(
@@ -514,11 +516,7 @@ async function installCatalogOAuthServer(
 
   const authType = server.auth?.type ?? 'none';
   if (authType === 'none') {
-    return {
-      short_circuit: true,
-      server,
-      reasonText: `[Agor] "${catalogDisplayName(entry)}" needs no sign-in and is attached to this session; its tools are available on your next turn.`,
-    };
+    return { short_circuit: true, server, label: catalogDisplayName(entry) };
   }
   if (authType !== 'oauth') {
     throw new Error(
@@ -626,46 +624,75 @@ const GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT =
  * a terminal `already_present` widget row so the transcript still shows what
  * happened — the same status the env_vars short-circuit uses.
  *
- * Supersedes first, for the same reason the ordinary path does — and this is
- * the case where a stale Connect button is most obviously stale, because the
- * connection it offers to make already exists. The user who connected through
- * the Catalog drawer and then re-asked the agent would otherwise be left with a
- * live button that runs a full unnecessary re-authorization and queues a second
- * auto-resume prompt under a different widget id, so the two do not coalesce.
+ * Same order as the resolve path (D6), because the failure is the same one:
+ * a collaborator who may prompt a shared session may not change its MCP
+ * servers, and the attach route refuses them. So permission is ASKED first
+ * rather than learned from the attach throwing, and a caller who may not attach
+ * still gets the `already_present` row — with `attached: false` and the same
+ * "ask the owner" guidance the resolve path gives — instead of an exception
+ * after the fact. Any other attach failure propagates, as it does there.
+ *
+ * Superseding comes LAST, once the replacement row exists. A stale Connect
+ * button for a connection that already exists would run a full unnecessary
+ * re-authorization; but retiring it before the outcome is known left a
+ * failed attach with the button gone and nothing in its place.
  */
 async function attachAndResume(
   ctx: McpContext,
-  sessionId: SessionID,
+  session: Session,
   server: MCPServer,
-  prompt: string
+  outcome: { label: string; connected: 'needs no sign-in' | 'was already connected for you' }
 ) {
+  const sessionId = session.session_id as SessionID;
   const serverName = clampToSchemaMax(server.display_name || server.name, SERVER_NAME_MAX);
-  await supersedePendingOAuthWidgets(ctx, sessionId, server.mcp_server_id);
-  await ctx.app
-    .service('/sessions/:id/mcp-servers')
-    .create(
-      { mcpServerId: server.mcp_server_id },
-      { ...ctx.baseServiceParams, route: { id: sessionId } }
-    );
+  const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared';
+  const attached = mayConfigureSessionMcpServers(
+    { user_id: ctx.userId, role: ctx.authenticatedUser?.role },
+    session
+  );
+  if (attached) {
+    await ctx.app
+      .service('/sessions/:id/mcp-servers')
+      .create(
+        { mcpServerId: server.mcp_server_id },
+        { ...ctx.baseServiceParams, route: { id: sessionId } }
+      );
+  }
   const widgetId = await mintWidgetMessage(ctx, {
     sessionId,
     widgetType: 'oauth',
     params: {
       mcpServerId: server.mcp_server_id,
       serverName,
-      oauthMode: (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared',
+      oauthMode,
       reason: clampToSchemaMax(`Connect ${serverName}.`, REASON_MAX),
     } satisfies OAuthWidgetParams,
     content: `"${serverName}" is already connected.`,
     contentPreview: `Widget: oauth (${serverName}, already connected)`,
     status: 'already_present',
     autoResume: true,
+    resultMeta: {
+      mcp_server_id: server.mcp_server_id,
+      name: serverName,
+      oauth_mode: oauthMode,
+      attached,
+    } satisfies OAuthWidgetResultMeta,
   });
-  await queueWidgetAutoResume(ctx, sessionId, widgetId, prompt);
+  await supersedePendingOAuthWidgets(ctx, sessionId, server.mcp_server_id);
+  await queueWidgetAutoResume(
+    ctx,
+    sessionId,
+    widgetId,
+    attached
+      ? `[Agor] "${outcome.label}" ${outcome.connected}. It is attached to this session; its tools are available on your next turn.`
+      : `[Agor] "${outcome.label}" ${outcome.connected}, but it could not be attached to this session — ` +
+          oauthNotAttachedGuidance(outcome.label)
+  );
   return textResult({
     widget_id: widgetId,
     status: 'already_present',
     mcp_server_id: server.mcp_server_id,
+    attached,
   });
 }
 
@@ -816,7 +843,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         'If the result contains `link_unavailable`, there is NO link to give: relay the `relay_to_user` sentence as written and do NOT tell the user to click, open or look for anything. ' +
         'If it contains neither, you are on the Agor canvas and the user is already looking at the card. ' +
         'This tool NEVER promises a message in the thread itself: a Slack card, where one is posted at all, is sent separately and may not arrive, so never say one is coming. A link is the only thing it can promise. ' +
-        'If the account is already connected the tool attaches it and resumes you immediately (status "already_present") — no button is shown. ' +
+        'If the account is already connected the tool attaches it and resumes you immediately (status "already_present") — no button is shown. Only the session owner or an admin can attach; otherwise the result says `attached: false` and you should ask them to attach it. ' +
         'Tokens never enter your context: only the server name and OAuth mode do. The server is attached to this session only AFTER the grant lands, so its tools appear on a later turn, not this one. ' +
         'Keep `reason` to ONE short sentence (<=200 chars).',
       annotations: { destructiveHint: false, openWorldHint: false },
@@ -894,7 +921,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       if ('short_circuit' in resolved) {
         // The entry needs no sign-in at all. Attach and resume rather than
         // rendering a Connect button that would open a flow nobody asked for.
-        return attachAndResume(ctx, targetSessionId, resolved.server, resolved.reasonText);
+        return attachAndResume(ctx, session, resolved.server, {
+          label: resolved.label,
+          connected: 'needs no sign-in',
+        });
       }
       const { server, catalogEntryName, permissionDisclosure, disclosureRefusal } = resolved;
       const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as 'per_user' | 'shared';
@@ -935,12 +965,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         resolveMCPOAuthGrantLiveness(db, server.mcp_server_id, ctx.userId)
       );
       if (mcpOAuthGrantIsConnected(liveness)) {
-        return attachAndResume(
-          ctx,
-          targetSessionId,
-          server,
-          `[Agor] "${serverName}" was already connected for you. It is attached to this session; its tools are available on your next turn.`
-        );
+        return attachAndResume(ctx, session, server, {
+          label: serverName,
+          connected: 'was already connected for you',
+        });
       }
 
       // A Connect button is about to be minted, so the disclosure has to be

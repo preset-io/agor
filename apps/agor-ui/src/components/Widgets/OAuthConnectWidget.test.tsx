@@ -363,6 +363,28 @@ describe('OAuthConnectWidget — terminal states', () => {
     expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
   });
 
+  it('does not claim an already-connected server was attached when it was not (D6)', () => {
+    renderWidget(
+      <OAuthConnectWidget
+        message={message}
+        widget={widget({
+          status: 'already_present',
+          result_meta: {
+            mcp_server_id: 'srv-notion',
+            name: 'Notion',
+            oauth_mode: 'per_user',
+            attached: false,
+          },
+        })}
+        client={makeClient()}
+      />
+    );
+    expect(screen.getByText(/was already connected/i)).toBeVisible();
+    expect(screen.getByText(/only the session owner or an admin/i)).toBeVisible();
+    expect(screen.queryByText(/attached to this session/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+  });
+
   it('renders a durable dismissal', () => {
     renderWidget(
       <OAuthConnectWidget

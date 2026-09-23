@@ -124,6 +124,8 @@ interface MakeAppOpts {
   catalogEntry?: Record<string, unknown> | null;
   connectResult?: Record<string, unknown>;
   sessionCreator?: string;
+  /** Make the attach fail for a reason other than the owner-or-admin rule. */
+  attachError?: Error;
 }
 
 function makeApp(opts: MakeAppOpts = {}) {
@@ -174,6 +176,14 @@ function makeApp(opts: MakeAppOpts = {}) {
     '/sessions/:id/mcp-servers': {
       create: async (...args) => {
         record('/sessions/:id/mcp-servers', 'create', args);
+        // The real route's rule (`checkSessionOwnerOrAdmin`), not an
+        // always-succeeds stub: that stub is how a non-owner's failing attach
+        // went unnoticed.
+        const user = (args[1] as { user?: { user_id?: string; role?: string } }).user;
+        if (user?.user_id !== (opts.sessionCreator ?? 'user-actor') && user?.role !== 'admin') {
+          throw new Error('Forbidden: only the session owner or an admin');
+        }
+        if (opts.attachError) throw opts.attachError;
         return {};
       },
     },
@@ -603,6 +613,100 @@ describe('agor_widgets_request_oauth — already connected', () => {
     expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeDefined();
     const prompt = calls.find((c) => c.service === '/sessions/:id/prompt');
     expect(JSON.stringify(prompt?.args[0])).toContain('already connected');
+  });
+
+  it('attaches before recording, and retires a stale Connect card only after', async () => {
+    livenessStub.mockResolvedValue({ live: true });
+    superseded.rows = [pendingOAuthWidget('widget-stale', 'srv-notion')];
+    const { app, calls, supersedeSpy } = makeApp();
+    const tools = registerAndCapture({ app });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(payload(result)).toMatchObject({ status: 'already_present', attached: true });
+    expect(appendStub.mock.calls[0][0].metadata.widget.result_meta).toMatchObject({
+      attached: true,
+    });
+    expect(supersedeSpy).toHaveBeenCalledWith('widget-stale', expect.any(String));
+    // The replacement exists before the card it replaces is retired.
+    expect(appendStub.mock.invocationCallOrder[0]).toBeLessThan(
+      supersedeSpy.mock.invocationCallOrder[0]
+    );
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeDefined();
+  });
+
+  it('records attached=false for a prompter who may not configure the session (D6)', async () => {
+    // A collaborator allowed to prompt a shared session, who already holds a
+    // grant, asks for the server. The attach route refuses them — so the
+    // shortcut asks first, as the resolve path does, and records the outcome
+    // instead of throwing after it had already dismissed the pending card.
+    livenessStub.mockResolvedValue({ live: true });
+    superseded.rows = [pendingOAuthWidget('widget-stale', 'srv-notion')];
+    const { app, calls, supersedeSpy } = makeApp({ sessionCreator: 'user-session-owner' });
+    const tools = registerAndCapture({ app, userId: 'user-actor' });
+
+    const result = await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+
+    expect(payload(result)).toMatchObject({ status: 'already_present', attached: false });
+    // Asked, not attempted.
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeUndefined();
+    const widget = appendStub.mock.calls[0][0].metadata.widget;
+    expect(widget.status).toBe('already_present');
+    expect(widget.result_meta).toEqual({
+      mcp_server_id: 'srv-notion',
+      name: 'Notion',
+      oauth_mode: 'per_user',
+      attached: false,
+    });
+    // The agent is told what happened and who can fix it, and is resumed.
+    const prompt = JSON.stringify(calls.find((c) => c.service === '/sessions/:id/prompt')?.args[0]);
+    expect(prompt).toContain('could not be attached');
+    expect(prompt).toContain('Ask them to attach');
+    // The stale button is retired only once that outcome is on the record.
+    expect(appendStub.mock.invocationCallOrder[0]).toBeLessThan(
+      supersedeSpy.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records attached=false on the catalog no-auth path too, leaving the install inert', async () => {
+    const openServer = { ...OAUTH_SERVER, auth: undefined };
+    const { app, calls } = makeApp({
+      sessionCreator: 'user-session-owner',
+      catalogEntry: { ...NOTION_ENTRY, auth_type: 'none' },
+      connectResult: { mcp_server: openServer, reused_existing_server: false },
+    });
+    const tools = registerAndCapture({ app, userId: 'user-actor' });
+
+    const result = await tools.agor_widgets_request_oauth.cb({
+      catalogEntryName: 'com.notion/mcp',
+    });
+
+    expect(payload(result)).toMatchObject({ status: 'already_present', attached: false });
+    // The install is the caller's private, unattached row — what every
+    // catalog install from this tool is until it can be attached.
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeDefined();
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeUndefined();
+    expect(appendStub.mock.calls[0][0].metadata.widget.result_meta.attached).toBe(false);
+  });
+
+  it('leaves the pending card live when the attach itself fails', async () => {
+    // Any refusal other than D6's propagates, as on the resolve path — and
+    // because nothing is superseded before the outcome is known, the user's
+    // Connect button is still there to retry with.
+    livenessStub.mockResolvedValue({ live: true });
+    superseded.rows = [pendingOAuthWidget('widget-pending', 'srv-notion')];
+    const { app, calls, supersedeSpy } = makeApp({
+      attachError: new Error('That MCP server is private to another user'),
+    });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    ).rejects.toThrow('private to another user');
+
+    expect(supersedeSpy).not.toHaveBeenCalled();
+    expect(appendStub).not.toHaveBeenCalled();
+    expect(calls.find((c) => c.service === '/sessions/:id/prompt')).toBeUndefined();
   });
 
   it('checks the grant for the PROMPT ACTOR, not the session owner', async () => {

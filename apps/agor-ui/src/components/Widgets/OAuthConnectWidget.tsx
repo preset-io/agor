@@ -34,7 +34,7 @@
  *   - submitted (attached)      ✅ Connected and attached
  *   - submitted (not attached)  ⚠️ Connected, but the session owner must attach
  *   - dismissed                 ⊘ Declined
- *   - already_present           ✓ Already connected
+ *   - already_present           ✓ Already connected (⚠️ if it could not be attached)
  *
  * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  */
@@ -437,6 +437,25 @@ const ResolvedSummary: React.FC<{ widget: WidgetMessageMetadata }> = ({ widget }
   const name = rm?.name || params.serverName;
 
   if (widget.status === 'already_present') {
+    // `result_meta` is absent on rows minted before the shortcut recorded it;
+    // those were only ever written after a successful attach.
+    if (rm?.attached === false) {
+      return (
+        <TerminalLine
+          icon={<ExclamationCircleOutlined style={{ color: token.colorWarning }} />}
+          borderColor={token.colorWarning}
+          text={
+            <Space orientation="vertical" size={0}>
+              <Text>"{name}" was already connected</Text>
+              <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                It could not be attached here — only the session owner or an admin can change this
+                session's MCP servers.
+              </Text>
+            </Space>
+          }
+        />
+      );
+    }
     return (
       <TerminalLine
         icon={<CheckCircleOutlined style={{ color: token.colorSuccess }} />}

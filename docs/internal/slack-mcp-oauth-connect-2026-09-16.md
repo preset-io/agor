@@ -546,6 +546,17 @@ surfaced as "ask the session owner to attach it" — advice that is false for
 each, and for the first one impossible, since the session owner cannot attach a
 server private to a third user either.
 
+The mint-time shortcut — already connected, or a catalog entry that needs no
+sign-in — follows the same rule through the same helper
+(`mayConfigureSessionMcpServers`). It used to supersede the pending card, then
+attach, so a collaborator in exactly this position lost the card to an
+exception and got no `already_present` row and no resume. It now asks first,
+records `result_meta.attached` on the `already_present` row with the same
+guidance, and supersedes only after that row exists; any other attach error
+propagates with the pending card untouched. A catalog no-auth install made for
+such a caller stays what every install from this tool is until attached:
+private to them and unattached.
+
 **D7 — A pending widget does not expire, and that is an accepted gap, not an
 oversight.** A `pending` oauth widget lives until it is resolved, dismissed, or
 superseded. Nothing ages it out.
