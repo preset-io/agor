@@ -7,6 +7,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Database } from '../../db/client';
+import { getCurrentTenantDatabaseScope } from '../../db/tenant-context';
 
 const { MockOutboundPreDispatchAuthorityError } = vi.hoisted(() => ({
   MockOutboundPreDispatchAuthorityError: class OutboundPreDispatchAuthorityError extends Error {
@@ -461,11 +463,21 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
-      db: { run: () => undefined } as any,
+      db: { run: () => undefined } as unknown as Database,
+      tenantId: 'tenant-a',
       userId: USER_ID,
       mcpServerId: SERVER_ID,
       observedRefreshVersion: observedVersion(),
-      validateGrant: async () => true,
+      validateGrant: async () => {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'tenant',
+          tenantId: 'tenant-a',
+        });
+        return true;
+      },
+      assertCurrent: async () => {
+        expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      },
     });
 
     expect(token).toBe('new-a');
