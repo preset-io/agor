@@ -2110,7 +2110,7 @@ their own suites.
 `withGatewayTimeout` exists and is used only for `stopListening` — and the
 `setThreadStatus` guard. Separate ticket.
 
-### 7.1.16 One client name for the whole fleet
+### 7.1.16 Datadog's redirect-URI mismatch, and one client name for the whole fleet
 
 The next live failure was not in this lane either, and not in the Slack
 projection at all. Against `com.datadoghq/mcp` on the HA cell, discovery
@@ -2126,51 +2126,34 @@ that string or `null`, never a third value; HA hard-asserts equality
 `redirect_uris:[…]` and the authorize parameter. A probe in HA mode with a real
 DCR round trip printed `identical = true`.
 
-**What it was.** `client_name` was the hardcoded constant `'Agor MCP Client'`
-at both DCR call sites, with no deployment, tenant, or server identity in it.
-**Every Agor install registered under that name.** A provider that treats the
-client name as the client's identity answers a second install with the FIRST
-install's client — a `client_id` bound to a different deployment's callback —
-while echoing our request body back, so `validateDynamicClientRegistration`
-sees its own `redirect_uris` and finds nothing wrong. This cell had six earlier
-attempts from a different origin during the `getBaseUrl` incident above.
+**A hypothesis, disproven and reverted.** `client_name` is the constant
+`'Agor MCP Client'` at both DCR call sites, so every install registers under
+the same name. The working theory was that Datadog deduplicates registrations by
+name and handed this cell an earlier client bound to a different origin's
+callback. The name was changed to carry the callback host and saved server id.
+That did not fix it: on the sandbox, Datadog fails at authorize with the same
+`Mismatching redirect URI` under **both** names, while the same integration
+works on production, which sends the constant. The name is neither the cause
+here nor the fix.
 
-The name now carries the callback host, which is exactly what a reused
-`client_id` would be wrongly bound to, plus the saved MCP server id when one
-owns the flow, so two servers on one deployment cannot be collapsed onto one
-provider client and one server's scope. Both parts are already in the same
-request — the host is in `redirect_uris`, the server id is a random Agor UUID —
-so nothing new is disclosed to the provider, and a registrant id that is not
-Agor-shaped is dropped rather than sent. The constant survives as
-`LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME`, for the fingerprint story below and as
-the fallback for an unparseable callback.
+It was reverted, because the change was not free. `clientName` is an input to
+`bindingFingerprint` (`mcp-oauth-client-registration-authority.ts`), so a new
+value makes every stored registration miss on its next OAuth start: the row is
+superseded and the server re-registers with its provider under a request that
+provider has never seen. That included production's working Datadog
+registration, with nothing to show the new registration would be honoured.
+`MCP_OAUTH_DCR_CLIENT_NAME` now carries that warning, and
+`mcp-oauth-client-registration-authority.postgres.test.ts` pins that a
+registration sealed from the deployed request is found and opened by the live
+flow with no new registration. Every other fingerprint input, the binding
+version, the sealed-material shape, `open()`'s checks and the registration
+lookup were compared against `main` and are unchanged by this work.
 
-**The blast radius is fleet-wide, and is the remediation.** `bindingFingerprint`
-(`mcp-oauth-client-registration-authority.ts`) covers `clientName`, so every
-stored registration stops being `exactBinding` on its next OAuth start:
-`claimOrObserve` marks the current row `superseded` /
-`server_configuration_changed` with its sealed material dropped, and inserts a
-fresh `registering` row. One extra DCR per server per tenant, once, with no
-user-visible re-auth and no grant touched.
-
-That changes the operator advice. The Datadog registration is poisoned in the
-precise sense that it was registered with `token_endpoint_auth_method: 'none'`,
-so there is no `client_secret_expires_at`, `client_secret_live` is permanently
-true, and `claimOrObserve` answers `ready` forever — every retry reuses the same
-broken `client_id`. `POST /mcp-servers/oauth-client-registration-reset` does
-what it claims (admin-gated, under `lockOAuthGrantConfiguration`: bumps
-`config_version`, deletes every grant for the server, invalidates pending flows
-and registrations), but **this deployment does not need it**: the name change
-alone retires that row. The reset stays the tool for a poisoning that arrives
-without a code change. Both halves are pinned in
-`mcp-oauth-client-registration-authority.postgres.test.ts`.
-
-**What could not be proved, and was fixed anyway.** Nobody reproduced Datadog's
-deduplication against their endpoint, so the constant is treated as a defect on
-its own terms rather than as a diagnosis. It is modelled instead: the provider
-fixture now deduplicates by client name on request, and without the fix the
-test fails with `expected 'another-deployments-client' not to be
-'another-deployments-client'`.
+The sandbox's cause is still open. If a fresh Datadog registration is wanted
+there, `POST /mcp-servers/oauth-client-registration-reset` (admin-gated: bumps
+`config_version`, deletes the server's grants, invalidates pending flows and
+registrations) is the tool — its stored client, registered with
+`token_endpoint_auth_method: 'none'`, otherwise reads `ready` indefinitely.
 
 **The blind spot, and its proxy.** A redirect-URI mismatch is rejected
 **front-channel**. The provider refuses on its own page and never redirects, so
@@ -2181,8 +2164,8 @@ with no callback, which is now classified `authorization_never_returned`
 arrive), and whose guidance leads with an unregistered callback URL. Beside it,
 one `event=oauth_authorize_built` line per attempt states the binding Agor
 used — origins only, never a path, a full URL, a secret, or the provider's
-payload, plus `client_source`, `redirect_matches_registered`, and the
-Agor-constructed `client_name` that makes a deduplicating provider visible.
+payload, plus `client_source`, `redirect_matches_registered`, and
+`client_name`.
 
 The authorize URL also now asserts that the redirect URI it is about to send is
 the one the client was registered under, refusing with a named
@@ -2199,11 +2182,11 @@ latter echoed back exactly the `redirect_uris` it was sent. There was no
 fetched it. So nothing compared registered-vs-authorized, and no fixture
 modelled a provider that echoes one thing and stores another. `/authorize` is
 now a real endpoint that checks the request's `redirect_uri` against what the
-provider REGISTERED, and two options reproduce the two ways those come apart:
-`deduplicateRegistrationByClientName` and `registrationStoresRedirectUri`. The
-second one is refused at `/authorize` even with a correct client name, and the
-test asserts the end state that makes this class hard: no callback, no token,
-and an attempt still `pending`.
+provider REGISTERED, and `registrationStoresRedirectUri` reproduces a provider
+that binds one value while echoing another. It is refused at `/authorize`, and
+the test asserts the end state that makes this class hard: no callback, no
+token, and an attempt still `pending`. (A name-deduplication option was removed
+with the name change.)
 
 **Correction to §7.1.14.** The claim that the daemon host serves no `/ui` under
 `uiServingMode: "separate"`, and that a link on the cell origin would therefore

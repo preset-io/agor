@@ -38,7 +38,6 @@ import {
   socketioClient,
 } from '@agor/core/feathers';
 import { loadCatalog } from '@agor/core/mcp-catalog';
-import { LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import {
   AmbiguousRefreshError,
   FailedRefreshError,
@@ -160,10 +159,9 @@ type TestProvider = {
   /**
    * What the provider believes it registered, by `client_id`. The fixture
    * keeps this separately from the body it echoes back, because a provider
-   * that deduplicates by `client_name` answers with a pre-existing client
-   * while reflecting the request it was sent — which is exactly why Agor
-   * cannot tell locally that its `client_id` is bound to someone else's
-   * redirect URI.
+   * can bind a client to something other than what it reflects — which is
+   * exactly why Agor cannot tell locally that its `client_id` is bound to a
+   * different redirect URI.
    */
   registeredClients: Map<string, { clientName: string; redirectUris: string[] }>;
   /** Every `/authorize` verdict, in order. `invalid_request` on a mismatch. */
@@ -191,23 +189,9 @@ async function createTestProvider(
     /** Advertise and actually serve `/register`, keeping provider-side state. */
     serveDynamicRegistration?: boolean;
     /**
-     * Model a provider that treats `client_name` as the client's identity:
-     * a second registration under a name it has already seen returns the
-     * FIRST client, bound to the FIRST redirect URI, while still echoing the
-     * requested `redirect_uris` back in the response body.
-     */
-    deduplicateRegistrationByClientName?: boolean;
-    /** Clients the provider already holds, e.g. from an earlier deployment. */
-    preRegisteredClients?: Array<{
-      clientId: string;
-      clientName: string;
-      redirectUris: string[];
-    }>;
-    /**
      * Echo one thing, store another: `/register` reflects the requested
      * `redirect_uris` in its response while binding the client to this value
-     * instead. It is what a deduplicating provider does without saying so, and
-     * it is invisible to Agor until the front channel refuses.
+     * instead. It is invisible to Agor until the front channel refuses.
      */
     registrationStoresRedirectUri?: string;
     resourceScopes?: string[];
@@ -247,19 +231,9 @@ async function createTestProvider(
   let tokenRequestCount = 0;
   let baseUrl = '';
   const registeredClients = new Map<string, { clientName: string; redirectUris: string[] }>();
-  const clientsByName = new Map<string, string>();
-  for (const seed of options.preRegisteredClients ?? []) {
-    registeredClients.set(seed.clientId, {
-      clientName: seed.clientName,
-      redirectUris: seed.redirectUris,
-    });
-    clientsByName.set(seed.clientName, seed.clientId);
-  }
   const authorizeVerdicts: TestProvider['authorizeVerdicts'] = [];
   let issuedClients = 0;
-  const servesRegistration = (): boolean =>
-    options.serveDynamicRegistration === true ||
-    options.deduplicateRegistrationByClientName === true;
+  const servesRegistration = (): boolean => options.serveDynamicRegistration === true;
   const advertisesRegistration = (): boolean =>
     options.rejectDynamicRegistration === true ||
     options.holdDynamicRegistration === true ||
@@ -326,24 +300,17 @@ async function createTestProvider(
         const requestedRedirectUris = Array.isArray(recordedRequest.jsonBody?.redirect_uris)
           ? (recordedRequest.jsonBody.redirect_uris as string[])
           : [];
-        const deduplicated =
-          options.deduplicateRegistrationByClientName === true
-            ? clientsByName.get(clientName)
-            : undefined;
-        const clientId = deduplicated ?? `dcr-client-${++issuedClients}`;
-        if (!deduplicated) {
-          registeredClients.set(clientId, {
-            clientName,
-            redirectUris: options.registrationStoresRedirectUri
-              ? [options.registrationStoresRedirectUri]
-              : requestedRedirectUris,
-          });
-          clientsByName.set(clientName, clientId);
-        }
+        const clientId = `dcr-client-${++issuedClients}`;
+        registeredClients.set(clientId, {
+          clientName,
+          redirectUris: options.registrationStoresRedirectUri
+            ? [options.registrationStoresRedirectUri]
+            : requestedRedirectUris,
+        });
         response.writeHead(201, { 'content-type': 'application/json' });
-        // The response echoes the REQUEST, not what the provider stored. A
-        // deduplicated client is therefore indistinguishable from a fresh one
-        // until authorization is attempted.
+        // The response echoes the REQUEST, not what the provider stored, so a
+        // client bound elsewhere is indistinguishable from a correct one until
+        // authorization is attempted.
         response.end(
           JSON.stringify({
             client_id: clientId,
@@ -3680,14 +3647,13 @@ describe('SQLite saved-row OAuth authority', () => {
   });
 
   // -------------------------------------------------------------------------
-  // The front channel, and a provider that deduplicates by client name.
+  // The front channel.
   //
-  // This is the production failure against `com.datadoghq/mcp`: discovery
+  // The shape of the sandbox failure against `com.datadoghq/mcp`: discovery
   // succeeded, DCR succeeded, and the provider's authorize endpoint answered
-  // `invalid_request — Mismatching redirect URI`. Nothing in the DCR response
-  // contradicted us, because the provider echoed our request body back while
-  // handing us a pre-existing client bound to a different deployment's
-  // callback — the cell had six earlier attempts from another origin.
+  // `invalid_request — Mismatching redirect URI` on its own page, which never
+  // redirects to Agor. Its cause is not established; see §7.1.16 of
+  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
   // -------------------------------------------------------------------------
 
   const dcrCatalogEntry = (name: string, remoteUrl: string): MCPCatalogEntry =>
@@ -3732,35 +3698,26 @@ describe('SQLite saved-row OAuth authority', () => {
     return { harness, started };
   };
 
-  it('registers a client of its own when the provider deduplicates by client name', async () => {
-    const provider = await createTestProvider({
-      deduplicateRegistrationByClientName: true,
-      preRegisteredClients: [
-        {
-          clientId: 'another-deployments-client',
-          clientName: LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
-          redirectUris: ['https://other-agor.example.test/mcp-servers/oauth-callback'],
-        },
-      ],
-    });
+  it('registers under the deployed client name, and the front channel accepts that client', async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
     providers.push(provider);
-    const { harness, started } = await startWithCatalogHarness(provider, 'test/dcr-dedupe-by-name');
+    const { harness, started } = await startWithCatalogHarness(provider, 'test/dcr-front-channel');
     expect(started).toMatchObject({ success: true });
 
     const authorizationUrl = new URL(started.authorizationUrl!);
-    // The provider did not hand back the other deployment's client, because
-    // the name Agor registered under is not the name that one holds.
-    expect(authorizationUrl.searchParams.get('client_id')).not.toBe('another-deployments-client');
     const registered = provider.registeredClients.get(
       authorizationUrl.searchParams.get('client_id')!
     );
-    expect(registered?.clientName).toContain('agor.example.test');
+    // The name every deployed registration was made under; a different one
+    // re-registers every deployment's clients (see MCP_OAUTH_DCR_CLIENT_NAME).
+    expect(registered?.clientName).toBe('Agor MCP Client');
     expect(registered?.redirectUris).toEqual([
       'https://agor.example.test/mcp-servers/oauth-callback',
     ]);
 
-    // And the front channel accepts it — the assertion the fixture could not
-    // make before, because it had no `/authorize` handler at all.
+    // The front channel accepts the client Agor registered, and the callback
+    // completes — the assertion the fixture could not make before, because it
+    // had no `/authorize` handler at all.
     const authorizeResponse = await fetch(authorizationUrl, { redirect: 'manual' });
     expect(authorizeResponse.status).toBe(302);
     expect(provider.authorizeVerdicts.map((verdict) => verdict.outcome)).toEqual(['redirect']);
@@ -3770,11 +3727,11 @@ describe('SQLite saved-row OAuth authority', () => {
   });
 
   it('cannot see a front-channel redirect-URI rejection, and leaves the attempt pending', async () => {
-    // The residual case no client name can remove: the provider registers a
-    // client bound to a redirect URI other than the one it echoes back. DCR
-    // therefore looks clean — `validateDynamicClientRegistration` sees its own
-    // value in `redirect_uris` — and the rejection happens on the provider's
-    // own page, which never redirects to Agor.
+    // The provider registers a client bound to a redirect URI other than the
+    // one it echoes back. DCR therefore looks clean —
+    // `validateDynamicClientRegistration` sees its own value in
+    // `redirect_uris` — and the rejection happens on the provider's own page,
+    // which never redirects to Agor.
     const provider = await createTestProvider({
       serveDynamicRegistration: true,
       registrationStoresRedirectUri: 'https://stale-agor.example.test/mcp-servers/oauth-callback',

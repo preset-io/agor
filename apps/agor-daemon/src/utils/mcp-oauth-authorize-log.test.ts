@@ -3,7 +3,7 @@ import { describeOAuthAuthorizeBuilt } from './mcp-oauth-authorize-log.js';
 
 const context = {
   clientSource: 'dcr' as const,
-  clientName: 'Agor MCP Client (agor.example.test/0193f1e2)',
+  clientName: 'Agor MCP Client',
   redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
   registeredRedirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
   registrationEndpoint: 'https://provider.example.test/oauth/register?tenant=acme',
@@ -16,7 +16,7 @@ describe('describeOAuthAuthorizeBuilt', () => {
       describeOAuthAuthorizeBuilt({ mcpServerId: 'server-1', attemptId: 'attempt-1', context })
     ).toBe(
       '[MCP OAuth] event=oauth_authorize_built server=server-1 attempt=attempt-1 ' +
-        'client_source=dcr client_name=Agor MCP Client (agor.example.test/0193f1e2) ' +
+        'client_source=dcr client_name=Agor MCP Client ' +
         'redirect_origin=https://agor.example.test ' +
         'authorize_origin=https://provider.example.test ' +
         'redirect_matches_registered=true ' +

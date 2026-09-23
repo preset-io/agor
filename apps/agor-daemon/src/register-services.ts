@@ -2578,9 +2578,6 @@ export async function registerMCPServices(
         // flow context. Daemon callers never read or populate its origin-only
         // bearer cache.
         cacheKey: opts.prefetchedAuthServerMetadata ? effectiveMcpUrl : undefined,
-        // The registrant in the RFC 7591 client_name. The authoritative saved
-        // row wins over the request value, which is only a lookup key.
-        clientRegistrantId: savedServerAuthority?.mcp_server_id ?? opts.mcpServerId,
         // Process-global DCR credentials are not a tenant/user/server namespace.
         // Daemon flows never share them, including in SQLite deployments.
         reuseDynamicClientRegistration: false,

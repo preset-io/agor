@@ -20,9 +20,9 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import {
-  LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
-  mcpOAuthDynamicClientName,
+  type MCPOAuthDynamicClientRegistrationRequest,
   OAuthDCRFailure,
+  startMCPOAuthFlow,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -56,10 +56,7 @@ function inputFor(seed: TenantSeed, suffix = 'v1'): DurableMCPOAuthClientRegistr
     authorizationEndpoint: `${issuer}/authorize`,
     tokenEndpoint: `${issuer}/token`,
     redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
-    clientName: mcpOAuthDynamicClientName(
-      'https://agor.example.test/mcp-servers/oauth-callback',
-      '0193f1e2-4c5d-7a8b-9c0d-1e2f3a4b5c6d'
-    ),
+    clientName: 'Agor MCP Client',
     applicationType: 'web',
     scope: 'mcp:read mcp:write',
     compatibilityMode: 'strict',
@@ -187,64 +184,107 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(reused.registration.client_id).toBe('native-client');
     });
 
-    it('retires a registration poisoned under the legacy shared client name, with no reset', async () => {
-      // The production shape: registered with token_endpoint_auth_method
-      // 'none', so there is no client_secret_expires_at, `client_secret_live`
-      // is permanently true, and `claimOrObserve` answers `ready` forever.
-      // Every retry reuses the same broken client_id.
-      const seedRow = await seed('poisoned-legacy-name');
-      const poisoned = {
-        ...inputFor(seedRow),
-        clientName: LEGACY_SHARED_MCP_OAUTH_CLIENT_NAME,
+    it('reuses a registration sealed from the deployed DCR request, through the live flow', async () => {
+      // Every deployed DCR registration was sealed under a fingerprint of the
+      // request the flow hands the resolver. That request is written out here
+      // literally, as deployed daemons send it — not derived from the code under
+      // test — so a change to any fingerprint input (the client name above all:
+      // see MCP_OAUTH_DCR_CLIENT_NAME) fails here instead of silently
+      // re-registering every deployment's clients with providers that have
+      // never seen the new request.
+      const seedRow = await seed('main-sealed');
+      const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+      const issuer = 'https://provider.example.test/main-sealed';
+      const deployedRequest = {
+        registrationEndpoint: `${issuer}/register`,
+        registrationEndpointSource: 'metadata' as const,
+        metadataUrl: 'https://provider.example.test/mcp',
+        resourceUri: 'https://provider.example.test/mcp',
+        issuer,
+        authorizationEndpoint: `${issuer}/authorize`,
+        tokenEndpoint: `${issuer}/token`,
+        redirectUri,
+        clientName: 'Agor MCP Client',
+        applicationType: 'web' as const,
+        scope: 'mcp:read mcp:write',
+        // The catalog OAuth profile (Datadog is a catalog install); a prefetched
+        // authorization-server flow refuses `strict`.
+        compatibilityMode: 'marketplace' as const,
+        dcrMode: 'advertised' as const,
       };
-      const first = await authorityA.resolve(poisoned, async () => ({
-        client_id: 'another-deployments-client',
+      const durable = (request: MCPOAuthDynamicClientRegistrationRequest) => ({
+        ...request,
+        tenantId: seedRow.tenantId,
+        mcpServerId: seedRow.serverId,
+        serverConfigVersion: 1,
+      });
+      const sealed = await authorityA.resolve(durable(deployedRequest), async () => ({
+        client_id: 'prod-client',
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: 'none',
       }));
-      expect(first.registration.client_id).toBe('another-deployments-client');
-      const reusedForever = await authorityB.resolve(poisoned, async () => {
-        throw new Error('the poisoned row is reused without a code change');
-      });
-      expect(reusedForever.registration.client_id).toBe('another-deployments-client');
+      expect(sealed.registration.client_id).toBe('prod-client');
 
-      // The registrant-bearing name alone retires it: `bindingFingerprint`
-      // covers clientName, so the row stops being `exactBinding` and the next
-      // OAuth start supersedes it and registers again. No administrative
-      // `oauth-client-registration-reset` is required for this class.
-      const repaired = inputFor(seedRow);
-      expect(__fingerprintMCPOAuthClientRegistrationForTests(masterSecret, repaired)).not.toBe(
-        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, poisoned)
-      );
+      // Now the flow as it runs today, on another replica. The provider must
+      // not be asked again: a registration here means the stored one was not
+      // recognised.
+      const requests: MCPOAuthDynamicClientRegistrationRequest[] = [];
       let registrations = 0;
-      const next = await authorityB.resolve(repaired, async () => {
-        registrations += 1;
-        return { client_id: 'our-own-client' };
-      });
-      expect(registrations).toBe(1);
-      expect(next.registration.client_id).toBe('our-own-client');
-      expect(next.registrationId).not.toBe(first.registrationId);
+      let flowError: unknown;
+      let context: Awaited<ReturnType<typeof startMCPOAuthFlow>> | undefined;
+      try {
+        context = await startMCPOAuthFlow('', undefined, redirectUri, {
+          prefetchedAuthServerMetadata: {
+            issuer,
+            authorization_endpoint: `${issuer}/authorize`,
+            token_endpoint: `${issuer}/token`,
+            registration_endpoint: `${issuer}/register`,
+            code_challenge_methods_supported: ['S256'],
+            authorization_response_iss_parameter_supported: true,
+          },
+          cacheKey: 'https://provider.example.test/mcp',
+          resourceUri: 'https://provider.example.test/mcp',
+          scope: 'mcp:read mcp:write',
+          compatibilityMode: 'marketplace',
+          dcrMode: 'advertised',
+          reuseDynamicClientRegistration: false,
+          resolveDynamicClientRegistration: (request) => {
+            requests.push(request);
+            return authorityB.resolve(durable(request), async () => {
+              registrations += 1;
+              throw new Error('re-registered: the sealed registration was not reused');
+            });
+          },
+        });
+      } catch (error) {
+        flowError = error;
+      }
 
-      const rows = await runWithTenantDatabaseScope(dbA, seedRow.tenantId, async (scoped) => {
-        const result = await executeRaw(
-          scoped,
-          sql`SELECT registration_id, status, is_current, failure_code, sealed_material
-              FROM mcp_oauth_client_registrations
-              WHERE mcp_server_id = ${seedRow.serverId}`
-        );
-        return rawRows(result);
-      });
-      const retired = rows.find((row) => row.registration_id === first.registrationId);
-      expect(retired).toMatchObject({
-        status: 'superseded',
-        is_current: false,
-        failure_code: 'server_configuration_changed',
-      });
-      // The superseded row keeps no material, so the broken client_id cannot
-      // be reached again through it.
-      expect(retired?.sealed_material).toBeNull();
-      expect(rows.find((row) => row.registration_id === next.registrationId)).toMatchObject({
-        status: 'registered',
-        is_current: true,
-      });
+      // The request the flow builds is the deployed one, field for field.
+      expect(requests).toEqual([deployedRequest]);
+      expect(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, durable(requests[0]))
+      ).toBe(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, durable(deployedRequest))
+      );
+      expect(registrations).toBe(0);
+      expect(flowError).toBeUndefined();
+      expect(new URL(context!.authorizationUrl).searchParams.get('client_id')).toBe('prod-client');
+      expect(context!.clientRegistrationId).toBe(sealed.registrationId);
+
+      const rows = await runWithTenantDatabaseScope(dbA, seedRow.tenantId, async (scoped) =>
+        rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT registration_id, status, is_current
+                FROM mcp_oauth_client_registrations
+                WHERE mcp_server_id = ${seedRow.serverId}`
+          )
+        )
+      );
+      expect(rows).toEqual([
+        { registration_id: sealed.registrationId, status: 'registered', is_current: true },
+      ]);
     });
 
     it('does not invalidate a reusable fleet credential when caller authority is lost', async () => {

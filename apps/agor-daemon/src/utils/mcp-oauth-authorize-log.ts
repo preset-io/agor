@@ -4,15 +4,12 @@
  * A provider rejects a mismatched redirect URI front-channel, on its own
  * authorize page, so the rejection never reaches Agor: the flow simply stops
  * with a pending attempt that expires. The only thing Agor can do is state,
- * once per attempt, which callback origin it registered under and which one it
- * is authorizing with — and under what name it registered, since a provider
- * that deduplicates registrations by client name is the way those two come
- * apart without Agor doing anything wrong.
+ * once per attempt, which callback origin it registered under, which one it
+ * is authorizing with, and under what name it registered.
  *
  * Origins only. Never a path, a full URL, a client secret, an authorization
- * code, or anything the provider sent back. `client_name` is Agor-constructed
- * (see `mcpOAuthDynamicClientName`) and carries the callback host plus a
- * random Agor server id, so it is safe by construction.
+ * code, or anything the provider sent back. `client_name` is Agor's own
+ * constant (`MCP_OAUTH_DCR_CLIENT_NAME`), so it is safe by construction.
  */
 
 import type { OAuthFlowContext } from '@agor/core/tools/mcp/oauth-mcp-transport';
