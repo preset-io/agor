@@ -1,19 +1,17 @@
-import type { Session, SessionStatus } from '@agor-live/client';
+import type { Session } from '@agor-live/client';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
-import { agorStore, shallow, useStoreWithEqualityFn } from '../../store/agorStore';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
+import { useAwaitingSessions } from './useAwaitingSessions';
 
 const { Text } = Typography;
 
 const JUMP_LIMIT = 5;
-
-const AWAITING_STATUSES = new Set<SessionStatus>(['awaiting_permission', 'awaiting_input']);
 
 interface JumpBackInSectionProps {
   currentUserId?: string;
@@ -68,25 +66,7 @@ export const JumpBackInSection: React.FC<JumpBackInSectionProps> = ({
   onSessionClick,
 }) => {
   const { token } = theme.useToken();
-  // Shallow equality on the derived array: session patches that don't change
-  // the awaiting set (element identities) leave this section un-rendered.
-  const sessions = useStoreWithEqualityFn(
-    agorStore,
-    (state) => {
-      const waiting: Session[] = [];
-      for (const session of state.sessionById.values()) {
-        if (
-          !session.archived &&
-          AWAITING_STATUSES.has(session.status) &&
-          (!currentUserId || session.created_by === currentUserId)
-        ) {
-          waiting.push(session);
-        }
-      }
-      return waiting;
-    },
-    shallow
-  );
+  const sessions = useAwaitingSessions(currentUserId);
   const visibleSessions = sessions.slice(0, JUMP_LIMIT);
   const hiddenCount = sessions.length - visibleSessions.length;
 

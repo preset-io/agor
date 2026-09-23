@@ -1,23 +1,13 @@
 import type { Board, Branch, Session, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import {
+  AppstoreOutlined,
   BranchesOutlined,
+  CheckOutlined,
+  DownOutlined,
   RobotOutlined,
-  TeamOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons';
-import {
-  Avatar,
-  Card,
-  Empty,
-  List,
-  Popover,
-  Segmented,
-  Space,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Dropdown, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { memo, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -31,13 +21,14 @@ import { getTimeMs } from '../../utils/entityTime';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { getBoardEmoji } from '../BoardTile';
-import { BoardPill, BranchPill, SessionPill, TeammatePill, UserPill } from '../Pill';
-import { glassCardStyle } from './homeStyles';
+import { isSessionRowRead, SessionRowLogo } from '../SessionRow';
+import { HomeBlock, HomeEmpty, HomeLink } from './HomeBlock';
+import { compactRelativeTime, HomeRow, HomeTime } from './HomeRow';
 import type { HomePageProps } from './types';
 
-const { Text } = Typography;
-
 const HOME_ACTIVITY_LIMIT = 100;
+/** The feed shows the latest few; "Show more" expands to the full feed. */
+const HOME_ACTIVITY_PREVIEW = 6;
 
 type ActivityFilter = 'all' | 'branches' | 'sessions' | 'teammates';
 type ActivityEventType = Exclude<ActivityFilter, 'all'>;
@@ -55,21 +46,23 @@ interface ActivityEvent {
 
 type ActivityCallbacks = Pick<HomePageProps, 'onBoardClick' | 'onBranchClick' | 'onSessionClick'>;
 
-// Module-level constants: passing referentially-stable style objects keeps the
-// pills (and the memo'd rows below) from churning on unrelated store notifies.
-const CLICKABLE_PILL_STYLE: React.CSSProperties = { cursor: 'pointer', marginInlineEnd: 0 };
-const SESSION_PILL_STYLE: React.CSSProperties = {
-  ...CLICKABLE_PILL_STYLE,
-  display: 'inline-flex',
-  alignItems: 'center',
-  paddingInline: 6,
+const FILTER_LABELS: Record<ActivityFilter, string> = {
+  all: 'All',
+  branches: 'Branches',
+  sessions: 'Sessions',
+  teammates: 'Teammates',
 };
 
-const activityIcon = (type: ActivityEventType): React.ReactNode => {
-  if (type === 'sessions') return <UnorderedListOutlined />;
-  if (type === 'teammates') return <RobotOutlined />;
-  return <BranchesOutlined />;
-};
+/** Hover link to a row's branch or board, beside the row's own open button. */
+const RowLink: React.FC<{ label: string; icon: React.ReactNode; onClick: () => void }> = ({
+  label,
+  icon,
+  onClick,
+}) => (
+  <Tooltip title={label}>
+    <Button type="text" size="small" aria-label={label} icon={icon} onClick={onClick} />
+  </Tooltip>
+);
 
 /**
  * One activity row. Receives the already-resolved entity object references
@@ -100,8 +93,16 @@ const ActivityRow = memo(function ActivityRow({
   actor?: User;
 }) {
   const { token } = theme.useToken();
-
-  let message: React.ReactNode = null;
+  const who = actor?.name ?? 'Someone';
+  const relative = dttm ? formatRelativeTime(dttm) : null;
+  const trailing = relative ? <HomeTime>{compactRelativeTime(relative)}</HomeTime> : undefined;
+  const boardLink = board ? (
+    <RowLink
+      label={`Open board ${board.name}`}
+      icon={boardEmoji ? <span style={{ fontSize: 12 }}>{boardEmoji}</span> : <AppstoreOutlined />}
+      onClick={() => onBoardClick(board.board_id)}
+    />
+  ) : null;
 
   if (type === 'sessions') {
     if (!session) return null;
@@ -113,113 +114,77 @@ const ActivityRow = memo(function ActivityRow({
       Math.abs(getTimeMs(session, 'last_updated') - getTimeMs(session, 'created_at')) < 1000
         ? 'started'
         : 'updated';
+    const context = [
+      `${who} ${verb} this session`,
+      branch && `in ${branch.name}`,
+      board && `on ${board.name}`,
+    ]
+      .filter(Boolean)
+      .join(' ');
 
-    message = (
-      <Space size={4} wrap>
-        {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
-        <Text type="secondary">{verb}</Text>
-        <Popover
-          trigger="hover"
-          title={<Text style={{ maxWidth: 320, display: 'block' }}>{sessionTitle}</Text>}
-          content={
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {session.agentic_tool} · {session.status.replaceAll('_', ' ')}
-            </Text>
-          }
-        >
-          <SessionPill
-            ariaLabel={sessionTitle}
-            title={sessionTitle}
-            onClick={() => onSessionClick(session.session_id)}
-            style={SESSION_PILL_STYLE}
-          />
-        </Popover>
-        {branch && (
-          <>
-            <Text type="secondary">in</Text>
-            <BranchPill
-              branch={branch.name}
-              compact
-              onClick={() => onBranchClick(branch.branch_id)}
-            />
-          </>
-        )}
-        {board && (
-          <>
-            <Text type="secondary">on</Text>
-            <BoardPill
-              board={board}
-              emoji={boardEmoji}
-              compact
-              onClick={() => onBoardClick(board.board_id)}
-              style={CLICKABLE_PILL_STYLE}
-            />
-          </>
-        )}
-      </Space>
-    );
-  } else {
-    if (!branch) return null;
-    const teammate = type === 'teammates';
-    const teammateConfig = getTeammateConfig(branch);
-    const branchLabel = teammateConfig?.displayName ?? branch.name;
-
-    message = (
-      <Space size={4} wrap>
-        {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
-        <Text type="secondary">created</Text>
-        {teammate ? (
-          <TeammatePill
-            name={branchLabel}
-            emoji={teammateConfig?.emoji}
-            compact
-            title={branch.name}
-            onClick={() => onBranchClick(branch.branch_id)}
-            style={CLICKABLE_PILL_STYLE}
-          />
-        ) : (
-          <BranchPill
-            branch={branchLabel}
-            compact
-            title={branch.name}
-            onClick={() => onBranchClick(branch.branch_id)}
-          />
-        )}
-        {board && (
-          <>
-            <Text type="secondary">on</Text>
-            <BoardPill
-              board={board}
-              emoji={boardEmoji}
-              compact
-              onClick={() => onBoardClick(board.board_id)}
-              style={CLICKABLE_PILL_STYLE}
-            />
-          </>
-        )}
-      </Space>
+    return (
+      <HomeRow
+        ariaLabel={`Open session ${sessionTitle}; ${context}`}
+        onOpen={() => onSessionClick(session.session_id)}
+        leading={<SessionRowLogo tool={session.agentic_tool} />}
+        title={sessionTitle}
+        tooltip={[sessionTitle, context, relative].filter(Boolean).join('\n')}
+        read={isSessionRowRead(session, false)}
+        trailing={trailing}
+        hover={
+          branch || board ? (
+            <>
+              {branch && (
+                <RowLink
+                  label={`Open branch ${branch.name}`}
+                  icon={<BranchesOutlined />}
+                  onClick={() => onBranchClick(branch.branch_id)}
+                />
+              )}
+              {boardLink}
+            </>
+          ) : undefined
+        }
+      />
     );
   }
 
+  if (!branch) return null;
+  const teammate = type === 'teammates';
+  const teammateConfig = getTeammateConfig(branch);
+  const branchLabel = teammateConfig?.displayName ?? branch.name;
+  const context = [
+    `${who} created this ${teammate ? 'teammate' : 'branch'}`,
+    board && `on ${board.name}`,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <List.Item style={{ padding: '10px 0' }}>
-      <Space align="start">
-        <Avatar
-          size="small"
-          style={{ background: token.colorFillSecondary, color: token.colorText }}
+    <HomeRow
+      ariaLabel={`Open ${teammate ? 'teammate' : 'branch'} ${branchLabel}; ${context}`}
+      onOpen={() => onBranchClick(branch.branch_id)}
+      leading={
+        <span
+          style={{
+            width: 16,
+            display: 'inline-flex',
+            justifyContent: 'center',
+            color: token.colorTextTertiary,
+            fontSize: teammate && teammateConfig?.emoji ? 13 : token.fontSizeSM,
+          }}
         >
-          {activityIcon(type)}
-        </Avatar>
-        <div>
-          <div>{message}</div>
-          {dttm && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {formatRelativeTime(dttm)}
-            </Text>
-          )}
-        </div>
-      </Space>
-    </List.Item>
+          {teammate ? (teammateConfig?.emoji ?? <RobotOutlined />) : <BranchesOutlined />}
+        </span>
+      }
+      title={branchLabel}
+      tooltip={[branchLabel, branch.name !== branchLabel && branch.name, context, relative]
+        .filter(Boolean)
+        .join('\n')}
+      read
+      trailing={trailing}
+      hover={boardLink ?? undefined}
+    />
   );
 });
 
@@ -233,8 +198,8 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
   const sessionById = useAgorStore(selectSessionById);
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
-  const cardGlassStyle = glassCardStyle(token);
   const [filter, setFilter] = useState<ActivityFilter>('all');
+  const [expanded, setExpanded] = useState(false);
 
   const items = useMemo(() => {
     const events: ActivityEvent[] = [];
@@ -266,115 +231,69 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
       .slice(0, HOME_ACTIVITY_LIMIT);
   }, [branchById, sessionById, filter]);
 
+  const visibleItems = expanded ? items : items.slice(0, HOME_ACTIVITY_PREVIEW);
+
   return (
-    <section
-      aria-label="Team activity"
-      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    <HomeBlock
+      label="Activity"
+      surface
+      actions={
+        <>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              selectedKeys: [filter],
+              items: (Object.keys(FILTER_LABELS) as ActivityFilter[]).map((key) => ({
+                key,
+                label: FILTER_LABELS[key],
+                icon:
+                  key === filter ? (
+                    <CheckOutlined />
+                  ) : (
+                    <span style={{ width: 12, display: 'inline-block' }} />
+                  ),
+              })),
+              onClick: ({ key }) => setFilter(key as ActivityFilter),
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              aria-label={`Filter activity: ${FILTER_LABELS[filter]}`}
+              style={{
+                color: token.colorTextTertiary,
+                fontSize: token.fontSizeSM,
+                paddingInline: token.paddingXXS,
+                background: filter !== 'all' ? token.colorFillSecondary : undefined,
+              }}
+            >
+              {FILTER_LABELS[filter]} <DownOutlined style={{ fontSize: 9 }} />
+            </Button>
+          </Dropdown>
+          {items.length > HOME_ACTIVITY_PREVIEW && (
+            <HomeLink onClick={() => setExpanded((open) => !open)}>
+              {expanded ? 'Show less' : 'Show more'}
+            </HomeLink>
+          )}
+        </>
+      }
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          marginBottom: 8,
-          gap: 6,
-        }}
-      >
-        <Space size={6}>
-          <TeamOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
-          <Text strong style={{ fontSize: 14 }}>
-            Team activity
-          </Text>
-        </Space>
-        <Segmented<ActivityFilter>
-          size="small"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { label: <Tooltip title="All activity">All</Tooltip>, value: 'all' },
-            {
-              label: (
-                <Tooltip title="Branches">
-                  <BranchesOutlined aria-label="Branches" />
-                </Tooltip>
-              ),
-              value: 'branches',
-            },
-            {
-              label: (
-                <Tooltip title="Sessions">
-                  <UnorderedListOutlined aria-label="Sessions" />
-                </Tooltip>
-              ),
-              value: 'sessions',
-            },
-            {
-              label: (
-                <Tooltip title="Teammates">
-                  <RobotOutlined aria-label="Teammates" />
-                </Tooltip>
-              ),
-              value: 'teammates',
-            },
-          ]}
-        />
-      </div>
-      <Card
-        style={{
-          flex: 1,
-          minHeight: 0,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusLG,
-          ...cardGlassStyle,
-        }}
-        styles={{
-          body: {
-            padding: 0,
-            height: '100%',
-            overflow: 'auto',
-            background: 'transparent',
-          },
-        }}
-      >
+      <div style={expanded ? { maxHeight: 420, overflowY: 'auto' } : undefined}>
         {items.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No recent activity"
-            style={{ padding: '24px 0' }}
-          />
+          <HomeEmpty>No recent activity</HomeEmpty>
         ) : (
-          <List
-            rowKey="id"
-            dataSource={items}
-            renderItem={(item) => {
-              if (item.type === 'sessions') {
-                const session = sessionById.get(item.entityId);
-                const branch = session ? branchById.get(session.branch_id) : undefined;
-                const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
-                const actor = session ? userById.get(session.created_by) : undefined;
-                return (
-                  <ActivityRow
-                    type="sessions"
-                    dttm={item.dttm}
-                    session={session}
-                    branch={branch}
-                    board={board}
-                    boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
-                    actor={actor}
-                    onBoardClick={onBoardClick}
-                    onBranchClick={onBranchClick}
-                    onSessionClick={onSessionClick}
-                  />
-                );
-              }
-              const branch = branchById.get(item.entityId);
+          visibleItems.map((item) => {
+            if (item.type === 'sessions') {
+              const session = sessionById.get(item.entityId);
+              const branch = session ? branchById.get(session.branch_id) : undefined;
               const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
-              const actor = branch ? userById.get(branch.created_by) : undefined;
+              const actor = session ? userById.get(session.created_by) : undefined;
               return (
                 <ActivityRow
-                  type={item.type}
+                  key={item.id}
+                  type="sessions"
                   dttm={item.dttm}
+                  session={session}
                   branch={branch}
                   board={board}
                   boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
@@ -384,11 +303,27 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
                   onSessionClick={onSessionClick}
                 />
               );
-            }}
-            style={{ padding: '0 12px' }}
-          />
+            }
+            const branch = branchById.get(item.entityId);
+            const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
+            const actor = branch ? userById.get(branch.created_by) : undefined;
+            return (
+              <ActivityRow
+                key={item.id}
+                type={item.type}
+                dttm={item.dttm}
+                branch={branch}
+                board={board}
+                boardEmoji={board ? getBoardEmoji(board, branchById) : undefined}
+                actor={actor}
+                onBoardClick={onBoardClick}
+                onBranchClick={onBranchClick}
+                onSessionClick={onSessionClick}
+              />
+            );
+          })
         )}
-      </Card>
-    </section>
+      </div>
+    </HomeBlock>
   );
 };

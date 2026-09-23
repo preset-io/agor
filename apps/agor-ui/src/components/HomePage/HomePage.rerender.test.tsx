@@ -20,6 +20,7 @@ vi.mock('./HomeBoardsSection', () => ({
 }));
 vi.mock('./HomeSessionsSection', () => ({
   HomeSessionsSection: () => null,
+  HomeSessionRow: () => null,
 }));
 vi.mock('./HomeActivitySection', () => ({
   HomeActivitySection: () => null,

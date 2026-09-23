@@ -5,7 +5,7 @@
  */
 import type { Board, Branch, Session, SessionID, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { forwardRef, useLayoutEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -241,7 +241,7 @@ async function settle() {
   });
 }
 
-const homeIsShowing = () => !!screen.queryByText(/Hi, Tester/);
+const homeIsShowing = () => !!screen.queryByText(/^Good (morning|afternoon|evening), Tester$/);
 const canvasBoardName = () =>
   screen.queryByTestId('session-canvas')?.getAttribute('data-board') ?? null;
 const openSessionId = () =>
@@ -373,7 +373,9 @@ describe('Home navigation with a session open', () => {
     clickHomeButton();
     await settle();
 
-    fireEvent.click(await screen.findByText('Signal triage'));
+    // Activity lists the same session; click the row in Home's session list.
+    const mySessions = await screen.findByRole('region', { name: 'My sessions' });
+    fireEvent.click(await within(mySessions).findByText('Signal triage'));
     await settle();
 
     // Reported symptom: the row click resolved and the URL changed, but

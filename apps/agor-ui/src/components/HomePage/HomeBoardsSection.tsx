@@ -1,12 +1,6 @@
 import type { Board, Branch, Session } from '@agor-live/client';
-import {
-  ClockCircleOutlined,
-  LeftOutlined,
-  PlusOutlined,
-  RightOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import { Button, Empty, Tooltip, Typography, theme } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { Button, Flex, theme } from 'antd';
 import type React from 'react';
 import { memo, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -14,13 +8,12 @@ import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../..
 import { getTimeMs } from '../../utils/entityTime';
 import { formatRelativeTime } from '../../utils/time';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
-import { glassSurfaceStyle, withAlpha } from './homeStyles';
+import { HomeBlock, HomeEmpty, HomeLink } from './HomeBlock';
 import type { HomePageProps } from './types';
 
-const { Text } = Typography;
-
 const HOME_BOARDS_LIMIT = 50;
-const BOARDS_PER_PAGE = 4;
+/** Home shows the most relevant boards; "View all" reveals the rest. */
+const HOME_BOARDS_PREVIEW = 8;
 
 /**
  * Everything below `board` is a primitive so the memo'd card bails out of
@@ -96,93 +89,79 @@ const BoardHomeCard = memo(function BoardHomeCard({
   onBoardClick: (boardId: string) => void;
 }) {
   const { token } = theme.useToken();
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
+  const branches = `${branchCount} branch${branchCount !== 1 ? 'es' : ''}`;
+  const lastSession = latestSessionAt
+    ? `Last session ${formatRelativeTime(latestSessionAt)}`
+    : 'No sessions yet';
 
+  // Surface, border and hover/focus states come from .agor-home-tile (index.css).
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-      {/* Static blurred glass fill on its own layer, painted behind the
-          interactive button. Hover/focus never touch this element, so its
-          expensive backdrop-filter is never re-blurred. */}
-      <span
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: 0,
-          borderRadius: token.borderRadiusLG,
-          ...glassSurfaceStyle(token, 0.3),
-          pointerEvents: 'none',
-        }}
-      />
-      <button
-        type="button"
-        onClick={() => onBoardClick(board.board_id)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        style={{
-          position: 'relative',
-          display: 'block',
-          width: '100%',
-          height: '100%',
-          textAlign: 'left',
-          border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusLG,
-          padding: '12px 14px',
-          cursor: 'pointer',
-          background: 'transparent',
-          boxShadow: hovered
-            ? `${token.boxShadowSecondary}, inset 0 1px 0 ${withAlpha(token.colorWhite, 0.12)}`
-            : undefined,
-          outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
-          outlineOffset: focused ? 2 : undefined,
-          transition: 'border-color 0.2s, box-shadow 0.2s',
-          fontFamily: 'inherit',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <BoardTile emoji={emoji} size={36} />
-
-          {/* Name + meta — all aligned under each other, to the right of the icon */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <Tooltip title={board.name}>
-              <Text
-                strong
+    <button
+      type="button"
+      className="agor-home-tile"
+      aria-label={[
+        `Open board ${board.name}`,
+        branches,
+        activeCount > 0 && `${activeCount} active`,
+        lastSession,
+      ]
+        .filter(Boolean)
+        .join('; ')}
+      title={`${board.name}\n${lastSession}`}
+      onClick={() => onBoardClick(board.board_id)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: token.marginSM,
+        minWidth: 0,
+        padding: token.paddingSM,
+        borderRadius: token.borderRadiusLG,
+        textAlign: 'left',
+        font: 'inherit',
+        color: 'inherit',
+        cursor: 'pointer',
+      }}
+    >
+      <BoardTile emoji={emoji} size={36} />
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: token.fontSize,
+            fontWeight: 500,
+            color: token.colorText,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {board.name}
+        </span>
+        <Flex align="center" gap={token.marginXS} style={{ fontSize: token.fontSizeSM }}>
+          <span style={{ color: token.colorTextTertiary }}>{branches}</span>
+          {activeCount > 0 && (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: token.marginXXS,
+                color: token.colorTextSecondary,
+              }}
+            >
+              <span
+                aria-hidden
                 style={{
-                  fontSize: 14,
-                  display: 'block',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: token.colorSuccess,
                 }}
-              >
-                {board.name}
-              </Text>
-            </Tooltip>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {branchCount} branch{branchCount !== 1 ? 'es' : ''}
-              </Text>
-              {activeCount > 0 && (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  <ThunderboltOutlined style={{ marginRight: 2 }} />
-                  {activeCount} active
-                </Text>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {latestSessionAt
-                  ? `Last session ${formatRelativeTime(latestSessionAt)}`
-                  : 'No sessions yet'}
-              </Text>
-            </div>
-          </div>
-        </div>
-      </button>
-    </div>
+              />
+              {activeCount} active
+            </span>
+          )}
+        </Flex>
+      </span>
+    </button>
   );
 });
 
@@ -192,7 +171,8 @@ export const HomeBoardsSection: React.FC<
   const boardById = useAgorStore(selectBoardById);
   const branchById = useAgorStore(selectBranchById);
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
-  const [page, setPage] = useState(0);
+  const { token } = theme.useToken();
+  const [showAll, setShowAll] = useState(false);
 
   const rows = useMemo(() => {
     const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
@@ -241,77 +221,43 @@ export const HomeBoardsSection: React.FC<
       .slice(0, HOME_BOARDS_LIMIT);
   }, [boardById, recentBoardIds, branchById, sessionsByBranch]);
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / BOARDS_PER_PAGE));
-  const currentPage = Math.min(page, totalPages - 1);
-  const pageStart = currentPage * BOARDS_PER_PAGE;
-  const visibleRows = rows.slice(pageStart, pageStart + BOARDS_PER_PAGE);
-  const showPager = rows.length > BOARDS_PER_PAGE;
+  const visibleRows = showAll ? rows : rows.slice(0, HOME_BOARDS_PREVIEW);
 
   return (
-    <section aria-label="Boards" style={{ marginBottom: 24 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 12,
-        }}
-      >
-        <Text strong style={{ fontSize: 14 }}>
-          Boards
-        </Text>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {showPager && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Button
-                type="text"
-                size="small"
-                icon={<LeftOutlined />}
-                aria-label="Previous boards"
-                disabled={currentPage === 0}
-                onClick={() => setPage(Math.max(0, currentPage - 1))}
-              />
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {currentPage + 1} / {totalPages}
-              </Text>
-              <Button
-                type="text"
-                size="small"
-                icon={<RightOutlined />}
-                aria-label="Next boards"
-                disabled={currentPage >= totalPages - 1}
-                onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
-              />
-            </div>
+    <HomeBlock
+      label="Boards"
+      count={rows.length || undefined}
+      actions={
+        <>
+          <HomeLink onClick={() => onOpenCreateDialog('board')}>
+            <PlusOutlined /> New board
+          </HomeLink>
+          {rows.length > HOME_BOARDS_PREVIEW && (
+            <HomeLink onClick={() => setShowAll((open) => !open)}>
+              {showAll ? 'Show less' : `View all ${rows.length}`}
+            </HomeLink>
           )}
+        </>
+      }
+    >
+      {rows.length === 0 ? (
+        <HomeEmpty>
+          No boards yet.{' '}
           <Button
             type="link"
             size="small"
-            icon={<PlusOutlined />}
-            style={{ padding: 0 }}
+            style={{ padding: 0, fontSize: token.fontSizeSM }}
             onClick={() => onOpenCreateDialog('board')}
           >
-            New board
-          </Button>
-        </div>
-      </div>
-
-      {rows.length === 0 ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No boards yet"
-          style={{ padding: '24px 0' }}
-        >
-          <Button type="primary" onClick={() => onOpenCreateDialog('board')}>
             Create your first board
           </Button>
-        </Empty>
+        </HomeEmpty>
       ) : (
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap: 12,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+            gap: token.marginSM,
           }}
         >
           {visibleRows.map(({ board, emoji, branchCount, activeCount, latestSessionAt }) => (
@@ -327,6 +273,6 @@ export const HomeBoardsSection: React.FC<
           ))}
         </div>
       )}
-    </section>
+    </HomeBlock>
   );
 };
