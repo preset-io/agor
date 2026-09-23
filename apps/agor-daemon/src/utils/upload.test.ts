@@ -2,7 +2,7 @@
  * Upload-middleware tests.
  *
  * The multer instance is opaque, so we exercise its config indirectly:
- *   - the exported MIME allowlist excludes dangerous types
+ *   - served uploads never render active content inline (no type allowlist at ingress)
  *   - the limits constants match what the prompt specifies
  *   - the live multer instance carries those limits
  *   - aggregate-size middlewares reject oversize requests (pre + post multer)
@@ -15,7 +15,6 @@ import type { UploadStagingStore } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  ALLOWED_UPLOAD_MIME_TYPES,
   createUploadMiddleware,
   createUploadStorage,
   enforceTotalUploadSize,
@@ -23,6 +22,7 @@ import {
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILES_PER_REQUEST,
   MAX_UPLOAD_TOTAL_SIZE,
+  uploadContentHeaders,
   validateUploadDestinationQuery,
 } from './upload';
 
@@ -44,24 +44,55 @@ function mockRes() {
   return res as Response & { _status?: number; _body?: unknown };
 }
 
-describe('upload allowlist', () => {
-  it('accepts common safe MIMEs', () => {
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/png')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/jpeg')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/plain')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/markdown')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/pdf')).toBe(true);
+describe('upload content serving', () => {
+  it.each([
+    'text/html',
+    'text/html; charset=utf-8',
+    'image/svg+xml',
+    'application/xml',
+    'text/xml',
+    'application/javascript',
+    'text/javascript',
+    'application/x-yaml',
+    'application/octet-stream',
+    '',
+  ])('serves %j as an opaque, sandboxed nosniff attachment', (mimeType) => {
+    const headers = uploadContentHeaders({ mimeType, displayName: 'evil.html' });
+    expect(headers['Content-Type']).toBe('application/octet-stream');
+    expect(headers['Content-Disposition']).toBe("attachment; filename*=UTF-8''evil.html");
+    expect(headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(headers['Content-Security-Policy']).toBe("default-src 'none'; sandbox");
+    expect(headers['Cache-Control']).toBe('private, no-store');
   });
 
-  it('rejects HTML / executable / script-bearing MIMEs', () => {
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/html')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/x-msdownload')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/x-sh')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/javascript')).toBe(false);
-    // SVG is intentionally excluded — can carry inline <script>.
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/svg+xml')).toBe(false);
+  it('keeps raster images inline under nosniff and a sandbox CSP', () => {
+    const headers = uploadContentHeaders({ mimeType: 'IMAGE/PNG', displayName: 'chart.png' });
+    expect(headers['Content-Type']).toBe('image/png');
+    expect(headers['Content-Disposition']).toBe("inline; filename*=UTF-8''chart.png");
+    expect(headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(headers['Content-Security-Policy']).toBe("default-src 'none'; sandbox");
   });
 
+  it('keeps PDFs inline without the sandbox CSP that browser PDF viewers refuse', () => {
+    const headers = uploadContentHeaders({ mimeType: 'application/pdf', displayName: 'r.pdf' });
+    expect(headers['Content-Type']).toBe('application/pdf');
+    expect(headers['Content-Disposition']).toMatch(/^inline;/);
+    expect(headers).not.toHaveProperty('Content-Security-Policy');
+  });
+
+  it('percent-encodes the display name so it cannot inject header parameters', () => {
+    const headers = uploadContentHeaders({
+      mimeType: 'text/plain',
+      displayName: 'a"; filename=x.html\r\n',
+    });
+    expect(headers['Content-Disposition']).toBe(
+      "attachment; filename*=UTF-8''a%22%3B%20filename%3Dx.html%0D%0A"
+    );
+    expect(headers['Content-Disposition']).not.toMatch(/["\r\n]/);
+  });
+});
+
+describe('upload multer config', () => {
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.

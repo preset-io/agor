@@ -12,20 +12,6 @@ export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/webp',
 ]);
 
-export const COMPOSER_UPLOAD_MIME_TYPES = new Set([
-  ...COMPOSER_PREVIEW_IMAGE_MIME_TYPES,
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/zip',
-  'application/gzip',
-  'application/x-tar',
-]);
-
 const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -92,17 +78,13 @@ function normalizeComposerUploadFile(file: File): File {
   if (!inferredMime || normalizedMime) return file;
 
   // Browser drag/drop and clipboard APIs can leave File.type empty even for
-  // common safe extensions. Give FormData the inferred allowlisted MIME so the
-  // upload endpoint sees the same type the composer validated.
+  // common extensions. Give FormData the inferred MIME so image previews and
+  // the agent-facing attachment description match what the composer showed.
   return new File([file], file.name, { type: inferredMime, lastModified: file.lastModified });
 }
 
 export function isPreviewableComposerImage(file: File): boolean {
   return COMPOSER_PREVIEW_IMAGE_MIME_TYPES.has(inferComposerUploadMimeType(file));
-}
-
-export function isSupportedComposerUploadFile(file: File): boolean {
-  return COMPOSER_UPLOAD_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
 export function validateComposerFileIntake(
@@ -122,18 +104,12 @@ export function validateComposerFileIntake(
   const candidates: File[] = [];
 
   for (const file of files) {
-    if (!isSupportedComposerUploadFile(file)) {
-      rejections.push({
-        file,
-        reason: `Unsupported file type: ${file.type || 'unknown'}`,
-      });
-      continue;
-    }
-
+    // Any file type is accepted; the daemon enforces the same size and count
+    // limits and serves non-image content back only as an attachment.
     if (file.size > policy.maxFileBytes) {
       rejections.push({
         file,
-        reason: `File is larger than ${formatUploadBytes(policy.maxFileBytes)}`,
+        reason: `File is ${formatUploadBytes(file.size)}; the per-file limit is ${formatUploadBytes(policy.maxFileBytes)}`,
       });
       continue;
     }
@@ -157,7 +133,7 @@ export function validateComposerFileIntake(
     if (totalSize + file.size > policy.maxTotalBytes) {
       rejections.push({
         file,
-        reason: `Selected files exceed ${formatUploadBytes(policy.maxTotalBytes)} total`,
+        reason: `Selected files exceed the ${formatUploadBytes(policy.maxTotalBytes)} combined upload limit`,
       });
       continue;
     }
@@ -185,10 +161,6 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
 
 export function getComposerAttachmentFailureMessage(attachment: ComposerAttachment): string {
   return `${attachment.file.name}: ${attachment.error?.trim() || 'Upload failed'}`;
-}
-
-export function getComposerUploadAccept(): string {
-  return Array.from(COMPOSER_UPLOAD_MIME_TYPES).join(',');
 }
 
 export interface ComposerPromptValueSource {

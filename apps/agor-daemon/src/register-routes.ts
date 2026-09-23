@@ -299,6 +299,7 @@ import {
   enforceTotalUploadSize,
   getUploadLimits,
   type StagedMulterFile,
+  uploadContentHeaders,
 } from './utils/upload.js';
 import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
@@ -3089,22 +3090,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           res.setHeader('Content-Range', `bytes ${offset}-${offset + length - 1}/${upload.size}`);
         }
         const stream = await store.read({ ...readOwner, offset, ...(length ? { length } : {}) });
-        res.setHeader('Content-Type', upload.mimeType || 'application/octet-stream');
+        // Never echo an arbitrary client-declared MIME: see uploadContentHeaders.
+        for (const [name, value] of Object.entries(uploadContentHeaders(upload))) {
+          res.setHeader(name, value);
+        }
         res.setHeader('Content-Length', String(length ?? upload.size));
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        const safeInline = new Set([
-          'image/png',
-          'image/jpeg',
-          'image/gif',
-          'image/webp',
-          'application/pdf',
-        ]);
-        res.setHeader(
-          'Content-Disposition',
-          `${safeInline.has(upload.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`
-        );
         stream.once('error', (error) => res.destroy(error as Error));
         res.once('close', () =>
           (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()

@@ -24,12 +24,8 @@ import type {
   UploadStagingStore,
   UserID,
 } from '@agor/core/types';
-import { buildUploadAttachmentPrompt } from '@agor/core/types';
-import {
-  ALLOWED_UPLOAD_MIME_TYPES,
-  getUploadLimits,
-  MAX_UPLOAD_FILES_PER_REQUEST,
-} from './upload.js';
+import { buildUploadAttachmentPrompt, normalizeUploadMimeType } from '@agor/core/types';
+import { getUploadLimits, MAX_UPLOAD_FILES_PER_REQUEST } from './upload.js';
 import { getUploadStagingStore } from './upload-staging.js';
 
 export interface AttachmentIngestResult {
@@ -63,16 +59,25 @@ export function isAllowedSlackFileUrl(rawUrl: string): boolean {
 
 /**
  * MIME types the ingestion pipeline accepts: images and text-like files
- * (logs, plain text, CSV, JSON, markdown) agents use as context. Constrained
- * to the upload route's allowlist, which deliberately excludes script-bearing
- * types like image/svg+xml; the image/text prefix check additionally keeps
- * allowlisted-but-unsupported types (PDFs, office documents, archives) out of
- * ingestion.
+ * (logs, plain text, CSV, JSON, markdown) agents use as context. Unlike
+ * browser uploads (any type, chosen by the signed-in user), gateway ingestion
+ * downloads third-party-posted files automatically, so it stays deliberately
+ * narrow and excludes script-bearing types like image/svg+xml as well as PDFs,
+ * office documents, and archives.
  */
+const GATEWAY_INGEST_MIME_TYPES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+]);
+
 function isAllowedIngestMime(rawMime: string): boolean {
-  const mime = rawMime.split(';')[0].trim().toLowerCase();
-  if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) return false;
-  return mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/json';
+  return GATEWAY_INGEST_MIME_TYPES.has(normalizeUploadMimeType(rawMime));
 }
 
 function abortReason(signal: AbortSignal): Error {
