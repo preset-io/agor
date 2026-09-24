@@ -47,6 +47,8 @@ export function createCanUseToolCallback(
     sessionMCPRepo: SessionMCPServerRepository;
     /** Per-tool `tool_permissions` from the session's resolved MCP servers. */
     mcpToolPermissions: McpToolPermissionIndex;
+    /** Managed turns keep the output pin open until provider finalization. */
+    terminalizeOnTimeout?: boolean;
   }
 ) {
   return async (
@@ -271,9 +273,10 @@ export function createCanUseToolCallback(
         console.log(`✅ [canUseTool] Permission request updated: ${permissionStatus}`);
       }
 
-      // Handle timeout: set task/session to timed_out, deny the tool call
-      // The executor will exit cleanly and the user can re-prompt to retry.
-      if (decision.timedOut) {
+      // A managed turn cannot enter a terminal state while its output pin is
+      // open. Deny this tool, restore active state, and let normal provider
+      // finalization close the pin before publishing a terminal Task.
+      if (decision.timedOut && deps.terminalizeOnTimeout !== false) {
         console.log(
           `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
         );
@@ -314,6 +317,13 @@ export function createCanUseToolCallback(
         console.log(
           `✅ [canUseTool] Session ${sessionId} restored to running after permission decision`
         );
+      }
+
+      if (decision.timedOut) {
+        return {
+          behavior: 'deny' as const,
+          message: `Permission request timed out for tool: ${toolName}. Send a new prompt to retry.`,
+        };
       }
 
       // A denial rejects only this tool call. The SDK can report it to the model,

@@ -390,6 +390,7 @@ export async function executeOpenCodeTask(params: {
           // lives in `applyPermissionEffect`, keyed the way OpenCode names
           // things, and runs before this callback is reached.
           mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
+          terminalizeOnTimeout: !managed,
         }),
       cancelPendingPermissions: (targetSessionId) =>
         permissionService.cancelPendingRequests(targetSessionId),

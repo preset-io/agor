@@ -235,6 +235,43 @@ describe('createCanUseToolCallback', () => {
       );
     });
 
+    it('denies a timed-out managed tool without terminalizing an open output pin', async () => {
+      const deps = { ...createBaseDeps(), terminalizeOnTimeout: false };
+      deps.permissionService.waitForDecision.mockResolvedValue({
+        allow: false,
+        timedOut: true,
+        remember: false,
+        decidedBy: 'system',
+      });
+
+      const result = await createCanUseToolCallback(sessionId, taskId, deps)(
+        'Bash',
+        { command: 'ls' },
+        noopOptions
+      );
+
+      expect(result).toMatchObject({
+        behavior: 'deny',
+        message: expect.stringMatching(/timed out/i),
+      });
+      expect(deps.tasksService.patch).toHaveBeenLastCalledWith(taskId, {
+        status: 'running',
+      });
+      expect(deps.tasksService.patch).not.toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({ status: 'timed_out' })
+      );
+      expect(deps.sessionsService.patch).toHaveBeenLastCalledWith(sessionId, {
+        status: 'running',
+        ready_for_prompt: false,
+      });
+      expect(deps.messagesService.patch).toHaveBeenCalledWith(
+        'test-generated-id',
+        expect.objectContaining({ content: expect.objectContaining({ status: 'timed_out' }) })
+      );
+      expect(deps.permissionLocks.size).toBe(0);
+    });
+
     it('always releases the per-session permission lock, even on timeout', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({

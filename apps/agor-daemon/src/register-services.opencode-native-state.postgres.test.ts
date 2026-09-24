@@ -292,6 +292,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ),
           messagesRepo: repos.messages,
           messagesService: repos.messagesService,
+          sessionsService: repos.sessionsService,
           permissionLocks: new Map(),
           mcpServerRepo: repos.mcpServers,
           sessionMCPRepo: repos.sessionMCP,
@@ -313,6 +314,43 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           : permissionMessages.data;
         expect(permissionRows).toHaveLength(1);
         expect(permissionRows[0].content).toMatchObject({ status: PermissionStatus.APPROVED });
+        const timedOutPermission = createCanUseToolCallback(sessionId, taskId, {
+          permissionService: new PermissionService(async () => {}, 20),
+          tasksService: managedOpenCodePermissionTasksService(
+            repos.tasksService,
+            taskId,
+            input.holder_instance_id
+          ),
+          messagesRepo: repos.messages,
+          messagesService: repos.messagesService,
+          sessionsService: repos.sessionsService,
+          permissionLocks: new Map(),
+          mcpServerRepo: repos.mcpServers,
+          sessionMCPRepo: repos.sessionMCP,
+          mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
+          terminalizeOnTimeout: false,
+        });
+        await expect(
+          timedOutPermission(
+            'Bash',
+            { command: 'echo timeout' },
+            {
+              signal: new AbortController().signal,
+            }
+          )
+        ).resolves.toMatchObject({
+          behavior: 'deny',
+          message: expect.stringMatching(/timed out/i),
+        });
+        expect((await client.service('tasks').get(taskId)).status).toBe(TaskStatus.RUNNING);
+        const timeoutMessages = await client.service('messages').find({
+          query: { task_id: taskId, type: 'permission_request' },
+        });
+        const timeoutRows = Array.isArray(timeoutMessages) ? timeoutMessages : timeoutMessages.data;
+        expect(timeoutRows).toHaveLength(2);
+        expect(timeoutRows.map((row) => (row.content as { status: string }).status)).toContain(
+          PermissionStatus.TIMED_OUT
+        );
         await expect(
           client.service('tasks').reportRuntimeTelemetry({
             task_id: taskId,
