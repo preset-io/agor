@@ -146,6 +146,9 @@ export async function deleteTenant(
     ...((options.filesystem?.root ?? options.filesystemRoot)
       ? { filesystemRoot: options.filesystem?.root ?? options.filesystemRoot }
       : {}),
+    ...(options.additionalNativeStateFilesystemRoot
+      ? { additionalNativeStateFilesystemRoot: options.additionalNativeStateFilesystemRoot }
+      : {}),
     ...(options.log ? { log: options.log } : {}),
     ...(options.assertGateGeneration !== undefined
       ? { assertGateGeneration: options.assertGateGeneration }

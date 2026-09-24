@@ -54,7 +54,8 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ).toEqual(fixture.rows);
         });
       }
-      await runMigrations(db);
+      await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
+      await runMigrations(db, { allowOfflineCutover: true });
       expect(await policies()).toEqual(beforePolicies);
       expect(
         rawRows(

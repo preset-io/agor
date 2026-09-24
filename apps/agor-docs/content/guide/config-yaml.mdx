@@ -132,6 +132,14 @@ replaying historical grant state. Never export backend grants into SDK files.
 
 ### Hosted OpenCode (`opencode_hosted_native_state`)
 
+Migration `0115_opencode_checkpoint_attempts` is an incompatible offline cutover,
+not an online additive rollout. Stop all older daemon writers, take and verify a
+database backup, run `agor db migrate --offline-cutover` with the new binary,
+then start only the new version. Older session updates discard native-state
+pointers, so do not resume old binaries against the migrated database. This
+source procedure does not authorize a hosted rollout; hosted QA remains gated
+on the coordinated runtime and Cloud versions.
+
 OpenCode reports itself as unsupported in hosted, delegated, templated
 deployments until the operator opts in. Setting the key selects the managed
 credential projection plus checkpointed native-state contract described in the

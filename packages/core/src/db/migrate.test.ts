@@ -99,7 +99,7 @@ describe('migration status introspection', () => {
     expect(sqliteMigration?.impact).toBe(postgresqlMigration?.impact);
   });
 
-  it('classifies the additive checkpoint migration in both dialects', () => {
+  it('requires an offline cutover for checkpoint pointers in both dialects', () => {
     for (const dialect of ['sqlite', 'postgresql'] as const) {
       const report = introspectMigrationStatus(dialect, {
         applied: ['0000_init'],
@@ -107,14 +107,15 @@ describe('migration status introspection', () => {
         dbAheadOfBinary: false,
       });
       expect(report.pendingMigrations[0]).toMatchObject({
-        requiresOfflineCutover: false,
+        requiresOfflineCutover: true,
         impact: {
-          classification: 'schema',
-          userAction: 'none',
+          classification: 'protocol',
+          userAction: 'required',
           rollbackCompatibility: 'incompatible',
         },
       });
       expect(report.pendingMigrations[0]?.impact.summary).toContain('without CONCURRENTLY');
+      expect(report.requiresOfflineCutover).toBe(true);
     }
   });
 

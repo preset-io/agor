@@ -135,13 +135,13 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
     '0115_opencode_checkpoint_attempts',
     {
-      requiresOfflineCutover: false,
+      requiresOfflineCutover: true,
       impact: defineMigrationImpact({
-        classification: 'schema',
-        userAction: 'none',
+        classification: 'protocol',
+        userAction: 'required',
         rollbackCompatibility: 'incompatible',
         summary:
-          'Adds OpenCode checkpoint ledgers and JSON state. PostgreSQL builds three unique indexes without CONCURRENTLY, blocking writes during each build. Do not run older binaries afterward.',
+          'Adds OpenCode ledgers. Stop old daemon writers before migration; old session updates discard native-state pointers. PostgreSQL builds unique indexes without CONCURRENTLY, blocking writes.',
       }),
     },
   ],

@@ -28,6 +28,7 @@ import { SessionRepository } from './repositories/sessions';
 import { TaskRepository } from './repositories/tasks';
 import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
+import { deleteTenant } from './tenant-delete';
 import {
   deleteTenantData,
   TenantDeletionCatalogError,
@@ -392,6 +393,39 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
       expect(await countTenantSessions(db, tenantId)).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });
+      await deleteTenantData(db, tenantId);
+    }
+  });
+
+  it('checks an additional mounted tenant root before deleting rows, even database-only', async () => {
+    const tenantId = `td-native-mounted-${generateId()}`;
+    const configuredRoot = await mkdtemp(join(tmpdir(), 'agor-configured-native-delete-'));
+    const mountedRoot = await mkdtemp(join(tmpdir(), 'agor-mounted-native-delete-'));
+    await seedTenant(db, tenantId);
+    const orphan = join(
+      mountedRoot,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy'
+    );
+    await mkdir(orphan, { recursive: true });
+    await writeFile(join(orphan, 'checkpoint.json'), '{}');
+    try {
+      await expect(
+        deleteTenant(db, tenantId, {
+          databaseOnly: true,
+          filesystemRoot: configuredRoot,
+          additionalNativeStateFilesystemRoot: mountedRoot,
+        })
+      ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await rm(configuredRoot, { recursive: true, force: true });
+      await rm(mountedRoot, { recursive: true, force: true });
       await deleteTenantData(db, tenantId);
     }
   });

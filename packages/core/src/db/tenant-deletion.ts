@@ -143,6 +143,8 @@ export interface TenantDeletionOptions {
    * The caller remains responsible for the root's tenant binding.
    */
   filesystemRoot?: string;
+  /** Additional read-only native-state preflight root (never a deletion target). */
+  additionalNativeStateFilesystemRoot?: string;
 }
 
 /** Wildcard-like characters that must never be accepted as a concrete tenant id. */
@@ -907,8 +909,8 @@ export async function deleteTenantData(
   // Check physical state before opening the destructive transaction. The DB
   // ledger/pointer check below remains authoritative for protocol-owned writes;
   // this catches orphaned/legacy native trees that have no surviving row.
-  if (options.filesystemRoot) {
-    if (await hasTenantNativeStateFilesystemTree(options.filesystemRoot)) {
+  for (const root of [options.filesystemRoot, options.additionalNativeStateFilesystemRoot]) {
+    if (root && (await hasTenantNativeStateFilesystemTree(root))) {
       throw new TenantNativeStateHandoffRequiredError();
     }
   }
