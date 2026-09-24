@@ -187,6 +187,7 @@ describe('MCP Catalog real Chromium flows', () => {
 
 it('excludes hidden cards, searches, and counts but retains saved connections', async () => {
   const hiddenNames = [
+    'com.figma.mcp/mcp',
     'com.vercel/vercel-mcp',
     'com.intercom/mcp',
     'com.squareup/mcp',

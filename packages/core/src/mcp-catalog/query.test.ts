@@ -287,9 +287,10 @@ describe('catalog visibility', () => {
     expect(findCatalogEntry([hidden], hidden.name)).toBe(hidden);
   });
 
-  it('retains exactly the six blocked definitions internally, with no extra providers hidden', async () => {
+  it('retains exactly the seven blocked definitions internally, with no extra providers hidden', async () => {
     const full = await loadCatalog();
     const hiddenNames = [
+      'com.figma.mcp/mcp',
       'com.vercel/vercel-mcp',
       'com.intercom/mcp',
       'com.squareup/mcp',
@@ -304,7 +305,7 @@ describe('catalog visibility', () => {
         .sort()
     ).toEqual(hiddenNames);
     const visible = filterCatalog(full);
-    expect(visible).toHaveLength(full.length - 6);
+    expect(visible).toHaveLength(full.length - 7);
     for (const name of hiddenNames) {
       expect(findCatalogEntry(full, name)).toBeDefined();
       expect(filterCatalog(full, { search: name })).toEqual([]);

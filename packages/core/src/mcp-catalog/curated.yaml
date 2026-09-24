@@ -88,6 +88,8 @@ entries:
     auth_type: oauth
 
   - name: com.figma.mcp/mcp
+    # Sept 24: user-reported provider approval requirement; not independently verified.
+    hidden: true
     category: dev-tools
     capabilities: [design, notes]
     benefit: Give an agent the actual design file so generated UI matches the spec instead of approximating it.
