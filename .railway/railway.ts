@@ -4,7 +4,7 @@ import { defineRailway, github, project, service, volume } from 'railway/iac';
 // Before using this as a PR-environment template, replace the bootstrap branch
 // with the intended baseline. Generated domains are managed in Railway.
 export default defineRailway(() => {
-  const data = volume('agor-data', { region: 'sfo', sizeMB: 1024 });
+  const data = volume('agor-data', { region: 'sfo', sizeMB: 500 });
   const agor = service('agor', {
     source: github('preset-io/agor', { branch: 'investigate-railway-environment-variants' }),
     build: { builder: 'DOCKERFILE', dockerfilePath: 'docker/Dockerfile' },
@@ -18,6 +18,7 @@ export default defineRailway(() => {
     },
     env: {
       AGOR_RUNTIME_TARGET: 'production-source',
+      RAILWAY_DOCKERFILE_PATH: 'docker/Dockerfile',
       NODE_ENV: 'production',
       HOME: '/home/agor',
       PORT: '3030',
