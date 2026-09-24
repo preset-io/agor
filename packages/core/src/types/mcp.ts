@@ -1278,3 +1278,23 @@ export const MCP_TOKEN_AUDIENCE = 'agor:mcp:internal';
  * JWT `iss` claim for MCP session tokens (post-rollout tokens only).
  */
 export const MCP_TOKEN_ISSUER = 'agor';
+
+// Unauthenticated diagnostic hints for Agor's built-in MCP connection only.
+// Never authorization, tenant/session identity, or headers for external MCPs.
+export const MCP_CLIENT_HINT_HEADER = 'x-agor-mcp-client';
+export const MCP_CLIENT_HINTS = {
+  claude: 'claude',
+  codex: 'codex',
+  gemini: 'gemini',
+  copilot: 'copilot',
+  cursor: 'cursor',
+  opencode: 'opencode',
+} as const;
+export type MCPClientHint = (typeof MCP_CLIENT_HINTS)[keyof typeof MCP_CLIENT_HINTS];
+
+/** Reject arrays, coalesced headers, arbitrary text and noncanonical values. */
+export function normalizeMCPClientHint(value: unknown): MCPClientHint | 'unknown' {
+  return typeof value === 'string' && Object.values(MCP_CLIENT_HINTS).some((hint) => hint === value)
+    ? (value as MCPClientHint)
+    : 'unknown';
+}

@@ -31,15 +31,17 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
+import { MCP_CLIENT_HINT_HEADER } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
+import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
 import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
-import { validateVerifiedSessionToken, verifySessionToken } from './tokens.js';
+import { validateVerifiedSessionToken, verifySessionTokenDetailed } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
@@ -425,6 +427,7 @@ export function setupMCPRoutes(
     console.log(`✅ MCP tool registry built (${cachedRegistry!.size} tools cached)`);
   }
 
+  const logAuthRejection = createMcpAuthRejectionLogger();
   const personalApiKeys = new UserApiKeysRepository(db);
   const multiTenancy = resolveMultiTenancyConfig(config);
   const requestContext = new AsyncLocalStorage<McpContext>();
@@ -569,6 +572,7 @@ export function setupMCPRoutes(
 
       let requestedSessionId: string | undefined;
       let credential: string | undefined;
+      let credentialSource: 'authorization' | 'api_key' | 'none' = 'none';
       try {
         const authorization = getSingleHeader(req, 'Authorization');
         const xApiKey = getSingleHeader(req, 'X-API-Key');
@@ -578,6 +582,7 @@ export function setupMCPRoutes(
           throw new MalformedHeaderError('Mcp-Session-Id must contain only visible ASCII');
         }
         credential = getCredential(authorization, xApiKey);
+        credentialSource = authorization ? 'authorization' : xApiKey ? 'api_key' : 'none';
       } catch (error) {
         if (error instanceof MalformedHeaderError) {
           return res.status(400).json({
@@ -588,7 +593,8 @@ export function setupMCPRoutes(
       }
 
       if (!credential) {
-        console.warn('⚠️  MCP request missing credentials');
+        // Credential-free discovery is expected traffic, not a JWT failure.
+        // Still reject before tenant resolution, database access, or protocol dispatch.
         return res.status(401).json({
           ...jsonRpcError(
             req,
@@ -628,7 +634,13 @@ export function setupMCPRoutes(
           )
         );
         if (!keyRow) {
-          console.warn('⚠️  Invalid MCP personal API key');
+          logAuthRejection(
+            'invalid_personal_key',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid personal API key'),
           });
@@ -657,14 +669,21 @@ export function setupMCPRoutes(
         }
         sessionId = requestedSessionId as SessionID | undefined;
       } else {
-        const verifiedToken = verifySessionToken(app, credential);
-        if (!verifiedToken) {
-          console.warn('⚠️  Invalid MCP session token');
+        const verification = verifySessionTokenDetailed(app, credential);
+        if (!verification.context) {
+          logAuthRejection(
+            verification.reason,
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
           });
         }
 
+        const verifiedToken = verification.context;
         try {
           // The signed token binding is an authenticated tenant signal. Static
           // configuration and a configured trusted header, when present, must
@@ -684,7 +703,13 @@ export function setupMCPRoutes(
 
         const context = await validateVerifiedSessionToken(verifiedToken);
         if (!context) {
-          console.warn('⚠️  Invalid MCP session token');
+          logAuthRejection(
+            'session_missing',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
           });

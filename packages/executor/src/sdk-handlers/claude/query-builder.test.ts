@@ -692,6 +692,10 @@ describe('setupQuery - Local Settings Support', () => {
       const callArgs = claudeQuery.mock.calls[0][0];
       expect(callArgs.options).not.toHaveProperty('debug');
       expect(callArgs.options.resume).toBe('sdk-session-secret');
+      expect(callArgs.options.mcpServers.agor.headers).toEqual({
+        Authorization: 'Bearer test-token',
+        'x-agor-mcp-client': 'claude',
+      });
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
