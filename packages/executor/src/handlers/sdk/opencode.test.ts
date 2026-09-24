@@ -217,6 +217,8 @@ function execute(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.messageFindById.mockReset();
+  mocks.messagesCreate.mockReset();
   mocks.branchFind.mockResolvedValue({ path: '/worktree' });
   mocks.taskMessagesFind.mockResolvedValue([]);
   mocks.nextMessageIndex.mockResolvedValueOnce(0).mockResolvedValue(1);
@@ -583,14 +585,20 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
     mocks.runTurn.mockResolvedValueOnce({
       nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
-      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      finalMessage: {
+        content: 'done',
+        contentBlocks: [{ type: 'text', text: 'done' }],
+        toolUses: [],
+        metadata: {},
+      },
     });
     let committedMessage: Record<string, unknown> | undefined;
     mocks.messageFindById
       .mockResolvedValueOnce(null)
       .mockImplementation(async () => committedMessage);
     mocks.messagesCreate.mockImplementationOnce(async (message) => {
-      committedMessage = message;
+      // PostgreSQL JSONB can reorder object keys on readback.
+      committedMessage = { ...message, content: [{ text: 'done', type: 'text' }] };
       throw { code: 503 };
     });
 

@@ -5,6 +5,8 @@
  * Task settlement remains OpenCode-scoped until the generic runner migration lands.
  */
 
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   buildOpenCodeAuthContent,
   hostedCredentialFieldForProvider,
@@ -509,7 +511,7 @@ export async function executeOpenCodeTask(params: {
               existing.task_id !== taskId ||
               existing.type !== 'assistant' ||
               existing.role !== MessageRole.ASSISTANT ||
-              JSON.stringify(existing.content) !== JSON.stringify(finalMessage.content)
+              !isDeepStrictEqual(existing.content, finalMessage.content)
             )
               throw new Error('Managed OpenCode message ID does not match this turn');
             messageCommitted = true;
