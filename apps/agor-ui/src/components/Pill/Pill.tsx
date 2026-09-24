@@ -24,14 +24,14 @@ import {
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
+import { Badge, Collapse, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
 import { NeutralBoardIcon } from '../BoardTile/BoardTile';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
-import { Tag } from '../Tag';
+import { Tag, TagPopover } from '../Tag';
 import { getModelDisplayName } from './modelDisplay';
 import { getUrlDisplayLabel, isGitHubUrl, type UrlDisplayRepo } from './url-helpers';
 
@@ -454,7 +454,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   );
 
   return (
-    <Popover
+    <TagPopover
       content={
         <ContextWindowPopoverContent
           used={effectiveUsed}
@@ -469,7 +469,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
       mouseEnterDelay={0.3}
     >
       {pill}
-    </Popover>
+    </TagPopover>
   );
 };
 
@@ -619,7 +619,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   }
 
   return (
-    <Popover
+    <TagPopover
       title={
         <span>
           <IdcardOutlined style={{ marginRight: 8 }} />
@@ -644,7 +644,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
       mouseEnterDelay={0.3}
     >
       {pill}
-    </Popover>
+    </TagPopover>
   );
 };
 

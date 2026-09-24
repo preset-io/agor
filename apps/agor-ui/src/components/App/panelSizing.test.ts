@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { SIDE_PANEL_DEFAULT_WIDTH_PX } from '../../utils/sidePanelWidth';
 import {
   capSessionSizeForCanvasMin,
   getContentPanelWidthPercent,
+  getSessionPanelDefaultSizePercent,
   toContentRelativePercent,
   toViewportRelativePercent,
 } from './panelSizing';
@@ -91,5 +93,33 @@ describe('capSessionSizeForCanvasMin', () => {
 
   it('passes the size through unchanged when it already leaves the canvas its minimum', () => {
     expect(capSessionSizeForCanvasMin(50, 20)).toBe(50);
+  });
+});
+
+describe('getSessionPanelDefaultSizePercent', () => {
+  // Mirrors App's own min derivation: the panel's px floor as a viewport
+  // percentage, never under the 15% floor.
+  const minSize = (viewportWidth: number) =>
+    Math.max(15, (SIDE_PANEL_DEFAULT_WIDTH_PX / viewportWidth) * 100);
+  const toPx = (percent: number, viewportWidth: number) => (percent / 100) * viewportWidth;
+
+  it.each([1024, 1440, 1920])(
+    'opens at the home sidebar width on a %ipx viewport',
+    (viewportWidth) => {
+      const percent = getSessionPanelDefaultSizePercent(viewportWidth, minSize(viewportWidth), 75);
+      expect(toPx(percent, viewportWidth)).toBeCloseTo(SIDE_PANEL_DEFAULT_WIDTH_PX);
+    }
+  );
+
+  it('never opens narrower than the panel minimum', () => {
+    // On a very wide viewport the 15% floor is wider than the sidebar width.
+    const viewportWidth = 3440;
+    const percent = getSessionPanelDefaultSizePercent(viewportWidth, minSize(viewportWidth), 75);
+    expect(percent).toBe(minSize(viewportWidth));
+    expect(toPx(percent, viewportWidth)).toBeGreaterThan(SIDE_PANEL_DEFAULT_WIDTH_PX);
+  });
+
+  it('never opens wider than the panel maximum', () => {
+    expect(getSessionPanelDefaultSizePercent(400, 15, 75)).toBe(75);
   });
 });

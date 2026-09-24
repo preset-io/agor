@@ -3,6 +3,7 @@ import { ROLES } from '@agor-live/client';
 import { ApiOutlined, ShopOutlined } from '@ant-design/icons';
 import { Tag as AntTag, Button, Flex, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -13,7 +14,7 @@ import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
 import { MCPServerEditModal, MCPServerPill } from '../MCPServer';
 import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import { MCPServerSelect } from '../MCPServerSelect';
-import { Tag } from '../Tag';
+import { Tag, useFlippingPopupPosition } from '../Tag';
 
 export interface SessionMcpFooterControlProps {
   client: AgorClient | null;
@@ -77,20 +78,20 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   const rootRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const popupRef = React.useRef<HTMLDivElement>(null);
+  const popupPosition = useFlippingPopupPosition(open, triggerRef, popupRef, token.sizeXS);
   const generatedId = React.useId().replaceAll(':', '');
   const popupId = `session-mcp-popup-${generatedId}`;
   const headingId = `${popupId}-heading`;
 
+  // The popup is portaled out of `rootRef` (see the render below), so an
+  // outside press has to clear the trigger and the popup separately.
   React.useEffect(() => {
     if (!open) return;
     const dismissOutside = (event: PointerEvent) => {
-      if (
-        rootRef.current &&
-        event.target instanceof Node &&
-        !rootRef.current.contains(event.target)
-      ) {
-        setOpen(false);
-      }
+      if (!(event.target instanceof Node)) return;
+      if (rootRef.current?.contains(event.target)) return;
+      if (popupRef.current?.contains(event.target)) return;
+      setOpen(false);
     };
     document.addEventListener('pointerdown', dismissOutside);
     return () => document.removeEventListener('pointerdown', dismissOutside);
@@ -260,7 +261,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   );
 
   return (
-    <div ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
+    <div ref={rootRef} style={{ display: 'inline-flex' }}>
       {/* Tag renders a span, but this popover contains the only in-session
           sign-in action for a fresh Marketplace OAuth install. Keep the Tag's
           appearance inside a native disclosure control so Enter/Space, focus,
@@ -331,30 +332,41 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
         </Tag>
       </button>
 
-      {open && (
-        <div
-          ref={popupRef}
-          id={popupId}
-          role="dialog"
-          aria-labelledby={headingId}
-          onKeyDown={handleEscape}
-          style={{
-            position: 'absolute',
-            bottom: `calc(100% + ${token.sizeXS}px)`,
-            left: 0,
-            zIndex: token.zIndexPopupBase,
-            padding: token.paddingSM,
-            background: token.colorBgElevated,
-            borderWidth: token.lineWidth,
-            borderStyle: 'solid',
-            borderColor: token.colorBorderSecondary,
-            borderRadius: token.borderRadiusLG,
-            boxShadow: token.boxShadowSecondary,
-          }}
-        >
-          {content}
-        </div>
-      )}
+      {/* Portaled to the body and positioned against the trigger: anchored in
+          place, the popup was clipped by the session panel's `overflow:
+          hidden`. This stays a plain `dialog` element rather than becoming an
+          AntD overlay — `TagPopover` is the right answer for a chip popover,
+          but its container carries a `tooltip` role and a second global Escape
+          stack, neither of which this disclosure can take. `TagPopover`'s
+          collision behavior is matched by `useFlippingPopupPosition`. */}
+      {open &&
+        createPortal(
+          <div
+            ref={popupRef}
+            id={popupId}
+            role="dialog"
+            aria-labelledby={headingId}
+            onKeyDown={handleEscape}
+            style={{
+              position: 'fixed',
+              top: popupPosition?.top ?? 0,
+              left: popupPosition?.left ?? 0,
+              // Out of sight for the single layout pass that measures it.
+              visibility: popupPosition ? undefined : 'hidden',
+              zIndex: token.zIndexPopupBase,
+              padding: token.paddingSM,
+              background: token.colorBgElevated,
+              borderWidth: token.lineWidth,
+              borderStyle: 'solid',
+              borderColor: token.colorBorderSecondary,
+              borderRadius: token.borderRadiusLG,
+              boxShadow: token.boxShadowSecondary,
+            }}
+          >
+            {content}
+          </div>,
+          document.body
+        )}
       {editingServer && (
         <MCPServerEditModal
           server={editingServer}

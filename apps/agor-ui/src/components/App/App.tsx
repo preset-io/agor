@@ -71,6 +71,7 @@ import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
+import { SIDE_PANEL_DEFAULT_WIDTH_PX } from '../../utils/sidePanelWidth';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -106,6 +107,7 @@ import {
 import {
   capSessionSizeForCanvasMin,
   getContentPanelWidthPercent,
+  getSessionPanelDefaultSizePercent,
   toContentRelativePercent,
   toViewportRelativePercent,
 } from './panelSizing';
@@ -289,7 +291,9 @@ const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
-const SESSION_PANEL_MIN_WIDTH_PX = 360;
+// The session panel's first-open width is also its floor, so the width a
+// first-time user sees is never clamped wider than the home sidebar's.
+const SESSION_PANEL_MIN_WIDTH_PX = SIDE_PANEL_DEFAULT_WIDTH_PX;
 const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
 const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
 // Matches the canvas panel's own `minSize` below — kept as one constant so
@@ -623,10 +627,20 @@ export const App: React.FC<AppProps> = ({
   // Session panel size persistence: percentage of the FULL VIEWPORT (not of
   // the content panel), scoped per user, so the chat panel's absolute pixel
   // width doesn't change when the left panel collapses to a rail or back.
+  // Unset/first-time default only — a stored width always wins.
+  const sessionPanelDefaultSize = useMemo(
+    () =>
+      getSessionPanelDefaultSizePercent(
+        viewportWidth,
+        sessionPanelMinSize,
+        SESSION_PANEL_MAX_SIZE_PERCENT
+      ),
+    [sessionPanelMinSize, viewportWidth]
+  );
   const [sessionPanelSize, setSessionPanelSize] = useUserLocalStorage<number>(
     user?.user_id,
     'panel:right:size',
-    50
+    sessionPanelDefaultSize
   );
 
   const effectiveSessionPanelSize = clampPercent(

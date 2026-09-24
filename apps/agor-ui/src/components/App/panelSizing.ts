@@ -1,6 +1,8 @@
 // Pure width math for the resizable App layout panels. Extracted so it's
 // unit-testable without mounting the full App component tree.
 
+import { SIDE_PANEL_DEFAULT_WIDTH_PX } from '../../utils/sidePanelWidth';
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 // Width of the middle "content" panel (canvas + session panel) as a
@@ -42,3 +44,13 @@ export const capSessionSizeForCanvasMin = (
   sessionContentRelativePercent: number,
   canvasMinPercent: number
 ) => Math.min(sessionContentRelativePercent, 100 - canvasMinPercent);
+
+// Width the session panel opens at for a user who has never resized it:
+// the same absolute width as the home sidebar, so Agor's two side panels start
+// alike. Expressed as a percentage of the viewport (the frame the panel's size
+// is persisted in) and bounded by the panel's own min/max.
+export const getSessionPanelDefaultSizePercent = (
+  viewportWidth: number,
+  minSizePercent: number,
+  maxSizePercent: number
+) => clamp((SIDE_PANEL_DEFAULT_WIDTH_PX / viewportWidth) * 100, minSizePercent, maxSizePercent);

@@ -12,6 +12,7 @@ import {
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
 import { selectBoardById, selectBranchById } from '../../store/selectors';
+import { SIDE_PANEL_DEFAULT_WIDTH_PX } from '../../utils/sidePanelWidth';
 import { isDarkTheme } from '../../utils/theme';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { HomeActivitySection } from './HomeActivitySection';
@@ -29,7 +30,7 @@ const { Text, Title } = Typography;
 
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 const SIDEBAR_STORAGE_KEY = 'agor:homepage-sidebar-width';
-const SIDEBAR_DEFAULT = 340;
+const SIDEBAR_DEFAULT = SIDE_PANEL_DEFAULT_WIDTH_PX;
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;
 

@@ -283,4 +283,35 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     expect(within(replacementDialog).getByText('Admin B Server')).toBeInTheDocument();
     expect(within(replacementDialog).queryByText('Admin A Bearer')).not.toBeInTheDocument();
   });
+
+  it('opens the disclosure outside the footer’s clipped chrome', () => {
+    render(
+      <div data-testid="clipped-footer" style={{ overflow: 'hidden' }}>
+        <SessionMcpFooterControl
+          client={client}
+          currentUserId="user-a"
+          sessionId="session-id"
+          sessionMcpServerIds={[]}
+          mcpServerById={new Map()}
+          userAuthenticatedMcpServerIds={new Set()}
+        />
+      </div>,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
+      })
+    );
+
+    // Anchored inside the footer, this popup is cut off at the panel's
+    // `overflow: hidden`; it has to live in the body to be positioned freely.
+    const popup = screen.getByRole('dialog', { name: 'Session MCP servers' });
+    expect(screen.getByTestId('clipped-footer')).not.toContainElement(popup);
+    expect(popup.parentElement).toBe(document.body);
+    expect(popup.style.position).toBe('fixed');
+    // Still a dialog disclosure, not an AntD tooltip overlay.
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
 });
