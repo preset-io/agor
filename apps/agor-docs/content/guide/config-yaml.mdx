@@ -634,23 +634,21 @@ pipeline is involved. Older executors omit the optional field; older daemons can
 ignore it. Memory observations are not persisted on Tasks or sent to community
 telemetry. Export requires an accepted runtime authority check.
 
-`executor.memory.current.<field>_bytes` and
-`executor.memory.sampled_peak.<field>_bytes` are distributions with fixed fields:
-`rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`,
-`direct_children_rss`, `cgroup_current`, `cgroup_limit`, `cgroup_anon`,
-`cgroup_file`, and `cgroup_kernel`. They add no tenant, session, task, PID, command,
-or content labels. **Array buffers are a subset of external memory**, not an
-additional category to sum.
+`executor.memory.current.<field>_bytes` distributions have six fixed fields:
+`rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`.
+They describe the executor's Node wrapper process only, using synchronous
+`process.memoryUsage()` and V8 heap-limit counters. There is no proc/cgroup I/O,
+async sampling promise, child-process enumeration, or retained peak state.
+Cloud infrastructure owns container/node metrics. Missing values are omitted,
+not zero; old/unknown fields (including `sampled_peak`) are ignored.
 
-Linux process reads cover at most 32 direct children of the executor's main
-thread, not a recursive process tree. Cgroup v2 and conventional v1 memory mounts
-are best-effort; unsupported mounts, unlimited limits, inaccessible or oversized
-files, and incomplete child reads omit the affected metric rather than report
-zero. Cgroup usage describes the containing cgroup, which may be shared with
-other workloads; it is not necessarily exclusive executor usage.
+No tenant, session, task, PID, command, or content labels are added.
+**Array buffers are a subset of external memory**, not an additional category
+to sum. Every heartbeat revalidates runtime authority before stamping liveness;
+it is not merely a timestamp patch. Sampling failures omit diagnostics, not
+heartbeats.
 
-Peaks are maxima **observed since task heartbeat sampling began**. Samples can
-miss short-lived processes and between-sample spikes; a crash can lose the last
-observation. Distributions are heartbeat-weighted running observations/peaks,
-not distinct-executor counts or one terminal peak per run. Do not use them alone
-to infer a leak, OOM cause, fleet concurrency, or required memory sizing.
+Distributions are heartbeat/time-weighted observations, not a distinct-executor
+distribution or run peaks. Samples miss between-heartbeat spikes and a crash can
+lose the final observation; no terminal peak is synthesized. Do not use these
+alone to infer a leak, OOM cause, fleet concurrency, or required memory sizing.

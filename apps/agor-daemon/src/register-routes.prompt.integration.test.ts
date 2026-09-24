@@ -1,4 +1,7 @@
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import { createClient } from '@agor/core/api';
 import { DEFAULT_STATIC_TENANT_ID } from '@agor/core/config';
 import {
   BranchRepository,
@@ -17,7 +20,9 @@ import {
 import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  HookContext,
   MessageCreate,
+  RuntimeTelemetryInput,
   Session,
   SessionUpdate,
   Task,
@@ -25,6 +30,9 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ReactiveSessionHandle } from '../../../packages/client/src/reactive-session';
+import { startExecutorHeartbeat } from '../../../packages/executor/src/executor-heartbeat';
+import { NOOP_METRICS } from './metrics/noop';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import { TasksService } from './services/tasks.js';
 
@@ -77,7 +85,7 @@ async function fixture(throughQueue = false) {
     return { actor, session };
   });
 
-  // Real Feathers registration/hooks and real repositories; no listener is started.
+  // Real Feathers registration/hooks and real repositories. Only transport tests listen.
   // Only the executor and unrelated session configuration/service work are stubbed.
   const app = feathersExpress(feathers()) as unknown as Application;
   app.configure(socketio());
@@ -111,7 +119,9 @@ async function fixture(throughQueue = false) {
   app.use('users', { get: (id: string) => usersRepository.findById(id) });
   app.use('repos', { get: vi.fn() });
   const tasksService = new TasksService(db, app);
-  app.use('tasks', tasksService);
+  app.use('tasks', tasksService, {
+    methods: ['find', 'get', 'create', 'patch', 'remove', 'reportRuntimeTelemetry'],
+  });
   vi.spyOn(tasksService, 'autoTitleSession').mockResolvedValue();
   const claim = vi.spyOn(tasksService, 'claimDispatchAndProjectSession');
   app.service('tasks').on('created', (task: Task) => events.push(`created:${task.status}`));
@@ -156,6 +166,7 @@ async function fixture(throughQueue = false) {
     } as AuthenticatedParams) as Promise<Task>;
   return {
     app,
+    tasksService,
     scoped,
     session,
     actor,
@@ -245,6 +256,165 @@ it('registers the parameterized queue route and resolves params.route.id inside 
     route: { id: f.session.session_id },
     user: f.actor,
     tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
-  });
+  } as AuthenticatedParams);
   expect(result.data.map((task: Task) => task.task_id)).toEqual([queued.task_id]);
 });
+
+it('real reader transports parameterized queue through registered route and scoped SQLite, including reconnect', async () => {
+  const f = await fixture(true);
+  const queued = await f.scoped(() =>
+    f.taskRepo.createPending({
+      session_id: f.session.session_id,
+      created_by: f.actor.user_id,
+      full_prompt: 'fixture queue',
+      status: TaskStatus.QUEUED,
+    })
+  );
+  f.app.hooks({
+    before: {
+      all: [
+        (ctx: HookContext) => {
+          ctx.params.user = f.actor;
+          ctx.params.tenant = { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' };
+          return ctx;
+        },
+      ],
+    },
+  });
+  for (const name of ['tasks', 'sessions', 'messages'])
+    f.app.service(name).hooks({
+      around: { all: [(ctx: HookContext, next: () => Promise<void>) => f.scoped(next)] },
+    });
+  f.app.use('session-streams', {
+    create: async (data: unknown) => data,
+    remove: async (id: string) => ({ session_id: id }),
+  });
+  const server = await f.app.listen({ port: 0, host: '127.0.0.1' });
+  if (!server.listening) await once(server, 'listening');
+  const client = createClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, false, {
+    ackTimeout: 3000,
+  });
+  let handle: ReactiveSessionHandle | undefined;
+  try {
+    const connected = new Promise<void>((resolve) => client.io.once('connect', () => resolve()));
+    client.io.connect();
+    await connected;
+    handle = new ReactiveSessionHandle(client, f.session.session_id, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.error).toBeNull();
+    expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual([queued.task_id]);
+    expect(Object.keys(client.services).filter((k) => k.endsWith('/tasks/queue'))).toEqual([
+      'sessions/:id/tasks/queue',
+    ]);
+    client.io.disconnect();
+    const reconnected = new Promise<void>((resolve) => client.io.once('connect', () => resolve()));
+    client.io.connect();
+    await reconnected;
+    await vi.waitFor(() => expect(handle!.state.connected).toBe(true));
+    await handle.resync();
+    expect(handle.state.error).toBeNull();
+    expect(handle.state.queuedTasks.map((t) => t.task_id)).toEqual([queued.task_id]);
+  } finally {
+    handle?.dispose();
+    client.io.disconnect();
+    await f.app.teardown();
+  }
+}, 15000);
+
+it('real sampler reaches custom Feathers heartbeat, SQLite authority and fixed metric sink', async () => {
+  const f = await fixture(true);
+  const task = await f.prompt({ prompt: 'telemetry fixture' });
+  await f.scoped(() => f.taskRepo.bindExecutorLaunchAuthority(task.task_id));
+  await f.scoped(() => f.taskRepo.connectExecutor(task.task_id));
+  Reflect.set(f.tasksService, 'executorCredentialRevoker', {
+    isTaskTokenAuthorityCurrent: async () => true,
+  });
+  const distribution = vi.fn();
+  f.app.set('metrics', { ...NOOP_METRICS, enabled: true, distribution });
+  let mismatchedTenant = false;
+  f.app.hooks({
+    before: {
+      all: [
+        (ctx: HookContext) => {
+          ctx.params.user = f.actor;
+          ctx.params.tenant = { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' };
+          // Deliberately trusted fixture identity, not a production JWT authenticator.
+          ctx.params.authentication = {
+            strategy: 'jwt',
+            accessToken: 'disposable-fixture-token',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              sub: f.actor.user_id,
+              tenant_id: mismatchedTenant ? 'foreign-tenant' : DEFAULT_STATIC_TENANT_ID,
+              session_id: f.session.session_id,
+              task_id: task.task_id,
+              branch_id: f.session.branch_id,
+            },
+          };
+          return ctx;
+        },
+      ],
+    },
+  });
+  f.app
+    .service('tasks')
+    .hooks({ around: { all: [(ctx: HookContext, next: () => Promise<void>) => f.scoped(next)] } });
+  const server = await f.app.listen({ port: 0, host: '127.0.0.1' });
+  if (!server.listening) await once(server, 'listening');
+  const client = createClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, false, {
+    ackTimeout: 3000,
+  });
+  let heartbeat: ReturnType<typeof startExecutorHeartbeat> | undefined;
+  try {
+    const connected = new Promise<void>((resolve) => client.io.once('connect', () => resolve()));
+    client.io.connect();
+    await connected;
+    heartbeat = startExecutorHeartbeat({
+      client,
+      taskId: task.task_id,
+      memorySampling: true,
+      intervalMs: 10000,
+    });
+    await vi.waitFor(() => expect(distribution.mock.calls.length).toBe(6), { timeout: 5000 });
+    heartbeat.stop();
+    expect(distribution.mock.calls).toContainEqual([
+      'executor.memory.current.rss_bytes',
+      expect.any(Number),
+    ]);
+    const stored = await f.scoped(() => f.taskRepo.findById(task.task_id));
+    expect(stored?.last_executor_heartbeat_at).toBeTruthy();
+    expect(stored).not.toHaveProperty('memory');
+    const before = distribution.mock.calls.length;
+    // Export disabled still accepts the liveness write.
+    f.app.set('metrics', NOOP_METRICS);
+    await client
+      .service('tasks')
+      .reportRuntimeTelemetry({ task_id: task.task_id, memory: { current: { rss: 1 } } });
+    expect(distribution.mock.calls.length).toBe(before);
+    f.app.set('metrics', { ...NOOP_METRICS, enabled: true, distribution });
+    await client.service('tasks').reportRuntimeTelemetry({
+      task_id: task.task_id,
+      memory: { current: { rss: -1, external: 'redacted-fixture' }, sampled_peak: {} },
+    } as unknown as RuntimeTelemetryInput);
+    expect(distribution.mock.calls.length).toBe(before);
+    await expect(
+      client
+        .service('tasks')
+        .reportRuntimeTelemetry({ task_id: generateId(), memory: { current: { rss: 1 } } })
+    ).rejects.toMatchObject({ code: 403 });
+    expect(distribution.mock.calls.length).toBe(before);
+    mismatchedTenant = true;
+    await expect(
+      client.service('tasks').reportRuntimeTelemetry({
+        task_id: task.task_id,
+        memory: { current: { rss: 1 } },
+      })
+    ).rejects.toMatchObject({ code: 403 });
+    expect(distribution.mock.calls.length).toBe(before);
+  } finally {
+    heartbeat?.stop();
+    client.io.disconnect();
+    await f.app.teardown();
+  }
+}, 15000);

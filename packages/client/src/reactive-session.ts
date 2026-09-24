@@ -1,12 +1,20 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
-import { isTaskExecuting, MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
-
-import { leanMessage } from './lean-message.js';
+import {
+  isTaskExecuting,
+  isTerminalTaskStatus,
+  leanMessage,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+  TaskStatus,
+} from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
+/** Full-detail turn budget, independent of history pagination (not a byte cap).
+ * Latest/active turns and explicitly expanded consumers are protected exceptions. */
+export const LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT = 10;
 const isLeanActive = isTaskExecuting;
 
 export interface ReactiveSessionOptions {
@@ -203,7 +211,7 @@ export class ReactiveSessionHandle {
 
   /** Each expanded consumer owns a pin. Release is idempotent and cannot unpin another reader. */
   retainTaskDetails(taskId: string): () => void {
-    this.assertNotDisposed();
+    if (this.disposed) return () => {};
     this.detailPins.set(taskId, (this.detailPins.get(taskId) ?? 0) + 1);
     let released = false;
     return () => {
@@ -212,14 +220,18 @@ export class ReactiveSessionHandle {
       const count = (this.detailPins.get(taskId) ?? 1) - 1;
       if (count) this.detailPins.set(taskId, count);
       else this.detailPins.delete(taskId);
-      this.updateState((state) => state);
+      // React may replace a disclosure callback in one effect cleanup/setup
+      // pass. Give its replacement pin a chance to acquire before eviction.
+      queueMicrotask(() => {
+        if (!this.disposed) this.updateState((state) => state);
+      });
     };
   }
 
   private touchDetails(taskId: string): void {
     this.recentDetails.delete(taskId);
     this.recentDetails.add(taskId);
-    while (this.recentDetails.size > LEAN_TRANSCRIPT_TASK_PAGE_SIZE)
+    while (this.recentDetails.size > LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT)
       this.recentDetails.delete(this.recentDetails.values().next().value!);
   }
 
@@ -228,15 +240,43 @@ export class ReactiveSessionHandle {
    * explicitly pinned details. This is a turn bound, not a byte bound. Text,
    * attachments and widget history remain lean; tools/reasoning rehydrate on demand.
    * Apply after every update so late events and reconnect snapshots cannot regrow
-   * old full buckets. Never evict the actual stream or silently discard events.
+   * old full buckets. Active streams survive the persisted-message handoff;
+   * unmatched terminal partial/error displays share the bounded recent-turn cache.
    */
   private boundLeanDetails(state: ReactiveSessionState): ReactiveSessionState {
     const keep = new Set([...this.recentDetails, ...this.detailPins.keys()]);
     for (const task of state.tasks) if (isLeanActive(task)) keep.add(task.task_id);
     const latest = state.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
     if (latest) keep.add(latest.task_id);
+    const tasksById = new Map<string, Task>(state.tasks.map((task) => [task.task_id, task]));
+    const activeStream = (stream: StreamingMessageState) => {
+      const task = stream.task_id ? tasksById.get(stream.task_id) : undefined;
+      return (
+        (stream.isStreaming || stream.isThinking) && (!task || !isTerminalTaskStatus(task.status))
+      );
+    };
     for (const stream of state.streamingMessages.values())
-      if (stream.task_id) keep.add(stream.task_id);
+      if (stream.task_id && activeStream(stream)) keep.add(stream.task_id);
+    let streamingMessages = state.streamingMessages;
+    // End/error is not persistence. Keep recent unmatched partial displays, but
+    // never let them pin full buckets forever. Unassigned ended streams have a
+    // separate bounded fallback, since there is no turn to charge them to.
+    const unassigned = [...streamingMessages.values()]
+      .filter((stream) => !stream.task_id && !activeStream(stream))
+      .slice(-LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT);
+    const keepUnassigned = new Set(unassigned.map((stream) => stream.message_id));
+    for (const [id, stream] of streamingMessages) {
+      if (activeStream(stream)) continue;
+      if (!(stream.task_id ? keep.has(stream.task_id) : keepUnassigned.has(id))) {
+        if (streamingMessages === state.streamingMessages)
+          streamingMessages = new Map(streamingMessages);
+        streamingMessages.delete(id);
+      } else if (stream.isStreaming || stream.isThinking) {
+        if (streamingMessages === state.streamingMessages)
+          streamingMessages = new Map(streamingMessages);
+        streamingMessages.set(id, { ...stream, isStreaming: false, isThinking: false });
+      }
+    }
     let messagesByTask = state.messagesByTask;
     for (const [id, messages] of messagesByTask) {
       if (keep.has(id) || messages.every((message) => this.projectedMessages.has(message)))
@@ -260,9 +300,10 @@ export class ReactiveSessionHandle {
       : state.toolsByTask;
     return messagesByTask === state.messagesByTask &&
       loadedTaskIds === state.loadedTaskIds &&
-      toolsByTask === state.toolsByTask
+      toolsByTask === state.toolsByTask &&
+      streamingMessages === state.streamingMessages
       ? state
-      : { ...state, messagesByTask, loadedTaskIds, toolsByTask };
+      : { ...state, messagesByTask, loadedTaskIds, toolsByTask, streamingMessages };
   }
 
   /**

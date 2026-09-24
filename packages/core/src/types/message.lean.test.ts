@@ -1,6 +1,10 @@
-import { type Message, type PermissionRequestContent, PermissionStatus } from '@agor/core/client';
 import { expect, it } from 'vitest';
-import { leanMessage } from './lean-message.js';
+import {
+  leanMessage,
+  type Message,
+  type PermissionRequestContent,
+  PermissionStatus,
+} from './message';
 
 it('projects tools/reasoning and raw metadata without mutating text, attachments or history identity', () => {
   const source = {

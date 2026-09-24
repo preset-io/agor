@@ -192,6 +192,6 @@ it('exports memory only after accepted authority, never for another tenant or a 
         runtimeParams(outcome === 'scope_mismatch' ? { tenant_id: 'tenant-b' } : {})
       )
       .catch(() => undefined);
-    expect(distribution.mock.calls.length).toBe(outcome === 'continued' ? 2 : 0);
+    expect(distribution.mock.calls.length).toBe(outcome === 'continued' ? 1 : 0);
   }
 });

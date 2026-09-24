@@ -57,18 +57,10 @@ export const EXECUTOR_MEMORY_FIELDS = [
   'heap_limit',
   'external',
   'array_buffers',
-  'direct_children_rss',
-  'cgroup_current',
-  'cgroup_limit',
-  'cgroup_anon',
-  'cgroup_file',
-  'cgroup_kernel',
 ] as const;
 export type ExecutorMemoryValues = Partial<Record<(typeof EXECUTOR_MEMORY_FIELDS)[number], number>>;
 export interface ExecutorMemorySample {
   current: ExecutorMemoryValues;
-  /** Maxima observed since this task's sampler started, not kernel/lifetime high-water marks. */
-  sampled_peak: ExecutorMemoryValues;
 }
 
 export interface RuntimeTelemetryInput {

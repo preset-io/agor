@@ -6,13 +6,15 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
-import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
+import { leanMessage, MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
+import { DEFAULT_STATIC_TENANT_ID } from '../../config/multitenancy';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { select, update } from '../database-wrapper';
 import { messages as messagesTable, tasks as tasksTable } from '../schema';
+import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from '../tenant-scope';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -1214,4 +1216,68 @@ dbTest('does not certify malformed recorded references as empty', async ({ db })
     (await new TaskRepository(db).update(taskId, { status: TaskStatus.COMPLETED }))
       .recorded_tool_count
   ).toBeNull();
+});
+
+dbTest('browser lean projection exactly matches scoped SQLite SQL DTOs', async ({ db: rawDb }) => {
+  const db = createTenantScopedDatabaseProxy(rawDb, { requireScope: true });
+  await runWithTenantDatabaseScope(db, DEFAULT_STATIC_TENANT_ID, async () => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const taskId = await createTestTask(db, sessionId);
+    const sources = [
+      createMessageData({ content: 'plain', metadata: { raw: 'drop', model: 'keep' } }),
+      createMessageData({
+        type: 'assistant',
+        content: [
+          { type: 'text', text: 'answer' },
+          { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+          { type: 'thinking', text: 'reasoning' },
+          { type: 'tool_use', id: 'tool', name: 'Read', input: { path: '/test' } },
+          { type: 'tool_result', tool_use_id: 'tool', content: 'output' },
+        ],
+        tool_uses: [{ id: 'tool', name: 'Read', input: {} }],
+      }),
+      ...[PermissionStatus.PENDING, PermissionStatus.APPROVED].map((status) =>
+        createMessageData({
+          type: 'permission_request',
+          content: {
+            request_id: 'permission',
+            tool_name: 'Read',
+            tool_input: { path: '/test' },
+            status,
+          },
+        })
+      ),
+      createMessageData({
+        type: 'widget_request',
+        metadata: {
+          widget: {
+            widget_id: generateId() as MessageID,
+            widget_type: 'test',
+            schema_version: 1,
+            params: {},
+            status: 'pending',
+            requested_at: new Date().toISOString(),
+          },
+        },
+      }),
+    ];
+    for (const [index, source] of sources.entries())
+      await repository.create({
+        ...source,
+        session_id: sessionId,
+        task_id: taskId,
+        index,
+        parent_tool_use_id: 'parent',
+      });
+    const full = await repository.findPage({ sessionId, taskId });
+    const lean = await repository.findPage({ sessionId, taskId, lean: true });
+    expect((full.data as Message[]).map(leanMessage)).toStrictEqual(lean.data);
+    expect((lean.data as Message[]).map(leanMessage)).toStrictEqual(lean.data); // idempotent hint/shape
+    const foreign = await createTestSession(db);
+    expect(await repository.findPage({ sessionId: foreign, taskId, lean: true })).toEqual({
+      data: [],
+      total: 0,
+    });
+  });
 });

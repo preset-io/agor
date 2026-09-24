@@ -1024,6 +1024,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
             const messageElement = (
               <MessageBlock
+                retainDetails={retainDetails}
                 key={block.message.message_id}
                 message={block.message}
                 agentic_tool={agentic_tool}

@@ -38,6 +38,15 @@ it('reads the latest valid token record across giant lines, malformed tails, CRL
         JSON.stringify({ type: 'token_count', tokens: 2, padding: 'x'.repeat(2 * 1024 * 1024) })
     );
     expect(await findLatestJsonLine(file, project)).toBeUndefined();
+    // An unrelated oversized quoted marker is indistinguishable without a
+    // streaming JSON parser. Conservatively unknown, never the stale value 1.
+    await writeFile(
+      file,
+      JSON.stringify({ type: 'token_count', tokens: 1 }) +
+        '\n' +
+        JSON.stringify({ output: 'quoted "token_count" ' + 'x'.repeat(2 * 1024 * 1024) })
+    );
+    expect(await findLatestJsonLine(file, project)).toBeUndefined();
     await writeFile(file, 'x'.repeat(3 * 1024 * 1024));
     expect(await findLatestJsonLine(file, project)).toBeUndefined();
     await writeFile(file, '');

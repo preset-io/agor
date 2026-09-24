@@ -46,7 +46,10 @@ still copies the full source. All fetched text remains available for expansion a
 copying; this is a display preference, not a payload reduction.
 
 Tool and reasoning details use a separate cache: ten recently hydrated/live turns,
-plus the latest turn, active streams, and expanded tool activity. Collapsed older
+plus the latest turn, active turns/streams, and expanded tool or reasoning
+disclosures (including mixed text/activity messages). Ended/error streams never
+pin full history indefinitely: unmatched partial displays remain only for retained
+turns while awaiting persistence. Collapsed older
 details may need to reload when opened again. Text, attachments, and persisted
 history are not deleted. This bounds full-detail turns, not bytes: a large active
 turn or many deliberately expanded turns can still use substantial memory.

@@ -5,7 +5,9 @@ const MAX_LINE_BYTES = 1024 * 1024;
 
 /**
  * Read newest-first with fixed-size reads and at most 1 MiB per JSON record.
- * Oversized records (usually tool output) are skipped, never read in full.
+ * Oversized records without a token marker are skipped, never read in full.
+ * A possible token marker (even quoted in unrelated output) yields unknown:
+ * bounded scanning cannot validate it, and an older value must not look latest.
  * UTF-8 is decoded only after a whole line is assembled. A concurrent append
  * is outside the initial file-size snapshot; malformed/truncated tails are ignored.
  */
