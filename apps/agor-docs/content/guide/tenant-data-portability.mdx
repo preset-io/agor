@@ -79,7 +79,15 @@ filesystem summary (file, directory, symlink counts and total bytes).
 ```bash
 agor tenant inspect --tenant-id acme-corp
 agor tenant inspect --tenant-id acme-corp --database-only
+agor tenant inspect --tenant-id acme-corp --database-only --require-portable
 ```
+
+Use `--require-portable` for a re-home preflight: it refuses a tenant with
+managed OpenCode checkpoint ledger, store identity, or accepted pointer rows
+before a separate file-copy leg can materialize destination data. Ordinary
+read-only inspection remains available without this flag. A database-only
+inspection does not inspect native-state files; the file-copy leg must refuse
+those before writing.
 
 ### `agor tenant export`
 

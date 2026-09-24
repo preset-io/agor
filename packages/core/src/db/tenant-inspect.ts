@@ -15,6 +15,7 @@ import { resolveTenantDatabaseIdentity, type TenantDatabaseIdentity } from './te
 import { countTenantTableRows } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import { summarizeTenantFilesystem, type TenantFilesystemInventory } from './tenant-filesystem';
+import { assertTenantNativeStateHandoffClear } from './tenant-native-state-guard';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -50,6 +51,8 @@ export interface TenantInspectionResult {
 }
 
 export interface TenantInspectionOptions {
+  /** Refuse non-portable native-state database authority before any transfer leg. */
+  requirePortable?: boolean;
   /**
    * Absolute tenant filesystem root to inventory (as resolved by
    * `getTenantDataRoot(tenantId)`). Omit to inspect the database only.
@@ -98,6 +101,7 @@ export async function inspectTenant(
   options: TenantInspectionOptions = {}
 ): Promise<TenantInspectionResult> {
   assertValidTenantId(tenantId);
+  if (options.requirePortable) await assertTenantNativeStateHandoffClear(db, tenantId);
   const identity = await resolveTenantDatabaseIdentity(db);
   const { tables, derivedTables, totalRows } = await collectTenantDatabaseCounts(
     db,

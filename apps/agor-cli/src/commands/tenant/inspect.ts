@@ -44,6 +44,10 @@ export default class TenantInspect extends Command {
       description: 'Inspect only the database, skipping the tenant filesystem tree',
       default: false,
     }),
+    'require-portable': Flags.boolean({
+      description: 'Refuse non-portable native-state database authority before transfer',
+      default: false,
+    }),
   };
 
   async run(): Promise<void> {
@@ -75,7 +79,10 @@ export default class TenantInspect extends Command {
       }
 
       const db = createDatabase({ url: getDatabaseUrl() });
-      const result = await inspectTenant(db, tenantId, { filesystemRoot });
+      const result = await inspectTenant(db, tenantId, {
+        filesystemRoot,
+        requirePortable: flags['require-portable'],
+      });
       await writeStdoutJson(result);
       this.logToStderr(
         chalk.green(

@@ -849,6 +849,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     });
 
     const refusedArchive = join(scratch, `${tenantId}-refused-export`);
+    await expect(inspectTenant(db, tenantId)).resolves.toMatchObject({ tenantId });
+    await expect(inspectTenant(db, tenantId, { requirePortable: true })).rejects.toBeInstanceOf(
+      TenantNativeStateHandoffRequiredError
+    );
     await expect(
       exportTenant(db, tenantId, { archivePath: refusedArchive })
     ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
