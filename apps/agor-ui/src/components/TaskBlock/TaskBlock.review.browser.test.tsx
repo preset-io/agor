@@ -44,6 +44,7 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
     <ConfigProvider theme={{ token: {} }}>
       <TaskBlock
         task={task}
+        isLatestTask
         taskMessages={[
           message(0, MessageRole.USER, 'Prompt'),
           notice,

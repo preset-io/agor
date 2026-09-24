@@ -120,6 +120,7 @@ describe('groupMessagesIntoBlocks — widget_request ordering', () => {
     const { container } = render(
       <TaskBlock
         task={task}
+        isLatestTask
         taskMessages={[
           userMessage(0, 'u0'),
           widgetRequestMessage,
