@@ -75,3 +75,45 @@ credentials and tool installation are separate from verifying the UI/API.
 References: [Railway IaC](https://docs.railway.com/infrastructure-as-code),
 [Dockerfiles](https://docs.railway.com/builds/dockerfiles),
 [Volumes](https://docs.railway.com/volumes).
+
+## Experimental runtime-build target
+
+`docker/Dockerfile --target runtime-build` reuses the development dependency
+layers and the existing source-release builder/production bootstrap. It does not
+copy application source into the image and does not run watch processes or the
+development-default admin bootstrap. The current Railway configuration deliberately
+continues to use `production-source` until runtime capacity is validated.
+
+The new target requires `AGOR_SOURCE_BRANCH`; `AGOR_SOURCE_REPO` currently only
+accepts `https://github.com/preset-io/agor.git`. At startup it shallow-clones into
+`/home/agor/.agor/runtime-build/checkout` if missing, otherwise fetches and resets
+that **owned, disposable checkout** to the branch tip. This can be newer than the
+commit that triggered the deployment. The resolved SHA is logged and stamped in
+the release. Never edit that checkout or use it as an Agor managed workspace.
+
+A volume lock prevents concurrent startups; an ownership marker rejects reuse
+for another branch or repository. Dependency manifests, lockfile, workspace
+configuration, and patches must match the image fingerprint, otherwise startup
+fails closed and requires an image rebuild. It does not reinstall dependencies
+from arbitrary branch changes at startup.
+
+Runtime rsync copies source into disposable `/app`, preserving the dependency
+directories baked into the image. Build outputs remain disposable; Turbo's cache
+at `runtime-build/turbo` persists and restores unchanged outputs. The normal watch
+entrypoint's blanket dist/cache cleanup is not used. Build subprocesses receive
+an allowlisted environment without the operator's password/provider tokens.
+The packaged daemon still starts through `docker-entrypoint-prod.sh` and retains
+the existing SQLite configuration, users, keys, and managed workspaces.
+
+Runtime compilation needs substantially more memory/storage and a longer health
+startup window than serving an already-built image. Validate cold and warm boots
+under the intended resource limits before changing `AGOR_RUNTIME_TARGET` to
+`runtime-build`. No automatic cache pruning or private-repository authentication
+is implemented in this prototype. With a volume-backed service the old daemon
+cannot stay online throughout a long startup build; active sessions are interrupted.
+The full release build is not supported by the trial's 1 GB runtime RAM and
+1 GB ephemeral-disk limits. Budget memory for compilation and scratch disk for
+source, package staging, and the installed release, not only the final daemon.
+Warm Turbo hits avoid compilation but still pack and install the release.
+
+Local preparation tests: `node --test docker/runtime-checkout.test.mjs`.
