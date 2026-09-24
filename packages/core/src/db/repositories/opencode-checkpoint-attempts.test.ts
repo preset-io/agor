@@ -961,6 +961,40 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         collectorTask.task_id,
         collectorHolder,
         abandoned.attempt.attempt_id,
+        'unknown',
+        'CLOUD_UNKNOWN'
+      );
+      await expect(
+        attempts.loadObservationBinding(
+          collectorTask.task_id,
+          collectorHolder,
+          abandoned.attempt.attempt_id
+        )
+      ).rejects.toThrow(/no longer eligible/);
+      await update(db, opencodeCheckpointAttempts)
+        .set({ holder_observation_retry_at: new Date(0) })
+        .where(eq(opencodeCheckpointAttempts.attempt_id, abandoned.attempt.attempt_id))
+        .run();
+      let retriedObservation = false;
+      for (let index = 0; index < 8; index += 1) {
+        const next = await attempts.prepareCleanup(collectorTask.task_id, collectorHolder);
+        if (next.kind === 'observe' && next.attemptId === abandoned.attempt.attempt_id) {
+          retriedObservation = true;
+          break;
+        }
+      }
+      expect(retriedObservation).toBe(true);
+      await expect(
+        attempts.loadObservationBinding(
+          collectorTask.task_id,
+          collectorHolder,
+          abandoned.attempt.attempt_id
+        )
+      ).resolves.toEqual(abandoned.attempt.binding);
+      await attempts.recordHolderObservation(
+        collectorTask.task_id,
+        collectorHolder,
+        abandoned.attempt.attempt_id,
         'verified_closed'
       );
       const oldAttempt = await select(db)

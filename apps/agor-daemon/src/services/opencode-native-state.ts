@@ -1,15 +1,18 @@
 import { spawn } from 'node:child_process';
 import type { AgorConfig } from '@agor/core/config';
 import {
+  and,
   eq,
   generateId,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  opencodeCheckpointAttempts,
   select,
   sessions,
   TaskRepository,
   type TaskRuntimeAuthorityScope,
   type TenantScopeAwareDatabase,
+  tasks,
 } from '@agor/core/db';
 import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
@@ -26,6 +29,7 @@ import {
   type OpenCodeCheckpointSealInput,
   type OpenCodeNativeStateAttempt,
   type TaskID,
+  TaskStatus,
 } from '@agor/core/types';
 import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
@@ -127,6 +131,44 @@ type ObserverResponse =
   | { version: 1; action: 'resolve'; locator: OpenCodeCheckpointLocator }
   | { version: 1; action: 'observe'; outcome: 'verified_closed' | 'still_present' | 'unknown' };
 
+// Task tokens are bearer credentials inside a hosted Job. One token must not be
+// able to fork an unbounded number of trusted Cloud helpers on a shared daemon.
+const MAX_ACTIVE_OBSERVER_HELPERS = 8;
+const OBSERVER_TASK_COOLDOWN_MS = 1_000;
+const observerSlots = new Map<string, { active: boolean; retryAt: number }>();
+let activeObserverHelpers = 0;
+class ObserverCapacityError extends Conflict {}
+
+export async function withOpenCodeObserverSlot<T>(
+  tenantId: string,
+  taskId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const key = JSON.stringify([tenantId, taskId]);
+  const now = Date.now();
+  const current = observerSlots.get(key);
+  if (
+    current?.active ||
+    (current && current.retryAt > now) ||
+    activeObserverHelpers >= MAX_ACTIVE_OBSERVER_HELPERS
+  ) {
+    throw new ObserverCapacityError('Trusted Cloud observer helper is busy; retry later');
+  }
+  if (observerSlots.size > 1_024) {
+    for (const [candidate, slot] of observerSlots) {
+      if (!slot.active && slot.retryAt <= now) observerSlots.delete(candidate);
+    }
+  }
+  observerSlots.set(key, { active: true, retryAt: now });
+  activeObserverHelpers += 1;
+  try {
+    return await work();
+  } finally {
+    activeObserverHelpers -= 1;
+    observerSlots.set(key, { active: false, retryAt: Date.now() + OBSERVER_TASK_COOLDOWN_MS });
+  }
+}
+
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return (
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
@@ -196,6 +238,17 @@ async function runObserver(
   if (!command)
     throw new Conflict('Managed OpenCode admission requires the trusted Cloud observer helper');
   const timeoutMs = settings?.timeout_ms ?? 2_000;
+  const identity = request.action === 'resolve' ? request.expected : request.binding;
+  return withOpenCodeObserverSlot(identity.tenantId, identity.taskId, () =>
+    runObserverProcess(command, timeoutMs, request)
+  );
+}
+
+function runObserverProcess(
+  command: string,
+  timeoutMs: number,
+  request: ObserverRequest
+): Promise<ObserverResponse> {
   return new Promise<ObserverResponse>((resolve, reject) => {
     const child = spawn('sh', ['-c', command], {
       env: buildTrustedLauncherEnvironment(),
@@ -350,6 +403,40 @@ export class OpenCodeNativeStateService {
         session.created_by !== authority.userId
       ) {
         throw new Forbidden('Managed OpenCode requires the owner execution-home Session');
+      }
+      // Fast fail before any process spawn. The repository repeats these checks
+      // under Session → Task locks after resolution; this read only bounds cost
+      // for stale or invented holder calls carrying an otherwise valid task token.
+      const task = await select(this.options.db)
+        .from(tasks)
+        .where(eq(tasks.task_id, input.task_id))
+        .one();
+      if (
+        !task ||
+        task.session_id !== session.session_id ||
+        task.created_by !== authority.userId ||
+        task.data.managed_opencode_protocol !== 3 ||
+        !task.executor_connected_at ||
+        (task.status !== TaskStatus.RUNNING &&
+          task.status !== TaskStatus.AWAITING_INPUT &&
+          task.status !== TaskStatus.AWAITING_PERMISSION)
+      ) {
+        throw new Conflict('Managed OpenCode Task is not active for checkpoint admission');
+      }
+      const existing = await select(this.options.db, {
+        holder_instance_id: opencodeCheckpointAttempts.holder_instance_id,
+      })
+        .from(opencodeCheckpointAttempts)
+        .where(
+          and(
+            eq(opencodeCheckpointAttempts.tenant_id, tenantId),
+            eq(opencodeCheckpointAttempts.session_id, session.session_id),
+            eq(opencodeCheckpointAttempts.task_id, input.task_id)
+          )
+        )
+        .one();
+      if (existing && existing.holder_instance_id !== input.holder_instance_id) {
+        throw new Conflict('Managed OpenCode Task already has a different checkpoint holder');
       }
       const pointer = session.data.sdk_native_state;
       const storedId = session.data.sdk_native_state_store_id;
@@ -528,7 +615,8 @@ export class OpenCodeNativeStateService {
         throw new Conflict('Trusted Cloud observer returned an unexpected action');
       outcome = response.outcome;
       if (outcome === 'unknown') errorCode = 'CLOUD_UNKNOWN';
-    } catch {
+    } catch (error) {
+      if (error instanceof ObserverCapacityError) throw error;
       outcome = 'unknown';
       errorCode = 'HELPER_UNAVAILABLE';
     }

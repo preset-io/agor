@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseResolvedLocator } from './opencode-native-state';
+import { describe, expect, it, vi } from 'vitest';
+import { parseResolvedLocator, withOpenCodeObserverSlot } from './opencode-native-state';
 
 function resolvedLocator(containerId: string) {
   return {
@@ -34,5 +34,55 @@ describe('parseResolvedLocator', () => {
     expect(() => parseResolvedLocator(resolvedLocator('../containerd://id'))).toThrow(
       /invalid container binding/
     );
+  });
+});
+
+describe('trusted Cloud observer helper budget', () => {
+  it('allows only one helper per tenant task and throttles immediate replay', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      const first = withOpenCodeObserverSlot(
+        'tenant-budget',
+        'task-budget',
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      );
+      await expect(
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => {})
+      ).rejects.toThrow(/busy/);
+      finish();
+      await first;
+      await expect(
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => {})
+      ).rejects.toThrow(/busy/);
+      vi.advanceTimersByTime(1_000);
+      await expect(
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => 'admitted')
+      ).resolves.toBe('admitted');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps concurrent helpers across different tasks on the shared daemon', async () => {
+    const releases: Array<() => void> = [];
+    const pending = Array.from({ length: 8 }, (_, index) =>
+      withOpenCodeObserverSlot(
+        'tenant-global-budget',
+        `task-${index}`,
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve);
+          })
+      )
+    );
+    await expect(
+      withOpenCodeObserverSlot('tenant-global-budget', 'task-ninth', async () => {})
+    ).rejects.toThrow(/busy/);
+    for (const release of releases) release();
+    await Promise.all(pending);
   });
 });

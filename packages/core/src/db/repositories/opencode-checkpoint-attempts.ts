@@ -114,6 +114,8 @@ function retryAt(now: Date, failures: number): Date {
   );
 }
 
+const OBSERVATION_RESERVED = 'OBSERVATION_RESERVED';
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -651,6 +653,7 @@ export class OpenCodeCheckpointAttemptRepository {
               await update(tx, opencodeCheckpointAttempts)
                 .set({
                   holder_observation_retry_at: retry,
+                  holder_observation_last_error: OBSERVATION_RESERVED,
                   updated_at: now,
                 })
                 .where(eq(opencodeCheckpointAttempts.attempt_id, candidate.attempt_id))
@@ -764,6 +767,10 @@ export class OpenCodeCheckpointAttemptRepository {
       !owner ||
       owner.retired_at ||
       work.holder_closed_observed_at ||
+      // retry_at is also the in-flight lease set by prepareCleanup. The marker
+      // distinguishes that reservation from a completed failed observation's
+      // backoff, which must not launch another trusted helper yet.
+      work.holder_observation_last_error !== OBSERVATION_RESERVED ||
       (work.write_state !== 'open' && (!work.input_task_id || work.input_read_closed_at))
     ) {
       throw new RepositoryError('OpenCode observation identity is no longer eligible');
