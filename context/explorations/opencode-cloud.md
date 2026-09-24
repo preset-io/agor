@@ -319,8 +319,10 @@ replacement while a previous Job is unreachable.
   Cloud observation.
   After a managed output seals, exact Socket.IO acknowledgement/disconnect
   faults and transient service refusals retry the same holder's seal, fixed-ID
-  message, and completion for at most 15 minutes per phase, using a monotonic
-  clock. A permanent refusal, revoked credential, or exhausted budget exits
+  message, and completion with a 15-minute retry-start budget per phase, using
+  a monotonic clock. The deadline is checked after failed attempts, so the
+  final in-flight request can exceed it by its bounded I/O timeout. A permanent
+  refusal, revoked credential, or exhausted budget exits
   nonzero without abandoning possibly sealed output or manufacturing FAILED.
   Stale-heartbeat containment remains unverified for OpenCode; an owner may
   need to force-fail the Task after separate closure proof. This is recovery

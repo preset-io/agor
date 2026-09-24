@@ -193,7 +193,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         };
         await expect(
           nativeState.begin(input, { ...params, tenant: { tenant_id: `${tenantId}-foreign` } })
-        ).rejects.toThrow();
+        ).rejects.toThrow('Conflicting tenant identities');
         const grant = await nativeState.begin(input, params);
         expect(grant.outcome).toBe('admitted');
       } finally {
