@@ -246,6 +246,7 @@ describe('OpenCode model catalog service (hosted managed projection)', () => {
         unix_user_mode: 'delegated',
         executor_command_template: 'launch',
         executor_storage: { user_home: 'persistent-per-user' },
+        opencode_native_state_observer: { command_template: 'observe {task_id}' },
       },
       agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
     } as never);

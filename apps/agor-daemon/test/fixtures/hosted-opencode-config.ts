@@ -15,6 +15,7 @@ export function hostedOpenCodeConfig(): AgorConfig {
       unix_user_mode: 'delegated',
       executor_command_template: 'launch {payload}',
       executor_storage: { user_home: 'persistent-per-user' },
+      opencode_native_state_observer: { command_template: 'observe {task_id}' },
       sandbox: { sdk_home_mode: 'per_branch' },
     },
     agentic_tools: { opencode_hosted_native_state: 'checkpointed' },

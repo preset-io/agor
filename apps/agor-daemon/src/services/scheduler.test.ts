@@ -183,6 +183,7 @@ describe('scheduler deployment capability admission', () => {
               execution: {
                 unix_user_mode: 'delegated',
                 executor_command_template: 'launch {payload}',
+                opencode_native_state_observer: { command_template: 'observe {task_id}' },
                 executor_storage: {
                   user_home: missing === 'persistent-home' ? 'shared' : 'persistent-per-user',
                 },
