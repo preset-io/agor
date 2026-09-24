@@ -86,6 +86,9 @@ it('keeps card rows, chevrons and hover actions aligned at canvas zooms', async 
     screen.getByRole('button', { name: rowName(session.title!) })
   );
   for (const zoom of ZOOMS) {
+    // A previous row's title tooltip can move over the next hover target when zoom changes.
+    await act(async () => page.getByText('Sessions', { exact: true }).hover());
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
     screen.getByTestId('canvas').style.transform = `scale(${zoom})`;
     for (const row of rows) {
       await act(async () => page.elementLocator(row).hover());
