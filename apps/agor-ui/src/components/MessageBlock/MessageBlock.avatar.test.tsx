@@ -1,5 +1,5 @@
 import type { Message } from '@agor-live/client';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { MessageBlock } from './MessageBlock';
@@ -32,5 +32,22 @@ describe('MessageBlock avatar sizing', () => {
       width: `${IDENTITY_AVATAR_SIZE}px`,
       height: `${IDENTITY_AVATAR_SIZE}px`,
     });
+  });
+
+  it('keeps a visible, named AntD timestamp control in the grouped-message gutter', () => {
+    const { container } = render(
+      <MessageBlock message={{ ...messageOf('assistant'), index: 7 }} showAvatar={false} />
+    );
+    const timestamp = screen.getByRole('button', {
+      name: /Message 7 timestamp:.*Message index: 7/s,
+    });
+    expect(timestamp).toHaveClass('ant-btn');
+    expect(timestamp.querySelector('.anticon-clock-circle')).not.toBeNull();
+    expect(timestamp.closest('.ant-bubble-avatar')).not.toBeNull();
+    expect(timestamp).toHaveStyle({
+      width: `${IDENTITY_AVATAR_SIZE}px`,
+      height: `${IDENTITY_AVATAR_SIZE}px`,
+    });
+    expect(container.querySelector('[data-testid="avatar-spacer"]')).toBeNull();
   });
 });

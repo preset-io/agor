@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ConfigProvider } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { TaskBlock } from './TaskBlock';
 
 afterEach(cleanup);
@@ -48,6 +49,7 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
           notice,
           message(2, MessageRole.ASSISTANT, 'First actual answer'),
           message(3, MessageRole.ASSISTANT, 'Continued answer'),
+          message(4, MessageRole.ASSISTANT, 'One more answer'),
         ]}
         taskMessagesLoaded
         onLoadTaskMessages={vi.fn()}
@@ -58,16 +60,36 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
   expect(container.querySelectorAll('.ant-bubble-avatar .ant-avatar')).toHaveLength(2);
   expect(screen.getByText('First actual answer')).toBeVisible();
   const timestamp = screen.getByRole('button', { name: /Message 3 timestamp:.*Message index: 3/s });
+  const nextTimestamp = screen.getByRole('button', {
+    name: /Message 4 timestamp:.*Message index: 4/s,
+  });
   expect(timestamp.closest('.ant-bubble-avatar')).not.toBeNull();
-  expect(timestamp.getBoundingClientRect().width).toBeGreaterThan(0);
+  expect(timestamp).toHaveClass('ant-btn');
+  expect(timestamp.querySelector('.anticon-clock-circle')).not.toBeNull();
+  expect(timestamp.getBoundingClientRect().width).toBe(IDENTITY_AVATAR_SIZE);
+  expect(nextTimestamp.closest('.ant-bubble-avatar')).not.toBeNull();
   await act(async () => userEvent.hover(timestamp));
   await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 3'));
+  await act(async () => userEvent.unhover(timestamp));
+  await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
   act(() => timestamp.focus());
   expect(document.activeElement).toBe(timestamp);
+  await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 3'));
+  await act(async () => userEvent.keyboard('{Escape}'));
+  await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+  await act(async () => userEvent.keyboard('{Enter}'));
+  await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 3'));
+  await act(async () => userEvent.keyboard('{Escape}'));
+  await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+  await act(async () => userEvent.keyboard(' '));
+  await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 3'));
   act(() => {
     timestamp.blur();
     fireEvent.mouseLeave(screen.getByLabelText('Turn and its metadata'));
   });
+  await act(async () => userEvent.click(nextTimestamp));
+  await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 4'));
+  act(() => nextTimestamp.blur());
 
   const usage = screen.getByRole('button', {
     name: /Context window 22% used; show token breakdown/,
@@ -76,10 +98,12 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
   const label = screen.getByTestId('turn-usage-label');
   await waitFor(() => expect(getComputedStyle(label).color).toBe(label.style.color));
   await waitFor(() => expect(getComputedStyle(tag).color).toBe(getComputedStyle(label).color));
-  const restingColor = getComputedStyle(tag).color;
+  expect(usage).toHaveClass('ant-btn');
+  await act(async () => userEvent.keyboard('{Tab}'));
   act(() => usage.focus());
-  await waitFor(() => expect(getComputedStyle(tag).color).not.toBe(restingColor));
-  await waitFor(() => expect(getComputedStyle(tag).color).toBe(getComputedStyle(label).color));
+  expect(usage).toHaveFocus();
+  expect(getComputedStyle(usage).outlineStyle).not.toBe('none');
+  expect(getComputedStyle(tag).color).toBe(getComputedStyle(label).color);
   await act(async () => userEvent.keyboard('{Enter}'));
   expect(usage).toHaveAttribute('aria-expanded', 'true');
   await waitFor(() => expect(screen.getByText('Context Window Usage')).toBeVisible());

@@ -24,7 +24,7 @@ import {
   UnorderedListOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
+import { Badge, Button, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -464,7 +464,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   };
 
   const pill = (
-    <Tag color={getColor()} style={style}>
+    <Tag color={getColor()} style={{ ...style, marginInlineEnd: 0 }}>
       {hasLimit ? `${percentage}%` : '?'}
     </Tag>
   );
@@ -487,9 +487,9 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
       placement="top"
       mouseEnterDelay={0.3}
     >
-      <button
+      <Button
         ref={triggerRef}
-        type="button"
+        type="text"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
         onKeyDown={(event) => {
@@ -499,16 +499,13 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
           }
         }}
         style={{
-          display: 'inline-flex',
           padding: 0,
-          border: 0,
-          background: 'transparent',
+          height: 'auto',
           color: 'inherit',
-          cursor: 'pointer',
         }}
       >
         {pill}
-      </button>
+      </Button>
     </Popover>
   );
 };

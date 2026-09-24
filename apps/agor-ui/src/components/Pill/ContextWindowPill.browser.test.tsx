@@ -28,6 +28,10 @@ it('returns focus to the percentage when Escape closes the breakdown from raw SD
   await new Promise((resolve) => setTimeout(resolve, 400)); // Let the popover exit animation finish.
   expect(rawDetails).not.toBeVisible();
   expect(document.activeElement).toBe(trigger);
+  await userEvent.keyboard(' ');
+  await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
 });
 
 it('does not return focus on outside dismissal', async () => {

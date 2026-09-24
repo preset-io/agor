@@ -22,7 +22,12 @@ import {
   shortId,
   type User,
 } from '@agor-live/client';
-import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
+import {
+  ClockCircleOutlined,
+  RobotOutlined,
+  SyncOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Button, Tooltip, theme } from 'antd';
 
@@ -401,6 +406,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   showAvatar = true,
 }) => {
   const { token } = theme.useToken();
+  const [timestampOpen, setTimestampOpen] = useState(false);
 
   // One vertical gap for every top-level block a message renders — speaker
   // bubble, tool stack, notice — so the transcript holds a single rhythm.
@@ -757,18 +763,31 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       if (!message.timestamp) return <AvatarGutterSpacer />;
       const timestamp = formatTimestampWithRelative(message.timestamp, message.index);
       return (
-        <Tooltip title={timestamp} trigger={['hover', 'focus']} mouseEnterDelay={0.5} fresh>
-          <button
-            type="button"
+        <Tooltip
+          title={timestamp}
+          trigger={['hover', 'focus']}
+          open={timestampOpen}
+          onOpenChange={setTimestampOpen}
+          mouseEnterDelay={0.5}
+          fresh
+        >
+          <Button
+            type="text"
+            shape="circle"
+            icon={<ClockCircleOutlined />}
             aria-label={`Message ${message.index} timestamp: ${timestamp}`}
+            onClick={() => setTimestampOpen(true)}
+            onBlur={() => setTimestampOpen(false)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                setTimestampOpen(false);
+              }
+            }}
             style={{
-              display: 'block',
               width: IDENTITY_AVATAR_SIZE,
               height: IDENTITY_AVATAR_SIZE,
-              padding: 0,
-              border: 0,
-              background: 'transparent',
-              cursor: 'help',
+              color: token.colorTextTertiary,
             }}
           />
         </Tooltip>
