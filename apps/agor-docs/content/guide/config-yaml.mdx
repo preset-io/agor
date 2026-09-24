@@ -637,6 +637,10 @@ telemetry. Export requires an accepted runtime authority check.
 When a heartbeat callback command is configured, its stdin JSON also carries
 the optional top-level `memory: { current: { ... } }` sample with the same
 validation. Missing or entirely invalid samples omit `memory`, not the heartbeat.
+Callback delivery is deferred and best-effort: an in-flight callback for the same
+task can cause later samples to be skipped. Delivery is neither durable nor
+ordered. Cloud export requires a paired, compatible launcher and receiver; the
+cloud integration PR is pending.
 
 `executor.memory.current.<field>_bytes` distributions have six fixed fields:
 `rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`.
