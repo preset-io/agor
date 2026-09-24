@@ -3,6 +3,7 @@ import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import type { CreateModalKind } from '../CreateMenu';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
@@ -16,6 +17,8 @@ interface MobileMoreSheetProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onLogout?: () => void;
+  /** Opens the shared create flow for the picked kind (sheet closes first). */
+  onCreate: (kind: CreateModalKind) => void;
 }
 
 /**
@@ -33,6 +36,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onLogout,
+  onCreate,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -82,6 +86,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
           onOpenUserSettings();
         }}
         onLogout={onLogout}
+        onCreate={onCreate}
       />
     </Drawer>
   );

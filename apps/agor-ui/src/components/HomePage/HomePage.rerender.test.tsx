@@ -1,4 +1,4 @@
-import type { Board, Session } from '@agor-live/client';
+import type { Session } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -27,8 +27,6 @@ vi.mock('./HomeActivitySection', () => ({
 vi.mock('./HomeKnowledgeSection', () => ({
   HomeKnowledgeSection: () => null,
 }));
-
-const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as unknown as Board;
 
 const session = {
   session_id: 'session-1',
@@ -103,19 +101,39 @@ describe('HomePage store-selector re-render isolation', () => {
     expect(homeRenders).toBe(baseline);
   });
 
-  it('a patch to a selected slice (boards) re-renders HomePage', async () => {
-    renderHome();
+  it('a patch to a selected slice (current user) re-renders HomePage', async () => {
+    const userId = 'user-1';
+    agorStore.setState({
+      userById: new Map([[userId, { user_id: userId, name: 'Ada' } as never]]),
+    });
+    render(
+      <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
+        <HomePage
+          client={null}
+          currentUserId={userId}
+          onBoardClick={() => {}}
+          onBranchClick={() => {}}
+          onSessionClick={() => {}}
+          onOpenCreateDialog={() => {}}
+          onOpenSettings={() => {}}
+        />
+      </MemoryRouter>
+    );
 
     await waitFor(() => {
       expect(homeRenders).toBeGreaterThanOrEqual(1);
     });
     const baseline = homeRenders;
 
-    // Contrast: HomePage subscribes to boardById (it derives the boards section
-    // from it), so a boards patch MUST wake it — proving the subscription is
-    // live and the isolation above is meaningful.
+    // Contrast: HomePage selects the current user's name from userById, so
+    // renaming them MUST wake it — proving the subscription is live and the
+    // isolation above is meaningful. (The boards grid now owns its own board
+    // subscription in HomeBoardsSection, so HomePage no longer subscribes to
+    // boardById directly.)
     act(() => {
-      agorStore.setState({ boardById: new Map([[board.board_id, board]]) });
+      agorStore.setState({
+        userById: new Map([[userId, { user_id: userId, name: 'Ada Lovelace' } as never]]),
+      });
     });
 
     await waitFor(() => {
