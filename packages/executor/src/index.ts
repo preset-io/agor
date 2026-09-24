@@ -29,7 +29,10 @@ import type {
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
-import type { ManagedOpenCodeAdmission } from './managed-opencode-admission.js';
+import {
+  beginManagedOpenCodeWithBusyRetry,
+  type ManagedOpenCodeAdmission,
+} from './managed-opencode-admission.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
 import type { OpenCodeCheckpointLaunchLocator } from './opencode-launch-locator.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
@@ -176,7 +179,8 @@ export class AgorExecutor {
           return;
         }
         const locator = this.config.managedOpenCodeLocator;
-        if (!locator || !this.managedOpenCodeHolderId) {
+        const holderId = this.managedOpenCodeHolderId;
+        if (!locator || !holderId) {
           this.managedOpenCodeAdmissionState = 'rejected';
           console.error(
             '[executor.opencode] event=admission_rejected reason=cloud_identity_missing'
@@ -193,11 +197,16 @@ export class AgorExecutor {
             locator: OpenCodeCheckpointLaunchLocator;
           }): Promise<ManagedOpenCodeAdmission | { outcome: 'rejected'; code: string }>;
         };
-        const admission = await nativeStateService.begin({
-          task_id: this.config.taskId,
-          holder_instance_id: this.managedOpenCodeHolderId,
-          locator,
-        });
+        const admission = await beginManagedOpenCodeWithBusyRetry(
+          () =>
+            nativeStateService.begin({
+              task_id: this.config.taskId,
+              holder_instance_id: holderId,
+              locator,
+            }),
+          this.abortController.signal,
+          () => Boolean(this.terminationRequest)
+        );
         if (
           admission.outcome !== 'admitted' ||
           admission.attempt.holder_instance_id !== this.managedOpenCodeHolderId ||

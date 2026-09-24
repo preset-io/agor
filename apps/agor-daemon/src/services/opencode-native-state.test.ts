@@ -1,3 +1,4 @@
+import { OPENCODE_OBSERVER_BUSY_REASON } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { parseResolvedLocator, withOpenCodeObserverSlot } from './opencode-native-state';
 
@@ -45,34 +46,39 @@ describe('trusted Cloud observer helper budget', () => {
       const first = withOpenCodeObserverSlot(
         'tenant-budget',
         'task-budget',
+        'resolve',
         () =>
           new Promise<void>((resolve) => {
             finish = resolve;
           })
       );
       await expect(
-        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => {})
-      ).rejects.toThrow(/busy/);
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', 'resolve', async () => {})
+      ).rejects.toMatchObject({
+        code: 429,
+        data: { reason: OPENCODE_OBSERVER_BUSY_REASON },
+      });
       finish();
       await first;
       await expect(
-        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => {})
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', 'resolve', async () => {})
       ).rejects.toThrow(/busy/);
       vi.advanceTimersByTime(1_000);
       await expect(
-        withOpenCodeObserverSlot('tenant-budget', 'task-budget', async () => 'admitted')
+        withOpenCodeObserverSlot('tenant-budget', 'task-budget', 'resolve', async () => 'admitted')
       ).resolves.toBe('admitted');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('caps concurrent helpers across different tasks on the shared daemon', async () => {
+  it('keeps one tenant from occupying every helper slot', async () => {
     const releases: Array<() => void> = [];
-    const pending = Array.from({ length: 8 }, (_, index) =>
+    const pending = Array.from({ length: 4 }, (_, index) =>
       withOpenCodeObserverSlot(
-        'tenant-global-budget',
+        'tenant-a-budget',
         `task-${index}`,
+        'resolve',
         () =>
           new Promise<void>((resolve) => {
             releases.push(resolve);
@@ -80,7 +86,53 @@ describe('trusted Cloud observer helper budget', () => {
       )
     );
     await expect(
-      withOpenCodeObserverSlot('tenant-global-budget', 'task-ninth', async () => {})
+      withOpenCodeObserverSlot('tenant-a-budget', 'task-fifth', 'resolve', async () => {})
+    ).rejects.toThrow(/busy/);
+    await expect(
+      withOpenCodeObserverSlot('tenant-b-budget', 'task-first', 'resolve', async () => 'admitted')
+    ).resolves.toBe('admitted');
+    for (const release of releases) release();
+    await Promise.all(pending);
+  });
+
+  it('reserves capacity for admission when observations are busy', async () => {
+    const releases: Array<() => void> = [];
+    const pending = Array.from({ length: 4 }, (_, index) =>
+      withOpenCodeObserverSlot(
+        `tenant-observe-${index}`,
+        `task-${index}`,
+        'observe',
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve);
+          })
+      )
+    );
+    await expect(
+      withOpenCodeObserverSlot('tenant-observe-fifth', 'task-fifth', 'observe', async () => {})
+    ).rejects.toThrow(/busy/);
+    await expect(
+      withOpenCodeObserverSlot('tenant-resolve', 'task-first', 'resolve', async () => 'admitted')
+    ).resolves.toBe('admitted');
+    for (const release of releases) release();
+    await Promise.all(pending);
+  });
+
+  it('caps total helpers across many tenants', async () => {
+    const releases: Array<() => void> = [];
+    const pending = Array.from({ length: 16 }, (_, index) =>
+      withOpenCodeObserverSlot(
+        `tenant-global-${Math.floor(index / 4)}`,
+        `task-${index}`,
+        'resolve',
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve);
+          })
+      )
+    );
+    await expect(
+      withOpenCodeObserverSlot('tenant-global-fifth', 'task-extra', 'resolve', async () => {})
     ).rejects.toThrow(/busy/);
     for (const release of releases) release();
     await Promise.all(pending);

@@ -11,6 +11,9 @@ interface OpenCodeNativeStateFields {
   publishedAt: string;
 }
 
+/** Stable task-scoped retry signal for a saturated trusted Cloud observer helper. */
+export const OPENCODE_OBSERVER_BUSY_REASON = 'observer_busy' as const;
+
 export type LegacyOpenCodeNativeStateAttempt = OpenCodeNativeStateFields &
   ({ version: 1 } | { version: 2; openCodeVersion: string });
 

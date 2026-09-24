@@ -1,4 +1,50 @@
 /** Wire shape returned only after the daemon commits the managed Task holder. */
+import { OPENCODE_OBSERVER_BUSY_REASON } from '@agor/core/types';
+
+const OBSERVER_BUSY_DELAYS_MS = [150, 300, 600, 1_200, 2_400] as const;
+
+function isObserverBusy(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; data?: { reason?: unknown } };
+  return candidate.code === 429 && candidate.data?.reason === OPENCODE_OBSERVER_BUSY_REASON;
+}
+
+function waitBeforeRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Managed OpenCode admission was stopped'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Managed OpenCode admission was stopped'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Retry only the daemon's typed capacity refusal, before any provider or checkpoint I/O. */
+export async function beginManagedOpenCodeWithBusyRetry<T>(
+  begin: () => Promise<T>,
+  signal: AbortSignal,
+  shouldStop: () => boolean,
+  wait: (ms: number, signal: AbortSignal) => Promise<void> = waitBeforeRetry,
+  random: () => number = Math.random
+): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (signal.aborted || shouldStop()) throw new Error('Managed OpenCode admission was stopped');
+    try {
+      return await begin();
+    } catch (error) {
+      if (!isObserverBusy(error) || attempt >= OBSERVER_BUSY_DELAYS_MS.length) throw error;
+      const base = OBSERVER_BUSY_DELAYS_MS[attempt];
+      const jitter = Math.floor(random() * Math.min(100, base / 4));
+      await wait(base + jitter, signal);
+    }
+  }
+}
+
 export interface ManagedOpenCodeNativeStateManifest {
   version: 3;
   attemptTaskId: string;

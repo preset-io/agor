@@ -14,10 +14,11 @@ import {
   type TenantScopeAwareDatabase,
   tasks,
 } from '@agor/core/db';
-import { BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import { BadRequest, Conflict, Forbidden, TooManyRequests } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
 import {
   isOpenCodeCheckpointLaunchLocator,
+  OPENCODE_OBSERVER_BUSY_REASON,
   type OpenCodeCheckpointAdmission,
   type OpenCodeCheckpointBeginInput,
   type OpenCodeCheckpointBinding,
@@ -133,15 +134,26 @@ type ObserverResponse =
 
 // Task tokens are bearer credentials inside a hosted Job. One token must not be
 // able to fork an unbounded number of trusted Cloud helpers on a shared daemon.
-const MAX_ACTIVE_OBSERVER_HELPERS = 8;
+const MAX_ACTIVE_OBSERVER_HELPERS = 16;
+const MAX_ACTIVE_OBSERVER_HELPERS_PER_TENANT = 4;
+const MAX_ACTIVE_OBSERVATIONS = 4;
 const OBSERVER_TASK_COOLDOWN_MS = 1_000;
 const observerSlots = new Map<string, { active: boolean; retryAt: number }>();
 let activeObserverHelpers = 0;
-class ObserverCapacityError extends Conflict {}
+let activeObservations = 0;
+const activeHelpersByTenant = new Map<string, number>();
+class ObserverCapacityError extends TooManyRequests {
+  constructor() {
+    super('Trusted Cloud observer helper is busy; retry later', {
+      reason: OPENCODE_OBSERVER_BUSY_REASON,
+    });
+  }
+}
 
 export async function withOpenCodeObserverSlot<T>(
   tenantId: string,
   taskId: string,
+  action: 'resolve' | 'observe',
   work: () => Promise<T>
 ): Promise<T> {
   const key = JSON.stringify([tenantId, taskId]);
@@ -150,9 +162,11 @@ export async function withOpenCodeObserverSlot<T>(
   if (
     current?.active ||
     (current && current.retryAt > now) ||
-    activeObserverHelpers >= MAX_ACTIVE_OBSERVER_HELPERS
+    activeObserverHelpers >= MAX_ACTIVE_OBSERVER_HELPERS ||
+    (activeHelpersByTenant.get(tenantId) ?? 0) >= MAX_ACTIVE_OBSERVER_HELPERS_PER_TENANT ||
+    (action === 'observe' && activeObservations >= MAX_ACTIVE_OBSERVATIONS)
   ) {
-    throw new ObserverCapacityError('Trusted Cloud observer helper is busy; retry later');
+    throw new ObserverCapacityError();
   }
   if (observerSlots.size > 1_024) {
     for (const [candidate, slot] of observerSlots) {
@@ -161,10 +175,16 @@ export async function withOpenCodeObserverSlot<T>(
   }
   observerSlots.set(key, { active: true, retryAt: now });
   activeObserverHelpers += 1;
+  activeHelpersByTenant.set(tenantId, (activeHelpersByTenant.get(tenantId) ?? 0) + 1);
+  if (action === 'observe') activeObservations += 1;
   try {
     return await work();
   } finally {
     activeObserverHelpers -= 1;
+    const tenantActive = (activeHelpersByTenant.get(tenantId) ?? 1) - 1;
+    if (tenantActive === 0) activeHelpersByTenant.delete(tenantId);
+    else activeHelpersByTenant.set(tenantId, tenantActive);
+    if (action === 'observe') activeObservations -= 1;
     observerSlots.set(key, { active: false, retryAt: Date.now() + OBSERVER_TASK_COOLDOWN_MS });
   }
 }
@@ -239,7 +259,7 @@ async function runObserver(
     throw new Conflict('Managed OpenCode admission requires the trusted Cloud observer helper');
   const timeoutMs = settings?.timeout_ms ?? 2_000;
   const identity = request.action === 'resolve' ? request.expected : request.binding;
-  return withOpenCodeObserverSlot(identity.tenantId, identity.taskId, () =>
+  return withOpenCodeObserverSlot(identity.tenantId, identity.taskId, request.action, () =>
     runObserverProcess(command, timeoutMs, request)
   );
 }
