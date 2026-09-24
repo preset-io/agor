@@ -1,4 +1,4 @@
-import { cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import type { ComponentProps } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -8,6 +8,7 @@ import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS as recs } from '../../utils/onboardingGoals';
 import {
+  catalogEntry,
   catalogUser,
   githubHandoffEntry,
   makeCatalogClient,
@@ -22,7 +23,14 @@ beforeEach(() => {
 afterEach(cleanup);
 type Props = ComponentProps<typeof OnboardingToolsStep>;
 function fixture(overrides: Partial<Props> = {}) {
-  const api = makeCatalogClient([githubHandoffEntry]);
+  const api = makeCatalogClient([
+    githubHandoffEntry,
+    ...[recs.linear, recs.notion, recs.firecrawl].flatMap((rec) =>
+      rec.setup.surface === 'marketplace'
+        ? [{ ...catalogEntry, name: rec.setup.catalogEntryName, title: rec.name }]
+        : []
+    ),
+  ]);
   const props: Props = {
     client: api.client,
     user: catalogUser,
@@ -146,7 +154,7 @@ describe('Kasia-derived MCP rows — real layout', () => {
       expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
       const state = document.getElementById(stateId)!;
       expect(state).toHaveClass('ant-tag', 'ant-tag-default');
-      expect(state).toHaveTextContent(/Token required|Sign in required/);
+      expect(state.textContent).toMatch(/Token required|Sign in required/);
       expect(getComputedStyle(state).fontSize).toBe(getComputedStyle(description).fontSize);
       expect(state.parentElement).toBe(heading.parentElement);
       expect(getComputedStyle(state).color).not.toBe(getComputedStyle(action).color);
@@ -202,8 +210,10 @@ describe('Kasia-derived MCP rows — real layout', () => {
     });
 
     render(<Harness props={props} largeType />);
-    const list = screen.getByRole('list', { name: 'Suggested MCP tools' });
-    const rows = within(list).getAllByRole('listitem');
+    const list = await screen.findByRole('list', { name: 'Suggested MCP tools' });
+    const rows = await within(list).findAllByRole('listitem');
+    expect(rows).toHaveLength(20);
+    await waitFor(() => expect(within(list).getAllByText('Sign in required')).toHaveLength(20));
     assertGeometry(rows);
     assertFlushActions(list);
     for (const row of rows) {
@@ -242,11 +252,14 @@ describe('Kasia-derived MCP rows — real layout', () => {
         })
     );
     const view = render(<Harness props={props} />);
-    expect(screen.getByText('Checking connection…')).toBeInTheDocument();
+    expect(await screen.findByText('Checking connection…')).toBeInTheDocument();
     await waitFor(() => expect(get).toHaveBeenCalled());
     view.rerender(<Harness props={{ ...props, connected: false, authGeneration: 2 }} />);
-    resolve({ state: 'installed_ready' } as never);
-    expect(screen.getByText('Reconnect to check connection')).toBeInTheDocument();
+    await act(async () => resolve({ state: 'installed_ready' } as never));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Loading suggested MCP tools')).toBeInTheDocument();
+      expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+    });
     expect(screen.queryByText('Ready to use')).not.toBeInTheDocument();
     get.mockRejectedValueOnce(new Error('Do not echo provider internals'));
     view.rerender(<Harness props={{ ...props, authGeneration: 3 }} />);
