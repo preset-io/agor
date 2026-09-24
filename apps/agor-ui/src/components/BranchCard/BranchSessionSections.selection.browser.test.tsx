@@ -128,6 +128,11 @@ for (const surface of ['shared', 'branch-card', 'teammate'] as const) {
         for (const [i, row] of rows.entries()) {
           const style = getComputedStyle(row);
           expect(style.boxShadow.includes('inset')).toBe(i === index);
+          if (i === index) {
+            expect(style.boxShadow.replace(/\s/g, '')).toContain(
+              token.colorText.replace(/\s/g, '')
+            );
+          }
           expect(style.borderRadius).toBe(`${token.borderRadiusSM}px`);
           expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
           expect(row.getBoundingClientRect().right).toBeLessThanOrEqual(
