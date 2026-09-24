@@ -4,13 +4,13 @@ import { defineRailway, github, preserve, project, service, volume } from 'railw
 // Before using this as a PR-environment template, replace the bootstrap branch
 // with the intended baseline. Generated domains are managed in Railway.
 export default defineRailway(() => {
-  const data = volume('agor-data', { region: 'sfo', sizeMB: 500 });
+  const data = volume('agor-data', { region: 'sfo', sizeMB: 2048 });
   const agor = service('agor', {
     source: github('preset-io/agor', { branch: 'investigate-railway-environment-variants' }),
     build: { builder: 'DOCKERFILE', dockerfilePath: 'docker/Dockerfile' },
     replicas: { sfo: 1 },
     healthcheck: '/health',
-    healthcheckTimeout: 120,
+    healthcheckTimeout: 600,
     deploy: {
       // ON_FAILURE is Railway's default; spelling it out causes false drift
       // in CLI 5.62.1 because the importer omits the default enum value.
@@ -20,7 +20,9 @@ export default defineRailway(() => {
     env: {
       // Set with secrets.mjs first; never evaluate the password into this graph.
       AGOR_ADMIN_PASSWORD: preserve(),
-      AGOR_RUNTIME_TARGET: 'production-source',
+      AGOR_RUNTIME_TARGET: 'runtime-build',
+      AGOR_SOURCE_REPO: 'https://github.com/preset-io/agor.git',
+      AGOR_SOURCE_BRANCH: 'investigate-railway-environment-variants',
       RAILWAY_DOCKERFILE_PATH: 'docker/Dockerfile',
       NODE_ENV: 'production',
       HOME: '/home/agor',

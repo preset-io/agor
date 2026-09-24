@@ -18,8 +18,8 @@ variables, this file, a Docker build argument, or a committed `.env` file.
 For programmatic CLI invocation, ensure `_` names the Railway executable (SDK
 3.11.0 uses it to check the CLI version).
 
-The Dockerfile's `AGOR_RUNTIME_TARGET=production-source` selects the existing
-source-built production image. It serves the UI and API on port 3030, runs SQLite
+The Dockerfile's `AGOR_RUNTIME_TARGET=runtime-build` selects the shared
+dependency image and builds the branch release at startup (details below). It serves the UI and API on port 3030, runs SQLite
 migrations at startup with the volume mounted, and installs no agent runtimes by
 default. Railway's generated domain must target port 3030; `AGOR_BASE_URL` and
 the exact `CORS_ORIGIN` follow that domain. The base URL alone does not authorize
@@ -63,8 +63,10 @@ SQLite, configuration, signing/encryption keys, repositories, and branch homes
 survive redeployment on the volume. Stop retains data; deleting the volume or PR
 environment is destructive. Back up before cleanup. Storage can accrue charges
 even when compute is stopped. No automatic PR fan-out is enabled by this config.
-The initial volume is only 500 MB to fit the trial plan: do not clone large
-repositories or install agent runtimes until capacity is reviewed.
+The volume is 2 GB, expanded in place from the initial 500 MB trial volume.
+Runtime checkout and Turbo cache share this space with application data; monitor
+usage before adding large repositories or agent runtimes. Paid storage/compute
+usage is billed beyond the plan's included credit.
 
 This is a trusted single-operator bootstrap, not a verified multi-tenant hosting
 recipe. Default `simple` execution does not isolate users' processes or files.
@@ -81,8 +83,9 @@ References: [Railway IaC](https://docs.railway.com/infrastructure-as-code),
 `docker/Dockerfile --target runtime-build` reuses the development dependency
 layers and the existing source-release builder/production bootstrap. It does not
 copy application source into the image and does not run watch processes or the
-development-default admin bootstrap. The current Railway configuration deliberately
-continues to use `production-source` until runtime capacity is validated.
+development-default admin bootstrap. The Railway configuration selects this
+target with a 600-second health startup window. Hobby capacity is required;
+local cold/warm tests passed with a 6 GiB container memory limit.
 
 The new target requires `AGOR_SOURCE_BRANCH`; `AGOR_SOURCE_REPO` currently only
 accepts `https://github.com/preset-io/agor.git`. At startup it shallow-clones into
