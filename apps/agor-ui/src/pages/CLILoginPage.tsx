@@ -47,16 +47,24 @@ export function CLILoginPage({ client, currentUserId, currentUserEmail }: CLILog
   const keyName = parseCliKeyName(searchParams.get('name'));
   const [state, setState] = useState<CliLoginState>({ kind: 'idle' });
   const { showSuccess, showError } = useThemedMessage();
-  // The displayed key belongs to one caller and one machine name. A different
-  // user, link, client, or auth generation erases it and discards late replies.
+  // The displayed key belongs to one caller and one machine name: a different
+  // user or link erases it. Like PersonalApiKeysTab, a same-user reconnect keeps
+  // a displayed key, but any client/auth-generation change discards in-flight
+  // replies and releases the pending state.
   const identityKey = currentUserId && keyName ? `${currentUserId}:${keyName}` : null;
   const authority = useAuthenticatedAuthorityScope(client, identityKey);
   const operationGuard = useAuthorityOperationGuard(authority.operationScope);
+  const canCreate = authority.operationScope !== null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the displayed raw key
   useLayoutEffect(() => {
     setState({ kind: 'idle' });
   }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases a pending create whose reply will be discarded
+  useLayoutEffect(() => {
+    setState((current) => (current.kind === 'creating' ? { kind: 'idle' } : current));
+  }, [authority.operationScope]);
 
   const create = async () => {
     const operation = operationGuard.begin();
@@ -147,7 +155,13 @@ export function CLILoginPage({ client, currentUserId, currentUserEmail }: CLILog
           Copy key
         </Button>
       ) : (
-        <Button type="primary" size="large" loading={state.kind === 'creating'} onClick={create}>
+        <Button
+          type="primary"
+          size="large"
+          loading={state.kind === 'creating'}
+          disabled={!canCreate}
+          onClick={create}
+        >
           Create CLI key
         </Button>
       )

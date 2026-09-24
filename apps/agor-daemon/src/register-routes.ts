@@ -119,6 +119,7 @@ import {
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
+  normalizeRole,
   ROLES,
   SessionStatus,
   TaskStatus,
@@ -4063,10 +4064,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           | { strategy?: string; api_key_id?: unknown; api_key_source?: unknown }
           | undefined;
         return {
-          user_id: user.user_id,
+          user_id: user.user_id as UserID,
           email: user.email,
           name: (user as { name?: string }).name,
-          role: user.role,
+          role: normalizeRole(user.role),
           tenant_id: params.tenant?.tenant_id,
           auth_strategy: authentication?.strategy,
           ...(authentication?.strategy === 'api-key' &&

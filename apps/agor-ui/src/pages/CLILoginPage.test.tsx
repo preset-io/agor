@@ -6,17 +6,21 @@ import { describe, expect, it, vi } from 'vitest';
 import { CLILoginPage, parseCliKeyName } from './CLILoginPage';
 
 function renderAt(path: string, create = vi.fn()) {
-  const client = { service: vi.fn(() => ({ create })) } as unknown as AgorClient;
-  const page = (userId: string, email: string) => (
+  const makeClient = () => ({ service: vi.fn(() => ({ create })) }) as unknown as AgorClient;
+  const client = makeClient();
+  const page = (userId: string, email: string, pageClient: AgorClient | null = client) => (
     <App>
       <MemoryRouter initialEntries={[path]}>
-        <CLILoginPage client={client} currentUserId={userId} currentUserEmail={email} />
+        <CLILoginPage client={pageClient} currentUserId={userId} currentUserEmail={email} />
       </MemoryRouter>
     </App>
   );
   const view = render(page('user-alice', 'alice@acme.example.test'));
   const switchUser = () => view.rerender(page('user-bob', 'bob@acme.example.test'));
-  return { client, create, switchUser };
+  /** Same user, new client instance (a reconnect / auth-generation change). */
+  const reconnect = () =>
+    view.rerender(page('user-alice', 'alice@acme.example.test', makeClient()));
+  return { client, create, switchUser, reconnect };
 }
 
 describe('CLI login page', () => {
@@ -102,5 +106,49 @@ describe('CLI login page', () => {
 
     expect(screen.queryByRole('textbox', { name: 'CLI key' })).toBeNull();
     expect(screen.queryByDisplayValue('agor_sk_late')).toBeNull();
+  });
+
+  it('releases a pending create when the same user reconnects', async () => {
+    let resolveCreate: (value: { rawKey: string }) => void = () => {};
+    const create = vi.fn(
+      () => new Promise<{ rawKey: string }>((resolve) => (resolveCreate = resolve))
+    );
+    const { reconnect } = renderAt('/cli-login?name=agor-cli-laptop-1a2b', create);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create CLI key' }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    reconnect();
+    resolveCreate({ rawKey: 'agor_sk_stale' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const button = screen.getByRole('button', { name: 'Create CLI key' });
+    expect(button.className).not.toContain('ant-btn-loading');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByDisplayValue('agor_sk_stale')).toBeNull();
+  });
+
+  it('keeps a displayed key across a same-user reconnect', async () => {
+    const create = vi.fn(async () => ({ rawKey: 'agor_sk_kept', replaced: 0 }));
+    const { reconnect } = renderAt('/cli-login?name=agor-cli-laptop-1a2b', create);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create CLI key' }));
+    await waitFor(() => expect(screen.getByDisplayValue('agor_sk_kept')).toBeTruthy());
+    reconnect();
+
+    expect(screen.getByDisplayValue('agor_sk_kept')).toBeTruthy();
+  });
+
+  it('disables creation until the caller identity is known', () => {
+    const client = { service: vi.fn() } as unknown as AgorClient;
+    render(
+      <App>
+        <MemoryRouter initialEntries={['/cli-login?name=agor-cli-laptop-1a2b']}>
+          <CLILoginPage client={client} currentUserId={null} currentUserEmail={null} />
+        </MemoryRouter>
+      </App>
+    );
+    expect(screen.getByRole('button', { name: 'Create CLI key' }).hasAttribute('disabled')).toBe(
+      true
+    );
   });
 });

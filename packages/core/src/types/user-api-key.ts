@@ -2,6 +2,10 @@
  * Personal API keys: the shared contract between the daemon, the CLI and the UI.
  */
 
+import type { UserID } from './id';
+import type { TenantID } from './tenant';
+import type { UserRole } from './user';
+
 /** Every personal API key starts with this non-secret prefix. */
 export const PERSONAL_API_KEY_PREFIX = 'agor_sk_';
 
@@ -32,11 +36,11 @@ export interface CreateUserApiKeyRequest {
 
 /** `GET api/v1/user/me` response. */
 export interface CurrentUserIdentity {
-  user_id: string;
+  user_id: UserID;
   email: string;
   name?: string;
-  role: string;
-  tenant_id?: string;
+  role: UserRole;
+  tenant_id?: TenantID;
   auth_strategy?: string;
   /** Present when the request authenticated with a personal API key (never the secret). */
   api_key_id?: string;
