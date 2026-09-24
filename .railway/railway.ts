@@ -28,6 +28,9 @@ export default defineRailway(() => {
       AGOR_AGENTIC_TOOLS: 'none',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Railway resolves this reference, not JavaScript.
       AGOR_BASE_URL: 'https://${{RAILWAY_PUBLIC_DOMAIN}}',
+      // Public URL and browser-origin authorization are separate Agor settings.
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Railway resolves this reference, not JavaScript.
+      CORS_ORIGIN: 'https://${{RAILWAY_PUBLIC_DOMAIN}}',
     },
     volumeMounts: { '/home/agor/.agor': data },
   });

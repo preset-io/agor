@@ -21,8 +21,10 @@ For programmatic CLI invocation, ensure `_` names the Railway executable (SDK
 The Dockerfile's `AGOR_RUNTIME_TARGET=production-source` selects the existing
 source-built production image. It serves the UI and API on port 3030, runs SQLite
 migrations at startup with the volume mounted, and installs no agent runtimes by
-default. Railway's generated domain must target port 3030; `AGOR_BASE_URL` follows
-that domain. Do not use a pre-deploy migration command: the SQLite volume is not
+default. Railway's generated domain must target port 3030; `AGOR_BASE_URL` and
+the exact `CORS_ORIGIN` follow that domain. The base URL alone does not authorize
+browser origins; omitting CORS causes even same-origin module assets to fail.
+Keep CSP and login enabled. Do not use a pre-deploy migration command: the SQLite volume is not
 available during that phase.
 
 Railway does not automatically apply `.railway/railway.ts` on GitHub pushes.
