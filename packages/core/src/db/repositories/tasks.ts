@@ -2155,7 +2155,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               'native_state_attempt is not the exact sealed output of this holder'
             );
           }
-          const task = await this.applyTaskUpdate(txDb, taskRow, fullId, updates, true, holderId);
+          const task = await this.applyTaskUpdate(
+            txDb,
+            taskRow,
+            fullId,
+            updates,
+            true,
+            holderId,
+            true
+          );
           const projection = await update(txDb, sessions)
             .set({
               data: {
@@ -2189,12 +2197,21 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     fullId: string,
     updates: Partial<Task>,
     executorUpdate: boolean,
-    holderId?: string
+    holderId?: string,
+    nativeStatePublication = false
   ): Promise<Task> {
     console.debug(
       `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
     );
     const current = this.rowToTask(currentRow);
+
+    if (
+      currentRow.data.managed_opencode_protocol === 3 &&
+      updates.status === TaskStatus.COMPLETED &&
+      !nativeStatePublication
+    ) {
+      throw new RepositoryError('Managed OpenCode completion requires sealed publication');
+    }
 
     if (executorUpdate && currentRow.data.managed_opencode_protocol === 3) {
       await this.requireManagedOpenCodeHolder(txDb, currentRow, holderId);

@@ -121,6 +121,29 @@ async function attemptFor(
 }
 
 describe('TaskRepository.completeWithNativeStatePublication', () => {
+  dbTest('rejects generic managed completion before and after seal', async ({ db }) => {
+    const sessionId = await createSession(db);
+    const task = await runningTask(db, sessionId);
+    const taskRepo = new TaskRepository(db);
+
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      /requires sealed publication/
+    );
+    const { manifest, holderId } = await attemptFor(db, task, sessionId);
+    await expect(taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED })).rejects.toThrow(
+      /requires sealed publication/
+    );
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
+    expect((await new SessionRepository(db).findById(sessionId))?.sdk_native_state).toBeUndefined();
+
+    await expect(
+      taskRepo.completeWithNativeStatePublication(
+        task.task_id,
+        { status: TaskStatus.COMPLETED, native_state_attempt: manifest },
+        holderId
+      )
+    ).resolves.toMatchObject({ status: TaskStatus.COMPLETED });
+  });
   dbTest(
     'fences an SDK-health termination claim with the holder inside its write',
     async ({ db }) => {
