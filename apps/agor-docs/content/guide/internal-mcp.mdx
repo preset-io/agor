@@ -473,55 +473,13 @@ execution:
 
 ### Troubleshooting
 
-The HTTP boundary emits bounded `[mcp.auth] rejected` diagnostics: one warning
-per reason/RPC-operation pair per minute per daemon route instance, with the
-next eligible event reporting `suppressed` (additional rejections since that pair's previous
-event). There is no timer flush, so a burst that stops within the minute has no
-trailing summary. `sample_method`, `sample_source`, and `sample_rpc` describe the
-current sample, not all suppressed requests. These are operational samples, not audit
-counts; authentication still runs on every request. No credentials, caller IPs,
-raw request contents, or claimed tenant identities are logged.
+If an external client receives an authentication error, check that it is using
+an Agor personal API key—not a browser login token or another provider's API
+key—and sending it through a supported authentication header.
 
-`sample_rpc` uses the same bounded operation labels as APM's `mcp.request`
-spans (for example `initialize`, `server/discover`, `tools/list`, `tools/call`,
-`batch`, or `other`). It is an **unauthenticated operation hint**, not client
-identity or proof that a request was a legitimate probe. Arbitrary method
-names and tool arguments are never logged. Credential-free requests still
-receive 401 but emit no warning: unauthenticated discovery is expected.
-POST, GET, and DELETE all authenticate before protocol dispatch; a GET probe
-with a bad credential is not exempt.
-
-To investigate after deployment, first separate wrong credential shape from
-expiry/signature failures, then compare the sampled HTTP method, carrier, and
-RPC operation. Repeated initialization suggests connection attempts; rejected
-tool calls suggest a client attempting operational use. Neither identifies
-the sender. Where retained, inspect existing proxy/APM metadata for the same
-time window; do not enable raw header/body logging, decode rejected claims
-for attribution, or treat client-supplied session/tenant IDs as provenance.
-Sampling may omit short-lived traffic patterns, and these events contain no
-per-request correlation ID.
-
-Built-in Claude, Codex, Gemini, Copilot, Cursor, and OpenCode connections send
-`x-agor-mcp-client`. Rejection samples include an allowlisted `client_hint`;
-missing, duplicate/coalesced, or unrecognized values become `unknown`.
-This header is spoofable and grants no authority. It is not a session ID and
-never substitutes for signature, tenant, or access checks. It does not add
-sampling buckets; the hint describes only the sampled request. Older clients
-and external callers may remain `unknown` after a daemon-only deployment.
-No arbitrary header text is logged, and Agor only adds this hint to its
-built-in connection, not configured external MCP servers.
-
-
-| Reason | Meaning / next step |
-| --- | --- |
-| `wrong_segment_count` | Credential does not have three dot-separated JWT segments. Check for an opaque credential, unresolved placeholder, or truncation. No token contents or segment lengths are recorded. |
-| `invalid_encoding` | Three-segment credential could not be decoded as a JWT. |
-| `expired` | Token is past expiry; fetch the session to mint a fresh token and refresh the client's credential. |
-| `invalid_signature`, `invalid_audience`, `invalid_issuer`, `invalid_jwt`, `not_active` | Wrong, damaged, or not-yet-valid credential. Browser/login and provider tokens are not internal MCP session tokens. |
-| `missing_identity`, `missing_lifetime` | Required identity or lifetime claims are absent; fetch/recreate the session for a current token. |
-| `session_missing` | Session no longer exists in the signed tenant. |
-| `invalid_personal_key` | Supply a valid session token or personal API key through a supported header. |
-| `secret_missing`, `verify_error` | Error-level server configuration/verification failure; investigate the daemon rather than treating this as ordinary rejected traffic. |
+Agor manages internal session tokens automatically. If authentication errors
+persist in an Agor-launched session, contact your administrator. Do not share
+tokens or paste them into logs or support messages.
 
 ## Related Reading
 
