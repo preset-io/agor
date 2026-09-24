@@ -268,7 +268,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             task_id: taskId,
             holder_instance_id: generateId(),
           })
-        ).rejects.toThrow();
+        ).rejects.toThrow('Managed OpenCode holder is not admitted');
         let previousHeartbeat = 0;
         for (let sequence = 1; sequence <= 3; sequence++) {
           await new Promise((resolve) => setTimeout(resolve, 20));
@@ -290,7 +290,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             elapsed_ms: 1_000,
             watchdog_action: 'would_fire',
           })
-        ).rejects.toThrow();
+        ).rejects.toThrow('Managed OpenCode holder is not admitted');
         const watchdog = await client.service('tasks').reportSdkHealthFailure({
           task_id: taskId,
           holder_instance_id: input.holder_instance_id,
@@ -315,7 +315,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         };
         await expect(
           remoteState.seal({ task_id: taskId, holder_instance_id: generateId(), manifest })
-        ).rejects.toThrow();
+        ).rejects.toThrow('OpenCode holder is not admitted for this Task');
         await remoteState.seal({
           task_id: taskId,
           holder_instance_id: input.holder_instance_id,
@@ -327,7 +327,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             native_state_attempt: manifest,
             native_state_holder_instance_id: generateId(),
           })
-        ).rejects.toThrow();
+        ).rejects.toThrow('Managed OpenCode holder is not admitted');
         const completed = await client.service('tasks').patch(taskId, {
           status: TaskStatus.COMPLETED,
           native_state_attempt: manifest,
