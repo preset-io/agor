@@ -23,9 +23,6 @@ vi.mock('../AgentSelectionGrid/AgentSelectionGrid', () => ({
     </button>
   ),
 }));
-vi.mock('../CodexSettingsForm', () => ({
-  CodexSettingsForm: () => <div data-testid="codex-settings" />,
-}));
 // Chip-row stub that registers + drives the shared `agenticToolPresetId` field.
 vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: () => {
@@ -130,10 +127,131 @@ describe('ForkSpawnModal configuration defaults', { timeout: 10_000 }, () => {
     );
 
     fireEvent.click(screen.getByText('Custom config'));
-    expect(await screen.findByTestId('codex-settings')).toBeInTheDocument();
+    expect(await screen.findByText('Sandbox Mode')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('pick-preset'));
-    await waitFor(() => expect(screen.queryByTestId('codex-settings')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Sandbox Mode')).not.toBeInTheDocument());
+  });
+
+  it.each([
+    { name: 'parent values', defaults: undefined, network: true, toggle: false },
+    { name: 'explicit OFF', defaults: undefined, network: false, toggle: true },
+    {
+      name: 'legacy parent mapped defaults',
+      defaults: undefined,
+      network: true,
+      toggle: false,
+      legacy: true,
+    },
+    {
+      name: 'parent network false',
+      defaults: undefined,
+      network: false,
+      toggle: false,
+      parentNetwork: false,
+    },
+    {
+      name: 'saved user values override the parent, including false',
+      defaults: {
+        codexSandboxMode: 'read-only' as const,
+        codexApprovalPolicy: 'untrusted' as const,
+        codexNetworkAccess: false,
+      },
+      network: false,
+      toggle: false,
+    },
+  ])(
+    'shows and submits $name for untouched custom fields',
+    async ({ defaults, network, toggle, legacy, parentNetwork }) => {
+      const onConfirm = vi.fn().mockResolvedValue(undefined);
+      render(
+        <ForkSpawnModal
+          open
+          action="spawn"
+          session={{
+            ...codexSession,
+            permission_config: {
+              mode: 'allow-all',
+              codex: legacy
+                ? undefined
+                : {
+                    sandboxMode: 'workspace-write',
+                    approvalPolicy: 'never',
+                    networkAccess: parentNetwork ?? true,
+                  },
+            },
+          }}
+          currentUser={defaults ? ({ default_agentic_config: { codex: defaults } } as User) : null}
+          initialPrompt="Delegate"
+          onConfirm={onConfirm}
+          onCancel={vi.fn()}
+          client={null}
+          userById={new Map()}
+        />
+      );
+      fireEvent.click(screen.getByText('Custom config'));
+      const networkSwitch = await screen.findByRole('switch');
+      expect(networkSwitch).toHaveAttribute('aria-checked', String(toggle || network));
+      expect(screen.getByLabelText('Sandbox Mode').closest('.ant-select')).toHaveTextContent(
+        defaults ? 'read-only' : 'workspace-write'
+      );
+      expect(screen.getByLabelText('Approval Policy').closest('.ant-select')).toHaveTextContent(
+        defaults ? 'untrusted' : 'never'
+      );
+      if (toggle) fireEvent.click(networkSwitch);
+      expect(networkSwitch).toHaveAttribute('aria-checked', String(network));
+      fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledOnce());
+      expect(buildSpawnPromptContext(onConfirm.mock.calls[0][0])).toMatchObject({
+        codexSandboxMode: defaults?.codexSandboxMode ?? 'workspace-write',
+        codexApprovalPolicy: defaults?.codexApprovalPolicy ?? 'never',
+        codexNetworkAccess: network,
+      });
+    }
+  );
+
+  it('does not send custom overrides after switching back to Same as parent', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={codexSession}
+        initialPrompt="Inherit"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+    fireEvent.click(screen.getByText('Custom config'));
+    fireEvent.click(await screen.findByRole('switch'));
+    fireEvent.click(screen.getByText('Same as parent'));
+    fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({ prompt: 'Inherit' }));
+  });
+
+  it('keeps an inherited parent preset instead of submitting seeded inline fields', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={{ ...codexSession, agentic_tool_preset_id: 'preset-1' } as Session}
+        initialPrompt="Inherit preset"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+    fireEvent.click(screen.getByText('Custom config'));
+    fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledOnce());
+    const config = onConfirm.mock.calls[0][0];
+    expect(config.presetId).toBe('preset-1');
+    expect(config).not.toHaveProperty('codexNetworkAccess');
+    expect(config).not.toHaveProperty('permissionMode');
   });
 
   it("uses the target agent's default when changing agents", async () => {
