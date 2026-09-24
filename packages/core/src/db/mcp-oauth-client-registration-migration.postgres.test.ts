@@ -389,6 +389,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         db,
         sql`DROP POLICY IF EXISTS api_key_host_tenant_discovery ON app_variables`
       );
+      await executeRaw(db, sql`ALTER TABLE user_api_keys DROP COLUMN source`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_status`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_error`);
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);

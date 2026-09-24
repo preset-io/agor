@@ -44,6 +44,10 @@ export interface StoredApiKeyAuth {
   kind: 'api-key';
   target: StoredAuthTarget & { tenantId?: string };
   apiKey: string;
+  /** Server id of the key (never secret); lets `agor logout` delete a CLI-minted key. */
+  apiKeyId?: string;
+  /** `cli_login` keys were minted for this machine and are deleted on logout. */
+  apiKeySource?: 'manual' | 'cli_login';
   user: StoredAuthUser;
 }
 

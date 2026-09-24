@@ -65,7 +65,13 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     }
 
     return {
-      authentication: { strategy: 'api-key' },
+      // Non-secret key identity so the caller can manage its own credential
+      // (e.g. `agor logout` deleting the key a CLI login minted).
+      authentication: {
+        strategy: 'api-key',
+        api_key_id: keyRow.id,
+        api_key_source: keyRow.source ?? 'manual',
+      },
       user,
     };
   }

@@ -17,6 +17,8 @@ import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { saveToken } from '../lib/auth';
+import { cliKeyName, cliLoginPageUrl, openInBrowser } from '../lib/cli-login';
+import { getUIUrl } from '../lib/context';
 import { probeAgorDaemon } from '../lib/daemon-probe';
 
 export default class Login extends Command {
@@ -25,6 +27,8 @@ export default class Login extends Command {
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --email user@example.com',
+    '<%= config.bin %> <%= command.id %> --url https://my-workspace.example.com',
+    '<%= config.bin %> <%= command.id %> --url https://my-workspace.example.com --web',
     '<%= config.bin %> <%= command.id %> --url https://my-workspace.example.com --api-key',
     'pbpaste | <%= config.bin %> <%= command.id %> --url https://my-workspace.example.com --api-key',
   ];
@@ -44,6 +48,11 @@ export default class Login extends Command {
       description:
         'Authenticate with a personal API key (prompted, or read from stdin). Use this for deployments that sign in with Google/SSO.',
       exclusive: ['email', 'password'],
+    }),
+    web: Flags.boolean({
+      description:
+        'Sign in through the browser: approve a key for this machine and paste it back. Default for deployments without password login (Google/SSO).',
+      exclusive: ['email', 'password', 'api-key'],
     }),
   };
 
@@ -100,7 +109,7 @@ export default class Login extends Command {
     }
     if (flags.local && !hasLocalConfig) this.error(`No local config found at ${getConfigPath()}.`);
 
-    if (flags['api-key'] && !isLoopbackOrHttps(daemonUrl)) {
+    if ((flags['api-key'] || flags.web) && !isLoopbackOrHttps(daemonUrl)) {
       this.error(
         `${chalk.red('✗ Refusing to send an API key over plain HTTP')}\n\nUse an https:// URL (or a localhost daemon).`
       );
@@ -130,7 +139,19 @@ export default class Login extends Command {
     }
 
     if (flags['api-key']) {
-      await this.loginWithApiKey(daemonUrl, probe.deploymentId);
+      await this.loginWithApiKey(daemonUrl, probe.deploymentId, await readApiKey());
+      return;
+    }
+    // Deployments without password login (Agor Cloud's Google/SSO launch)
+    // default to the browser flow unless the caller asked for a password.
+    const useWeb = flags.web || (!flags.email && !flags.password && probe.localAuth === 'disabled');
+    if (useWeb) {
+      if (!isLoopbackOrHttps(daemonUrl)) {
+        this.error(
+          `${chalk.red('✗ Refusing to send an API key over plain HTTP')}\n\nUse an https:// URL (or a localhost daemon).`
+        );
+      }
+      await this.loginWithBrowser(daemonUrl, probe.deploymentId, Boolean(localSelected));
       return;
     }
 
@@ -253,8 +274,36 @@ export default class Login extends Command {
    * server binds the key to the workspace URL it was created in; the tenant
    * returned here is recorded for display only.
    */
-  private async loginWithApiKey(daemonUrl: string, deploymentId: string): Promise<void> {
-    const apiKey = await readApiKey();
+  /**
+   * Browser step: open the workspace's `/cli-login` page, where the signed-in
+   * user explicitly creates a key tagged for this machine (replacing this
+   * machine's previous one), then paste it here. Signed-out users go through the
+   * deployment's normal sign-in and are returned to the same page.
+   */
+  private async loginWithBrowser(
+    daemonUrl: string,
+    deploymentId: string,
+    localDevelopmentTarget: boolean
+  ): Promise<void> {
+    const pageUrl = cliLoginPageUrl(
+      getUIUrl(daemonUrl, localDevelopmentTarget),
+      await cliKeyName()
+    );
+    this.log('');
+    this.log('To sign in, open this page, click Create CLI key, then paste the key here:');
+    this.log(`  ${chalk.cyan(pageUrl)}`);
+    this.log('');
+    if (process.stdin.isTTY && (await openInBrowser(pageUrl))) {
+      this.log(chalk.dim('Opened in your browser.'));
+    }
+    await this.loginWithApiKey(daemonUrl, deploymentId, await readApiKey());
+  }
+
+  private async loginWithApiKey(
+    daemonUrl: string,
+    deploymentId: string,
+    apiKey: string
+  ): Promise<void> {
     if (!apiKey.startsWith(API_KEY_PREFIX)) {
       this.error(
         `${chalk.red('✗ Invalid API key format')}\n\nPersonal API keys start with ${API_KEY_PREFIX}.`
@@ -292,6 +341,10 @@ export default class Login extends Command {
         ...(me.tenant_id ? { tenantId: me.tenant_id } : {}),
       },
       apiKey,
+      ...(me.api_key_id ? { apiKeyId: me.api_key_id } : {}),
+      ...(me.api_key_source === 'cli_login' || me.api_key_source === 'manual'
+        ? { apiKeySource: me.api_key_source }
+        : {}),
       user: {
         user_id: me.user_id,
         email: me.email,
@@ -309,7 +362,13 @@ export default class Login extends Command {
     if (me.tenant_id) this.log(chalk.dim('Workspace:'), me.tenant_id);
     this.log('');
     this.log(chalk.dim('API key saved to ~/.agor/cli-token (mode 0600)'));
-    this.log(chalk.dim('Delete the key in User settings → API tokens to revoke this login.'));
+    this.log(
+      chalk.dim(
+        me.api_key_source === 'cli_login'
+          ? 'Run agor logout to sign out and delete this key, or delete it in User settings → API tokens.'
+          : 'Delete the key in User settings → API tokens to revoke this login.'
+      )
+    );
     this.log('');
   }
 }
@@ -322,6 +381,8 @@ interface ApiKeyIdentity {
   name?: string;
   role?: string;
   tenant_id?: string;
+  api_key_id?: string;
+  api_key_source?: string;
 }
 
 function isLoopbackOrHttps(url: string): boolean {
@@ -337,7 +398,7 @@ async function readApiKey(): Promise<string> {
       {
         type: 'password',
         name: 'apiKey',
-        message: 'API key',
+        message: 'Paste your API key',
         mask: '*',
         validate: (input: string) => (input.trim() ? true : 'API key is required'),
       },

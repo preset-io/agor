@@ -123,12 +123,18 @@ describe('login command', () => {
   describe('--api-key', () => {
     const validKey = 'agor_sk_valid-test-key';
 
-    function createApiKeyServer(requests: string[]) {
+    function createApiKeyServer(requests: string[], localAuth?: 'enabled' | 'disabled') {
       return createServer((request, response) => {
         response.setHeader('content-type', 'application/json');
         requests.push(`${request.method} ${request.url}`);
         if (request.url === '/health') {
-          response.end(JSON.stringify({ service: 'agor-daemon', deploymentId }));
+          response.end(
+            JSON.stringify({
+              service: 'agor-daemon',
+              deploymentId,
+              ...(localAuth ? { auth: { requireAuth: true, identity: { localAuth } } } : {}),
+            })
+          );
           return;
         }
         if (request.url?.startsWith('/api/v1/user/me') && request.method === 'GET') {
@@ -146,6 +152,8 @@ describe('login command', () => {
               role: 'member',
               tenant_id: 'workspace-123',
               auth_strategy: 'api-key',
+              api_key_id: 'key-123',
+              api_key_source: localAuth === 'disabled' ? 'cli_login' : 'manual',
             })
           );
           return;
@@ -155,7 +163,12 @@ describe('login command', () => {
       });
     }
 
-    async function runApiKeyLogin(home: string, url: string, stdin: string) {
+    async function runApiKeyLogin(
+      home: string,
+      url: string,
+      stdin: string,
+      mode: '--api-key' | '--web' | 'auto' = '--api-key'
+    ) {
       const env = { ...process.env };
       delete env.AGOR_API_KEY;
       delete env.AGOR_DEPLOYMENT_ID;
@@ -163,7 +176,15 @@ describe('login command', () => {
       return new Promise<{ code: number | null; output: string }>((resolveRun, reject) => {
         const child = spawn(
           process.execPath,
-          ['--import', 'tsx', 'bin/dev.ts', 'login', '--url', url, '--api-key'],
+          [
+            '--import',
+            'tsx',
+            'bin/dev.ts',
+            'login',
+            '--url',
+            url,
+            ...(mode === 'auto' ? [] : [mode]),
+          ],
           {
             cwd: cliRoot,
             env: {
@@ -212,6 +233,59 @@ describe('login command', () => {
         });
       } finally {
         await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        await rm(home, { recursive: true, force: true });
+      }
+    }, 15_000);
+
+    it('uses the browser flow by default when the deployment has no password login', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'agor-login-web-'));
+      const requests: string[] = [];
+      const server = createApiKeyServer(requests, 'disabled');
+      const port = await listen(server);
+      try {
+        const result = await runApiKeyLogin(
+          home,
+          `http://127.0.0.1:${port}`,
+          `${validKey}\n`,
+          'auto'
+        );
+
+        expect(result.code, result.output).toBe(0);
+        const pageUrl = result.output.match(
+          /http:\/\/127\.0\.0\.1:\d+\/ui\/cli-login\?name=\S+/
+        )?.[0];
+        expect(pageUrl).toBeDefined();
+        const name = new URL(pageUrl!).searchParams.get('name');
+        expect(name).toMatch(/^agor-cli-[a-z0-9][a-z0-9-]*-[a-f0-9]{6}$/);
+        expect(result.output).not.toContain('Email');
+        expect(requests).not.toContain('POST /authentication');
+        expect(JSON.parse(await readFile(join(home, '.agor', 'cli-token'), 'utf8'))).toMatchObject({
+          version: 3,
+          apiKeyId: 'key-123',
+          apiKeySource: 'cli_login',
+        });
+
+        // A second login on the same machine asks for the same key name.
+        const again = await runApiKeyLogin(
+          home,
+          `http://127.0.0.1:${port}`,
+          `${validKey}\n`,
+          '--web'
+        );
+        expect(again.output).toContain(`name=${name}`);
+      } finally {
+        await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        await rm(home, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('refuses the browser flow against a plain-HTTP remote', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'agor-login-web-http-'));
+      try {
+        const result = await runApiKeyLogin(home, 'http://agor.example.invalid', '', '--web');
+        expect(result.code).not.toBe(0);
+        expect(result.output).toContain('Refusing to send an API key over plain HTTP');
+      } finally {
         await rm(home, { recursive: true, force: true });
       }
     }, 15_000);

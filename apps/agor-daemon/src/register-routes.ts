@@ -4022,7 +4022,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: AuthenticatedParams) {
         return userApiKeysService.find(params);
       },
-      async create(data: { name: string }, params: AuthenticatedParams) {
+      async create(
+        data: Parameters<typeof userApiKeysService.create>[0],
+        params: AuthenticatedParams
+      ) {
         return userApiKeysService.create(data, params);
       },
       async patch(id: string, data: { name?: string }, params: AuthenticatedParams) {
@@ -4054,13 +4057,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: AuthenticatedParams) {
         const user = params.user;
         if (!user) throw new NotAuthenticated('Authentication required');
+        const authentication = params.authentication as
+          | { strategy?: string; api_key_id?: unknown; api_key_source?: string }
+          | undefined;
         return {
           user_id: user.user_id,
           email: user.email,
           name: (user as { name?: string }).name,
           role: user.role,
           tenant_id: params.tenant?.tenant_id,
-          auth_strategy: (params.authentication as { strategy?: string } | undefined)?.strategy,
+          auth_strategy: authentication?.strategy,
+          ...(authentication?.strategy === 'api-key' &&
+          typeof authentication.api_key_id === 'string'
+            ? {
+                api_key_id: authentication.api_key_id,
+                api_key_source: authentication.api_key_source ?? 'manual',
+              }
+            : {}),
         };
       },
     },
