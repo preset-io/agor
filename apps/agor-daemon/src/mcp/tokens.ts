@@ -329,6 +329,9 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
     let reason: McpTokenRejectionReason = 'verify_error';
     if (err instanceof jwt.TokenExpiredError) reason = 'expired';
     else if (err instanceof jwt.NotBeforeError) reason = 'not_active';
+    // jsonwebtoken's JWT payload decoder can throw native JSON.parse errors
+    // before verifying the signature. This is invalid input, not a server fault.
+    else if (err instanceof SyntaxError) reason = 'invalid_encoding';
     else if (err instanceof jwt.JsonWebTokenError) {
       // Do not forward library messages: some include claim/configuration values.
       if (err.message === 'jwt malformed') reason = 'wrong_segment_count';

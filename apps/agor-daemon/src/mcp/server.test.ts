@@ -237,6 +237,13 @@ describe('POST /mcp token source', () => {
       reason: 'wrong_segment_count',
     },
     {
+      headers: {
+        authorization: `Bearer ${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from('not-json').toString('base64url')}.dummy`,
+      },
+      status: 401,
+      reason: 'invalid_encoding',
+    },
+    {
       // A signed browser/login JWT is not an MCP session token.
       headers: { authorization: `Bearer ${jwt.sign({ sub: 'user' }, 'mcp-server-test-secret')}` },
       status: 401,
@@ -248,6 +255,7 @@ describe('POST /mcp token source', () => {
       initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
       const handler = captureMcpHandler();
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
       const res = buildRes();
       await handler(
         {
@@ -259,6 +267,7 @@ describe('POST /mcp token source', () => {
         res as unknown as Response
       );
       expect(res.statusCode).toBe(status);
+      expect(error).not.toHaveBeenCalled();
       if (reason) {
         expect(warn).toHaveBeenCalledTimes(1);
         expect(warn.mock.lastCall?.[0]).toContain(`reason=${reason}`);

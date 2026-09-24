@@ -297,7 +297,7 @@ describe('setupQuery - live MCP reprojection', () => {
         vi.fn().mockResolvedValue(readyProjection()),
         vi.fn().mockResolvedValue(undefined),
         vi.fn().mockResolvedValue(undefined),
-        { custom_context: { gateway_source: 'slack' } }
+        { custom_context: { gateway_source: 'slack' }, mcp_token: 'test-token' }
       ),
       { taskId: 'test-task' as TaskID }
     );
@@ -307,8 +307,15 @@ describe('setupQuery - live MCP reprojection', () => {
       expected_generation: 3,
     });
     expect(setMcpServers).toHaveBeenCalledWith({
+      agor: expect.objectContaining({
+        headers: {
+          Authorization: 'Bearer test-token',
+          'x-agor-mcp-client': 'claude',
+        },
+      }),
       fresh: expect.objectContaining({ alwaysLoad: true }),
     });
+    expect(setMcpServers.mock.calls[0][0].fresh.headers).not.toHaveProperty('x-agor-mcp-client');
   });
 
   it('reports partial setMcpServers application as a truthful provider failure', async () => {

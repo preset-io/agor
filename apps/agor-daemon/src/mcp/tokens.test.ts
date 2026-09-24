@@ -477,6 +477,10 @@ describe('verification diagnostics', () => {
         const cases = [
           ['synthetic-opaque-secret', 'wrong_segment_count'],
           ['invalid.encoding.signature', 'invalid_encoding'],
+          [
+            `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from('not-json').toString('base64url')}.dummy`,
+            'invalid_encoding',
+          ],
           [signed({}, 'other-secret'), 'invalid_signature'],
           [signed({ aud: 'private-audience' }), 'invalid_audience'],
           [signed({ iss: 'private-issuer' }), 'invalid_issuer'],
