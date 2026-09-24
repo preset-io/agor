@@ -79,7 +79,7 @@ describe('auditCatalogHealth', () => {
   it('expects Datadog to audit as OAuth-ready without requiring a challenge header', async () => {
     const datadog = entry('oauth');
     datadog.name = 'com.datadoghq/mcp';
-    datadog.remote_url = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp';
+    datadog.remote_url = 'https://mcp.datadoghq.com/v1/mcp';
     const oauthMetadataReady = vi.fn().mockResolvedValue(undefined);
 
     const [result] = await auditCatalogHealth([datadog], {

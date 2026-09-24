@@ -33,20 +33,16 @@ function Harness({
   api,
   complete,
   update,
-  savedBoard = true,
 }: {
   api: ReturnType<typeof makeCatalogClient>;
   complete: (result: OnboardingCompletionResult) => void;
   update: (...args: unknown[]) => void;
-  savedBoard?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const user: User = {
     ...catalogUser,
     onboarding_completed: false,
-    preferences: {
-      onboarding: { boardId: savedBoard ? 'board-1' : undefined, teammateDisplayName: 'QA' },
-    },
+    preferences: { onboarding: { boardId: 'board-1', teammateDisplayName: 'QA' } },
   };
   return (
     <CatalogHarness client={api.client}>
@@ -71,7 +67,7 @@ async function click(name: RegExp | string) {
   await userEvent.click(await screen.findByRole('button', { name }));
 }
 async function openGitHub() {
-  const card = (await screen.findByText('GitHub')).closest<HTMLElement>('.ant-card')!;
+  const card = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
   await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
   const dialog = input.closest<HTMLElement>('[role="dialog"]')!;
@@ -129,69 +125,6 @@ function drawerSpacing(dialog: HTMLElement) {
 }
 
 describe('onboarding-owned Catalog in Chromium', () => {
-  it.each([
-    { outcome: 'rejected', savedBoard: false },
-    { outcome: 'rejected', savedBoard: true },
-    { outcome: 'success', savedBoard: true },
-    { outcome: 'skipped', savedBoard: true },
-  ])(
-    'completes with saved connections when catalog is $outcome (saved board: $savedBoard)',
-    async ({ outcome, savedBoard }) => {
-      const api = makeCatalogClient([githubHandoffEntry]);
-      const complete = vi.fn();
-      const update = vi.fn();
-      render(<Harness api={api} complete={complete} update={update} savedBoard={savedBoard} />);
-      const { input, drawer } = await openGitHub();
-      await userEvent.fill(input, 'test-only-credential');
-      await userEvent.click(
-        drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
-      );
-      await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
-      await drawer.findByText('Connected and ready');
-      await userEvent.click(drawer.getByRole('button', { name: 'Return to onboarding' }));
-      await click(outcome === 'skipped' ? /Skip for now/ : /^Continue/);
-
-      const read = vi.mocked(api.client.service('mcp-catalog').find);
-      read.mockClear();
-      if (outcome !== 'success') read.mockRejectedValue(new Error('Catalog read unavailable'));
-      await click(savedBoard ? /Meet QA/ : /Open my board/);
-      await waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
-      const result: OnboardingCompletionResult = complete.mock.calls[0][0];
-      expect(result.connectedMcpServerIds).toEqual(['server-1']);
-      expect(result.suggestedIntegrations?.map((rec) => rec.id)).toEqual(
-        outcome === 'success' ? ['github', 'slack'] : outcome === 'skipped' ? [] : ['slack']
-      );
-      expect(result.slackGatewayIntent).toBe(outcome === 'skipped' ? undefined : 'prefer-existing');
-      expect(result).not.toHaveProperty('catalogEntryName');
-      expect(read).toHaveBeenCalledTimes(outcome === 'skipped' ? 0 : 1);
-      const createBoard = api.client.service('boards').create;
-      if (savedBoard) {
-        expect(createBoard).not.toHaveBeenCalled();
-        expect(result.boardId).toBe('board-1');
-      } else {
-        expect(createBoard).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ board_id: result.boardId, name: 'My board' })
-        );
-        expect(result.boardId).toBeTruthy();
-      }
-      expect(update).toHaveBeenCalledWith(
-        catalogUser.user_id,
-        expect.objectContaining({
-          preferences: expect.objectContaining({
-            onboarding: expect.objectContaining({ boardId: result.boardId }),
-          }),
-        })
-      );
-      const warning = /Could not verify catalog suggestions/;
-      if (outcome === 'rejected') {
-        expect(await screen.findByText(warning)).toBeInTheDocument();
-      } else {
-        expect(screen.queryByText(warning)).not.toBeInTheDocument();
-      }
-      expect(screen.queryByText('Catalog read unavailable')).not.toBeInTheDocument();
-    }
-  );
-
   it.each(['credentials', 'oauth'] as const)(
     'shares Catalog header/body/inline-action spacing and responsive width for %s auth',
     async (authType) => {
@@ -220,7 +153,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
       standard.unmount();
 
       render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
-      const row = (await screen.findByText('GitHub')).closest<HTMLElement>('.ant-card')!;
+      const row = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
       await userEvent.click(within(row).getByRole('button', { name: /^Sign in through Catalog/ }));
       const onboardingDialog = await screen.findByRole('dialog', { name: /GitHub/ });
       await within(onboardingDialog).findByRole('button', {
@@ -267,16 +200,14 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(rect.left).toBeGreaterThanOrEqual(0);
       expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
     }
-    const suggestion = await screen.findByRole('checkbox', {
-      name: 'Suggest GitHub to my teammate',
-    });
+    const suggestion = screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
     suggestion.focus();
     await userEvent.keyboard(' ');
     expect(suggestion).not.toBeChecked();
     await click(/^Continue/);
     await click(/Back$/);
     expect(
-      await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
+      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
     ).not.toBeChecked();
     const { input, drawer } = await openGitHub();
     expect(input).toHaveAttribute('type', 'password');

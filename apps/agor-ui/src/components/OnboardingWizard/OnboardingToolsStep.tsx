@@ -2,16 +2,12 @@ import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Flex, Spin, Typography, theme } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
-import {
-  type OnboardingIntegrationRecommendation,
-  visibleOnboardingIntegrationRecs,
-} from '../../utils/onboardingGoals';
+import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
 import {
   type OnboardingSlackGatewayIntent,
   readOnboardingSlackGateways,
 } from '../../utils/onboardingSlack';
 import { CatalogTab } from '../Marketplace/CatalogTab';
-import { useCatalogSearch } from '../Marketplace/useCatalogSearch';
 import { OnboardingRecommendationCard } from './OnboardingRecommendationCard';
 import { OnboardingToolRow } from './OnboardingToolRow';
 
@@ -41,8 +37,6 @@ function ToolsForIdentity(props: Props) {
     gatewayIntent,
     onGatewayIntent,
   } = props;
-  const catalog = useCatalogSearch(client, connected, { search: '', sort: 'popularity' }, 1);
-  const visibleKit = visibleOnboardingIntegrationRecs(kit, catalog.allEntries);
   const [readinessRevision, setReadinessRevision] = useState(0);
   const [entry, setEntry] = useState<string>();
   const trigger = useRef<HTMLElement | null>(null);
@@ -97,16 +91,8 @@ function ToolsForIdentity(props: Props) {
         Connect tools here without leaving setup. Connections are optional. Connect saves only your
         MCP connection; Back and Skip do not delete saved connections.
       </Typography.Paragraph>
-      {catalog.status === 'loading' && <Spin aria-label="Loading suggested MCP tools" />}
-      {catalog.status === 'error' && (
-        <Alert
-          type="warning"
-          title="Could not load suggested MCP tools"
-          action={<Button onClick={catalog.retry}>Retry</Button>}
-        />
-      )}
       <Flex vertical role="list" aria-label="Suggested MCP tools" gap={token.marginXS}>
-        {visibleKit
+        {kit
           .filter((rec) => rec.setup.surface !== 'slack')
           .map((rec) => (
             <OnboardingToolRow

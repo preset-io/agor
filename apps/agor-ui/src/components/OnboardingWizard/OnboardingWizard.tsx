@@ -12,7 +12,6 @@
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import { generateId } from '@agor/core/ids/browser';
-import type { MCPCatalogEntry } from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
@@ -30,7 +29,7 @@ import {
   LeftOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, App, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
@@ -41,7 +40,6 @@ import {
   mergeGoalIntegrationRecs,
   ONBOARDING_GOALS,
   type OnboardingIntegrationRecommendation,
-  visibleOnboardingIntegrationRecs,
 } from '../../utils/onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from '../../utils/onboardingSlack';
 import {
@@ -497,7 +495,6 @@ export function OnboardingWizard({
   completionSlowThresholdMs = ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS,
 }: OnboardingWizardProps) {
   const { token } = useToken();
-  const { message } = App.useApp();
   const savedOnboarding = user?.preferences?.onboarding;
   const savedBoardId = savedOnboarding?.boardId;
   // Resume only from a board the current tenant-scoped store can actually see.
@@ -1220,7 +1217,7 @@ export function OnboardingWizard({
             isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
         };
         const name = teammateName.trim();
-        let suggestedIntegrations =
+        const suggestedIntegrations =
           !toolsConfirmed || toolsSkipped
             ? []
             : mergeGoalIntegrationRecs(selectedGoals).filter(
@@ -1235,27 +1232,6 @@ export function OnboardingWizard({
           if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
-          // Re-read visibility before seeding recommendations into the first session.
-          // Saved connections below are independent and remain attached even if hidden.
-          if (suggestedIntegrations.some((rec) => rec.setup.surface === 'marketplace')) {
-            let entries: MCPCatalogEntry[] = [];
-            try {
-              const catalog = await client.service('mcp-catalog').find();
-              entries = Array.isArray(catalog) ? catalog : catalog.data;
-            } catch {
-              if (!completionAttempt.isCurrent()) return;
-              // Visibility fails closed, but optional recommendations must not
-              // block onboarding or discard connections the caller already saved.
-              message.warning(
-                'Could not verify catalog suggestions. Continuing setup without them; saved connections are kept.'
-              );
-            }
-            if (!completionAttempt.isCurrent()) return;
-            suggestedIntegrations = visibleOnboardingIntegrationRecs(
-              suggestedIntegrations,
-              entries
-            );
-          }
           const boardId = await ensureBoard();
           if (!completionAttempt.isCurrent()) return;
           await observeSlowCompletion(
@@ -1343,7 +1319,6 @@ export function OnboardingWizard({
     invalidSavedTemplateId,
     onComplete,
     completionSlowThresholdMs,
-    message,
     goToStep,
   ]);
 

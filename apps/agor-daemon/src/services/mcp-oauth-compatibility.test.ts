@@ -1,6 +1,7 @@
 import { loadCatalog } from '@agor/core/mcp-catalog';
-import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
+import type { MCPCatalogEntry, MCPCatalogServerCandidate, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { compatibleCatalogOAuthPeers } from './mcp-catalog-credential-match.js';
 import {
   presentMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
@@ -40,6 +41,38 @@ function catalogServer(overrides: Partial<MCPServer> = {}): MCPServer {
 }
 
 describe('resolveMCPOAuthCompatibilityPolicy', () => {
+  it('fails closed for saved Datadog endpoints and grants predating the v1 catalog URL', async () => {
+    const datadog = (await loadCatalog()).find((entry) => entry.name === 'com.datadoghq/mcp')!;
+    const oldUrl = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp';
+    const saved = catalogServer({ catalog_entry_name: datadog.name, url: oldUrl });
+    const before = structuredClone(saved);
+    await expect(resolveMCPOAuthCompatibilityPolicy(saved)).resolves.toMatchObject({
+      mode: 'strict',
+      reason: 'catalog_configuration_drift',
+    });
+    const current = { ...saved, url: datadog.remote_url };
+    await expect(resolveMCPOAuthCompatibilityPolicy(current)).resolves.toMatchObject({
+      mode: 'marketplace',
+      reason: 'current_catalog_marketplace',
+    });
+    const candidate: MCPCatalogServerCandidate = {
+      server: saved,
+      has_row_secret: false,
+      grant: {
+        has_access_token: true,
+        refresh_status: 'idle',
+        binding_ready: true,
+        resource_uri: oldUrl,
+      },
+    };
+    const definition = { ...datadog, remote_url: datadog.remote_url! };
+    // Neither the old row nor a changed URL carrying an old-resource grant is reusable.
+    expect(
+      await compatibleCatalogOAuthPeers(definition, [candidate, { ...candidate, server: current }])
+    ).toEqual([]);
+    expect(saved).toEqual(before);
+  });
+
   it('derives marketplace only from a canonical install of a current OAuth entry', async () => {
     await expect(resolveMCPOAuthCompatibilityPolicy(catalogServer(), [entry])).resolves.toEqual({
       mode: 'marketplace',

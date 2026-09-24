@@ -724,7 +724,7 @@ unpublished:
     permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
     icon_url: https://www.google.com/s2/favicons?domain=datadoghq.com&sz=64
     popularity_rank: 14
-    remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+    remote_url: https://mcp.datadoghq.com/v1/mcp
     transport: streamable-http
     auth_type: oauth
     website_url: https://docs.datadoghq.com/mcp_server/setup/

@@ -28,11 +28,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
-import {
-  mergeGoalIntegrationRecs,
-  ONBOARDING_INTEGRATION_RECOMMENDATIONS,
-} from '../../utils/onboardingGoals';
-import { catalogEntry } from '../Marketplace/MCPCatalogModal.test-fixtures';
+import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
 const { TEST_BOARD_ID } = vi.hoisted(() => ({
@@ -50,10 +46,6 @@ vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
     </button>
   ),
 }));
-
-const catalogEntries = Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS).flatMap((rec) =>
-  rec.setup.surface === 'marketplace' ? [{ ...catalogEntry, name: rec.setup.catalogEntryName }] : []
-);
 
 function makeUser(overrides: Partial<User> = {}): User {
   return {
@@ -105,18 +97,12 @@ function renderWizard(
   const usersService = {
     get: vi.fn(async () => effectiveUser),
   };
-  const catalogRead = vi.fn(async () => ({ data: catalogEntries }));
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return usersService;
-      return {
-        on: vi.fn(),
-        off: vi.fn(),
-        get: vi.fn(async () => ({ state: 'no_auth' })),
-        find: catalogRead,
-      };
+      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
   const props = {
@@ -134,7 +120,6 @@ function renderWizard(
     client,
     boardsService,
     usersService,
-    catalogRead,
   };
 }
 
@@ -846,12 +831,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return { get: vi.fn(async () => user) };
-        return {
-          on: vi.fn(),
-          off: vi.fn(),
-          get: vi.fn(async () => ({ state: 'no_auth' })),
-          find: vi.fn(async () => ({ data: catalogEntries })),
-        };
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
 
@@ -883,12 +863,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {
-          on: vi.fn(),
-          off: vi.fn(),
-          get: vi.fn(async () => ({ state: 'no_auth' })),
-          find: vi.fn(async () => ({ data: catalogEntries })),
-        };
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onComplete = vi.fn();
@@ -924,12 +899,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {
-          on: vi.fn(),
-          off: vi.fn(),
-          get: vi.fn(async () => ({ state: 'no_auth' })),
-          find: vi.fn(async () => ({ data: catalogEntries })),
-        };
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -998,12 +968,7 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return {
-          on: vi.fn(),
-          off: vi.fn(),
-          get: vi.fn(async () => ({ state: 'no_auth' })),
-          find: vi.fn(async () => ({ data: catalogEntries })),
-        };
+        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -1649,7 +1614,7 @@ describe('OnboardingWizard', () => {
 
     expect(screen.getByText('Choose your tools')).toBeInTheDocument();
     // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
-    const notion = await screen.findByRole('checkbox', { name: 'Suggest Notion to my teammate' });
+    const notion = screen.getByRole('checkbox', { name: 'Suggest Notion to my teammate' });
     expect(notion).toBeChecked();
     fireEvent.click(notion as HTMLButtonElement);
     expect(notion).not.toBeChecked();
@@ -1690,30 +1655,13 @@ describe('OnboardingWizard', () => {
     expect(emitted).toContain('GitHub');
   });
 
-  it('lets members select tools without claiming that selection authorizes a connection', async () => {
+  it('lets members select tools without claiming that selection authorizes a connection', () => {
     renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
     expect(screen.getByText('Choose your tools')).toBeInTheDocument();
-    expect(
-      await screen.findByRole('checkbox', { name: 'Suggest Linear to my teammate' })
-    ).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })).toBeChecked();
     expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })[0]).toBeEnabled();
     expect(screen.getByText(/Connections are optional/i)).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-  });
-
-  it('rechecks visibility before handing recommendations to the first session', async () => {
-    const onComplete = vi.fn();
-    const { catalogRead } = renderWizard({ onComplete, initialStep: 'tools' });
-    await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
-    catalogRead.mockResolvedValue({
-      data: catalogEntries.map((entry) => ({ ...entry, hidden: true })),
-    });
-    clickButton(/^continue/i);
-    clickButton(/open my board/i);
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(
-      onComplete.mock.calls[0][0].suggestedIntegrations.map((rec: { id: string }) => rec.id)
-    ).toEqual(['slack']);
   });
 
   it('resuming directly at completion does not invent unreviewed tool selections', async () => {
@@ -1744,12 +1692,10 @@ describe('OnboardingWizard', () => {
     renderWizard({ onComplete, initialStep: 'tools' });
     clickButton(/skip for now/i);
     clickButton('Back');
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' }));
+    expect(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })).toBeChecked();
     expect(
-      await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
-    ).toBeChecked();
-    expect(
-      await screen.findByRole('checkbox', { name: 'Suggest Linear to my teammate' })
+      screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })
     ).not.toBeChecked();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
@@ -1763,13 +1709,12 @@ describe('OnboardingWizard', () => {
   it('deselecting every tool suppresses the handoff, including after Back', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools' });
-    await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
     for (const rec of mergeGoalIntegrationRecs([]))
       fireEvent.click(screen.getByRole('checkbox', { name: `Suggest ${rec.name} to my teammate` }));
     clickButton(/^continue/i);
     clickButton('Back');
     expect(
-      await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
+      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
     ).not.toBeChecked();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
@@ -1787,9 +1732,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i);
     clickButton(/skip for now/i);
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })).toHaveLength(4)
-    );
+    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })).toHaveLength(4);
     expect(onComplete).not.toHaveBeenCalled();
     clickButton(/^continue/i);
     clickButton(/open my board/i);
@@ -1811,12 +1754,7 @@ describe('Codex ChatGPT login import', () => {
           ? boardsService
           : name === 'codex-auth/import'
             ? { create }
-            : {
-                on: vi.fn(),
-                off: vi.fn(),
-                get: vi.fn(async () => ({ state: 'no_auth' })),
-                find: vi.fn(async () => ({ data: catalogEntries })),
-              }
+            : { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });
@@ -1969,7 +1907,7 @@ describe('Codex ChatGPT device sign-in', () => {
           ? { create, find }
           : {
               create: vi.fn(),
-              find: vi.fn(async () => ({ data: catalogEntries })),
+              find: vi.fn(),
               on: vi.fn(),
               off: vi.fn(),
               get: vi.fn(async () => ({ state: 'no_auth' })),

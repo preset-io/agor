@@ -598,15 +598,17 @@ describe('the shipped catalog', () => {
     );
   });
 
-  it('keeps Datadog on its validated OAuth path rather than the bearer fallback', async () => {
+  it('uses Datadog’s documented US1 v1 endpoint with unchanged OAuth and transport', async () => {
     const entries = await loadCuratedCatalog();
     const datadog = entries.find((entry) => entry.name === 'com.datadoghq/mcp');
 
     expect(datadog).toMatchObject({
-      remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
+      remote_url: 'https://mcp.datadoghq.com/v1/mcp',
+      transport: 'streamable-http',
       auth_type: 'oauth',
     });
     expect(datadog?.credentials).toBeUndefined();
+    expect(datadog?.oauth).toBeUndefined();
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {

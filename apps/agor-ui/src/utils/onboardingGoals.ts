@@ -1,5 +1,3 @@
-import { filterCatalog } from '@agor/core/mcp-catalog/query';
-import type { MCPCatalogEntry } from '@agor/core/types';
 import type { UserPreferences } from '@agor-live/client';
 import {
   BuildOutlined,
@@ -347,17 +345,6 @@ function resolveRecs(ids: readonly string[]): OnboardingIntegrationRecommendatio
   return ids
     .map((id) => ONBOARDING_INTEGRATION_RECOMMENDATIONS[id])
     .filter((rec): rec is OnboardingIntegrationRecommendation => !!rec);
-}
-
-/** Static goal copy must never offer a hidden or removed catalog entry. */
-export function visibleOnboardingIntegrationRecs(
-  recs: OnboardingIntegrationRecommendation[],
-  catalog: readonly MCPCatalogEntry[]
-): OnboardingIntegrationRecommendation[] {
-  const names = new Set(filterCatalog(catalog).map((entry) => entry.name));
-  return recs.filter(
-    (rec) => rec.setup.surface !== 'marketplace' || names.has(rec.setup.catalogEntryName)
-  );
 }
 
 const isAskRec = (rec: OnboardingIntegrationRecommendation) => rec.connectMode === 'ask';

@@ -86,7 +86,7 @@ function Harness({
   );
 }
 async function openTool(title: string) {
-  const card = (await screen.findByText(title)).closest<HTMLElement>('.ant-card')!;
+  const card = screen.getByText(title).closest<HTMLElement>('.ant-card')!;
   await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   const dialog = await screen.findByRole('dialog', { name: new RegExp(title) });
   const wrapper = dialog.closest('.ant-drawer-content-wrapper')!;
@@ -107,7 +107,6 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     const find = vi.mocked(api.client.service('mcp-catalog').find);
     const result = await find();
     let resolve!: (value: typeof result) => void;
-    find.mockResolvedValueOnce(result); // Recommendation inventory loads before the drawer.
     find.mockImplementationOnce(
       () =>
         new Promise((done) => {
@@ -163,15 +162,12 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     async (initial) => {
       const api = apiFor();
       const find = vi.mocked(api.client.service('mcp-catalog').find);
-      const result = await find();
-      find.mockClear();
-      find.mockResolvedValueOnce(result); // Recommendation inventory remains visible.
       if (initial === 'missing')
         find.mockResolvedValueOnce({ data: [], total: 0, limit: 1, skip: 0 });
       else find.mockRejectedValueOnce(new Error('fixture unavailable'));
       render(<Harness api={api} />);
       await userEvent.click(
-        await screen.findByRole('button', { name: 'Sign in through Catalog for GitHub' })
+        screen.getByRole('button', { name: 'Sign in through Catalog for GitHub' })
       );
       const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
       const root = dialog.closest('.ant-drawer');
@@ -189,7 +185,7 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       expect(document.querySelector('.ant-drawer')).toBe(root);
       expect(document.querySelector('.ant-drawer-content-wrapper')).toBe(wrapper);
       expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
-      expect(find).toHaveBeenCalledTimes(3);
+      expect(find).toHaveBeenCalledTimes(2);
       expect(api.connect).not.toHaveBeenCalled();
       expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
     }
@@ -234,7 +230,7 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
     expect(choice).toHaveAccessibleDescription(
       /existing Slack gateway channel.*none exists and permissions allow/
     );
-    const github = (await screen.findByText('GitHub')).closest<HTMLElement>('.ant-card')!;
+    const github = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
     const logo = within(card).getByRole('img', { name: /logo/ });
     expect(logo.getBoundingClientRect().left).toBe(
       within(github).getByRole('img').getBoundingClientRect().left
@@ -438,18 +434,4 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       );
     }
   );
-});
-
-it('does not recommend a hidden catalog entry during onboarding', async () => {
-  const api = apiFor();
-  vi.mocked(api.client.service('mcp-catalog').find).mockResolvedValue({
-    data: [{ ...githubHandoffEntry, hidden: true }, oauthEntry],
-    total: 2,
-    limit: 2,
-    skip: 0,
-  });
-  render(<Harness api={api} />);
-  await screen.findByText('Linear');
-  expect(screen.queryByText('GitHub')).not.toBeInTheDocument();
-  expect(api.connect).not.toHaveBeenCalled();
 });

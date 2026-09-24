@@ -8,7 +8,7 @@ Open **MCP Catalog** from the header’s shop icon or the same icon in the sessi
 
 Curators can set `hidden: true` on an entry in
 `packages/core/src/mcp-catalog/curated.yaml` to remove it from catalog discovery,
-search, recommendations, and new catalog installs by name. Hidden names return
+search, and new catalog installs by name. Hidden names return
 not found on catalog lookup, readiness, connect, and catalog start-session routes;
 there is no request parameter to reveal them. Omit `hidden` or set it to `false`
 and redeploy to offer the entry again. All definitions remain validated.
@@ -25,7 +25,8 @@ documented provider-client or callback approval requirements. Dropbox involved
 trusted-client DCR admission; its observed nonspecific `403` did not prove
 callback rejection. New Relic DCR succeeded, but subsequent authorization failed;
 allowlisting was not confirmed. Asana, incident.io, and Datadog are not hidden by
-this change.
+this change. Onboarding recommendations remain hardcoded: none names these six
+providers, but future recommendation changes need matching catalog curation.
 
 ## Authentication
 
@@ -37,6 +38,15 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
+
+Datadog now uses its [documented US1 endpoint](https://github.com/datadog-labs/mcp-server),
+`https://mcp.datadoghq.com/v1/mcp`, without additional toolsets or permissions.
+Saved rows are not automatically migrated from `/api/unstable/mcp-server/mcp`.
+Those rows no longer match the current catalog: absent an explicit compatibility
+override, they fall back to strict OAuth, which invalidates grants bound to the
+former marketplace policy. Explicit Catalog Connect can reconcile the caller's
+owned row to the new endpoint through the existing flow; old-resource grants are
+not reusable there, so renewed authorization is required.
 
 ### Inspecting OAuth policy and failures
 
