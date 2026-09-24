@@ -45,7 +45,6 @@ vi.mock('../BoardTeammatePanel', () => ({
   BoardTeammatePanel: () => null,
   TeammatePanelRail: () => null,
 }));
-vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({
   SettingsModal: (props: { open?: boolean }) =>
     props.open ? <div data-testid="settings-modal" /> : null,

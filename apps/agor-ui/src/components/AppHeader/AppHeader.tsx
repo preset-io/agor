@@ -1,6 +1,6 @@
 import type { ActiveUser, AgorClient, Board, BoardID, Branch, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { BulbOutlined, ShopOutlined } from '@ant-design/icons';
+import { BulbOutlined, PlusOutlined, ShopOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { memo, useMemo } from 'react';
@@ -18,6 +18,7 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BrandLogo } from '../BrandLogo';
 import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
+import { CreateMenu, type CreateModalKind } from '../CreateMenu';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
@@ -61,6 +62,8 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Opens the shared create menu's dedicated modal for the picked flow. */
+  onCreate?: (kind: CreateModalKind) => void;
   /** Session-creation seam behind the navbar compose affordance. */
   onCreateSession?: (
     config: NewSessionConfig,
@@ -145,6 +148,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   instanceLabel,
   instanceDescription,
   onCreateSession,
+  onCreate,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -322,6 +326,19 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
+        {onCreate && (
+          <Tooltip title="Create new">
+            <CreateMenu onSelect={onCreate} disabled={mutationDisabled}>
+              <Button
+                type="text"
+                icon={<PlusOutlined style={{ fontSize: token.fontSizeLG }} />}
+                aria-label="Create new"
+                disabled={mutationDisabled}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              />
+            </CreateMenu>
+          </Tooltip>
+        )}
         <Tooltip title="Knowledge Base">
           <Button
             type="text"

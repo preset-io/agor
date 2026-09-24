@@ -90,7 +90,6 @@ import { CreateModals, type TeammateProgress } from '../CreateModals';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
-import { NewSessionButton } from '../NewSessionButton';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
@@ -1409,6 +1408,14 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
   const stableOnCreateSession = useStableCallback(onCreateSession);
+  // Navbar "+" → shared create menu. Preserves the old floating button's
+  // behaviour: on a board, spawn new branches at the current viewport centre;
+  // on the home surface (no canvas) fall back to the default position.
+  const handleNavbarCreate = useStableCallback((kind: CreateModalKind) => {
+    const center = sessionCanvasRef.current?.getViewportCenter();
+    setNewBranchDefaultPosition(center || null);
+    setActiveCreateModal(kind);
+  });
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1445,6 +1452,7 @@ export const App: React.FC<AppProps> = ({
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
           onCreateSession={stableOnCreateSession}
+          onCreate={handleNavbarCreate}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
@@ -1634,15 +1642,6 @@ export const App: React.FC<AppProps> = ({
                         onOpenCommentsPanel={handleOpenCommentsPanel}
                         onCommentHover={setHoveredCommentId}
                         onCommentSelect={handleCommentSelect}
-                      />
-                    )}
-                    {!isHomeSurface && (
-                      <NewSessionButton
-                        onSelect={(kind) => {
-                          const center = sessionCanvasRef.current?.getViewportCenter();
-                          setNewBranchDefaultPosition(center || null);
-                          setActiveCreateModal(kind);
-                        }}
                       />
                     )}
                   </div>
