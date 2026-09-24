@@ -7,6 +7,7 @@ import { KNOWLEDGE_TRANSFER, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/type
  * Extracted from index.ts for maintainability.
  */
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { projectClaudeResultResponse, projectNormalizedSdkResponse } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
@@ -393,6 +394,20 @@ export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
   'sdk_session_id',
 ];
 
+/**
+ * Whether a constrained-HA process-affine gate still applies under this
+ * config. OpenCode's hosted managed-projection authority keeps no daemon-local
+ * native state, so its settings/catalog services may be served by any replica;
+ * every other gated feature, and OpenCode's native-file authority, stays gated.
+ */
+export function constrainedHaGateApplies(
+  feature: (typeof CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES)[number][1],
+  config: Parameters<typeof resolveOpenCodeCapabilities>[0]
+): boolean {
+  if (feature !== 'openCodeAuth') return true;
+  return resolveOpenCodeCapabilities(config).mode !== 'managed-projection';
+}
+
 export function isPromptFlowPatchOnly(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const keys = Object.keys(data);
@@ -588,6 +603,9 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'claude-auth/logout',
   'opencode-auth',
   'opencode-models',
+  // Checkpoint RPC crosses a trusted Cloud observer process boundary. Carry
+  // executor tenant identity, then open only short tenant DB units per call.
+  'opencode-native-state',
   'claude-models',
   'copilot-models',
   'cursor-models',
@@ -684,21 +702,27 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
 
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
-const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
-  'status',
-  'completed_at',
-  'git_state',
-  'message_range',
-  'model',
-  'raw_sdk_response',
-  'normalized_sdk_response',
-  'computed_context_window',
-  'duration_ms',
-  'agent_session_id',
-  'error_message',
-  'report',
-  'permission_request'
-);
+const EXECUTOR_TASK_PATCH_FIELDS = new Set<string>([
+  ...taskFieldSet(
+    'status',
+    'completed_at',
+    'git_state',
+    'message_range',
+    'model',
+    'raw_sdk_response',
+    'normalized_sdk_response',
+    'computed_context_window',
+    'duration_ms',
+    'agent_session_id',
+    'error_message',
+    'report',
+    'permission_request',
+    'native_state_attempt'
+  ),
+  // Transport-only holder proof: TasksService.patch consumes it before the
+  // persisted Task DTO is built, then revalidates the exact managed holder.
+  'native_state_holder_instance_id',
+]);
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
 
@@ -1359,7 +1383,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   if (deployment.mode === 'ha') {
+    // OpenCode's hosted managed-projection authority keeps no daemon-local
+    // native state (keys live in the users row, native state is checkpointed
+    // by the executor), so any replica may serve its settings/catalog. The
+    // process-affine native-file authority stays rejected under constrained HA.
     for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      if (!constrainedHaGateApplies(feature, config)) continue;
       safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
     }
   }

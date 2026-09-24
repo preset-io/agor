@@ -30,6 +30,7 @@ function serviceFor(current = task, observationAccepted = true) {
   service.get = vi.fn().mockResolvedValue(current);
   Object.defineProperty(service, 'taskRepo', {
     value: {
+      assertManagedExecutorHolder: vi.fn().mockResolvedValue(undefined),
       recordSdkHealthObservation: vi.fn(async (_id: string, failure: SdkFailure) =>
         observationAccepted ? { ...current, sdk_failure: failure } : null
       ),
@@ -105,6 +106,7 @@ describe('TasksService SDK health reports', () => {
         task_id: task.task_id,
         reason: 'no_first_progress',
         watchdog_action: 'enforced',
+        holder_instance_id: 'exact-holder',
       },
       { tenant: { tenant_id: 'tenant-a' } } as never
     );
@@ -115,6 +117,7 @@ describe('TasksService SDK health reports', () => {
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
         sdkFailure: expect.objectContaining({ termination: 'requested' }),
+        holderInstanceId: 'exact-holder',
         runInFreshTenantWriteDatabase: expect.any(Function),
       })
     );
@@ -123,6 +126,13 @@ describe('TasksService SDK health reports', () => {
     const work = vi.fn(async () => 'written');
     await expect(runFreshWrite(work)).resolves.toBe('written');
     expect(withFreshTenantWrite).toHaveBeenCalledWith({}, 'tenant-a', work);
+    expect(
+      (
+        service as unknown as {
+          taskRepo: { assertManagedExecutorHolder: ReturnType<typeof vi.fn> };
+        }
+      ).taskRepo.assertManagedExecutorHolder
+    ).not.toHaveBeenCalled();
   });
 
   it('rejects terminal, disconnected, disabled, and authority-escalating reports', async () => {

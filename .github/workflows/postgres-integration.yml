@@ -20,6 +20,8 @@ on:
       - 'packages/core/drizzle/**'
       - 'packages/core/package.json'
       - 'packages/core/src/db/**'
+      - 'packages/executor/package.json'
+      - 'packages/executor/src/**'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - 'scripts/run-postgres-integration-tests.mjs'
@@ -37,6 +39,8 @@ on:
       - 'packages/core/drizzle/**'
       - 'packages/core/package.json'
       - 'packages/core/src/db/**'
+      - 'packages/executor/package.json'
+      - 'packages/executor/src/**'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - 'scripts/run-postgres-integration-tests.mjs'
@@ -96,7 +100,9 @@ jobs:
           cache: pnpm
 
       - name: Install PostgreSQL test workspace dependencies
-        run: pnpm install --frozen-lockfile --filter '@agor/core...' --filter '@agor/daemon...'
+        # The registered OpenCode integration test exercises the real executor
+        # permission callback; its workspace imports must be linked in this lane.
+        run: pnpm install --frozen-lockfile --filter '@agor/core...' --filter '@agor/daemon...' --filter '@agor/executor...'
 
       - name: Bootstrap and verify the non-superuser app role
         env:

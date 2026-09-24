@@ -46,6 +46,8 @@ export interface TerminationInput {
   cooperativeGraceMs?: number;
   absenceVerified?: boolean;
   sdkFailure?: SdkFailure;
+  /** Exact managed executor holder proof for SDK-health claims only. */
+  holderInstanceId?: string;
   expectedStatus?: Task['status'];
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
@@ -173,6 +175,7 @@ async function claimRequest(input: TerminationInput) {
         cause: input.cause,
         errorMessage: input.errorMessage,
         sdkFailure: input.sdkFailure,
+        holderInstanceId: input.holderInstanceId,
         expectedStatus: input.expectedStatus,
         expectedHeartbeatAt: input.expectedHeartbeatAt,
         heartbeatStaleBefore: input.heartbeatStaleBefore,

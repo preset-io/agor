@@ -2,9 +2,65 @@ import type {
   OpenCodeCatalogModel,
   OpenCodeCatalogProvider,
   OpenCodeModelCatalog,
+  OpenCodeProviderConnection,
+  OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 
 export const OPENCODE_VERSION = '1.18.31';
+
+/**
+ * Reviewed key-bearing providers offered in hosted (`managed-projection`)
+ * deployments, mapped to the static encrypted field that stores each key in
+ * the caller's per-tool credential bucket. Providers outside this map are
+ * never projected, even if a field for them somehow exists.
+ */
+export const OPENCODE_HOSTED_PROVIDER_FIELDS = Object.freeze({
+  anthropic: 'OPENCODE_API_KEY_ANTHROPIC',
+  openai: 'OPENCODE_API_KEY_OPENAI',
+  'kimi-for-coding': 'OPENCODE_API_KEY_KIMI_FOR_CODING',
+} as const);
+
+export type OpenCodeHostedProviderId = keyof typeof OPENCODE_HOSTED_PROVIDER_FIELDS;
+export type OpenCodeHostedCredentialField =
+  (typeof OPENCODE_HOSTED_PROVIDER_FIELDS)[OpenCodeHostedProviderId];
+
+export function hostedCredentialFieldForProvider(
+  providerId: string
+): OpenCodeHostedCredentialField | undefined {
+  return Object.hasOwn(OPENCODE_HOSTED_PROVIDER_FIELDS, providerId)
+    ? OPENCODE_HOSTED_PROVIDER_FIELDS[providerId as OpenCodeHostedProviderId]
+    : undefined;
+}
+
+/** Provider ids whose hosted key field is present (non-empty) in a resolved connection. */
+export function hostedProviderIdsFromConnection(
+  connection: Readonly<Record<string, string | boolean | undefined>>
+): Set<string> {
+  const saved = new Set<string>();
+  for (const [providerId, field] of Object.entries(OPENCODE_HOSTED_PROVIDER_FIELDS)) {
+    const value = connection[field];
+    if (value === true || (typeof value === 'string' && value.trim())) saved.add(providerId);
+  }
+  return saved;
+}
+
+/**
+ * Convert a resolved OpenCode connection into the `OPENCODE_AUTH_CONTENT`
+ * map the pinned runtime reads in place of `auth.json`. Only reviewed
+ * providers are eligible; only the selected provider is projected. `secrets`
+ * lists its key and the complete serialized map so the
+ * managed-server sanitizer can redact a bare key, not just the whole map.
+ */
+export function buildOpenCodeAuthContent(
+  connection: Readonly<Record<string, string | undefined>>,
+  provider: string
+): { content: string | undefined; providerIds: string[]; secrets: string[] } {
+  const field = hostedCredentialFieldForProvider(provider);
+  const key = field ? connection[field]?.trim() : undefined;
+  if (!key) return { content: undefined, providerIds: [], secrets: [] };
+  const content = JSON.stringify({ [provider]: { type: 'api', key } });
+  return { content, providerIds: [provider], secrets: [key, content] };
+}
 
 interface KnownProvider {
   id: string;
@@ -109,23 +165,36 @@ function hasActiveSuggestedModel(provider: KnownProvider): boolean {
  * Configured providers outside the curated list remain visible for exact entry.
  */
 export function createOpenCodeKnownModelCatalog(
-  credentialProviderIds: ReadonlySet<string> | null
+  credentialProviderIds: ReadonlySet<string> | null,
+  options: {
+    /**
+     * Whether credential-less providers (OpenCode Zen) count as available. Hosted
+     * managed projection requires a saved reviewed key for every turn, so it
+     * passes `false` and never lists or suggests a provider the first prompt
+     * would refuse.
+     */
+    allowCredentialless?: boolean;
+  } = {}
 ): Omit<OpenCodeModelCatalog, 'runtimeVersion'> {
+  const allowCredentialless = options.allowCredentialless ?? true;
   const configuredProvider = credentialProviderIds
     ? KNOWN_PROVIDERS.find(
         (provider) => credentialProviderIds.has(provider.id) && hasActiveSuggestedModel(provider)
       )
     : undefined;
-  const fallbackProvider = KNOWN_PROVIDERS.find(
-    (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
-  );
+  const fallbackProvider = allowCredentialless
+    ? KNOWN_PROVIDERS.find(
+        (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
+      )
+    : undefined;
   const suggestedProvider = configuredProvider ?? fallbackProvider;
   const knownIds = new Set<string>(KNOWN_PROVIDERS.map(({ id }) => id));
   const providers: OpenCodeCatalogProvider[] = KNOWN_PROVIDERS.map((provider) => ({
     id: provider.id,
     name: provider.name,
     availableForSelection:
-      provider.availableWithoutCredentials || credentialProviderIds?.has(provider.id) === true,
+      (allowCredentialless && provider.availableWithoutCredentials) ||
+      credentialProviderIds?.has(provider.id) === true,
     suggestedModel: provider.suggestedModel,
     models: provider.models.map((model) => ({ ...model })),
   }));
@@ -145,6 +214,41 @@ export function createOpenCodeKnownModelCatalog(
           },
         }
       : {}),
+    providers,
+  };
+}
+
+/**
+ * Provider settings for hosted deployments, derived from saved-key presence
+ * without starting an OpenCode server. Every reviewed key-bearing provider
+ * offers exactly one API-key method; OAuth is never listed. A saved key is
+ * reported as present but is verified only by the first prompt.
+ */
+export function createOpenCodeHostedProviderDiscovery(
+  savedProviderIds: ReadonlySet<string>
+): OpenCodeProviderDiscovery {
+  const providers: OpenCodeProviderConnection[] = KNOWN_PROVIDERS.map((provider) => {
+    const hostedField = hostedCredentialFieldForProvider(provider.id);
+    const saved = savedProviderIds.has(provider.id);
+    return {
+      id: provider.id,
+      name: provider.name,
+      // Managed projection requires a saved reviewed key for every turn; a
+      // credential-less provider is therefore not available in hosted mode.
+      runtimeAvailable: saved,
+      credentialPresence: saved ? 'present' : 'absent',
+      authMethods: hostedField ? [{ index: 0, type: 'api', label: 'API key' }] : [],
+      suggestedModel: provider.suggestedModel,
+      models: provider.models.map((model) => ({ ...model })),
+    };
+  });
+  const catalog = createOpenCodeKnownModelCatalog(savedProviderIds, {
+    allowCredentialless: false,
+  });
+  return {
+    runtime: 'available',
+    runtimeVersion: OPENCODE_VERSION,
+    ...(catalog.suggestedSelection ? { suggestedSelection: catalog.suggestedSelection } : {}),
     providers,
   };
 }

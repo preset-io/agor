@@ -6,7 +6,7 @@ import type { EffortLevel, SessionID } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
-import { OpenCodeTool } from './opencode-tool.js';
+import { type OpenCodeInvocationConfig, OpenCodeTool } from './opencode-tool.js';
 
 type AbortResponse = { data: boolean; error: undefined } | { data: undefined; error: unknown };
 
@@ -282,5 +282,237 @@ describe('OpenCodeTool prompt variants', () => {
 
     expect(request?.body).not.toHaveProperty('variant');
     expect(request?.body?.system).toContain('Agor Session Context');
+  });
+});
+
+// ── Hosted managed-projection turns ────────────────────────────────────────
+// A real child process is replaced by an event emitter that announces the
+// loopback listener; the SDK client is a fake whose behavior each test picks.
+
+vi.mock('./native-state.js', () => ({
+  publishOpenCodeCheckpoint: vi.fn(async () => ({
+    version: 1,
+    attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+    digest: `sha256:${'a'.repeat(64)}`,
+    bytes: 4096,
+    openCodeSessionId: 'opencode-session-1',
+    publishedAt: '2026-09-10T22:18:55.000Z',
+  })),
+}));
+
+async function managedTurn(
+  behavior: 'prompt-fails' | 'completes',
+  config: OpenCodeInvocationConfig = { mcp: {} }
+) {
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const { publishOpenCodeCheckpoint } = await import('./native-state.js');
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    exitCode: null as number | null,
+    kill: vi.fn(() => {
+      child.exitCode = 0;
+      child.emit('exit', 0, null);
+      return true;
+    }),
+  });
+  const spawn = vi.fn(() => {
+    setTimeout(
+      () => child.stdout.write('opencode server listening on http://127.0.0.1:43210\n'),
+      0
+    );
+    return child as never;
+  });
+  const key = 'sk-ant-managed-secret';
+  const authContent = JSON.stringify({ anthropic: { type: 'api', key } });
+  const events =
+    behavior === 'completes'
+      ? [
+          {
+            type: 'message.updated',
+            properties: { info: { id: 'm-1', sessionID: 'opencode-session-1', role: 'assistant' } },
+          },
+          { type: 'session.idle', properties: { sessionID: 'opencode-session-1' } },
+        ]
+      : [];
+  // Hand-rolled iterator: a pending next() resolves as done once the collector
+  // calls return(), which an async generator blocked on a promise cannot do.
+  let release: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = [...events];
+  const stream = {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          const event = pending.shift();
+          if (event) return { value: event, done: false as const };
+          await closed;
+          return { value: undefined, done: true as const };
+        },
+        async return() {
+          release?.();
+          return { value: undefined, done: true as const };
+        },
+      };
+    },
+    return: async () => {
+      release?.();
+      return { value: undefined, done: true as const };
+    },
+  };
+  let prompted = false;
+  const client = {
+    config: {
+      providers: vi.fn(async () => ({
+        data: {
+          providers: [{ id: 'anthropic', models: { 'claude-test': { id: 'claude-test' } } }],
+        },
+        error: undefined,
+      })),
+    },
+    provider: {
+      list: vi.fn(async () => ({ data: { connected: ['anthropic'] }, error: undefined })),
+    },
+    event: { subscribe: vi.fn(async () => ({ stream })) },
+    session: {
+      create: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
+      get: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
+      messages: vi.fn(async () => ({
+        data: prompted
+          ? [
+              {
+                info: { id: 'm-1', sessionID: 'opencode-session-1', role: 'assistant' },
+                parts: [{ id: 'p-1', type: 'text', text: 'done' }],
+              },
+            ]
+          : [],
+        error: undefined,
+      })),
+      prompt: vi.fn(async () => {
+        prompted = true;
+        return behavior === 'prompt-fails'
+          ? { error: { name: 'PromptError', message: `provider rejected ${key}` } }
+          : { data: {}, error: undefined };
+      }),
+      abort: vi.fn(async () => ({ data: true, error: undefined })),
+    },
+  };
+  const persistOpenCodeSessionId = vi.fn(async () => undefined);
+  const tool = new OpenCodeTool({
+    resolveBinary: async () => '/packaged/opencode',
+    spawn,
+    fetch: vi.fn(async () => new Response('{}', { status: 200 })),
+    createClient: (() => client) as never,
+    resolveInvocationConfig: async () => config,
+    eventDrainMs: 0,
+  });
+  const nativeState = {
+    scratchRoot: '/scratch/task-1',
+    xdg: {
+      data: '/scratch/task-1/xdg-data',
+      config: '/scratch/task-1/xdg-config',
+      cache: '/scratch/task-1/xdg-cache',
+      state: '/scratch/task-1/xdg-state',
+    },
+    liveDbPath: '/scratch/task-1/opencode.db',
+    attemptsDir: '/home/user/attempts',
+    attemptTaskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+  };
+  const run = tool.runTurn({
+    agorSessionId: 'session-1' as SessionID,
+    taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e' as never,
+    prompt: 'Continue',
+    agorAssistantMessageId: 'message-1' as never,
+    title: 'Managed',
+    directory: '/workspace',
+    provider: 'anthropic',
+    model: 'claude-test',
+    signal: new AbortController().signal,
+    managed: { authContent, authSecrets: [key, authContent], nativeState, accepted: null },
+    persistOpenCodeSessionId,
+  });
+  return {
+    run,
+    spawn,
+    key,
+    authContent,
+    nativeState,
+    persistOpenCodeSessionId,
+    publishOpenCodeCheckpoint,
+  };
+}
+
+describe('OpenCodeTool managed projection', () => {
+  it('refuses attached local MCP commands and config overrides before spawning', async () => {
+    for (const config of [
+      { mcp: { local: { type: 'local', command: ['true'] } } },
+      { mcp: {}, plugin: ['file:///untrusted.mjs'] },
+      { mcp: {}, provider: { openai: { options: { baseURL: 'https://example.invalid' } } } },
+    ]) {
+      const { run, spawn } = await managedTurn('completes', config);
+      await expect(run).rejects.toThrow(/Hosted OpenCode/);
+      expect(spawn).not.toHaveBeenCalled();
+    }
+  });
+  it('projects credentials and scratch roots onto the child only and publishes after a completed turn', async () => {
+    const {
+      run,
+      spawn,
+      authContent,
+      nativeState,
+      persistOpenCodeSessionId,
+      publishOpenCodeCheckpoint,
+    } = await managedTurn('completes');
+    const result = await run;
+    const env = (
+      spawn.mock.calls[0] as unknown as [string, string[], { env: Record<string, string> }]
+    )[2].env;
+    expect(env).toMatchObject({
+      XDG_DATA_HOME: nativeState.xdg.data,
+      XDG_CONFIG_HOME: nativeState.xdg.config,
+      XDG_CACHE_HOME: nativeState.xdg.cache,
+      XDG_STATE_HOME: nativeState.xdg.state,
+      OPENCODE_DB: nativeState.liveDbPath,
+      OPENCODE_AUTH_CONTENT: authContent,
+      OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
+      OPENCODE_PURE: 'true',
+      OPENCODE_TEST_HOME: nativeState.scratchRoot,
+    });
+    expect(process.env.OPENCODE_AUTH_CONTENT).toBeUndefined();
+    expect(persistOpenCodeSessionId).not.toHaveBeenCalled();
+    expect(publishOpenCodeCheckpoint).toHaveBeenCalledWith(nativeState, {
+      taskId: '01a08d5f-7773-77fa-a7dc-2575cfe6727e',
+      openCodeSessionId: 'opencode-session-1',
+    });
+    expect(result.nativeStateAttempt?.openCodeSessionId).toBe('opencode-session-1');
+  });
+
+  it('redacts projected keys from a failed turn and publishes nothing', async () => {
+    const { run, key, persistOpenCodeSessionId, publishOpenCodeCheckpoint } =
+      await managedTurn('prompt-fails');
+    vi.mocked(publishOpenCodeCheckpoint).mockClear();
+    let failure: Error | undefined;
+    try {
+      await run;
+    } catch (error) {
+      failure = error as Error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(`${failure?.message}\n${failure?.stack ?? ''}`).not.toContain(key);
+    expect(publishOpenCodeCheckpoint).not.toHaveBeenCalled();
+    expect(persistOpenCodeSessionId).not.toHaveBeenCalled();
+  });
+
+  it('redacts managed checkpoint paths from a failed publication', async () => {
+    const { publishOpenCodeCheckpoint } = await import('./native-state.js');
+    vi.mocked(publishOpenCodeCheckpoint).mockRejectedValueOnce(
+      new Error("EEXIST: mkdir '/home/user/attempts/private-task'")
+    );
+    const { run } = await managedTurn('completes');
+    await expect(run).rejects.toThrow(/\[REDACTED\]/);
+    await expect(run).rejects.not.toThrow(/\/home\/user\/attempts/);
   });
 });

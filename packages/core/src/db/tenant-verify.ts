@@ -20,12 +20,17 @@ import {
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
 import { snapshotTenantTableHashes } from './tenant-database-io';
-import { assertValidTenantId } from './tenant-deletion';
+import { assertValidTenantId, TenantNativeStateHandoffRequiredError } from './tenant-deletion';
 import {
+  hasOpenCodeNativeStateFilesystemEntries,
   type TenantFilesystemEntry,
   tenantFilesystemEntriesEqual,
   walkTenantFilesystemTree,
 } from './tenant-filesystem';
+import {
+  assertArchiveNativeStateAbsent,
+  assertTenantNativeStateHandoffClear,
+} from './tenant-native-state-guard';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /**
@@ -149,6 +154,8 @@ export async function verifyTenant(
   const integrity = await verifyArchiveIntegrity(options.archivePath, manifest, {
     maxProblems: maxEvidence,
   });
+  await assertArchiveNativeStateAbsent(options.archivePath, manifest);
+  await assertTenantNativeStateHandoffClear(db, tenantId);
 
   const identity = await resolveTenantDatabaseIdentity(db);
   const identityMatched =
@@ -196,6 +203,9 @@ export async function verifyTenant(
   if (fsRequested && typeof options.filesystemRoot === 'string') {
     fsChecked = true;
     const walk = await walkTenantFilesystemTree(options.filesystemRoot);
+    if (hasOpenCodeNativeStateFilesystemEntries(walk.entries, walk.unsafeSymlinkPaths)) {
+      throw new TenantNativeStateHandoffRequiredError();
+    }
     const comparison = compareFilesystem(manifest, walk.entries, maxEvidence);
     fsMismatchCount = comparison.mismatchCount;
     fsMismatchedPaths = comparison.mismatchedPaths;

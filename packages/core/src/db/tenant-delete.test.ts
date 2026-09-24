@@ -138,7 +138,39 @@ describe('deleteTenant combined contract', () => {
     );
     expect(deleteTenantData).toHaveBeenNthCalledWith(2, db, 'tenant-a', {
       dryRun: false,
+      filesystemRoot: root,
     });
     await expect(stat(root)).rejects.toBeTruthy();
+  });
+
+  it('passes the filesystem root for a database-only safety preflight without deleting files', async () => {
+    const base = join(scratch, 'tenants');
+    const root = join(base, 'tenant-native');
+    const nativeFile = join(
+      root,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy.json'
+    );
+    await mkdir(join(nativeFile, '..'), { recursive: true });
+    await writeFile(nativeFile, 'synthetic');
+    vi.mocked(deleteTenantData).mockResolvedValueOnce(databaseResult(1));
+
+    await deleteTenant(db, 'tenant-native', {
+      databaseOnly: true,
+      filesystem: { root, base },
+    });
+
+    expect(deleteTenantData).toHaveBeenCalledWith(
+      db,
+      'tenant-native',
+      expect.objectContaining({ filesystemRoot: root })
+    );
+    expect(deleteTenantFilesystemTree).not.toHaveBeenCalled();
+    await expect(stat(nativeFile)).resolves.toBeTruthy();
   });
 });

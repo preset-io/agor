@@ -63,9 +63,18 @@ export function resolveNewSessionSdkHomeScope(input: {
   branchSdkHomeIntent: 'per_branch' | null;
   enabledForNewSessions: boolean;
   inheritedScope?: SessionSdkHomeScope;
+  tool?: AgenticToolName;
+  delegated?: boolean;
 }): { scope: SessionSdkHomeScope; adoptBranch: boolean } {
   if (input.inheritedScope) {
     return { scope: input.inheritedScope, adoptBranch: false };
+  }
+  // Hosted OpenCode keeps credentials and checkpoints in the owner's execution
+  // home, even on a branch adopted by another tool. Do not change branch intent
+  // or relocate an inherited SDK lineage. Deployment capability admission and
+  // the branch-home incompatibility/owner-only launch guards still apply.
+  if (input.tool === 'opencode' && input.delegated) {
+    return { scope: 'execution_home', adoptBranch: false };
   }
   if (input.branchSdkHomeIntent === 'per_branch') {
     return { scope: 'branch', adoptBranch: false };

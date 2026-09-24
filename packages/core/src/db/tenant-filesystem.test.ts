@@ -14,6 +14,8 @@ import {
   copyRegularFileNoFollow,
   copyTenantFilesystemInto,
   deleteTenantFilesystemTree,
+  hasOpenCodeNativeStateFilesystemEntries,
+  isOpenCodeNativeStateFilesystemPath,
   publishTenantFilesystemAtomically,
   resolveWithinRoot,
   stageTenantFilesystem,
@@ -55,6 +57,71 @@ describe('resolveWithinRoot', () => {
     const root = join(scratch, 'root');
     expect(resolveWithinRoot(root, 'x/y')).toBe(join(root, 'x', 'y'));
     expect(() => resolveWithinRoot(root, '../y')).toThrow(UnsafeArchivePathError);
+  });
+});
+
+describe('OpenCode native-state filesystem boundary', () => {
+  it('recognizes current/legacy managed roots and descendants without matching neighbors', () => {
+    expect(isOpenCodeNativeStateFilesystemPath('homes/user-1/.local/share/agor/opencode')).toBe(
+      true
+    );
+    expect(
+      isOpenCodeNativeStateFilesystemPath(
+        'home/user-1/.local/share/agor/opencode/stores/s1/attempts/t1/state.json'
+      )
+    ).toBe(true);
+    expect(
+      isOpenCodeNativeStateFilesystemPath(
+        'homes\\user-1\\.local\\share\\agor\\opencode\\legacy.json'
+      )
+    ).toBe(true);
+    expect(isOpenCodeNativeStateFilesystemPath('homes/user-1/.local/share/agor/opencodex')).toBe(
+      false
+    );
+    expect(isOpenCodeNativeStateFilesystemPath('homes/user-1/.local/share/agor/other')).toBe(false);
+    expect(
+      hasOpenCodeNativeStateFilesystemEntries([
+        { path: 'homes/user-1/.local/share/agor/opencode/legacy-orphan' },
+      ])
+    ).toBe(true);
+    expect(
+      hasOpenCodeNativeStateFilesystemEntries([{ path: 'homes/user-1/.local', type: 'symlink' }])
+    ).toBe(true);
+  });
+
+  it('finds files-only orphan state in a tenant tree even without pointer metadata', async () => {
+    const root = join(scratch, 'tenant');
+    const orphan = join(
+      root,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'stores',
+      'legacy-store',
+      'attempts',
+      'legacy-task',
+      'snapshot.json'
+    );
+    await mkdir(join(orphan, '..'), { recursive: true });
+    await writeFile(orphan, '{"synthetic":true}');
+    const walk = await walkTenantFilesystemTree(root);
+    expect(walk.entries.some((entry) => entry.path.endsWith('/snapshot.json'))).toBe(true);
+    expect(hasOpenCodeNativeStateFilesystemEntries(walk.entries)).toBe(true);
+  });
+
+  it('fails closed when an unsafe ancestor symlink could hide native state', async () => {
+    const root = join(scratch, 'tenant');
+    const ancestor = join(root, 'homes', 'owner-1', '.local');
+    await mkdir(join(ancestor, '..'), { recursive: true });
+    await symlink('../../../../etc', ancestor);
+    const walk = await walkTenantFilesystemTree(root);
+    expect(walk.unsafeSymlinkPaths).toContain('homes/owner-1/.local');
+    expect(hasOpenCodeNativeStateFilesystemEntries(walk.entries, walk.unsafeSymlinkPaths)).toBe(
+      true
+    );
   });
 });
 

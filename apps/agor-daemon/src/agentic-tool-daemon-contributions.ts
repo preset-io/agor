@@ -1,14 +1,16 @@
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
+import type { AgorConfig } from '@agor/core/config';
 import type { AgenticToolName, Session } from '@agor/core/types';
 
 /**
  * Result of a tool's executor-launch hook: a key used to serialize native-state
- * mutations plus a partial executor payload to merge into the spawn. Shaped from
+ * mutations when requiresLocalContainment is true, plus a partial executor
+ * payload to merge into the spawn. Hosted Job-local state skips local fences. Shaped from
  * OpenCode's hook — the only real implementation today.
  */
-export type ExecutorLaunchContribution = ReturnType<
-  typeof OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch
->;
+export type ExecutorLaunchContribution = NonNullable<
+  ReturnType<typeof OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch>
+> & { managedProtocolVersion?: 3 };
 
 /**
  * Per-tool daemon-side contribution.
@@ -28,8 +30,10 @@ export interface AgenticToolDaemonContribution {
    */
   getExecutorLaunch?: (input: {
     tenantId: string;
-    session: Pick<Session, 'created_by' | 'unix_username'>;
+    session: Pick<Session, 'created_by' | 'unix_username' | 'session_id' | 'sdk_native_state'>;
+    taskId: string;
     homeDir: string;
+    config: Pick<AgorConfig, 'execution' | 'multi_tenancy' | 'agentic_tools'>;
   }) => ExecutorLaunchContribution;
 }
 

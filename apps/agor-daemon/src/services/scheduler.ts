@@ -63,6 +63,7 @@ import {
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
   isPostgresDatabaseHandle,
+  OpenCodeNativeStateHandoffRequiredError,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -74,6 +75,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   Branch,
   MCPServerID,
   PersistedScheduleAgenticToolConfig,
@@ -291,6 +293,8 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
+  /** Same capability gate as interactive session creation, before admitting a row. */
+  deploymentToolUnsupported?: (tool: AgenticToolName) => BadRequest | undefined;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -327,6 +331,7 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
@@ -375,6 +380,7 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
+      deploymentToolUnsupported: config.deploymentToolUnsupported ?? (() => undefined),
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
@@ -902,6 +908,14 @@ export class SchedulerService {
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is disabled for this workspace`);
     }
+    const unsupported = this.config.deploymentToolUnsupported(resolvedConfig.activeTool);
+    if (unsupported) {
+      this.logWorkEvent('warn', 'occurrence_tool_unsupported', {
+        schedule_id: schedule.schedule_id,
+        error_code: structuredLogErrorCode(unsupported.data),
+      });
+      throw unsupported;
+    }
     // Native Codex auth cannot be projected safely into branch-owned state.
     // Resolve it before admission so a rejected scheduled run cannot leave an
     // otherwise-unused branch permanently adopted. Executor startup repeats
@@ -960,6 +974,8 @@ export class SchedulerService {
         const sdkHomeAdmission = resolveNewSessionSdkHomeScope({
           branchSdkHomeIntent: currentBranch.sdk_home ?? null,
           enabledForNewSessions: this.config.sdkHomeMode === 'per_branch',
+          tool: resolvedConfig.activeTool,
+          delegated: this.config.unixUserMode === 'delegated',
         });
         if (sdkHomeAdmission.scope === 'branch') {
           const unsupportedReason = branchSdkHomeIncompatibility;
@@ -1572,10 +1588,19 @@ export class SchedulerService {
 
     if (sessionsToDelete.length > 0) {
       const sessionService = this.app.service('sessions');
+      let deletedCount = 0;
+      let handoffSkipped = 0;
       for (const session of sessionsToDelete) {
         try {
           await sessionService.remove(session.session_id, { provider: undefined });
+          deletedCount += 1;
         } catch (error) {
+          // Hosted native state cannot be erased by retention. It is a durable
+          // handoff refusal, not an initialization failure of the new occurrence.
+          if (error instanceof OpenCodeNativeStateHandoffRequiredError) {
+            handoffSkipped += 1;
+            continue;
+          }
           // Concurrent reconcilers may have deleted the same retained-out row.
           // Re-read once; absence is idempotent success, presence is a real
           // failure and keeps the schedule due for another bounded retry.
@@ -1583,14 +1608,25 @@ export class SchedulerService {
             this.sessionRepo.findById(session.session_id)
           );
           if (stillPresent) throw error;
+          deletedCount += 1;
         }
       }
 
-      this.logWorkEvent('info', 'retention_deleted', {
-        schedule_id: schedule.schedule_id,
-        deleted_count: sessionsToDelete.length,
-        retention: schedule.retention,
-      });
+      if (handoffSkipped > 0) {
+        this.logWorkEvent('info', 'retention_deferred', {
+          schedule_id: schedule.schedule_id,
+          skipped_handoff_count: handoffSkipped,
+          retention: schedule.retention,
+        });
+      }
+
+      if (deletedCount > 0) {
+        this.logWorkEvent('info', 'retention_deleted', {
+          schedule_id: schedule.schedule_id,
+          deleted_count: deletedCount,
+          retention: schedule.retention,
+        });
+      }
     }
   }
 }

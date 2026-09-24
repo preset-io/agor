@@ -4,6 +4,7 @@ import {
   BranchRepository,
   CardRepository,
   generateId,
+  runWithTenantContext,
   runWithTenantDatabaseTransaction,
   ScheduleRepository,
   UsersRepository,
@@ -270,10 +271,8 @@ describe('management ownership transfer', () => {
   for (const operation of ['delete', 'cleanup'] as const) {
     dbTest(`rejects transfer during branch ${operation}`, async ({ db }) => {
       const f = await ownershipFixture(db);
-      await new BranchMaintenanceRepository(db).claim(
-        f.branch.branch_id,
-        operation,
-        f.owner.user_id
+      await runWithTenantContext('default', () =>
+        new BranchMaintenanceRepository(db).claim(f.branch.branch_id, operation, f.owner.user_id)
       );
       const app = ownershipApp(db);
       const published = vi.fn();

@@ -40,6 +40,7 @@ import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
+  constrainedHaGateApplies,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -459,6 +460,28 @@ describe('protectServerManagedTaskWrites', () => {
         )
       )
     ).resolves.toBeDefined();
+  });
+
+  it('allows the holder proof only on a task-scoped executor patch', async () => {
+    const context = externalContext(
+      'patch',
+      {
+        status: TaskStatus.COMPLETED,
+        native_state_attempt: { version: 3 },
+        native_state_holder_instance_id: 'holder-1',
+      },
+      { taskId: 'task-1', executorTaskId: 'task-1' }
+    );
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { native_state_holder_instance_id: 'holder-1' },
+          { taskId: 'task-1' }
+        )
+      )
+    ).rejects.toThrow('executor token scoped to this task');
   });
 
   it.each([TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT])(
@@ -1551,66 +1574,69 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     ]);
   });
 
-  it('populates getCurrentTenantId() for a claude-auth/oauth call via the registered hook', async () => {
-    type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
-    const captured: AroundHook[] = [];
-    const app = {
-      service(path: string) {
-        return {
-          hooks(hooks: { around?: { all?: AroundHook[] } }) {
-            if (path.replace(/^\//, '') === 'claude-auth/oauth') {
-              captured.push(...(hooks.around?.all ?? []));
-            }
-          },
-        };
-      },
-      use() {},
-      publish() {},
-    };
+  it.each(['claude-auth/oauth', 'opencode-native-state'])(
+    'populates getCurrentTenantId() for %s via the registered hook',
+    async (servicePath) => {
+      type AroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
+      const captured: AroundHook[] = [];
+      const app = {
+        service(path: string) {
+          return {
+            hooks(hooks: { around?: { all?: AroundHook[] } }) {
+              if (path.replace(/^\//, '') === servicePath) {
+                captured.push(...(hooks.around?.all ?? []));
+              }
+            },
+          };
+        },
+        use() {},
+        publish() {},
+      };
 
-    registerHooks({
-      db: {} as RegisterHooksContext['db'],
-      app: app as RegisterHooksContext['app'],
-      config: {
-        database: { dialect: 'postgresql' },
-        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
-      } as RegisterHooksContext['config'],
-      jwtSecret: 'registration-test-secret',
-      requireAuth: async (context) => context,
-      superadminOpts: { allowSuperadmin: true },
-      sessionsService: {} as RegisterHooksContext['sessionsService'],
-      messagesService: {} as RegisterHooksContext['messagesService'],
-      boardsService: undefined,
-      branchRepository: {} as RegisterHooksContext['branchRepository'],
-      usersRepository: {} as RegisterHooksContext['usersRepository'],
-      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
-      deployment: { mode: 'standalone' },
-    });
+      registerHooks({
+        db: {} as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: {} as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: {} as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
 
-    // The service must actually receive an around hook — an empty capture is the
-    // exact production failure (no ambient identity), so assert it is wired.
-    expect(captured.length).toBeGreaterThan(0);
+      // The service must actually receive an around hook — an empty capture is the
+      // exact production failure (no ambient identity), so assert it is wired.
+      expect(captured.length).toBeGreaterThan(0);
 
-    const context = {
-      path: 'claude-auth/oauth',
-      method: 'create',
-      data: {},
-      params: { provider: 'rest', user: { user_id: 'registration-test-user', role: 'member' } },
-    } as HookContext;
-    // `next` runs where the service body runs; it must see the ambient tenant.
-    let tenantDuringCall: string | undefined;
-    const next = async () => {
-      tenantDuringCall = getCurrentTenantId() ?? undefined;
-    };
-    const invoke = captured.reduceRight<() => Promise<void>>(
-      (downstream, hook) => () => hook(context, downstream),
-      next
-    );
-    await invoke();
+      const context = {
+        path: servicePath,
+        method: 'create',
+        data: {},
+        params: { provider: 'rest', user: { user_id: 'registration-test-user', role: 'member' } },
+      } as HookContext;
+      // `next` runs where the service body runs; it must see the ambient tenant.
+      let tenantDuringCall: string | undefined;
+      const next = async () => {
+        tenantDuringCall = getCurrentTenantId() ?? undefined;
+      };
+      const invoke = captured.reduceRight<() => Promise<void>>(
+        (downstream, hook) => () => hook(context, downstream),
+        next
+      );
+      await invoke();
 
-    expect(context.params.tenant?.tenant_id).toBe('registration-test');
-    expect(tenantDuringCall).toBe('registration-test');
-  });
+      expect(context.params.tenant?.tenant_id).toBe('registration-test');
+      expect(tenantDuringCall).toBe('registration-test');
+    }
+  );
 
   it('keeps gateway channel provider probes outside the request transaction', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('gateway-channels');
@@ -1755,4 +1781,26 @@ describe('file service RBAC database preload', () => {
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('constrained-HA gate applicability for OpenCode', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const, auth_claim: 'tenant_id' },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+      opencode_native_state_observer: { command_template: 'observe {task_id}' },
+    },
+    agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const },
+  };
+
+  it('lifts the OpenCode gate only for managed projection and keeps every other gate', () => {
+    expect(constrainedHaGateApplies('openCodeAuth', hosted)).toBe(false);
+    expect(
+      constrainedHaGateApplies('openCodeAuth', { execution: { unix_user_mode: 'simple' } })
+    ).toBe(true);
+    expect(constrainedHaGateApplies('codexAuth', hosted)).toBe(true);
+    expect(constrainedHaGateApplies('claudeOAuth', hosted)).toBe(true);
+  });
 });

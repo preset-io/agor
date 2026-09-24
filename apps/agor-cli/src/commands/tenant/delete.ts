@@ -8,6 +8,7 @@
  * automation. Human audit logging goes to stderr so stdout stays parseable.
  */
 
+import { isAbsolute } from 'node:path';
 import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   assertValidTenantId,
@@ -62,12 +63,22 @@ export default class TenantDelete extends Command {
       description:
         'Require the tenant write gate to be held at this generation inside the deletion transaction; abort if lost or replaced',
     }),
+    'native-state-preflight-root': Flags.string({
+      description:
+        'Additional mounted tenant root to check for native state before deletion; never deleted',
+    }),
   };
 
   async run(): Promise<void> {
     const { flags } = await this.parse(TenantDelete);
     const tenantId = flags['tenant-id'];
     const dryRun = flags['dry-run'];
+
+    if (flags['native-state-preflight-root'] && !isAbsolute(flags['native-state-preflight-root'])) {
+      this.error('Native-state preflight root must be an absolute path', {
+        exit: EXIT_INVALID_INPUT,
+      });
+    }
 
     // Validate before touching the database so bad input never opens a connection.
     try {
@@ -88,7 +99,10 @@ export default class TenantDelete extends Command {
         )
       );
 
-      const filesystem = flags['database-only'] ? null : await resolveTenantFilesystem(tenantId);
+      // Even database-only deletion resolves the configured tenant root for a
+      // read-only native-state safety preflight; the combined delete wrapper
+      // still skips every filesystem deletion when that flag is set.
+      const filesystem = await resolveTenantFilesystem(tenantId);
       if (!flags['database-only'] && !filesystem) {
         this.logToStderr(
           chalk.dim('  Filesystem isolation is disabled; leaving the shared data home untouched.')
@@ -100,6 +114,9 @@ export default class TenantDelete extends Command {
         dryRun,
         databaseOnly: flags['database-only'],
         filesystem,
+        ...(flags['native-state-preflight-root']
+          ? { additionalNativeStateFilesystemRoot: flags['native-state-preflight-root'] }
+          : {}),
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
         ...(flags['assert-gate-generation']
           ? { assertGateGeneration: flags['assert-gate-generation'] }

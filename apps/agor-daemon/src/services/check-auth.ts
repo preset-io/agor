@@ -16,6 +16,11 @@
  * variables are not credential fallbacks.
  */
 
+import {
+  hostedCredentialFieldForProvider,
+  hostedProviderIdsFromConnection,
+} from '@agor/agentic-tool-opencode';
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
@@ -385,7 +390,7 @@ export function createCheckAuthService(
 ) {
   return {
     async create(
-      data: { tool: string; apiKey?: string; validateNative?: boolean },
+      data: { tool: string; apiKey?: string; validateNative?: boolean; provider?: string },
       params?: AuthenticatedParams
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
@@ -399,6 +404,38 @@ export function createCheckAuthService(
 
       if (!(await withTenantDatabase((tenantDb) => isTenantAgenticToolEnabled(tool, tenantDb)))) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
+      }
+
+      // OpenCode: the capability resolver decides which credential authority
+      // applies. Hosted keys are saved-unverified; the first prompt verifies.
+      if (tool === 'opencode') {
+        const capabilities = resolveOpenCodeCapabilities(config);
+        if (capabilities.mode === 'unsupported') {
+          return unauthenticated('none', capabilities.reason.message);
+        }
+        if (capabilities.mode === 'native-file') return authed('native');
+        if (!userId) return unauthenticated('none', 'Sign in to save an OpenCode provider key.');
+        const provider = data.provider?.trim();
+        const field = provider ? hostedCredentialFieldForProvider(provider) : undefined;
+        if (provider && !field)
+          return unauthenticated('none', 'This OpenCode provider is not supported in hosted mode.');
+        const resolution = await withTenantDatabase((tenantDb) =>
+          resolveApiKey(field ?? 'OPENCODE_API_KEY_ANTHROPIC', {
+            userId,
+            db: tenantDb,
+            tool: 'opencode',
+          })
+        );
+        if (resolution.decryptionFailed) {
+          return unknown('A saved OpenCode key could not be decrypted — re-enter it in Settings.');
+        }
+        const saved = hostedProviderIdsFromConnection(resolution.connection ?? {});
+        return (provider ? saved.has(provider) : saved.size > 0)
+          ? authed('api-key', 'Saved provider key; verified by the first prompt.')
+          : unauthenticated(
+              'none',
+              'No key is saved for the requested OpenCode provider connection.'
+            );
       }
 
       // Runtime-managed integrations authenticate inside their isolated native runtime.

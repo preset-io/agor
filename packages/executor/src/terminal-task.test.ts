@@ -103,6 +103,18 @@ describe('tryMarkTaskTerminal', () => {
     });
   });
 
+  it('carries the recovered unstarted managed holder on failure', async () => {
+    const { client, tasks } = makeClient(TaskStatus.RUNNING);
+    await tryMarkTaskTerminal(client, 't1', TaskStatus.FAILED, 'admission failed', 'holder-1');
+    expect(tasks.patch).toHaveBeenCalledWith(
+      't1',
+      expect.objectContaining({
+        status: TaskStatus.FAILED,
+        native_state_holder_instance_id: 'holder-1',
+      })
+    );
+  });
+
   it.each([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
     'skips the patch when the task is already %s (e.g. inner SDK catch already wrote it)',
     async (current) => {

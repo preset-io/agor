@@ -20,10 +20,14 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { branches, sessions, uploads } from '../schema';
+import { branches, opencodeCheckpointAttempts, sessions, uploads } from '../schema';
 import { requireCurrentTenantId } from '../tenant-context';
 import { assertTenantWritable } from '../tenant-write-gate';
-import { EntityNotFoundError, RepositoryError } from './base';
+import {
+  EntityNotFoundError,
+  OpenCodeNativeStateHandoffRequiredError,
+  RepositoryError,
+} from './base';
 import { TaskRepository } from './tasks';
 
 /**
@@ -68,6 +72,11 @@ export class BranchMaintenanceRepository {
     requestedBy?: UserID,
     validate?: (tx: Database) => Promise<void>
   ): Promise<{ claim: BranchMaintenanceClaim; acquired: boolean }> {
+    // Capture trusted tenant identity before the database transaction changes
+    // async context. SQLite has no RLS, but its attempt rows still carry the
+    // `default` tenant discriminator; production PostgreSQL callers must scope
+    // this destructive operation explicitly.
+    const nativeStateTenantId = kind === 'delete' ? requireCurrentTenantId() : undefined;
     return this.locked(branchId, async (tx, row) => {
       await validate?.(tx);
       if (row.data.maintenance) {
@@ -84,10 +93,12 @@ export class BranchMaintenanceRepository {
       }
       const overlap = await select(tx, { branch_id: branches.branch_id })
         .from(branches)
-        .where(sql`${branches.branch_id} <> ${branchId} AND (
+        .where(
+          sql`${branches.branch_id} <> ${branchId} AND (
           ${branches.data} ->> 'path' = ${row.data.path}
           OR ${branches.data} ->> 'path' LIKE ${`${row.data.path}/%`}
-          OR ${row.data.path} LIKE ((${branches.data} ->> 'path') || '/%'))`)
+          OR ${row.data.path} LIKE ((${branches.data} ->> 'path') || '/%'))`
+        )
         .limit(1)
         .one();
       if (overlap)
@@ -114,10 +125,37 @@ export class BranchMaintenanceRepository {
       }
       if (
         kind === 'delete' &&
+        ((await select(tx, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+          .from(opencodeCheckpointAttempts)
+          .innerJoin(sessions, eq(opencodeCheckpointAttempts.session_id, sessions.session_id))
+          .where(
+            and(
+              eq(sessions.branch_id, branchId),
+              eq(opencodeCheckpointAttempts.tenant_id, nativeStateTenantId!)
+            )
+          )
+          .limit(1)
+          .one()) ||
+          (await select(tx)
+            .from(sessions)
+            .where(
+              sql`${sessions.branch_id} = ${branchId}
+              AND (${sessions.data} -> 'sdk_native_state' IS NOT NULL
+                OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`
+            )
+            .limit(1)
+            .one()))
+      ) {
+        throw new OpenCodeNativeStateHandoffRequiredError('branch');
+      }
+      if (
+        kind === 'delete' &&
         (await select(tx)
           .from(sessions)
-          .where(sql`${sessions.branch_id} = ${branchId}
-        AND ${sessions.sdk_home_scope} = 'execution_home' AND (${sessions.data} ->> 'sdk_session_id') IS NOT NULL`)
+          .where(
+            sql`${sessions.branch_id} = ${branchId}
+        AND ${sessions.sdk_home_scope} = 'execution_home' AND (${sessions.data} ->> 'sdk_session_id') IS NOT NULL`
+          )
           .limit(1)
           .one())
       ) {

@@ -56,15 +56,21 @@ import {
   snapshotTenantTableHashes,
   splitTenantJsonlLines,
 } from './tenant-database-io';
-import { assertValidTenantId } from './tenant-deletion';
+import { assertValidTenantId, TenantNativeStateHandoffRequiredError } from './tenant-deletion';
 import {
   assertSymlinkTargetWithinRoot,
+  hasOpenCodeNativeStateFilesystemEntries,
   publishTenantFilesystemAtomically,
   stageTenantFilesystem,
-  summarizeTenantFilesystem,
   type TenantFilesystemEntry,
+  type TenantFilesystemWalk,
   tenantFilesystemEntriesEqual,
+  walkTenantFilesystemTree,
 } from './tenant-filesystem';
+import {
+  assertArchiveNativeStateAbsent,
+  assertTenantNativeStateHandoffClear,
+} from './tenant-native-state-guard';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -248,6 +254,7 @@ export async function importTenant(
       `Refusing to import: archive failed integrity check (${integrity.problemCount} problem(s)); first: ${integrity.problems[0] ?? 'unknown'}`
     );
   }
+  await assertArchiveNativeStateAbsent(options.archivePath, manifest);
 
   // Prove every stored symlink target is root-contained BEFORE any database
   // write. Structural manifest validation checks each entry's own path but not
@@ -273,6 +280,7 @@ export async function importTenant(
       `Refusing to import: live database identity (schemaVersion=${identity.schemaVersion}) does not match the archive (schemaVersion=${manifest.database.identity.schemaVersion})`
     );
   }
+  await assertTenantNativeStateHandoffClear(db, tenantId);
 
   // The archive must carry exactly the live catalog's movable tenant tables —
   // no missing, extra, or duplicate — before we read or restore any of them.
@@ -313,13 +321,19 @@ export async function importTenant(
   }
 
   const wantFilesystem = manifest.filesystem.included && typeof options.filesystemRoot === 'string';
+  let destinationWalk: TenantFilesystemWalk | undefined;
   let fsState: PortionState | 'skipped' = 'skipped';
   if (wantFilesystem) {
-    const inventory = await summarizeTenantFilesystem(options.filesystemRoot as string);
+    destinationWalk = await walkTenantFilesystemTree(options.filesystemRoot as string);
     if (
-      !inventory.present ||
-      inventory.fileCount + inventory.directoryCount + inventory.symlinkCount === 0
+      hasOpenCodeNativeStateFilesystemEntries(
+        destinationWalk.entries,
+        destinationWalk.unsafeSymlinkPaths
+      )
     ) {
+      throw new TenantNativeStateHandoffRequiredError();
+    }
+    if (destinationWalk.entries.length === 0) {
       fsState = 'empty';
     } else {
       // A populated destination is only acceptable if it already matches the
@@ -327,9 +341,7 @@ export async function importTenant(
       // rewrite (paths and bytes are not tenant-bound), so a re-home whose tree
       // was fully published is recognised here just as a same-tenant import is —
       // letting a filesystem-tail retry finish as a no-op rather than conflict.
-      const { walkTenantFilesystemTree } = await import('./tenant-filesystem');
-      const walk = await walkTenantFilesystemTree(options.filesystemRoot as string);
-      fsState = filesystemMatches(manifest, walk.entries) ? 'matches' : 'conflict';
+      fsState = filesystemMatches(manifest, destinationWalk.entries) ? 'matches' : 'conflict';
     }
     if (fsState === 'conflict') {
       throw new MalformedArchiveError(

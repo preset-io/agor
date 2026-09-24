@@ -20,33 +20,44 @@ const NATIVE_AUTH_HINT: Partial<Record<AgenticToolName, string>> = {
     'Already signed in with ChatGPT on this machine? Codex can use that instead of an API key.',
 };
 
-const pendingAuthChecks = new WeakMap<
-  AgorClient,
-  Map<AgenticToolName, Promise<AuthCheckResult | null>>
->();
+const pendingAuthChecks = new WeakMap<AgorClient, Map<string, Promise<AuthCheckResult | null>>>();
 
-function checkAuth(client: AgorClient, tool: AgenticToolName): Promise<AuthCheckResult | null> {
+function checkAuth(
+  client: AgorClient,
+  tool: AgenticToolName,
+  sessionId?: string | null
+): Promise<AuthCheckResult | null> {
   let checksByTool = pendingAuthChecks.get(client);
   if (!checksByTool) {
     checksByTool = new Map();
     pendingAuthChecks.set(client, checksByTool);
   }
 
-  const existing = checksByTool.get(tool);
+  const key = `${tool}:${tool === 'opencode' ? (sessionId ?? '') : ''}`;
+  const existing = checksByTool.get(key);
   if (existing) return existing;
 
-  const request = Promise.resolve(client.service('check-auth').create({ tool }))
+  const request = (async () => {
+    const session =
+      tool === 'opencode' && sessionId
+        ? await client.service('sessions').get(sessionId)
+        : undefined;
+    const provider = session?.model_config?.provider;
+    if (tool === 'opencode' && sessionId && !provider) return null;
+    return client.service('check-auth').create({ tool, ...(provider ? { provider } : {}) });
+  })()
     .then((result) => result as AuthCheckResult)
     .catch(() => null);
-  checksByTool.set(tool, request);
+  checksByTool.set(key, request);
   void request.finally(() => {
-    if (checksByTool?.get(tool) === request) checksByTool.delete(tool);
+    if (checksByTool?.get(key) === request) checksByTool.delete(key);
   });
   return request;
 }
 
 export interface MissingCredentialPanelProps {
   tool: AgenticToolName;
+  sessionId?: string | null;
   client?: AgorClient | null;
   /** Opens Settings deep-linked to this tool's Agentic Tools tab. */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
@@ -54,6 +65,7 @@ export interface MissingCredentialPanelProps {
 
 export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
   tool,
+  sessionId,
   client,
   onOpenAgenticToolSettings,
 }) => {
@@ -68,7 +80,7 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
       return;
     }
     setChecking(true);
-    checkAuth(client, tool)
+    checkAuth(client, tool, sessionId)
       .then((result) => {
         if (!cancelled) setAuthResult(result);
       })
@@ -78,7 +90,7 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [client, tool]);
+  }, [client, tool, sessionId]);
 
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool] ?? tool;
   const keyCreationUrl = AGENTIC_TOOL_KEY_CREATION_URL[tool];

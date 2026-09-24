@@ -483,6 +483,14 @@ describe('startup operational metrics lifecycle', () => {
           }) as unknown as ReturnType<StartupContext['getSocketServer']>;
 
         await startup(ctx);
+        const scheduler = settings.get('scheduler') as unknown as {
+          config: { deploymentToolUnsupported(tool: string): Error | undefined };
+        };
+        expect(scheduler.config.deploymentToolUnsupported('opencode')).toMatchObject({
+          name: 'OpenCodeUnsupportedError',
+          reason: { code: 'hosted_native_state_disabled' },
+        });
+        expect(scheduler.config.deploymentToolUnsupported('codex')).toBeUndefined();
         expect(events).toEqual(['listen', 'start']);
         expect(operational.start).toHaveBeenCalledOnce();
         expect(signals.has('SIGINT')).toBe(true);

@@ -19,6 +19,15 @@ export interface AgorAgenticToolsSettings {
    * Default: enabled; false is an explicit opt-out. Provider approval remains a release prerequisite.
    */
   claude_subscription_oauth?: boolean;
+
+  /**
+   * Operator opt-in for OpenCode in hosted (delegated, templated) deployments.
+   * `checkpointed` selects the managed credential projection plus checkpointed
+   * native-state contract in `context/explorations/opencode-cloud.md`; it is
+   * admitted only when every other hosted prerequisite holds. Absent: OpenCode
+   * reports itself unsupported in such deployments and starts nothing.
+   */
+  opencode_hosted_native_state?: 'checkpointed';
 }
 
 /**
@@ -596,6 +605,11 @@ export interface AgorExecutionSettings {
    * stdin; keep secrets out of the command argv.
    */
   executor_heartbeat?: AgorExecutorHeartbeatSettings;
+  /** Narrow trusted Cloud helper used to resolve and observe managed OpenCode container identity. */
+  opencode_native_state_observer?: {
+    command_template?: string;
+    timeout_ms?: number;
+  };
   sdk_watchdog?: {
     mode?: 'disabled' | 'observe' | 'enforce';
     first_progress_timeout_ms?: number;

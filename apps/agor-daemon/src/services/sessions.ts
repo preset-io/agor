@@ -333,10 +333,19 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private deploymentAvailable: (tool: AgenticToolName) => boolean;
+  private deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
 
   private assertDeploymentToolConfigured(tool: AgenticToolName): void {
-    if (this.deploymentAvailable(tool)) return;
-    throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    if (!this.deploymentAvailable(tool)) {
+      throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    }
+    // An installed tool can still be unsupported by this deployment's execution
+    // topology (for example OpenCode in a hosted workspace without the hosted
+    // native-state contract). Refuse at creation with the same structured
+    // reason the settings and prompt paths report, instead of accepting a
+    // session whose first prompt can only fail.
+    const unsupported = this.deploymentToolUnsupported(tool);
+    if (unsupported) throw unsupported;
   }
 
   private assertSupportedModelConfig(
@@ -372,7 +381,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+    deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
   ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
@@ -388,6 +398,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     this.sessionRepo = sessionRepo;
     this.db = db;
     this.deploymentAvailable = deploymentAvailable;
+    this.deploymentToolUnsupported = deploymentToolUnsupported;
     this.app = app;
     // Custom service-to-service methods such as setMCPServers() can run with
     // tenant identity but without a request-scoped database transaction. Bind
@@ -467,6 +478,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
+    }
+    if (Object.hasOwn(data, 'sdk_native_state')) {
+      throw new BadRequest('sdk_native_state is server-managed and cannot be set by clients');
+    }
+    if (
+      Object.hasOwn(data, 'sdk_native_state_store_id') ||
+      Object.hasOwn(data, 'opencode_cleanup_cursor')
+    ) {
+      throw new BadRequest('OpenCode native-state coordination is server-managed');
     }
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
@@ -576,6 +596,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         branchSdkHomeIntent: branch.sdk_home ?? null,
         enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
         inheritedScope: params?._sdkHomeScope,
+        tool: agenticTool,
+        delegated: config.execution?.unix_user_mode === 'delegated',
       });
       if (admission.scope === 'branch') {
         // Admission must reject credential/state combinations before it
@@ -1695,6 +1717,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   ): Promise<Session> {
     const session = await sessionRepo.findById(id);
     if (!session) throw new NotFound(`Session not found: ${id}`);
+    await (
+      sessionRepo as SessionRepository & {
+        assertNativeStateHandoffClear(id: string): Promise<void>;
+      }
+    ).assertNativeStateHandoffClear(session.session_id);
     if (await taskRepo.hasNonterminalForSession(session.session_id)) {
       throw new Conflict(
         `Cannot delete session ${session.session_id} while it has unfinished tasks. Stop them first.`
@@ -1731,6 +1758,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<Session | Session[]> {
     assertSessionArchiveStateUsesDedicatedOperation(data);
+    if (Object.hasOwn(data, 'sdk_native_state')) {
+      throw new BadRequest('sdk_native_state is server-managed and cannot be set by clients');
+    }
+    if (
+      Object.hasOwn(data, 'sdk_native_state_store_id') ||
+      Object.hasOwn(data, 'opencode_cleanup_cursor')
+    ) {
+      throw new BadRequest('OpenCode native-state coordination is server-managed');
+    }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }
@@ -2047,7 +2083,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
 ): SessionsService {
-  return new SessionsService(db, app, deploymentAvailable);
+  return new SessionsService(db, app, deploymentAvailable, deploymentToolUnsupported);
 }

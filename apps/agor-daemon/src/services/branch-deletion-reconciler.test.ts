@@ -1,4 +1,4 @@
-import { BranchMaintenanceRepository, BranchRepository } from '@agor/core/db';
+import { BranchMaintenanceRepository, BranchRepository, runWithTenantContext } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
@@ -10,7 +10,9 @@ test('existing-loop observer marks stale deletion failed but cannot dispatch or 
 }) => {
   const { branch } = await seedEnvironmentCommandBranch(db);
   const maintenance = new BranchMaintenanceRepository(db);
-  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const { claim } = await runWithTenantContext('default', () =>
+    maintenance.claim(branch.branch_id, 'delete')
+  );
   vi.useFakeTimers({ toFake: ['Date'] });
   try {
     vi.setSystemTime(new Date('2026-09-15T00:00:00Z'));
@@ -31,7 +33,10 @@ test('existing-loop observer marks stale deletion failed but cannot dispatch or 
     expect((await new BranchRepository(db).findById(branch.branch_id))?.deletion_status).toBe(
       'deletion_failed'
     );
-    expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(false);
+    expect(
+      (await runWithTenantContext('default', () => maintenance.claim(branch.branch_id, 'delete')))
+        .acquired
+    ).toBe(false);
     await expect(maintenance.beginExecution(claim)).rejects.toThrow();
   } finally {
     vi.useRealTimers();

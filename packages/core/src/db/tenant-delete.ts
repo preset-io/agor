@@ -143,6 +143,12 @@ export async function deleteTenant(
   const dryRun = options.dryRun ?? false;
   const database = await deleteTenantData(db, tenantId, {
     dryRun,
+    ...((options.filesystem?.root ?? options.filesystemRoot)
+      ? { filesystemRoot: options.filesystem?.root ?? options.filesystemRoot }
+      : {}),
+    ...(options.additionalNativeStateFilesystemRoot
+      ? { additionalNativeStateFilesystemRoot: options.additionalNativeStateFilesystemRoot }
+      : {}),
     ...(options.log ? { log: options.log } : {}),
     ...(options.assertGateGeneration !== undefined
       ? { assertGateGeneration: options.assertGateGeneration }

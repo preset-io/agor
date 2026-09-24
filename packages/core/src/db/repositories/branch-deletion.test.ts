@@ -1,10 +1,15 @@
 import { expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
-import { ownedDbTest as test } from '../test-helpers';
+import type { Database } from '../client';
+import { runWithTenantContext } from '../tenant-context';
+import { ownedDbTest } from '../test-helpers';
 import { BranchDeletionRepository } from './branch-deletion';
 import { BranchMaintenanceRepository } from './branch-maintenance';
 import { BranchRepository } from './branches';
 import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
+
+const test = (title: string, work: (fixtures: { db: Database }) => Promise<void>) =>
+  ownedDbTest(title, async ({ db }) => runWithTenantContext('default', () => work({ db })));
 
 test('finalization requires verified storage and drained data, and deletes branch only after final callback', async ({
   db,

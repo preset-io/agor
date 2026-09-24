@@ -20,7 +20,9 @@ test('deletion steps require exact authenticated command, tenant and invocation,
 }) => {
   const { branch, user } = await seedEnvironmentCommandBranch(db);
   const maintenance = new BranchMaintenanceRepository(db);
-  const { claim } = await maintenance.claim(branch.branch_id, 'delete', user.user_id);
+  const { claim } = await runWithTenantContext('default', () =>
+    maintenance.claim(branch.branch_id, 'delete', user.user_id)
+  );
   const invocation = await maintenance.beginExecution(claim);
   const emit = vi.fn();
   const generateCommandToken = vi.fn().mockResolvedValue('renewed-invocation-token');

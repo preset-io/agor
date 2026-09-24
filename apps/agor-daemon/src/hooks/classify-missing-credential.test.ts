@@ -367,15 +367,33 @@ describe('classifyMissingCredentialFailure', () => {
     expect(taskRepository.findById).not.toHaveBeenCalled();
   });
 
-  it('falls through for unmapped tools and missing records', async () => {
+  it('classifies a hosted OpenCode provider failure through its reviewed connection fields', async () => {
     sessionsRepository.findById = vi
       .fn()
       .mockResolvedValue(makeSession({ agentic_tool: 'opencode' }));
-    let ctx = await runHook()(makeContext({ ...explicitCredentialFailure }));
-    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: null,
+      connection: {},
+      source: 'none',
+      useNativeAuth: false,
+    } as never);
+    let ctx = await runHook()(makeContext({ ...zeroTurnResult }));
+    expect((ctx.data as Message).metadata?.error_kind).toBe('missing_credential');
+    expect(vi.mocked(resolveApiKey).mock.calls[0]?.[0]).toBe('OPENCODE_API_KEY_ANTHROPIC');
 
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: null,
+      connection: { OPENCODE_API_KEY_OPENAI: 'sk-openai' },
+      source: 'user',
+      useNativeAuth: false,
+    } as never);
+    ctx = await runHook()(makeContext({ ...zeroTurnResult }));
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+  });
+
+  it('falls through for missing records', async () => {
     taskRepository.findById = vi.fn().mockResolvedValue(null);
-    ctx = await runHook()(makeContext({ ...explicitCredentialFailure }));
+    const ctx = await runHook()(makeContext({ ...explicitCredentialFailure }));
     expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
   });
 

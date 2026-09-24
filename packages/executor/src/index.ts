@@ -14,6 +14,7 @@
  * signals and remote heartbeat recovery remain containment fallbacks.
  */
 
+import { randomUUID } from 'node:crypto';
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
@@ -28,7 +29,13 @@ import type {
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
+import {
+  beginManagedOpenCodeWithBusyRetry,
+  isRetryableTransportFailure,
+  type ManagedOpenCodeAdmission,
+} from './managed-opencode-admission.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
+import type { OpenCodeCheckpointLaunchLocator } from './opencode-launch-locator.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
@@ -44,6 +51,24 @@ const DEBUG_EXECUTOR =
   process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
 
 const PROVIDER_CLEANUP_SLOW_MS = 15_000;
+const UNSTARTED_GRANT_RETRY_DELAYS_MS = [200, 500, 1_000] as const;
+
+async function retryUnstartedGrantMutation(work: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await work();
+      return;
+    } catch (error) {
+      if (!isRetryableTransportFailure(error) || attempt >= UNSTARTED_GRANT_RETRY_DELAYS_MS.length)
+        throw error;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, UNSTARTED_GRANT_RETRY_DELAYS_MS[attempt])
+      );
+    }
+  }
+}
+
+type ManagedOpenCodeAdmissionState = 'not_admitted' | 'admitted' | 'rejected';
 
 function executorDebug(...args: unknown[]): void {
   if (DEBUG_EXECUTOR) {
@@ -74,6 +99,8 @@ export interface ExecutorConfig {
   agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. See payload-types.ResolvedConfigSliceSchema. */
   resolvedConfig?: ResolvedConfigSlice;
+  /** Substrate identity snapshotted by the CLI before payload env application. */
+  managedOpenCodeLocator?: OpenCodeCheckpointLaunchLocator | null;
 }
 
 export class AgorExecutor {
@@ -89,9 +116,21 @@ export class AgorExecutor {
   /** Exact durable refresh currently in flight plus bounded automatic backoff. */
   private mcpRefreshIdentity: string | null = null;
   private mcpRefreshFailure: { identity: string; attempts: number; retryAt: number } | undefined;
+  private readonly managedOpenCodeCandidate: boolean;
+  private readonly managedOpenCodeHolderId: string | undefined;
+  private managedOpenCodeAdmissionState: ManagedOpenCodeAdmissionState = 'not_admitted';
+  private managedOpenCodeAdmission: ManagedOpenCodeAdmission | undefined;
+  private managedOpenCodeBeginUncertain = false;
+  private managedReconnectPending = false;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
+    const context = config.agenticToolContext;
+    this.managedOpenCodeCandidate =
+      config.tool === 'opencode' &&
+      !!context &&
+      (context.mode === 'managed-projection' || context.version !== undefined);
+    this.managedOpenCodeHolderId = this.managedOpenCodeCandidate ? randomUUID() : undefined;
   }
 
   /**
@@ -104,7 +143,80 @@ export class AgorExecutor {
     errorMessage?: string
   ): Promise<void> {
     if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
-    await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
+    await tryMarkTaskTerminal(
+      this.client,
+      this.config.taskId,
+      status,
+      errorMessage,
+      this.managedOpenCodeAdmission?.attempt.holder_instance_id
+    );
+  }
+
+  /** Recover a response-lost grant by the same holder before settling an unstarted turn. */
+  private async settleManagedOpenCodeBeforeAdmission(): Promise<void> {
+    if (!this.client) return;
+    const locator = this.config.managedOpenCodeLocator;
+    const holderId = this.managedOpenCodeHolderId;
+    if (
+      this.managedOpenCodeBeginUncertain &&
+      locator &&
+      holderId &&
+      !this.managedOpenCodeAdmission
+    ) {
+      const service = this.client.service('opencode-native-state' as string) as unknown as {
+        begin(input: {
+          task_id: string;
+          holder_instance_id: string;
+          locator: OpenCodeCheckpointLaunchLocator;
+        }): Promise<ManagedOpenCodeAdmission | { outcome: 'rejected'; code: string }>;
+      };
+      try {
+        // Ignore Stop only for this read-only same-holder replay. The daemon
+        // refuses a new admission on STOPPING and never re-runs Cloud identity
+        // resolution for an existing immutable binding.
+        const recovered = await beginManagedOpenCodeWithBusyRetry(
+          () =>
+            service.begin({ task_id: this.config.taskId, holder_instance_id: holderId, locator }),
+          new AbortController().signal,
+          () => false
+        );
+        if (
+          recovered.outcome === 'admitted' &&
+          recovered.attempt.task_id === this.config.taskId &&
+          recovered.attempt.holder_instance_id === holderId
+        ) {
+          this.managedOpenCodeAdmission = recovered;
+          this.managedOpenCodeAdmissionState = 'admitted';
+        }
+      } catch {
+        // Absence is decided only by the repository's locked no-attempt check
+        // below; a lost replay response cannot authorize holder-less closure.
+      }
+    }
+    if (this.managedOpenCodeAdmission) {
+      try {
+        await this.closeManagedOpenCodeWithoutStartingProvider();
+      } catch {
+        console.warn('[executor.opencode] event=unstarted_grant_drain_unverified');
+        return;
+      }
+    }
+    await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+    if (this.terminationRequest) {
+      await this.reportTerminationComplete().catch(() => undefined);
+    } else {
+      await this.tryMarkTaskTerminal(
+        TaskStatus.FAILED,
+        'Managed OpenCode admission failed before provider I/O'
+      );
+      // A Stop may win between the first read and terminal patch; the service
+      // then leaves terminality with the coordinator rather than applying our
+      // failure. Re-read and acknowledge that exact request before exit.
+      await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+      if (this.terminationRequest) {
+        await this.reportTerminationComplete().catch(() => undefined);
+      }
+    }
   }
 
   /**
@@ -122,7 +234,15 @@ export class AgorExecutor {
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createExecutorClient(this.config.daemonUrl, this.config.sessionToken, {
         onReconnected: () => {
-          void this.refreshTerminationState('reconnect');
+          if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') {
+            this.managedReconnectPending = true;
+            return;
+          }
+          void this.refreshTerminationState('reconnect').catch(() => {
+            // A transient read failure is not evidence of termination and must
+            // not become an unhandled rejection that kills an admitted holder.
+            console.warn('[executor.stop] event=reconnect_termination_read_deferred');
+          });
           void this.refreshDurableMcpRecovery();
         },
       });
@@ -142,9 +262,77 @@ export class AgorExecutor {
         .connectExecutor({ task_id: this.config.taskId });
       this.handleTaskLifecycleUpdate(connectedTask, 'connect_claim');
 
+      if (this.managedOpenCodeCandidate) {
+        if (this.terminationRequest || this.abortController.signal.aborted) {
+          this.managedOpenCodeAdmissionState = 'rejected';
+          console.warn('[executor.opencode] event=admission_skipped reason=stop_before_begin');
+          await this.settleManagedOpenCodeBeforeAdmission();
+          process.exit(1);
+          return;
+        }
+        const locator = this.config.managedOpenCodeLocator;
+        const holderId = this.managedOpenCodeHolderId;
+        if (!locator || !holderId) {
+          this.managedOpenCodeAdmissionState = 'rejected';
+          console.error(
+            '[executor.opencode] event=admission_rejected reason=cloud_identity_missing'
+          );
+          await this.settleManagedOpenCodeBeforeAdmission();
+          process.exit(1);
+          return;
+        }
+        const nativeStateService = this.client.service(
+          'opencode-native-state' as string
+        ) as unknown as {
+          begin(input: {
+            task_id: string;
+            holder_instance_id: string;
+            locator: OpenCodeCheckpointLaunchLocator;
+          }): Promise<ManagedOpenCodeAdmission | { outcome: 'rejected'; code: string }>;
+        };
+        this.managedOpenCodeBeginUncertain = true;
+        const admission = await beginManagedOpenCodeWithBusyRetry(
+          () =>
+            nativeStateService.begin({
+              task_id: this.config.taskId,
+              holder_instance_id: holderId,
+              locator,
+            }),
+          this.abortController.signal,
+          () => Boolean(this.terminationRequest)
+        );
+        if (
+          admission.outcome !== 'admitted' ||
+          admission.attempt.holder_instance_id !== this.managedOpenCodeHolderId ||
+          admission.attempt.task_id !== this.config.taskId
+        ) {
+          this.managedOpenCodeBeginUncertain = false;
+          this.managedOpenCodeAdmissionState = 'rejected';
+          console.warn(
+            `[executor.opencode] event=admission_rejected code=${admission.outcome === 'rejected' ? admission.code : 'binding_mismatch'}`
+          );
+          await this.settleManagedOpenCodeBeforeAdmission();
+          process.exit(1);
+          return;
+        }
+        this.managedOpenCodeAdmission = admission;
+        this.managedOpenCodeBeginUncertain = false;
+        this.managedOpenCodeAdmissionState = 'admitted';
+        if (this.managedReconnectPending) {
+          this.managedReconnectPending = false;
+          await this.refreshTerminationState('reconnect');
+          await this.refreshDurableMcpRecovery();
+        }
+        if (this.terminationRequest || this.abortController.signal.aborted) {
+          await this.closeManagedOpenCodeWithoutStartingProvider();
+        }
+      }
+
       // Execute the task
       if (!this.terminationRequest) await this.executeTask();
-      await this.reportTerminationComplete();
+      if (!this.managedOpenCodeCandidate || this.managedOpenCodeAdmissionState === 'admitted') {
+        await this.reportTerminationComplete();
+      }
 
       // Exit successfully
       console.log(
@@ -153,6 +341,26 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
+      if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') {
+        this.managedOpenCodeAdmissionState = 'rejected';
+        console.warn('[executor.opencode] event=admission_aborted reason=pre_admission_error');
+        await this.settleManagedOpenCodeBeforeAdmission();
+        process.exit(1);
+        return;
+      }
+      if (this.managedOpenCodeCandidate) {
+        // Managed attempts are settled only by the holder-aware OpenCode
+        // handler after its I/O drain. A generic outer fallback cannot prove
+        // a provider, checkpoint copy, or source read has closed.
+        if (!this.terminationRequest) {
+          await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+        }
+        if (this.terminationRequest) {
+          await this.reportTerminationComplete().catch(() => undefined);
+        }
+        process.exit(1);
+        return;
+      }
       if (isTaskFailurePersisted(error)) {
         console.log(
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
@@ -196,6 +404,8 @@ export class AgorExecutor {
       this.handleTaskLifecycleUpdate(data as Task, 'task_stop_event');
     });
     this.client.service('tasks').on('mcp_refresh_requested', (data: unknown) => {
+      if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted')
+        return;
       const event = data as {
         task_id?: string;
         session_id?: string;
@@ -256,6 +466,7 @@ export class AgorExecutor {
     reason: 'authority_changed' | 'user_reconnect';
     expectedGeneration: number;
   }): void {
+    if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') return;
     const identity = `${input.expectedGeneration}:${input.requestId}`;
     if (this.mcpRefreshIdentity === identity) return;
     const failure = this.mcpRefreshFailure;
@@ -288,6 +499,7 @@ export class AgorExecutor {
 
   /** Re-derive a missed availability hint from the authoritative Task row. */
   private requestDurableMcpRecovery(task: Task): void {
+    if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') return;
     const recovery = task.metadata?.mcp_recovery;
     if (
       task.task_id !== this.config.taskId ||
@@ -308,6 +520,7 @@ export class AgorExecutor {
   }
 
   private async refreshDurableMcpRecovery(): Promise<void> {
+    if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') return;
     if (!this.client) return;
     const task = (await this.client
       .service('tasks')
@@ -380,16 +593,55 @@ export class AgorExecutor {
       const report = reportExecutorQuiescence({
         taskId: this.config.taskId,
         requestedAt,
-        report: () =>
-          client.service('tasks').reportTerminationComplete({
+        report: () => {
+          const input = {
             task_id: this.config.taskId,
             requested_at: requestedAt,
-          }),
+            ...(this.managedOpenCodeCandidate && this.managedOpenCodeAdmission
+              ? { holder_instance_id: this.managedOpenCodeAdmission.attempt.holder_instance_id }
+              : {}),
+          };
+          return (
+            client.service('tasks').reportTerminationComplete as unknown as (
+              value: typeof input
+            ) => Promise<Task>
+          )(input);
+        },
         readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
       });
       this.terminationReport = report;
     }
     await this.terminationReport;
+  }
+
+  /** No provider or storage read has started, so this committed grant can be safely drained. */
+  private async closeManagedOpenCodeWithoutStartingProvider(): Promise<void> {
+    const grant = this.managedOpenCodeAdmission;
+    if (!grant || !this.client) return;
+    const service = this.client.service('opencode-native-state' as string) as unknown as {
+      closeRead(input: {
+        task_id: string;
+        holder_instance_id: string;
+        input: { storeId: string; taskId: string };
+      }): Promise<void>;
+      abandon(input: { task_id: string; holder_instance_id: string }): Promise<void>;
+    };
+    if (grant.input) {
+      const input = grant.input;
+      await retryUnstartedGrantMutation(() =>
+        service.closeRead({
+          task_id: this.config.taskId,
+          holder_instance_id: grant.attempt.holder_instance_id,
+          input: { storeId: input.storeId, taskId: input.attemptTaskId },
+        })
+      );
+    }
+    await retryUnstartedGrantMutation(() =>
+      service.abandon({
+        task_id: this.config.taskId,
+        holder_instance_id: grant.attempt.holder_instance_id,
+      })
+    );
   }
 
   /**
@@ -410,6 +662,8 @@ export class AgorExecutor {
 
   /** Handle Stop that atomically beat connectExecutor() without starting SDK work. */
   private async recoverTerminationBeforeStart(): Promise<boolean> {
+    if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted')
+      return false;
     if (!this.client) return false;
     try {
       await this.refreshTerminationState('startup_recovery');
@@ -438,6 +692,7 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
+      holderInstanceId: this.managedOpenCodeAdmission?.attempt.holder_instance_id,
       onTask: (task) => this.handleTaskLifecycleUpdate(task, 'heartbeat'),
     });
     const watchdogConfig =
@@ -476,6 +731,7 @@ export class AgorExecutor {
         agenticToolContext: this.config.agenticToolContext,
         resolvedConfig: this.config.resolvedConfig,
         onPulse: (kind, detail) => this.recordPulse(kind, detail),
+        managedOpenCodeAdmission: this.managedOpenCodeAdmission,
       });
     } finally {
       if (this.providerCleanupSlowTimer) {
@@ -519,7 +775,13 @@ export class AgorExecutor {
     let acknowledged = false;
     const report = this.client
       .service('tasks')
-      .reportSdkHealthFailure({ ...evidence, task_id: this.config.taskId })
+      .reportSdkHealthFailure({
+        ...evidence,
+        task_id: this.config.taskId,
+        ...(this.managedOpenCodeCandidate && this.managedOpenCodeAdmission
+          ? { holder_instance_id: this.managedOpenCodeAdmission.attempt.holder_instance_id }
+          : {}),
+      })
       .then((task) => {
         acknowledged = true;
         this.handleTaskLifecycleUpdate(task);
@@ -579,6 +841,14 @@ export class AgorExecutor {
       this.watchdog?.stop();
       this.watchdog = null;
 
+      if (this.managedOpenCodeCandidate) {
+        // Out-of-band signals are not proof that provider, source-read, or
+        // checkpoint-write I/O drained. Leave all holder pins open for exact
+        // trusted Cloud observation instead of synthesizing quiescence.
+        process.exit(1);
+        return;
+      }
+
       // The daemon's termination coordinator owns STOPPING → terminal. This
       // fallback only fires for an out-of-band signal while the task is active.
       await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
@@ -595,6 +865,10 @@ export class AgorExecutor {
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);
+      if (this.managedOpenCodeCandidate) {
+        process.exit(1);
+        return;
+      }
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
         `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
@@ -604,6 +878,10 @@ export class AgorExecutor {
 
     process.on('unhandledRejection', async (reason) => {
       console.error('[executor] Unhandled rejection:', reason);
+      if (this.managedOpenCodeCandidate) {
+        process.exit(1);
+        return;
+      }
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
         `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`

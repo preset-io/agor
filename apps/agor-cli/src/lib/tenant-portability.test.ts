@@ -6,6 +6,7 @@ import type {
   TenantInspectionResult,
   TenantVerificationResult,
 } from '@agor/core/tenant-portability';
+import { TenantNativeStateHandoffRequiredError } from '@agor/core/tenant-portability';
 import { describe, expect, it } from 'vitest';
 import {
   formatPortabilityError,
@@ -15,6 +16,18 @@ import {
 } from './tenant-portability';
 
 describe('formatPortabilityError', () => {
+  it('publishes a value-free typed handoff marker through a wrapped error', () => {
+    const formatted = formatPortabilityError(
+      new Error('wrapper', { cause: new TenantNativeStateHandoffRequiredError() })
+    );
+    expect(JSON.parse(formatted)).toEqual({
+      marker: TENANT_PORTABILITY_ERROR_MARKER,
+      version: TENANT_PORTABILITY_ERROR_VERSION,
+      category: 'native_state_handoff_required',
+    });
+    expect(formatted).not.toContain('tenant path');
+  });
+
   it('retains only allowlisted structural metadata from a wrapped PostgreSQL failure', () => {
     const distinctive = 'tenant-secret-43e2c831';
     const postgresCause = Object.assign(new Error(`PG detail leaked ${distinctive}`), {

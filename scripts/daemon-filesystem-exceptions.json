@@ -1986,5 +1986,47 @@
     "rationale": "Canonicalizes the trusted existing deployment-root ancestor so symlinked data roots resolve to one credential authority.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-252",
+    "class": "A",
+    "file": "packages/core/src/db/tenant-native-state-filesystem-preflight.ts",
+    "import": "node:fs/promises",
+    "symbol": "lstat",
+    "local": "lstat",
+    "operation": "call:lstat@inspect#1",
+    "owner": "tenant deletion admission",
+    "boundary": "trusted tenant filesystem root, path-only native-state preflight",
+    "rationale": "Rejects existing native-state paths and symlink ancestors before a destructive tenant database transaction; reads metadata only and never follows links.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-253",
+    "class": "A",
+    "file": "packages/core/src/db/tenant-native-state-filesystem-preflight.ts",
+    "import": "node:fs/promises",
+    "symbol": "readdir",
+    "local": "readdir",
+    "operation": "call:readdir@hasTenantNativeStateFilesystemTree#1",
+    "owner": "tenant deletion admission",
+    "boundary": "trusted tenant filesystem root, path-only native-state preflight",
+    "rationale": "Enumerates only tenant home names to find orphaned native-state trees; never reads file contents or acquires archive write capabilities.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-254",
+    "class": "A",
+    "file": "apps/agor-daemon/src/services/opencode-native-state.ts",
+    "import": "node:child_process",
+    "symbol": "spawn",
+    "local": "spawn",
+    "operation": "call:spawn@runObserverProcess#1",
+    "owner": "managed OpenCode native-state observation",
+    "boundary": "operator-configured trusted Cloud observer helper",
+    "rationale": "Invokes the configured observer command with a trusted environment and task-scoped authority, behind the per-task/global helper budget; no tenant-controlled shell text is interpolated.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

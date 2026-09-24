@@ -74,7 +74,7 @@ describe('TasksService executor patches', () => {
 
     await service.patch('task-1', { model: 'test-model' }, { provider: 'rest' });
 
-    expect(updateFromExecutor).toHaveBeenCalledWith('task-1', { model: 'test-model' });
+    expect(updateFromExecutor).toHaveBeenCalledWith('task-1', { model: 'test-model' }, undefined);
   });
 
   it('preserves explicit failure details', async () => {
@@ -162,7 +162,9 @@ describe('TasksService runtime telemetry', () => {
         branch_id: branchId,
         standalone_token_current: true,
       }),
-      { sequence: 1, kind: 'progress', detail: 'tool.start' }
+      { sequence: 1, kind: 'progress', detail: 'tool.start' },
+      undefined,
+      undefined
     );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });

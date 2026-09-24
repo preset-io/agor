@@ -69,6 +69,9 @@ function migrationTenantTables(): string[] {
   const transferMigration = readRepoFile(
     'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
+  const openCodeCheckpointMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0115_opencode_checkpoint_attempts.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -89,6 +92,7 @@ function migrationTenantTables(): string[] {
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...openCodeCheckpointMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -113,6 +117,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
     readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0115_opencode_checkpoint_attempts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -136,8 +141,16 @@ describe('Postgres multitenancy schema coverage', () => {
 
   it('keeps sqlite schema tenant-column free', () => {
     const sqliteSchema = readRepoFile('packages/core/src/db/schema.sqlite.ts');
-    expect(sqliteSchema).not.toContain('tenant_id');
-    expect(sqliteSchema).not.toContain("tenant_id'");
+    // SQLite remains single-tenant. The one exception is the new checkpoint
+    // ledger's literal-default scope column, which keeps its dual-dialect row
+    // type uniform; the application tables remain tenant-column free.
+    const ledgerStart = sqliteSchema.indexOf(
+      'export const opencodeCheckpointAttempts = sqliteTable('
+    );
+    const ledgerEnd = sqliteSchema.indexOf('/**', ledgerStart + 1);
+    const applicationSchema = `${sqliteSchema.slice(0, ledgerStart)}${sqliteSchema.slice(ledgerEnd)}`;
+    expect(applicationSchema).not.toContain('tenant_id');
+    expect(applicationSchema).not.toContain("tenant_id'");
   });
 
   it('limits cross-tenant gateway discovery to enabled rows and an explicit capability', () => {
@@ -281,6 +294,22 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain('"poll_lease_expires_at"');
     expect(migration).toContain('"exchange_started_at"');
     expect(migration).toContain('"finished_at"');
+  });
+
+  it('keeps OpenCode checkpoint attempts tenant-scoped and unavailable to system scopes', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0115_opencode_checkpoint_attempts.sql'
+    );
+    const policy = migration.slice(
+      migration.indexOf('CREATE POLICY "tenant_isolation_opencode_checkpoint_attempts"')
+    );
+
+    expect(policy).toContain("COALESCE(current_setting('agor.system_scope', true), '') = ''");
+    expect(policy).toContain(
+      "COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')"
+    );
+    expect(policy).toContain('USING (');
+    expect(policy).toContain('WITH CHECK (');
   });
 
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {

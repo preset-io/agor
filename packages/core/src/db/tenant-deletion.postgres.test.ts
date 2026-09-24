@@ -10,19 +10,30 @@
  *   pnpm --filter @agor/core exec vitest run src/db/tenant-deletion.postgres.test.ts
  */
 
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { count, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { UUID } from '../types/id';
+import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
 import { executeRaw, insert, isPostgresDatabase, select } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import { BranchRepository } from './repositories/branches';
+import { OpenCodeCheckpointAttemptRepository } from './repositories/opencode-checkpoint-attempts';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
+import { TaskRepository } from './repositories/tasks';
 import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
-import { deleteTenantData, TenantDeletionCatalogError } from './tenant-deletion';
+import { deleteTenant } from './tenant-delete';
+import {
+  deleteTenantData,
+  TenantDeletionCatalogError,
+  TenantNativeStateHandoffRequiredError,
+} from './tenant-deletion';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -357,6 +368,68 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     expect(await countTenantSessions(db, tenantB)).toBe(0);
   });
 
+  it('blocks deletion when files-only legacy native state remains without DB pointers', async () => {
+    const tenantId = `td-native-files-${generateId()}`;
+    const root = await mkdtemp(join(tmpdir(), 'agor-tenant-native-delete-'));
+    await seedTenant(db, tenantId);
+    const orphan = join(
+      root,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy',
+      'checkpoint.json'
+    );
+    await mkdir(join(orphan, '..'), { recursive: true });
+    await writeFile(orphan, '{"orphan":true}');
+
+    try {
+      await expect(deleteTenantData(db, tenantId, { filesystemRoot: root })).rejects.toBeInstanceOf(
+        TenantNativeStateHandoffRequiredError
+      );
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await deleteTenantData(db, tenantId);
+    }
+  });
+
+  it('checks an additional mounted tenant root before deleting rows, even database-only', async () => {
+    const tenantId = `td-native-mounted-${generateId()}`;
+    const configuredRoot = await mkdtemp(join(tmpdir(), 'agor-configured-native-delete-'));
+    const mountedRoot = await mkdtemp(join(tmpdir(), 'agor-mounted-native-delete-'));
+    await seedTenant(db, tenantId);
+    const orphan = join(
+      mountedRoot,
+      'homes',
+      'owner-1',
+      '.local',
+      'share',
+      'agor',
+      'opencode',
+      'legacy'
+    );
+    await mkdir(orphan, { recursive: true });
+    await writeFile(join(orphan, 'checkpoint.json'), '{}');
+    try {
+      await expect(
+        deleteTenant(db, tenantId, {
+          databaseOnly: true,
+          filesystemRoot: configuredRoot,
+          additionalNativeStateFilesystemRoot: mountedRoot,
+        })
+      ).rejects.toBeInstanceOf(TenantNativeStateHandoffRequiredError);
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await rm(configuredRoot, { recursive: true, force: true });
+      await rm(mountedRoot, { recursive: true, force: true });
+      await deleteTenantData(db, tenantId);
+    }
+  });
+
   it('dry-run reports counts without deleting', async () => {
     const tenantC = `tdc-${generateId()}`;
     await seedTenant(db, tenantC);
@@ -371,6 +444,119 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
 
     await deleteTenantData(db, tenantC);
     expect(await countTenantSessions(db, tenantC)).toBe(0);
+  });
+
+  it('blocks physical tenant deletion while a coordinated OpenCode attempt exists', async () => {
+    const tenantId = `td-opencode-${generateId()}`;
+    const ownerId = generateId() as UUID;
+    const repoId = generateId();
+    const branchId = generateId();
+    const sessionId = generateId();
+    const taskId = generateId();
+    const storeId = generateId();
+    const holderId = generateId();
+
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      await new UsersRepository(scoped).create({
+        user_id: ownerId,
+        email: `tenant-opencode-${tenantId}@example.invalid`,
+        role: 'member',
+      });
+      await new RepoRepository(scoped).create({
+        repo_id: repoId,
+        slug: `td-opencode-${repoId}`,
+        name: 'OpenCode native-state guard',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/tenant-opencode.git',
+        local_path: `/tmp/${repoId}`,
+        default_branch: 'main',
+      });
+      await new BranchRepository(scoped).create({
+        branch_id: branchId,
+        repo_id: repoId,
+        name: 'opencode-guard',
+        ref: 'main',
+        branch_unique_id: branchUniqueSeq++,
+        path: `/tmp/${branchId}`,
+        created_by: ownerId,
+      });
+      await new SessionRepository(scoped).create({
+        session_id: sessionId,
+        branch_id: branchId,
+        agentic_tool: 'opencode',
+        created_by: ownerId,
+      });
+      const tasks = new TaskRepository(scoped);
+      await tasks.create({
+        task_id: taskId,
+        session_id: sessionId,
+        created_by: ownerId,
+        full_prompt: 'tenant deletion guard',
+        status: TaskStatus.DISPATCHING,
+        message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+        git_state: { ref_at_start: 'main', sha_at_start: 'tenant-guard' },
+      });
+      const connected = await tasks.connectExecutor(taskId);
+      if (!connected) throw new Error('Task connection failed');
+      await tasks.stampManagedOpenCodeProtocol(taskId);
+      await new OpenCodeCheckpointAttemptRepository(scoped).begin({
+        taskId,
+        holderInstanceId: holderId,
+        storeId,
+        binding: {
+          protocol: 3,
+          tenantId,
+          ownerUserId: ownerId,
+          sessionId,
+          taskId,
+          storeId,
+          holderInstanceId: holderId,
+          locator: {
+            runId: generateId(),
+            cellId: generateId(),
+            tenantId,
+            ownerRuntimeUserId: ownerId,
+            sessionId,
+            taskId,
+            storeId,
+            holderInstanceId: holderId,
+            namespace: 'tenant-deletion-test',
+            jobName: `job-${taskId}`,
+            jobUid: generateId(),
+            podName: `pod-${taskId}`,
+            podUid: generateId(),
+            containerName: 'executor',
+            containerId: `containerd://${generateId()}`,
+            restartCount: 0,
+            imageIdentity: `sha256:${'d'.repeat(64)}`,
+          },
+        },
+      });
+    });
+
+    try {
+      await expect(deleteTenantData(db, tenantId)).rejects.toBeInstanceOf(
+        TenantNativeStateHandoffRequiredError
+      );
+      expect(await countTenantSessions(db, tenantId)).toBe(1);
+    } finally {
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        await executeRaw(
+          scoped,
+          sql`
+          DELETE FROM public.opencode_checkpoint_attempts WHERE tenant_id = ${tenantId}
+        `
+        );
+        await executeRaw(
+          scoped,
+          sql`
+          UPDATE public.sessions SET data = data - 'sdk_native_state_store_id'
+          WHERE tenant_id = ${tenantId}
+        `
+        );
+      });
+      await deleteTenantData(db, tenantId);
+    }
   });
 
   it('deletes and verifies the imperative embeddings table without touching another tenant', async () => {

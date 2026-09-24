@@ -95,3 +95,84 @@ describe('OpenCode known model catalog', () => {
     });
   });
 });
+
+describe('OpenCode hosted provider projection', () => {
+  it('projects only reviewed providers and registers every key as a redaction secret', async () => {
+    const { buildOpenCodeAuthContent, hostedProviderIdsFromConnection } = await import(
+      './known-models.js'
+    );
+    const projected = buildOpenCodeAuthContent(
+      {
+        OPENCODE_API_KEY_ANTHROPIC: ' sk-ant-test ',
+        OPENCODE_API_KEY_OPENAI: '',
+        OPENCODE_API_KEY_KIMI_FOR_CODING: 'unused-key',
+        SOMETHING_ELSE: 'ignored',
+      },
+      'anthropic'
+    );
+    expect(projected.providerIds).toEqual(['anthropic']);
+    expect(JSON.parse(projected.content ?? '')).toEqual({
+      anthropic: { type: 'api', key: 'sk-ant-test' },
+    });
+    expect(projected.secrets).toEqual(['sk-ant-test', projected.content]);
+    expect(buildOpenCodeAuthContent({}, 'anthropic')).toEqual({
+      content: undefined,
+      providerIds: [],
+      secrets: [],
+    });
+    expect([...hostedProviderIdsFromConnection({ OPENCODE_API_KEY_OPENAI: true })]).toEqual([
+      'openai',
+    ]);
+  });
+
+  it('keeps the hosted field map aligned with the core provider-connection fields', async () => {
+    const { OPENCODE_HOSTED_PROVIDER_FIELDS } = await import('./known-models.js');
+    const { PROVIDER_CONNECTION_FIELDS } = await import('@agor/core/types');
+    expect([...Object.values(OPENCODE_HOSTED_PROVIDER_FIELDS)].sort()).toEqual(
+      [...PROVIDER_CONNECTION_FIELDS.opencode].sort()
+    );
+  });
+
+  it('derives hosted provider settings from saved-key presence without OAuth methods', async () => {
+    const { createOpenCodeHostedProviderDiscovery } = await import('./known-models.js');
+    const discovery = createOpenCodeHostedProviderDiscovery(new Set(['openai']));
+    const openai = discovery.providers.find((provider) => provider.id === 'openai');
+    const zen = discovery.providers.find((provider) => provider.id === 'opencode');
+    expect(discovery.runtime).toBe('available');
+    expect(openai).toMatchObject({
+      credentialPresence: 'present',
+      runtimeAvailable: true,
+      authMethods: [{ index: 0, type: 'api', label: 'API key' }],
+    });
+    expect(zen).toMatchObject({
+      credentialPresence: 'absent',
+      runtimeAvailable: false,
+      authMethods: [],
+    });
+    expect(
+      discovery.providers.every((provider) => provider.authMethods.every((m) => m.type === 'api'))
+    ).toBe(true);
+    expect(discovery.suggestedSelection).toEqual({
+      providerId: 'openai',
+      modelId: 'gpt-5.6-terra-pro',
+    });
+  });
+
+  it('never offers or suggests the credential-less provider in hosted mode', async () => {
+    const { createOpenCodeHostedProviderDiscovery, createOpenCodeKnownModelCatalog } = await import(
+      './known-models.js'
+    );
+    const empty = createOpenCodeHostedProviderDiscovery(new Set());
+    expect(empty.suggestedSelection).toBeUndefined();
+    expect(empty.providers.every((provider) => provider.runtimeAvailable === false)).toBe(true);
+    const catalog = createOpenCodeKnownModelCatalog(new Set(), { allowCredentialless: false });
+    expect(catalog.suggestedSelection).toBeUndefined();
+    expect(catalog.providers.find((provider) => provider.id === 'opencode')).toMatchObject({
+      availableForSelection: false,
+    });
+    // Local native-file mode keeps the credential-less default.
+    expect(createOpenCodeKnownModelCatalog(new Set()).suggestedSelection).toMatchObject({
+      providerId: 'opencode',
+    });
+  });
+});

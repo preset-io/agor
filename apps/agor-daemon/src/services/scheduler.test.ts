@@ -5,6 +5,7 @@ import {
   createTenantScopedDatabaseProxy,
   generateId,
   MCPServerRepository,
+  OpenCodeNativeStateHandoffRequiredError,
   RepoRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -25,6 +26,8 @@ import {
 } from '@agor/core/types';
 import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { hostedOpenCodeConfig } from '../../test/fixtures/hosted-opencode-config';
+import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities.js';
 import {
   materializeScheduleAgenticToolConfig,
   renderSchedulePrompt,
@@ -152,6 +155,92 @@ function createSchedulerApp(db: SchedulerDb) {
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
   return { app, prompt, removeSession, sessionEvent, workIdentity };
 }
+
+describe('scheduler deployment capability admission', () => {
+  for (const missing of ['opt-in', 'persistent-home', 'none'] as const) {
+    for (const trigger of ['manual', 'cron'] as const) {
+      dbTest(
+        `gates OpenCode ${trigger} occurrence with missing prerequisite: ${missing}`,
+        async ({ db }) => {
+          const { creator, schedule } = await seedRunnableSchedule(
+            db,
+            {
+              email: `scheduler-opencode-${generateId()}@example.com`,
+              name: 'Owner',
+            },
+            {
+              agentic_tool: 'opencode',
+              model_config: { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-4-5' },
+            }
+          );
+          const { app, prompt } = createSchedulerApp(db);
+          const gate = vi.fn(
+            createDeploymentToolUnsupportedGate({
+              multi_tenancy: { mode: 'required_from_auth' },
+              agentic_tools: {
+                opencode_hosted_native_state: missing === 'opt-in' ? undefined : 'checkpointed',
+              },
+              execution: {
+                unix_user_mode: 'delegated',
+                executor_command_template: 'launch {payload}',
+                opencode_native_state_observer: { command_template: 'observe {task_id}' },
+                executor_storage: {
+                  user_home: missing === 'persistent-home' ? 'shared' : 'persistent-per-user',
+                },
+              },
+            })
+          );
+          const scheduler = new SchedulerService(db, app, {
+            deploymentPolicy: { managed: true, installed: new Set(['opencode']) },
+            deploymentToolUnsupported: gate,
+          });
+          const warn = vi.spyOn(console, 'warn');
+          try {
+            const run =
+              trigger === 'manual'
+                ? scheduler.executeScheduleNow({
+                    scheduleId: schedule.schedule_id,
+                    triggeredBy: creator.user_id,
+                  })
+                : (
+                    scheduler as unknown as {
+                      processSchedule(schedule: Schedule, now: number): Promise<void>;
+                    }
+                  ).processSchedule(schedule, NOW + 30_000);
+            if (missing === 'none') {
+              await run;
+              expect(
+                await new SessionRepository(db).findByScheduleId(schedule.schedule_id)
+              ).toHaveLength(1);
+              expect(prompt).toHaveBeenCalledOnce();
+              expect(gate.mock.results[0]?.value).toBeUndefined();
+            } else {
+              const code =
+                missing === 'opt-in'
+                  ? 'hosted_native_state_disabled'
+                  : 'persistent_user_home_required';
+              await expect(run).rejects.toMatchObject({
+                name: 'OpenCodeUnsupportedError',
+                reason: { code },
+              });
+              expect(
+                await new SessionRepository(db).findByScheduleId(schedule.schedule_id)
+              ).toHaveLength(0);
+              expect(prompt).not.toHaveBeenCalled();
+              expect(warn).toHaveBeenCalledWith(
+                expect.stringContaining('occurrence_tool_unsupported')
+              );
+              expect(warn).toHaveBeenCalledWith(expect.stringContaining(code));
+            }
+            expect(gate).toHaveBeenCalledWith('opencode');
+          } finally {
+            warn.mockRestore();
+          }
+        }
+      );
+    }
+  }
+});
 
 describe('scheduler HA occurrence recovery', () => {
   const killStages = [
@@ -837,6 +926,68 @@ describe('scheduler HA occurrence recovery', () => {
     expect(removeSession).toHaveBeenCalledWith(olderActive.session_id, { provider: undefined });
     expect(await sessions.findById(olderActive.session_id)).toBeNull();
   });
+
+  dbTest(
+    'retention defers native-state handoff without blocking the new occurrence marker',
+    async ({ db }) => {
+      const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
+        db,
+        { email: `scheduler-native-retention-${Math.random()}@example.com` },
+        { agentic_tool: 'opencode' }
+      );
+      const schedule = await new ScheduleRepository(db).update(createdSchedule.schedule_id, {
+        retention: 1,
+      });
+      const sessions = new SessionRepository(db);
+      const older = await sessions.create({
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'opencode',
+        status: SessionStatus.COMPLETED,
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW - 60_000,
+        schedule_id: schedule.schedule_id,
+      });
+      const newest = await sessions.create({
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'opencode',
+        status: SessionStatus.COMPLETED,
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW,
+        schedule_id: schedule.schedule_id,
+      });
+      await sessions.markScheduledInitializationComplete(older.session_id);
+      const { app, removeSession } = createSchedulerApp(db);
+      removeSession.mockRejectedValueOnce(new OpenCodeNativeStateHandoffRequiredError('session'));
+      const scheduler = new SchedulerService(db, app);
+      await (
+        scheduler as unknown as {
+          finalizeScheduledSession(input: {
+            schedule: Schedule;
+            scheduleId: Schedule['schedule_id'];
+            session: Session;
+            scheduledRunAt: number;
+            now: number;
+            runTestHooks: boolean;
+          }): Promise<void>;
+        }
+      ).finalizeScheduledSession({
+        schedule,
+        scheduleId: schedule.schedule_id,
+        session: newest,
+        scheduledRunAt: NOW,
+        now: NOW,
+        runTestHooks: false,
+      });
+      expect(removeSession).toHaveBeenCalledWith(older.session_id, { provider: undefined });
+      expect(await sessions.findById(older.session_id)).not.toBeNull();
+      expect(await sessions.isScheduledInitializationComplete(newest.session_id)).toBe(true);
+      expect(
+        (await new ScheduleRepository(db).findById(schedule.schedule_id))?.last_run_session_id
+      ).toBe(newest.session_id);
+    }
+  );
 });
 
 describe('renderSchedulePrompt', () => {
@@ -1297,4 +1448,59 @@ describe('materializeScheduleAgenticToolConfig', () => {
       expect(prompt).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('hosted OpenCode scheduled branch-home admission', () => {
+  for (const adopted of [false, true]) {
+    for (const trigger of ['manual', 'cron'] as const) {
+      dbTest(`uses the owner's execution home: ${trigger}, adopted=${adopted}`, async ({ db }) => {
+        const { creator, branch, schedule } = await seedRunnableSchedule(
+          db,
+          {
+            email: `cloud-schedule-${generateId()}@example.com`,
+            name: 'Owner',
+            unix_username: 'owner-home',
+          },
+          {
+            agentic_tool: 'opencode',
+            model_config: { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-4-5' },
+          }
+        );
+        const branches = new BranchRepository(db);
+        if (adopted) await branches.adoptSdkHome(branch.branch_id);
+        const config = hostedOpenCodeConfig();
+        expect(config.execution.sandbox.sdk_home_mode).toBe('per_branch');
+        const { app, prompt } = createSchedulerApp(db);
+        const scheduler = new SchedulerService(db, app, {
+          deploymentPolicy: { managed: true, installed: new Set(['opencode', 'claude-code']) },
+          deploymentToolUnsupported: createDeploymentToolUnsupportedGate(config),
+          sdkHomeMode: config.execution.sandbox.sdk_home_mode,
+          unixUserMode: config.execution.unix_user_mode,
+        });
+        if (trigger === 'manual') {
+          await scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          });
+        } else {
+          await (
+            scheduler as unknown as {
+              processSchedule(schedule: Schedule, now: number): Promise<void>;
+            }
+          ).processSchedule(schedule, NOW + 30_000);
+        }
+        const [created] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(created).toMatchObject({
+          sdk_home_scope: 'execution_home',
+          created_by: creator.user_id,
+          unix_username: 'owner-home',
+          agentic_tool: 'opencode',
+        });
+        expect(prompt).toHaveBeenCalledOnce();
+        expect((await branches.findById(branch.branch_id))?.sdk_home).toBe(
+          adopted ? 'per_branch' : undefined
+        );
+      });
+    }
+  }
 });

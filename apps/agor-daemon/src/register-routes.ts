@@ -259,6 +259,7 @@ import {
 } from './utils/mcp-runtime-hints.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { authorizeMcpSessionConfigAccess } from './utils/mcp-session-config-authorization.js';
+import { mapNativeStateHandoffError } from './utils/native-state-handoff-error';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
 import { runPromptAdmissionTransaction } from './utils/prompt-admission-transaction.js';
 import { promptDatabaseErrorAround } from './utils/prompt-database-error.js';
@@ -6853,6 +6854,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     before: {
       all: [enforcePasswordChange],
+    },
+    error: {
+      all: [mapNativeStateHandoffError],
     },
   });
 

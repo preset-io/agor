@@ -59,6 +59,11 @@ vi.mock('./tenant-scope', () => ({
   ),
 }));
 
+vi.mock('./tenant-native-state-guard', () => ({
+  assertArchiveNativeStateAbsent: vi.fn(async () => {}),
+  assertTenantNativeStateHandoffClear: vi.fn(async () => {}),
+}));
+
 const walkEntries = vi.fn<() => TenantFilesystemEntry[]>(() => []);
 vi.mock('./tenant-filesystem', async (importOriginal) => {
   const original = await importOriginal<typeof import('./tenant-filesystem')>();

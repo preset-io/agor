@@ -5,6 +5,7 @@ import type { AgorClient } from './services/feathers-client.js';
 export interface ExecutorHeartbeatOptions {
   client: AgorClient;
   taskId: TaskID | string;
+  holderInstanceId?: string;
   enabled?: boolean;
   intervalMs?: number;
   warn?: (...args: unknown[]) => void;
@@ -48,6 +49,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     try {
       const task = await options.client.service('tasks').reportRuntimeTelemetry({
         task_id: options.taskId,
+        ...(options.holderInstanceId ? { holder_instance_id: options.holderInstanceId } : {}),
         ...(latestPulse ? { pulse: latestPulse } : {}),
       });
       if (consecutiveFailures > 0) {

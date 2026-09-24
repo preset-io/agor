@@ -11,6 +11,8 @@ import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
+import { hostedOpenCodeConfig } from '../../test/fixtures/hosted-opencode-config';
+import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities';
 import { SessionsService } from './sessions';
 
 async function fixture(db: TenantScopeAwareDatabase) {
@@ -194,4 +196,60 @@ describe('SessionsService SDK-home admission', () => {
       service.patch(session.session_id, { sdk_home_scope: 'branch' } as never)
     ).rejects.toThrow(/immutable and server-managed/);
   });
+});
+
+describe('hosted OpenCode with provisioning-derived branch-home policy', () => {
+  for (const adopted of [false, true]) {
+    dbTest(
+      `creates owner-only execution-home sessions (adopted branch: ${adopted})`,
+      async ({ db }) => {
+        const { user, branch } = await fixture(db);
+        const branchRepo = new BranchRepository(db);
+        if (adopted) await branchRepo.adoptSdkHome(branch.branch_id);
+        const config = hostedOpenCodeConfig();
+        expect(config.execution.sandbox.sdk_home_mode).toBe('per_branch');
+        const gate = createDeploymentToolUnsupportedGate(config);
+        expect(gate('opencode')).toBeUndefined();
+        const app = {
+          get: (key: string) => (key === 'config' ? config : undefined),
+        } as unknown as Application;
+        const service = new SessionsService(db, app, () => true, gate);
+        const data = {
+          branch_id: branch.branch_id,
+          created_by: user.user_id,
+          agentic_tool: 'opencode' as const,
+          status: SessionStatus.IDLE,
+          model_config: {
+            mode: 'exact' as const,
+            provider: 'anthropic',
+            model: 'claude-sonnet-4-5',
+            updated_at: new Date().toISOString(),
+          },
+        };
+        const session = await service.create(data, { _agenticConfigResolved: true } as never);
+        expect(session).toMatchObject({
+          sdk_home_scope: 'execution_home',
+          created_by: user.user_id,
+        });
+        expect((await branchRepo.findById(branch.branch_id))?.sdk_home).toBe(
+          adopted ? 'per_branch' : undefined
+        );
+        // Inherited lineage is never silently relocated to bypass the refusal.
+        await expect(
+          service.create(data, { _agenticConfigResolved: true, _sdkHomeScope: 'branch' } as never)
+        ).rejects.toThrow(/cannot use a branch SDK home/);
+        // A different tool still adopts/uses the Cloud branch home.
+        const other = await service.create(
+          {
+            branch_id: branch.branch_id,
+            created_by: user.user_id,
+            agentic_tool: 'claude-code',
+            status: SessionStatus.IDLE,
+          },
+          { _agenticConfigResolved: true } as never
+        );
+        expect(other.sdk_home_scope).toBe('branch');
+      }
+    );
+  }
 });

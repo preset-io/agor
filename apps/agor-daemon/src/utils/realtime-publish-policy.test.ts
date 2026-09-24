@@ -47,6 +47,7 @@ describe('realtimePublishPolicyFor', () => {
   });
 
   it.each([
+    'opencode-native-state',
     'mcp-catalog/connect',
     'mcp-catalog/start-session',
     'mcp-slack-recovery',

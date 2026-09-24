@@ -130,6 +130,55 @@ schema/ledger rollback; never bypass startup watermark guards. A restored backup
 can hold provider-invalidated rotating tokens, so require reconnect rather than
 replaying historical grant state. Never export backend grants into SDK files.
 
+### Hosted OpenCode (`opencode_hosted_native_state`)
+
+Migration `0115_opencode_checkpoint_attempts` is an incompatible offline cutover,
+not an online additive rollout. Stop all older daemon writers, take and verify a
+database backup, run `agor db migrate --offline-cutover` with the new binary,
+then start only the new version. Older session updates discard native-state
+pointers, so do not resume old binaries against the migrated database. This
+source procedure does not authorize a hosted rollout; hosted QA remains gated
+on the coordinated runtime and Cloud versions.
+
+OpenCode reports itself as unsupported in hosted, delegated, templated
+deployments until the operator opts in. Setting the key selects the managed
+credential projection plus checkpointed native-state contract described in the
+runtime design (`context/explorations/opencode-cloud.md`): provider API keys are
+stored encrypted per user and pulled by each user's own executor run, and the
+native conversation state is checkpointed to the user's persistent executor home
+after every completed turn. It is admitted only when `multi_tenancy.mode` is
+`required_from_auth`, `execution.unix_user_mode` is `delegated`, an
+`executor_command_template` is set, and `executor_storage.user_home` is
+`persistent-per-user`, and a trusted
+`execution.opencode_native_state_observer.command_template` is configured;
+otherwise OpenCode stays unsupported with a specific reason. The observer
+command must resolve the exact Cloud Job/Pod/container identity and must not
+be supplied by an executor payload.
+The execution substrate must also pin `AGOR_OPENCODE_SCRATCH_ROOT` to an absolute
+Job-local storage path; without it, executor startup fails closed even when the
+daemon-side prerequisites pass.
+
+New hosted OpenCode sessions, including scheduled runs, use the owner's execution
+home even when `execution.sandbox.sdk_home_mode` is `per_branch`. They do not
+adopt or change the branch's SDK-home policy; other tools still follow that
+policy. Existing lineage is never relocated, and branch-scoped OpenCode sessions
+and cross-user prompting remain refused.
+
+Hosted startup ignores repository OpenCode configuration and component discovery
+(including `opencode.json`, `opencode.jsonc`, and `.opencode`), home configuration,
+and inherited `OPENCODE_*` configuration selectors. Only the invocation generated
+by Agor is loaded from isolated configuration roots. Plugins, provider overrides,
+and attached local MCP commands are refused; attach remote MCP servers instead.
+Local OpenCode configuration behavior is unchanged.
+
+```yaml
+agentic_tools:
+  opencode_hosted_native_state: checkpointed
+```
+
+Local `simple`/`sandbox` deployments ignore this key and keep OpenCode's native
+credential file authority.
+
 After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
 packaged daemon fails before listening if any configured integration is missing or misaligned.

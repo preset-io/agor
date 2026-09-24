@@ -1,7 +1,55 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createRestClient } from '@agor/core/api';
 import { describe, expect, it, vi } from 'vitest';
 import { startExecutorHeartbeat } from './executor-heartbeat';
 
 describe('startExecutorHeartbeat', () => {
+  it('reports through a bound custom method on a real Feathers client', async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => {
+      methods.push(String(request.headers['x-service-method']));
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(
+          JSON.stringify({
+            task_id: 'task-1',
+            status: 'running',
+            last_executor_heartbeat_at: new Date(Date.now() + methods.length).toISOString(),
+          })
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const client = await createRestClient(url, 'test-only-key');
+      const observed: unknown[] = [];
+      const handle = startExecutorHeartbeat({
+        client: client as never,
+        taskId: 'task-1',
+        intervalMs: 20,
+        onTask: (task) => observed.push(task),
+      });
+      try {
+        await vi.waitFor(() => expect(observed.length).toBeGreaterThanOrEqual(3), {
+          timeout: 1_000,
+        });
+        expect(methods.slice(0, 3)).toEqual(Array(3).fill('reportRuntimeTelemetry'));
+        const firstThree = observed
+          .slice(0, 3)
+          .map(
+            (task) => (task as { last_executor_heartbeat_at: string }).last_executor_heartbeat_at
+          );
+        expect(new Set(firstThree).size).toBe(3);
+      } finally {
+        handle.stop();
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
   it('writes immediately and then at the configured interval', async () => {
     vi.useFakeTimers();
     try {

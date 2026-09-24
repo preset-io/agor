@@ -12,6 +12,7 @@ import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from
 import { Forbidden } from '@agor/core/feathers';
 import type {
   AgenticToolName,
+  ApiKeyName,
   HookContext,
   Message,
   MessageID,
@@ -116,6 +117,15 @@ function classifyProviderFailure(
   };
 }
 
+function firstProviderCredentialField(tool: AgenticToolName): ApiKeyName | undefined {
+  const canonicalTool = canonicalTenantAgenticTool(tool);
+  if (!(canonicalTool in PROVIDER_CREDENTIAL_FIELDS)) return undefined;
+  // Every reviewed provider-connection field is itself a resolvable key name.
+  return PROVIDER_CREDENTIAL_FIELDS[canonicalTool as keyof typeof PROVIDER_CREDENTIAL_FIELDS][0] as
+    | ApiKeyName
+    | undefined;
+}
+
 function hasResolvedCredential(
   tool: AgenticToolName,
   connection: Record<string, string | undefined> | undefined
@@ -177,8 +187,10 @@ export function classifyMissingCredentialFailure(
 
       const tool = session.agentic_tool;
       if (!isAgenticToolName(tool)) return context;
-      const keyName = TOOL_API_KEY_NAMES[tool];
-      // Tools with no mapped key (e.g. opencode) aren't credential-gated.
+      // Provider-connection tools without a canonical key (OpenCode) are still
+      // credential-gated in hosted mode through their reviewed connection
+      // fields; probe with the first field so the scoped resolver answers.
+      const keyName = TOOL_API_KEY_NAMES[tool] ?? firstProviderCredentialField(tool);
       if (!keyName) return context;
 
       if ((isZeroTurnResult || isProviderFailureResult) && !isMissingCredentialFailure) {

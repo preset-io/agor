@@ -24,6 +24,7 @@ import {
 import { ExecutorResponsePublisher } from './executor-response.js';
 import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
+import { captureOpenCodeCheckpointLaunchLocator } from './opencode-launch-locator.js';
 import {
   type ExecutorPayload,
   ExecutorPayloadSchema,
@@ -120,7 +121,10 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
         publisher
       );
     }
-    await handlePromptPayload(payload, options);
+    // The Cloud locator is substrate-owned. Capture it before a caller's
+    // authenticated payload environment is considered for application.
+    const managedOpenCodeLocator = captureOpenCodeCheckpointLaunchLocator(process.env);
+    await handlePromptPayload(payload, options, managedOpenCodeLocator);
     return;
   }
 
@@ -206,7 +210,8 @@ async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promi
  */
 async function handlePromptPayload(
   payload: PromptPayload,
-  options: { dryRun: boolean }
+  options: { dryRun: boolean },
+  managedOpenCodeLocator: ReturnType<typeof captureOpenCodeCheckpointLaunchLocator>
 ): Promise<void> {
   if (options.dryRun) {
     console.log(
@@ -278,6 +283,7 @@ async function handlePromptPayload(
     promptOrigin: payload.params.promptOrigin,
     agenticToolContext: payload.agenticToolContext,
     resolvedConfig: payload.resolvedConfig,
+    managedOpenCodeLocator,
   });
 
   await executor.start();

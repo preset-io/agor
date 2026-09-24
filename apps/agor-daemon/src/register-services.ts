@@ -147,7 +147,10 @@ import type { UnixUserMode } from '@agor/core/unix';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
-import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  requireTaskScopedExecutorRuntimeToken,
+} from './auth/executor-runtime-scope.js';
 import {
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
@@ -169,6 +172,7 @@ import {
   trackExecutorProcess,
 } from './executor-tracking.js';
 import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
+import { createDeploymentToolUnsupportedGate } from './integrations/opencode/deployment-capabilities.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
 import {
   inOpenCodeNativeStateMutationSlot,
@@ -331,6 +335,7 @@ import {
 } from './services/mcp-slack-oauth-authority.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
+import { OpenCodeNativeStateService } from './services/opencode-native-state.js';
 import { setupOwnershipTransferServices } from './services/ownership-transfer.js';
 import { createReposService } from './services/repos.js';
 import {
@@ -544,8 +549,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Core services: sessions, tasks, messages
   // ============================================================================
 
-  const sessionsService = createSessionsService(db, app, (tool) =>
-    isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
+  const sessionsService = createSessionsService(
+    db,
+    app,
+    (tool) => isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy),
+    createDeploymentToolUnsupportedGate(config)
   ) as unknown as SessionsServiceImpl;
   const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
@@ -584,6 +592,28 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //   - 'tool:start' / 'tool:complete' / 'thinking:chunk': forwarded from
     //      the executor for live tool/thinking visualization.
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
+  });
+  app.use(
+    '/opencode-native-state',
+    new OpenCodeNativeStateService({
+      db,
+      getConfig: () => config,
+      executorCredentialRevoker: sessionTokenService,
+    }) as never,
+    {
+      methods: [
+        'begin',
+        'closeRead',
+        'seal',
+        'abandon',
+        'prepareCleanup',
+        'observe',
+        'acknowledgeDelete',
+      ],
+    }
+  );
+  app.service('/opencode-native-state').hooks({
+    before: { all: [requireTaskScopedExecutorRuntimeToken()] },
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
@@ -1302,7 +1332,7 @@ function createDeferredSignal() {
   return { promise, resolve, reject };
 }
 
-function createExecuteHandler(
+export function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
@@ -1718,9 +1748,20 @@ function createExecuteHandler(
       return contribution.getExecutorLaunch({
         tenantId,
         session,
+        taskId: data.taskId,
         homeDir: executorHomeDir,
+        config,
       });
     })();
+
+    // Managed checkpoint coordination is a server-derived Task requirement,
+    // persisted before any executor token or payload can be issued. Local
+    // OpenCode and every other tool retain their existing lifecycle.
+    if (executorLaunch?.managedProtocolVersion === 3) {
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        tasksService.stampManagedOpenCodeProtocol(data.taskId)
+      );
+    }
 
     // Issue only after every launch prerequisite succeeds. The credential
     // scope repeats the locked, server-derived launch authority; token retries
@@ -1956,7 +1997,7 @@ function createExecuteHandler(
       },
     });
 
-    if (executorLaunch) {
+    if (executorLaunch?.requiresLocalContainment) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;

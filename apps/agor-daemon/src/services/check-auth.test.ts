@@ -383,7 +383,6 @@ describe('check-auth codex auth.json probe', () => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
     resolveCodexCredentialRouteMock.mockResolvedValue({
       ok: true,
-      unixUser: null,
       delegatedHomeKey: null,
       userId: 'user-1' as never,
     });
@@ -458,5 +457,35 @@ describe('check-auth codex auth.json probe', () => {
       status: 'unknown',
       hint: 'Remove the filesystem_home override for this account or use an API key.',
     });
+  });
+});
+
+describe('hosted OpenCode provider-specific checks', () => {
+  it('does not call a different saved key authenticated for the selected provider', async () => {
+    const delegate = createCheckAuthService(TEST_DB, {
+      multi_tenancy: { mode: 'required_from_auth' },
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'fake',
+        executor_storage: { user_home: 'persistent-per-user' },
+        opencode_native_state_observer: { command_template: 'observe {task_id}' },
+      },
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    } as never);
+    resolveApiKeyMock.mockResolvedValue({
+      source: 'user',
+      useNativeAuth: false,
+      apiKey: undefined,
+      connection: { OPENCODE_API_KEY_OPENAI: 'synthetic' },
+    });
+    const check = (provider?: string) =>
+      runWithTenantContext('tenant-test', () =>
+        delegate.create({ tool: 'opencode', provider }, { user: { user_id: 'owner' } } as never)
+      );
+    expect(await check('anthropic')).toMatchObject({ status: 'unauthenticated' });
+    expect(await check('openai')).toMatchObject({ status: 'authenticated' });
+    expect(await check('unknown')).toMatchObject({ status: 'unauthenticated' });
+    // Tool-level onboarding has no session provider selection yet.
+    expect(await check()).toMatchObject({ status: 'authenticated' });
   });
 });
