@@ -7,6 +7,7 @@ const hostedBase = {
     unix_user_mode: 'delegated' as const,
     executor_command_template: 'launch {task_id}',
     executor_storage: { user_home: 'persistent-per-user' as const },
+    opencode_native_state_observer: { command_template: 'observe {task_id}' },
   },
 };
 
@@ -51,6 +52,13 @@ describe('OpenCode capability resolver', () => {
         execution: { ...hostedBase.execution, executor_storage: { user_home: 'shared' } },
       })
     ).toMatchObject({ mode: 'unsupported', reason: { code: 'persistent_user_home_required' } });
+    expect(
+      resolveOpenCodeCapabilities({
+        ...hostedBase,
+        ...optIn,
+        execution: { ...hostedBase.execution, opencode_native_state_observer: undefined },
+      })
+    ).toMatchObject({ mode: 'unsupported', reason: { code: 'native_state_observer_required' } });
     expect(
       resolveOpenCodeCapabilities({
         ...hostedBase,

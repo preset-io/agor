@@ -27,6 +27,8 @@ const UNSUPPORTED_MESSAGES: Record<OpenCodeUnsupportedCode, string> = {
     'OpenCode is not available in this workspace: hosted native-state execution has not been enabled for this deployment.',
   persistent_user_home_required:
     'OpenCode is not available in this workspace: hosted execution requires a persistent per-user executor home.',
+  native_state_observer_required:
+    'OpenCode is not available in this deployment: hosted execution requires a trusted native-state observer command.',
   templated_transport:
     'OpenCode is not available in this deployment: its native provider operations require a locally containable executor process, and no hosted execution mode is enabled.',
   delegated_execution:
@@ -76,6 +78,9 @@ export function resolveOpenCodeCapabilities(
       );
     if (config.execution?.executor_storage?.user_home !== 'persistent-per-user') {
       return unsupported('persistent_user_home_required');
+    }
+    if (!config.execution?.opencode_native_state_observer?.command_template?.trim()) {
+      return unsupported('native_state_observer_required');
     }
     return { mode: 'managed-projection' };
   }

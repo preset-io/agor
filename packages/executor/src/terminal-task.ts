@@ -60,7 +60,8 @@ export async function tryMarkTaskTerminal(
   client: AgorClient,
   taskId: string,
   status: typeof TaskStatus.FAILED | typeof TaskStatus.STOPPED,
-  errorMessage?: string
+  errorMessage?: string,
+  nativeStateHolderId?: string
 ): Promise<void> {
   try {
     const current = (await client.service('tasks').get(taskId)) as Task;
@@ -74,7 +75,8 @@ export async function tryMarkTaskTerminal(
       status,
       completed_at: new Date().toISOString(),
       ...(errorMessage ? { error_message: errorMessage } : {}),
-    });
+      ...(nativeStateHolderId ? { native_state_holder_instance_id: nativeStateHolderId } : {}),
+    } as Partial<Task>);
   } catch (patchError) {
     console.error('[executor] Failed to update task status:', patchError);
   }

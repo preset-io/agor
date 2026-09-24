@@ -64,7 +64,8 @@ interface OpenCodeCheckpointRepository {
     assertRuntimeAuthority?: (
       tx: TenantScopeAwareDatabase,
       taskId: string,
-      authority: TaskRuntimeAuthorityScope
+      authority: TaskRuntimeAuthorityScope,
+      allowStoppingReplay: boolean
     ) => Promise<void>;
   }): Promise<OpenCodeCheckpointAdmission>;
   closeRead(
@@ -418,6 +419,40 @@ export class OpenCodeNativeStateService {
       throw new BadRequest('Managed OpenCode launch identity is missing or malformed');
     }
     const tenantId = authority.tenantId;
+    const taskAuthority: TaskRuntimeAuthorityScope = {
+      token_fingerprint: authority.tokenFingerprint,
+      principal_user_id: authority.userId,
+      session_id: authority.sessionId,
+      branch_id: authority.branchId,
+    };
+    const assertRuntimeAuthority = async (
+      tx: TenantScopeAwareDatabase,
+      taskId: string,
+      scoped: TaskRuntimeAuthorityScope,
+      allowStoppingReplay: boolean
+    ) => {
+      const exact = { ...scoped };
+      if (!isPostgresDatabaseHandle(tx)) {
+        const check = this.options.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
+        if (!check) throw new Forbidden('Executor task token authority is unavailable');
+        exact.standalone_token_current = await check.call(this.options.executorCredentialRevoker, {
+          tenantId,
+          tokenFingerprint: authority.tokenFingerprint,
+          sessionId: authority.sessionId,
+          taskId: authority.taskId,
+          branchId: authority.branchId,
+          userId: authority.userId,
+        });
+      }
+      const taskRepo = new TaskRepository(tx) as TaskRepository & {
+        assertRuntimeCredentialAuthority(
+          id: TaskID,
+          authority: TaskRuntimeAuthorityScope,
+          allowStoppingReplay?: boolean
+        ): Promise<void>;
+      };
+      await taskRepo.assertRuntimeCredentialAuthority(taskId as TaskID, exact, allowStoppingReplay);
+    };
     const snapshot = await withFreshTenantWrite(this.options.db, tenantId, async () => {
       const session = await select(this.options.db, {
         session_id: sessions.session_id,
@@ -443,21 +478,10 @@ export class OpenCodeNativeStateService {
         .from(tasks)
         .where(eq(tasks.task_id, input.task_id))
         .one();
-      if (
-        !task ||
-        task.session_id !== session.session_id ||
-        task.created_by !== authority.userId ||
-        task.data.managed_opencode_protocol !== 3 ||
-        !task.executor_connected_at ||
-        (task.status !== TaskStatus.RUNNING &&
-          task.status !== TaskStatus.AWAITING_INPUT &&
-          task.status !== TaskStatus.AWAITING_PERMISSION)
-      ) {
-        throw new Conflict('Managed OpenCode Task is not active for checkpoint admission');
-      }
       const existing = await select(this.options.db, {
         holder_instance_id: opencodeCheckpointAttempts.holder_instance_id,
         store_id: opencodeCheckpointAttempts.store_id,
+        binding: opencodeCheckpointAttempts.binding,
       })
         .from(opencodeCheckpointAttempts)
         .where(
@@ -470,6 +494,20 @@ export class OpenCodeNativeStateService {
         .one();
       if (existing && existing.holder_instance_id !== input.holder_instance_id) {
         throw new Conflict('Managed OpenCode Task already has a different checkpoint holder');
+      }
+      const active =
+        task?.status === TaskStatus.RUNNING ||
+        task?.status === TaskStatus.AWAITING_INPUT ||
+        task?.status === TaskStatus.AWAITING_PERMISSION;
+      if (
+        !task ||
+        task.session_id !== session.session_id ||
+        task.created_by !== authority.userId ||
+        task.data.managed_opencode_protocol !== 3 ||
+        !task.executor_connected_at ||
+        (!active && !(task.status === TaskStatus.STOPPING && existing))
+      ) {
+        throw new Conflict('Managed OpenCode Task is not active for checkpoint admission');
       }
       const pointer = session.data.sdk_native_state;
       const storedId = session.data.sdk_native_state_store_id;
@@ -485,8 +523,42 @@ export class OpenCodeNativeStateService {
         storedId,
         pointerStoreId
       );
-      return { sessionId: session.session_id, ownerUserId: session.created_by, storeId };
+      return { sessionId: session.session_id, ownerUserId: session.created_by, storeId, existing };
     });
+
+    if (snapshot.existing) {
+      // This grant was already bound by a trusted observer. A lost response can
+      // be replayed without another Pod read, including after Stop. The ledger
+      // transaction below accepts only the original open exact-holder binding.
+      const binding = snapshot.existing.binding;
+      const locator = binding.locator;
+      if (
+        binding.protocol !== 3 ||
+        binding.tenantId !== tenantId ||
+        binding.ownerUserId !== snapshot.ownerUserId ||
+        binding.sessionId !== snapshot.sessionId ||
+        binding.taskId !== input.task_id ||
+        binding.storeId !== snapshot.storeId ||
+        binding.holderInstanceId !== input.holder_instance_id ||
+        locator.runId !== input.locator.runId ||
+        locator.cellId !== input.locator.cellId ||
+        locator.namespace !== input.locator.namespace ||
+        locator.podName !== input.locator.podName ||
+        locator.podUid !== input.locator.podUid ||
+        locator.containerName !== input.locator.containerName
+      )
+        throw new Conflict('Managed OpenCode retry does not match the admitted binding');
+      return this.repository(tenantId, (repo) =>
+        repo.begin({
+          taskId: input.task_id,
+          holderInstanceId: input.holder_instance_id,
+          binding,
+          storeId: snapshot.storeId,
+          authority: taskAuthority,
+          assertRuntimeAuthority,
+        })
+      );
+    }
 
     // This external resolution is not admission. The subsequent DB transaction
     // rechecks all current state after the helper returns.
@@ -533,38 +605,6 @@ export class OpenCodeNativeStateService {
       storeId: snapshot.storeId,
       holderInstanceId: input.holder_instance_id,
       locator,
-    };
-    const taskAuthority: TaskRuntimeAuthorityScope = {
-      token_fingerprint: authority.tokenFingerprint,
-      principal_user_id: authority.userId,
-      session_id: authority.sessionId,
-      branch_id: authority.branchId,
-    };
-    const assertRuntimeAuthority = async (
-      tx: TenantScopeAwareDatabase,
-      taskId: string,
-      scoped: TaskRuntimeAuthorityScope
-    ) => {
-      const exact = { ...scoped };
-      if (!isPostgresDatabaseHandle(tx)) {
-        const check = this.options.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
-        if (!check) throw new Forbidden('Executor task token authority is unavailable');
-        exact.standalone_token_current = await check.call(this.options.executorCredentialRevoker, {
-          tenantId,
-          tokenFingerprint: authority.tokenFingerprint,
-          sessionId: authority.sessionId,
-          taskId: authority.taskId,
-          branchId: authority.branchId,
-          userId: authority.userId,
-        });
-      }
-      const taskRepo = new TaskRepository(tx) as TaskRepository & {
-        assertRuntimeCredentialAuthority(
-          id: TaskID,
-          authority: TaskRuntimeAuthorityScope
-        ): Promise<void>;
-      };
-      await taskRepo.assertRuntimeCredentialAuthority(taskId as TaskID, exact);
     };
     return this.repository(tenantId, (repo) =>
       repo.begin({

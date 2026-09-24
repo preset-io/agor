@@ -175,6 +175,51 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).resolves.toMatchObject({ outcome: 'rejected', code: 'already_admitted' });
     });
 
+    it('replays a response-lost exact holder across connections after Stop without new admission', async () => {
+      const { ownerId, sessionId } = await createManagedSession();
+      const task = await createManagedTask(sessionId, ownerId);
+      const storeId = generateId();
+      const holderId = generateId();
+      const immutable = binding(sessionId, task.task_id, ownerId, storeId, holderId);
+      const first = new OpenCodeCheckpointAttemptRepository(dbA);
+      const second = new OpenCodeCheckpointAttemptRepository(dbB);
+      await expect(
+        first.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: immutable,
+        })
+      ).resolves.toMatchObject({ outcome: 'admitted' });
+      await new TaskRepository(dbA).claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped',
+      });
+      await expect(
+        second.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: immutable,
+        })
+      ).resolves.toMatchObject({ outcome: 'admitted' });
+      const rows = await select(dbA)
+        .from(opencodeCheckpointAttempts)
+        .where(eq(opencodeCheckpointAttempts.task_id, task.task_id))
+        .all();
+      expect(rows).toHaveLength(1);
+      await second.abandon(task.task_id, holderId);
+      await expect(
+        new TaskRepository(dbA).recordExecutorQuiescence({
+          task_id: task.task_id,
+          requested_at: (await new TaskRepository(dbA).findById(task.task_id))!.termination_request!
+            .requested_at,
+          holder_instance_id: holderId,
+        })
+      ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+    });
+
     it('rejects a completed checkpoint whose Session pointer was removed by an older writer', async () => {
       const { ownerId, sessionId } = await createManagedSession();
       const task = await createManagedTask(sessionId, ownerId);

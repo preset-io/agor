@@ -1514,10 +1514,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */
   async assertRuntimeCredentialAuthority(
     id: TaskID,
-    authority: TaskRuntimeAuthorityScope
+    authority: TaskRuntimeAuthorityScope,
+    allowStoppingReplay = false
   ): Promise<void> {
     const row = await select(this.db).from(tasks).where(eq(tasks.task_id, id)).one();
-    if (!row || !executorOwnsTask(row) || row.data.termination_request) {
+    const stoppingReplay =
+      allowStoppingReplay &&
+      row?.status === TaskStatus.STOPPING &&
+      !!row.executor_connected_at &&
+      !!row.data.termination_request;
+    if (
+      !row ||
+      (!executorOwnsTask(row) && !stoppingReplay) ||
+      (row.data.termination_request && !stoppingReplay)
+    ) {
       throw new RepositoryError('Task credential authority unavailable');
     }
     const result = await this.inspectRuntimeAuthority(this.db, row, id, authority);

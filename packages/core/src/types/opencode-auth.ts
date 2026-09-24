@@ -105,6 +105,7 @@ export type OpenCodeCredentialIsolation =
 export type OpenCodeUnsupportedCode =
   | 'hosted_native_state_disabled'
   | 'persistent_user_home_required'
+  | 'native_state_observer_required'
   | 'templated_transport'
   | 'delegated_execution'
   | 'hosted_tenancy';

@@ -2,7 +2,7 @@
 import { OPENCODE_OBSERVER_BUSY_REASON } from '@agor/core/types';
 
 const OBSERVER_BUSY_DELAYS_MS = [150, 300, 600, 1_200, 2_400] as const;
-const TRANSPORT_DELAYS_MS = [200, 500] as const;
+const TRANSPORT_DELAYS_MS = [200, 500, 1_000, 1_500, 2_000] as const;
 
 function isObserverBusy(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -10,7 +10,7 @@ function isObserverBusy(error: unknown): boolean {
   return candidate.code === 429 && candidate.data?.reason === OPENCODE_OBSERVER_BUSY_REASON;
 }
 
-function isRetryableTransportFailure(error: unknown): boolean {
+export function isRetryableTransportFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: unknown };
   return (

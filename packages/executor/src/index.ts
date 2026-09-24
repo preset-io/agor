@@ -31,6 +31,7 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import {
   beginManagedOpenCodeWithBusyRetry,
+  isRetryableTransportFailure,
   type ManagedOpenCodeAdmission,
 } from './managed-opencode-admission.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
@@ -50,6 +51,22 @@ const DEBUG_EXECUTOR =
   process.env.AGOR_DEBUG_EXECUTOR === '1' || process.env.DEBUG?.includes('executor');
 
 const PROVIDER_CLEANUP_SLOW_MS = 15_000;
+const UNSTARTED_GRANT_RETRY_DELAYS_MS = [200, 500, 1_000] as const;
+
+async function retryUnstartedGrantMutation(work: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await work();
+      return;
+    } catch (error) {
+      if (!isRetryableTransportFailure(error) || attempt >= UNSTARTED_GRANT_RETRY_DELAYS_MS.length)
+        throw error;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, UNSTARTED_GRANT_RETRY_DELAYS_MS[attempt])
+      );
+    }
+  }
+}
 
 type ManagedOpenCodeAdmissionState = 'not_admitted' | 'admitted' | 'rejected';
 
@@ -103,6 +120,7 @@ export class AgorExecutor {
   private readonly managedOpenCodeHolderId: string | undefined;
   private managedOpenCodeAdmissionState: ManagedOpenCodeAdmissionState = 'not_admitted';
   private managedOpenCodeAdmission: ManagedOpenCodeAdmission | undefined;
+  private managedOpenCodeBeginUncertain = false;
   private managedReconnectPending = false;
 
   constructor(private config: ExecutorConfig) {
@@ -125,12 +143,64 @@ export class AgorExecutor {
     errorMessage?: string
   ): Promise<void> {
     if (!this.client || isDaemonOwnedAbort(this.abortController)) return;
-    await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
+    await tryMarkTaskTerminal(
+      this.client,
+      this.config.taskId,
+      status,
+      errorMessage,
+      this.managedOpenCodeAdmission?.attempt.holder_instance_id
+    );
   }
 
-  /** No native-state grant was accepted here; the repository verifies that fact under its lock. */
+  /** Recover a response-lost grant by the same holder before settling an unstarted turn. */
   private async settleManagedOpenCodeBeforeAdmission(): Promise<void> {
     if (!this.client) return;
+    const locator = this.config.managedOpenCodeLocator;
+    const holderId = this.managedOpenCodeHolderId;
+    if (
+      this.managedOpenCodeBeginUncertain &&
+      locator &&
+      holderId &&
+      !this.managedOpenCodeAdmission
+    ) {
+      const service = this.client.service('opencode-native-state' as string) as unknown as {
+        begin(input: {
+          task_id: string;
+          holder_instance_id: string;
+          locator: OpenCodeCheckpointLaunchLocator;
+        }): Promise<ManagedOpenCodeAdmission | { outcome: 'rejected'; code: string }>;
+      };
+      try {
+        // Ignore Stop only for this read-only same-holder replay. The daemon
+        // refuses a new admission on STOPPING and never re-runs Cloud identity
+        // resolution for an existing immutable binding.
+        const recovered = await beginManagedOpenCodeWithBusyRetry(
+          () =>
+            service.begin({ task_id: this.config.taskId, holder_instance_id: holderId, locator }),
+          new AbortController().signal,
+          () => false
+        );
+        if (
+          recovered.outcome === 'admitted' &&
+          recovered.attempt.task_id === this.config.taskId &&
+          recovered.attempt.holder_instance_id === holderId
+        ) {
+          this.managedOpenCodeAdmission = recovered;
+          this.managedOpenCodeAdmissionState = 'admitted';
+        }
+      } catch {
+        // Absence is decided only by the repository's locked no-attempt check
+        // below; a lost replay response cannot authorize holder-less closure.
+      }
+    }
+    if (this.managedOpenCodeAdmission) {
+      try {
+        await this.closeManagedOpenCodeWithoutStartingProvider();
+      } catch {
+        console.warn('[executor.opencode] event=unstarted_grant_drain_unverified');
+        return;
+      }
+    }
     await this.refreshTerminationState('startup_recovery').catch(() => undefined);
     if (this.terminationRequest) {
       await this.reportTerminationComplete().catch(() => undefined);
@@ -220,6 +290,7 @@ export class AgorExecutor {
             locator: OpenCodeCheckpointLaunchLocator;
           }): Promise<ManagedOpenCodeAdmission | { outcome: 'rejected'; code: string }>;
         };
+        this.managedOpenCodeBeginUncertain = true;
         const admission = await beginManagedOpenCodeWithBusyRetry(
           () =>
             nativeStateService.begin({
@@ -235,6 +306,7 @@ export class AgorExecutor {
           admission.attempt.holder_instance_id !== this.managedOpenCodeHolderId ||
           admission.attempt.task_id !== this.config.taskId
         ) {
+          this.managedOpenCodeBeginUncertain = false;
           this.managedOpenCodeAdmissionState = 'rejected';
           console.warn(
             `[executor.opencode] event=admission_rejected code=${admission.outcome === 'rejected' ? admission.code : 'binding_mismatch'}`
@@ -244,6 +316,7 @@ export class AgorExecutor {
           return;
         }
         this.managedOpenCodeAdmission = admission;
+        this.managedOpenCodeBeginUncertain = false;
         this.managedOpenCodeAdmissionState = 'admitted';
         if (this.managedReconnectPending) {
           this.managedReconnectPending = false;
@@ -554,16 +627,21 @@ export class AgorExecutor {
       abandon(input: { task_id: string; holder_instance_id: string }): Promise<void>;
     };
     if (grant.input) {
-      await service.closeRead({
+      const input = grant.input;
+      await retryUnstartedGrantMutation(() =>
+        service.closeRead({
+          task_id: this.config.taskId,
+          holder_instance_id: grant.attempt.holder_instance_id,
+          input: { storeId: input.storeId, taskId: input.attemptTaskId },
+        })
+      );
+    }
+    await retryUnstartedGrantMutation(() =>
+      service.abandon({
         task_id: this.config.taskId,
         holder_instance_id: grant.attempt.holder_instance_id,
-        input: { storeId: grant.input.storeId, taskId: grant.input.attemptTaskId },
-      });
-    }
-    await service.abandon({
-      task_id: this.config.taskId,
-      holder_instance_id: grant.attempt.holder_instance_id,
-    });
+      })
+    );
   }
 
   /**

@@ -38,6 +38,7 @@ import type {
   ManagedOpenCodeAdmission,
   ManagedOpenCodeNativeStateManifest,
 } from '../../managed-opencode-admission.js';
+import { isRetryableTransportFailure } from '../../managed-opencode-admission.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
@@ -93,6 +94,27 @@ function managedStateService(client: AgorClient): ManagedOpenCodeStateService {
   ) as unknown as ManagedOpenCodeStateService;
 }
 
+const MANAGED_WRITE_RETRY_DELAYS_MS = [200, 500, 1_000] as const;
+
+function samePublishedAttempt(left: unknown, right: ManagedNativeManifest): boolean {
+  if (!left || typeof left !== 'object') return false;
+  const candidate = left as Partial<ManagedNativeManifest>;
+  return (
+    candidate.version === right.version &&
+    candidate.storeId === right.storeId &&
+    candidate.attemptTaskId === right.attemptTaskId &&
+    candidate.digest === right.digest &&
+    candidate.bytes === right.bytes &&
+    candidate.openCodeSessionId === right.openCodeSessionId &&
+    candidate.openCodeVersion === right.openCodeVersion &&
+    candidate.publishedAt === right.publishedAt
+  );
+}
+
+async function waitForManagedWriteRetry(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, MANAGED_WRITE_RETRY_DELAYS_MS[attempt]));
+}
+
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
   sessionId: SessionID;
@@ -124,6 +146,8 @@ export async function executeOpenCodeTask(params: {
       params.agenticToolContext.version !== undefined);
   let inputReadClosed = !committedGrant?.input;
   let managedIoSettled = false;
+  let sealAmbiguous = false;
+  let completionAmbiguous = false;
   let cleanupOperation: OpenCodeCleanupOperation | undefined;
   const stopCleanupOnAbort = () => cleanupOperation?.stopScheduling();
 
@@ -406,12 +430,23 @@ export async function executeOpenCodeTask(params: {
       throw new Error('OpenCode managed turn completed without a published checkpoint');
     }
     if (managed && committedGrant && publishedManifest) {
-      await managedStateService(client).seal({
-        task_id: taskId,
-        holder_instance_id: committedGrant.attempt.holder_instance_id,
-        manifest: publishedManifest,
-      });
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await managedStateService(client).seal({
+            task_id: taskId,
+            holder_instance_id: committedGrant.attempt.holder_instance_id,
+            manifest: publishedManifest,
+          });
+          break;
+        } catch (error) {
+          if (!isRetryableTransportFailure(error)) throw error;
+          sealAmbiguous = true;
+          if (attempt >= MANAGED_WRITE_RETRY_DELAYS_MS.length) throw error;
+          await waitForManagedWriteRetry(attempt);
+        }
+      }
       managedIoSettled = true;
+      sealAmbiguous = false;
       // A short healthy turn still gives cleanup its bounded per-launch budget.
       // Do not leave a committed delete worker behind task completion.
       await cleanupOperation?.finishWithin(2_000);
@@ -432,7 +467,7 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
-    await client.service('tasks').patch(taskId, {
+    const completionPatch = {
       status: 'completed',
       completed_at: new Date().toISOString(),
       model: `${session.model_config.provider}/${session.model_config.model}`,
@@ -442,7 +477,35 @@ export async function executeOpenCodeTask(params: {
       ...(committedGrant
         ? { native_state_holder_instance_id: committedGrant.attempt.holder_instance_id }
         : {}),
-    } as Partial<import('@agor/core/types').Task>);
+    } as Partial<import('@agor/core/types').Task>;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const committed = await client.service('tasks').patch(taskId, completionPatch);
+        if (
+          managed &&
+          publishedManifest &&
+          committed.status === 'completed' &&
+          !samePublishedAttempt(committed.native_state_attempt, publishedManifest)
+        ) {
+          throw new Error('Managed OpenCode completion pointer does not match the sealed output');
+        }
+        break;
+      } catch (error) {
+        if (!managed || !publishedManifest || !isRetryableTransportFailure(error)) throw error;
+        completionAmbiguous = true;
+        const current = await client
+          .service('tasks')
+          .get(taskId)
+          .catch(() => null);
+        if (
+          current?.status === 'completed' &&
+          samePublishedAttempt(current.native_state_attempt, publishedManifest)
+        )
+          break;
+        if (attempt >= MANAGED_WRITE_RETRY_DELAYS_MS.length) throw error;
+        await waitForManagedWriteRetry(attempt);
+      }
+    }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     if (committedGrant && managedLayoutForErrors) {
@@ -474,6 +537,13 @@ export async function executeOpenCodeTask(params: {
     if (isOpenCodeCleanupUnverifiedError(failure)) {
       // Keep the task active. Executor exit hands containment to the daemon;
       // making it terminal here would release the session before absence is proven.
+      if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
+      return;
+    }
+    if (sealAmbiguous || completionAmbiguous) {
+      // An accepted write can have lost only its response. Never abandon or
+      // terminalize a possibly sealed object from an ambiguous transport fact.
+      console.warn('[opencode] event=managed_publication_unverified');
       if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
       return;
     }

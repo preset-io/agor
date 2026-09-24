@@ -303,6 +303,91 @@ describe('AgorExecutor watchdog handoff', () => {
     });
   });
 
+  it('recovers and drains a response-lost begin grant after Stop with the original holder', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const requestedAt = '2026-09-24T00:00:00.000Z';
+    const stopping = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: 'stopping',
+      termination_request: { cause: 'user_stop', requested_at: requestedAt },
+    };
+    const closeRead = vi.fn().mockRejectedValueOnce({ code: 503 }).mockResolvedValue(undefined);
+    const abandon = vi.fn().mockResolvedValue(undefined);
+    const reportTerminationComplete = vi.fn().mockResolvedValue(stopping);
+    let executor!: AgorExecutor;
+    const begin = vi
+      .fn()
+      .mockImplementationOnce(async (input: { holder_instance_id: string }) => {
+        (
+          executor as unknown as { handleTaskLifecycleUpdate(task: unknown): void }
+        ).handleTaskLifecycleUpdate(stopping);
+        throw { code: 408 };
+      })
+      .mockImplementation(async (input: { holder_instance_id: string }) => ({
+        outcome: 'admitted',
+        attempt: { task_id: 'task-1', holder_instance_id: input.holder_instance_id },
+        input: { storeId: 'store-1', attemptTaskId: 'source-task-1' },
+      }));
+    runtime.createExecutorClient.mockResolvedValue({
+      service(path: string) {
+        if (path === 'tasks')
+          return {
+            on: vi.fn(),
+            connectExecutor: vi.fn().mockResolvedValue({
+              task_id: 'task-1',
+              session_id: 'session-1',
+              status: 'running',
+            }),
+            get: vi.fn().mockResolvedValue(stopping),
+            reportTerminationComplete,
+            patch: vi.fn(),
+          };
+        if (path === 'opencode-native-state') return { begin, closeRead, abandon };
+        return { on: vi.fn() };
+      },
+    });
+    executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+      agenticToolContext: { version: 3, mode: 'managed-projection' },
+      managedOpenCodeLocator: {
+        runId: 'run-1',
+        cellId: 'cell-1',
+        namespace: 'tenant-ns',
+        podName: 'pod-1',
+        podUid: 'pod-uid-1',
+        containerName: 'executor',
+      },
+    });
+    (executor as unknown as { setupShutdownHandlers: () => void }).setupShutdownHandlers = vi.fn();
+
+    await executor.start();
+
+    expect(begin).toHaveBeenCalledTimes(2);
+    const holderId = begin.mock.calls[0][0].holder_instance_id;
+    expect(begin.mock.calls[1][0].holder_instance_id).toBe(holderId);
+    expect(closeRead).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      holder_instance_id: holderId,
+      input: { storeId: 'store-1', taskId: 'source-task-1' },
+    });
+    expect(closeRead).toHaveBeenCalledTimes(2);
+    expect(abandon).toHaveBeenCalledWith({ task_id: 'task-1', holder_instance_id: holderId });
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: requestedAt,
+      holder_instance_id: holderId,
+    });
+    expect(runtime.execute).not.toHaveBeenCalled();
+  });
+
   it('starts SDK observation before invoking the tool', async () => {
     const executor = new AgorExecutor({
       sessionToken: 'token',

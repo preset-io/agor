@@ -87,7 +87,7 @@ describe('managed OpenCode admission capacity retry', () => {
         () => 0
       )
     ).rejects.toMatchObject({ code: 'ECONNRESET' });
-    expect(unavailable).toHaveBeenCalledTimes(3);
-    expect(waits).toEqual([200, 200, 500]);
+    expect(unavailable).toHaveBeenCalledTimes(6);
+    expect(waits).toEqual([200, 200, 500, 1_000, 1_500, 2_000]);
   });
 });

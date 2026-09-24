@@ -131,7 +131,10 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
       patch: vi.fn(async () => ({})),
       emit: vi.fn(),
     },
-    tasks: { patch: vi.fn(async () => ({})) },
+    tasks: {
+      get: vi.fn(async () => ({ status: 'running', native_state_attempt: null })),
+      patch: vi.fn(async () => ({})),
+    },
     messages: {
       find: vi.fn(async () => ({ total: 0, limit: 1, skip: 0, data: [] })),
       create: vi.fn(async () => ({})),
@@ -506,6 +509,54 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       manifest: published,
     });
     expect(nativeState.discard).toHaveBeenCalledOnce();
+  });
+
+  it('replays an exact seal when its committed response is lost', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    const published = { ...acceptedAttempt, attemptTaskId: taskId };
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: published,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services['opencode-native-state'].seal
+      .mockRejectedValueOnce({ code: 'ECONNRESET' })
+      .mockResolvedValueOnce(undefined);
+
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+
+    expect(state.services['opencode-native-state'].seal).toHaveBeenCalledTimes(2);
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'completed', native_state_attempt: published })
+    );
+  });
+
+  it('retries a completion transport failure before commit and verifies a lost committed response', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    const published = { ...acceptedAttempt, attemptTaskId: taskId };
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: published,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services.tasks.patch.mockRejectedValueOnce({ code: 503 }).mockResolvedValueOnce({});
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+    expect(state.services.tasks.patch).toHaveBeenCalledTimes(2);
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+
+    const accepted = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: published,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    accepted.services.tasks.patch.mockRejectedValueOnce({ code: 503 });
+    accepted.services.tasks.get.mockResolvedValueOnce({
+      status: 'completed',
+      native_state_attempt: published,
+    });
+    await execute(accepted.value, new AbortController(), managedContext, managedAdmission);
+    expect(accepted.services.tasks.patch).toHaveBeenCalledOnce();
+    expect(accepted.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
   });
 
   it('drains two cleanup reservations before a short healthy managed turn completes', async () => {

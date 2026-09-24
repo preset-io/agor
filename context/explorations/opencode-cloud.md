@@ -353,12 +353,14 @@ type OpenCodeCapabilities =
 
 `managed-projection` requires all of: `multi_tenancy.mode === 'required_from_auth'`,
 `execution.unix_user_mode === 'delegated'`, `execution.executor_command_template`
-set, `execution.executor_storage.user_home === 'persistent-per-user'`, and the
+set, `execution.executor_storage.user_home === 'persistent-per-user'`, the trusted
+`execution.opencode_native_state_observer.command_template` set, and the
 operator opt-in `agentic_tools.opencode_hosted_native_state: 'checkpointed'`
 (default absent → unsupported with code `hosted_native_state_disabled`).
 `native-file` requires the existing local conditions. Anything else is
 `unsupported` with a stable code (`hosted_tenancy`, `delegated_execution`,
-`templated_transport`, `persistent_user_home_required`, `hosted_native_state_disabled`).
+`templated_transport`, `persistent_user_home_required`, `native_state_observer_required`,
+`hosted_native_state_disabled`).
 
 Consumers (all read the same resolver): `opencode-auth` find/create/remove,
 `opencode-models` find, session creation and tool switch (`sessions.ts`), scheduled occurrence admission

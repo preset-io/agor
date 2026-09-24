@@ -148,7 +148,8 @@ export class OpenCodeCheckpointAttemptRepository {
     assertRuntimeAuthority?: (
       tx: Database,
       taskId: string,
-      authority: TaskRuntimeAuthorityScope
+      authority: TaskRuntimeAuthorityScope,
+      allowStoppingReplay: boolean
     ) => Promise<void>;
     now?: Date;
   }): Promise<OpenCodeCheckpointAdmission> {
@@ -176,9 +177,6 @@ export class OpenCodeCheckpointAttemptRepository {
         const task = await select(tx).from(tasks).where(eq(tasks.task_id, input.taskId)).one();
         if (!task || task.session_id !== session.session_id)
           throw new EntityNotFoundError('Task', input.taskId);
-        if (input.authority && input.assertRuntimeAuthority) {
-          await input.assertRuntimeAuthority(tx, task.task_id, input.authority);
-        }
         const current = await select(tx)
           .from(opencodeCheckpointAttempts)
           .where(
@@ -198,9 +196,22 @@ export class OpenCodeCheckpointAttemptRepository {
           [TaskStatus.RUNNING, TaskStatus.AWAITING_INPUT, TaskStatus.AWAITING_PERMISSION].includes(
             task.status as never
           );
+        const stoppingReplay =
+          !!current &&
+          task.status === TaskStatus.STOPPING &&
+          task.data.managed_opencode_protocol === 3 &&
+          session.agentic_tool === 'opencode' &&
+          session.sdk_home_scope === 'execution_home' &&
+          task.created_by === session.created_by &&
+          !!task.executor_connected_at &&
+          current.holder_instance_id === input.holderInstanceId &&
+          exactManifest(current.binding, input.binding);
+        if (input.authority && input.assertRuntimeAuthority) {
+          await input.assertRuntimeAuthority(tx, task.task_id, input.authority, stoppingReplay);
+        }
         if (current) {
           if (
-            !taskIsActive ||
+            (!taskIsActive && !stoppingReplay) ||
             current.retired_at ||
             current.write_state !== 'open' ||
             current.holder_instance_id !== input.holderInstanceId ||
@@ -430,6 +441,14 @@ export class OpenCodeCheckpointAttemptRepository {
           'OpenCode output is retired, abandoned, or bound to another object'
         );
       }
+      // A response can be lost after sealing. Exact same-manifest replay is a
+      // read-only confirmation even if Stop reached the task meanwhile; never
+      // allow a new seal after Stop or terminality.
+      if (row.write_state === 'sealed') {
+        if (!exactManifest(row.sealed_manifest, manifest))
+          throw new RepositoryError('OpenCode seal retry changed its manifest');
+        return;
+      }
       if (
         isTerminalTaskStatus(task.status) ||
         task.status === TaskStatus.STOPPING ||
@@ -441,11 +460,6 @@ export class OpenCodeCheckpointAttemptRepository {
         throw new RepositoryError(
           'OpenCode output cannot seal while its granted input remains pinned'
         );
-      }
-      if (row.write_state === 'sealed') {
-        if (!exactManifest(row.sealed_manifest, manifest))
-          throw new RepositoryError('OpenCode seal retry changed its manifest');
-        return;
       }
       await update(tx, opencodeCheckpointAttempts)
         .set({ write_state: 'sealed', sealed_manifest: manifest, updated_at: now })
@@ -459,6 +473,9 @@ export class OpenCodeCheckpointAttemptRepository {
       if (row.retired_at) throw new RepositoryError('Retired OpenCode output cannot be changed');
       if (row.input_task_id && !row.input_read_closed_at) {
         throw new RepositoryError('OpenCode input must be closed before abandoning its output');
+      }
+      if (row.write_state === 'sealed') {
+        throw new RepositoryError('Sealed OpenCode output cannot be abandoned');
       }
       if (row.write_state === 'open') {
         await update(tx, opencodeCheckpointAttempts)

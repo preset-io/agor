@@ -1,7 +1,7 @@
 import type { UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
@@ -112,6 +112,72 @@ function manifest(taskId: string, storeId: string) {
 }
 
 describe('OpenCodeCheckpointAttemptRepository', () => {
+  dbTest(
+    'replays only an existing exact open holder after Stop without admitting a new writer',
+    async ({ db }) => {
+      const { ownerId, sessionId, task } = await newTask(db);
+      const attempts = new OpenCodeCheckpointAttemptRepository(db);
+      const storeId = generateId();
+      const holderId = generateId();
+      const immutable = binding(sessionId, task.task_id, storeId, holderId, ownerId);
+      await expect(
+        attempts.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: immutable,
+        })
+      ).resolves.toMatchObject({ outcome: 'admitted' });
+      await new TaskRepository(db).claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped',
+      });
+      const assertRuntimeAuthority = vi.fn(async () => undefined);
+      await expect(
+        attempts.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: immutable,
+          authority: {} as never,
+          assertRuntimeAuthority,
+        })
+      ).resolves.toMatchObject({ outcome: 'admitted' });
+      expect(assertRuntimeAuthority).toHaveBeenCalledWith(
+        expect.anything(),
+        task.task_id,
+        expect.anything(),
+        true
+      );
+      await expect(
+        attempts.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: { ...immutable, locator: { ...immutable.locator, podUid: generateId() } },
+        })
+      ).resolves.toMatchObject({ outcome: 'rejected' });
+      const otherHolder = generateId();
+      await expect(
+        attempts.begin({
+          taskId: task.task_id,
+          holderInstanceId: otherHolder,
+          storeId,
+          binding: binding(sessionId, task.task_id, storeId, otherHolder, ownerId),
+        })
+      ).resolves.toMatchObject({ outcome: 'rejected' });
+      await attempts.abandon(task.task_id, holderId);
+      await expect(
+        attempts.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: immutable,
+        })
+      ).resolves.toMatchObject({ outcome: 'rejected' });
+    }
+  );
   dbTest('allows an admitted holder to abandon during Branch maintenance', async ({ db }) => {
     const { ownerId, sessionId, task } = await newTask(db);
     const attempts = new OpenCodeCheckpointAttemptRepository(db);
@@ -273,6 +339,8 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         .set({ status: TaskStatus.FAILED, completed_at: new Date() })
         .where(eq(taskRows.task_id, task.task_id))
         .run();
+      await expect(repo.seal(task.task_id, holderId, published)).resolves.toBeUndefined();
+      await expect(repo.abandon(task.task_id, holderId)).rejects.toThrow(/sealed/i);
       const session = await select(db, { branch_id: sessions.branch_id })
         .from(sessions)
         .where(eq(sessions.session_id, sessionId))
