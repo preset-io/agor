@@ -29,6 +29,7 @@ import {
   MessagesRepository,
   readTenantRestrictionGeneration,
   runWithTenantDatabaseTransaction,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
   ChannelType,
@@ -211,7 +212,7 @@ async function mintWidgetMessage(
   const hostTaskId = hostTask?.task_id as TaskID | undefined;
   const widgetId = generateId() as MessageID;
 
-  const create = (db: typeof ctx.db, tenantRestrictionGeneration?: string | null) =>
+  const create = (db: TenantScopeAwareDatabase, tenantRestrictionGeneration?: string | null) =>
     appendSystemMessage({
       app: ctx.app,
       db,

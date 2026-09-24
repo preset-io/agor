@@ -34,7 +34,6 @@ import {
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
-  type Database,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
   enqueueAfterTenantDatabaseCommit,
@@ -411,7 +410,7 @@ import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
 /** Compare only DB-fenced restriction epochs; daemon/request wall clocks are not authority. */
 async function slackConnectGenerationMatchesCurrent(
-  db: Database,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   tenantId: string,
   generation: string | null | undefined
 ): Promise<boolean> {

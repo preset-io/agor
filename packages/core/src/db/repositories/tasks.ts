@@ -3113,16 +3113,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  /**
-   * Return the next QUEUED task to drain (lowest queue_position) for a session,
-   * or null if none.
-   */
+  /** Exclude prompts held by a tenant restriction from runnable queue selection. */
   private runnablePromptPredicate(): SQL {
     return isSQLiteDatabase(this.db)
       ? sql`json_extract(${tasks.data}, '$.tenant_restriction_hold') IS NULL`
       : sql`${tasks.data}->'tenant_restriction_hold' IS NULL`;
   }
 
+  /** Return the next runnable QUEUED task by queue position, or null if none. */
   async getNextQueued(sessionId: string): Promise<Task | null> {
     try {
       const row = await select(this.db)

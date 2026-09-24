@@ -1238,7 +1238,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     return row?.completedAt != null;
   }
 
-  /** Conditional/idempotent completion marker written after schedule finalization. */
   /** Stop recovery without asserting that an existing task/process is terminal. */
   async holdScheduledInitialization(sessionId: SessionID): Promise<void> {
     await update(this.db, sessions)
@@ -1261,6 +1260,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .run();
   }
 
+  /** Conditional/idempotent completion marker written after schedule finalization. */
   async markScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
     const result = await update(this.db, sessions)
       .set({
