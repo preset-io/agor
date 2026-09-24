@@ -245,6 +245,44 @@ export class OpenCodeCheckpointAttemptRepository {
         if (!taskIsActive) {
           return { outcome: 'rejected', code: 'task_not_active' } as const;
         }
+        if (!pointer) {
+          const prior = await select(tx, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+            .from(opencodeCheckpointAttempts)
+            .where(
+              and(
+                eq(opencodeCheckpointAttempts.tenant_id, tenant),
+                eq(opencodeCheckpointAttempts.session_id, session.session_id)
+              )
+            )
+            .limit(1)
+            .one();
+          // A first failed attempt can legitimately have a store identity but
+          // no accepted pointer. If even the store identity vanished while a
+          // ledger exists, an older binary may have rewritten the Session.
+          if (prior && !session.data.sdk_native_state_store_id) {
+            return { outcome: 'rejected', code: 'legacy_state' } as const;
+          }
+          // Completion publishes the pointer in the same transaction as the
+          // Task status. Never silently start an empty conversation after a
+          // mixed-version Session writer drops that accepted pointer.
+          const accepted = await select(tx, {
+            attempt_id: opencodeCheckpointAttempts.attempt_id,
+          })
+            .from(opencodeCheckpointAttempts)
+            .innerJoin(tasks, eq(tasks.task_id, opencodeCheckpointAttempts.task_id))
+            .where(
+              and(
+                eq(opencodeCheckpointAttempts.tenant_id, tenant),
+                eq(opencodeCheckpointAttempts.session_id, session.session_id),
+                eq(opencodeCheckpointAttempts.write_state, 'sealed'),
+                eq(tasks.session_id, session.session_id),
+                eq(tasks.status, TaskStatus.COMPLETED)
+              )
+            )
+            .limit(1)
+            .one();
+          if (accepted) return { outcome: 'rejected', code: 'legacy_state' } as const;
+        }
         const storeId =
           session.data.sdk_native_state_store_id ??
           pointer?.storeId ??

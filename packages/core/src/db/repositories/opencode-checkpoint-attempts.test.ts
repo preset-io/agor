@@ -290,6 +290,136 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
   );
 
   dbTest(
+    'refuses a new empty turn when a completed checkpoint pointer was lost',
+    async ({ db }) => {
+      const { ownerId, sessionId, task } = await newTask(db);
+      const attempts = new OpenCodeCheckpointAttemptRepository(db);
+      const tasksRepo = new TaskRepository(db);
+      const storeId = generateId();
+      const holderId = generateId();
+      const admitted = await attempts.begin({
+        taskId: task.task_id,
+        holderInstanceId: holderId,
+        storeId,
+        binding: binding(sessionId, task.task_id, storeId, holderId, ownerId),
+      });
+      expect(admitted.outcome).toBe('admitted');
+      const published = manifest(task.task_id, storeId);
+      await attempts.seal(task.task_id, holderId, published);
+      await tasksRepo.completeWithNativeStatePublication(
+        task.task_id,
+        { status: TaskStatus.COMPLETED, native_state_attempt: published },
+        holderId
+      );
+
+      // Simulate a pre-migration Session writer rebuilding its JSON data.
+      const before = await select(db)
+        .from(sessions)
+        .where(eq(sessions.session_id, sessionId))
+        .one();
+      if (!before) throw new Error('Session missing');
+      const {
+        sdk_native_state: _pointer,
+        sdk_native_state_store_id: _storeId,
+        ...oldWriterData
+      } = before.data;
+      await update(db, sessions)
+        .set({ data: oldWriterData })
+        .where(eq(sessions.session_id, sessionId))
+        .run();
+
+      const next = await tasksRepo.create({
+        task_id: generateId(),
+        session_id: sessionId,
+        created_by: ownerId,
+        full_prompt: 'must not start empty',
+        status: TaskStatus.DISPATCHING,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: new Date().toISOString(),
+        },
+        git_state: { ref_at_start: 'main', sha_at_start: 'lost-pointer' },
+      });
+      const connected = await tasksRepo.connectExecutor(next.task_id);
+      if (!connected) throw new Error('Task connection failed');
+      await tasksRepo.stampManagedOpenCodeProtocol(next.task_id);
+      const nextHolder = generateId();
+      await expect(
+        attempts.begin({
+          taskId: next.task_id,
+          holderInstanceId: nextHolder,
+          storeId,
+          binding: binding(sessionId, next.task_id, storeId, nextHolder, ownerId),
+        })
+      ).resolves.toEqual({ outcome: 'rejected', code: 'legacy_state' });
+      // Keeping only the store id is not enough: the accepted input must still
+      // be present to prevent an empty resume of a successful conversation.
+      await update(db, sessions)
+        .set({ data: { ...oldWriterData, sdk_native_state_store_id: storeId } })
+        .where(eq(sessions.session_id, sessionId))
+        .run();
+      await expect(
+        attempts.begin({
+          taskId: next.task_id,
+          holderInstanceId: nextHolder,
+          storeId,
+          binding: binding(sessionId, next.task_id, storeId, nextHolder, ownerId),
+        })
+      ).resolves.toEqual({ outcome: 'rejected', code: 'legacy_state' });
+    }
+  );
+
+  dbTest(
+    'allows a fresh turn after a failed first attempt without an accepted pointer',
+    async ({ db }) => {
+      const { ownerId, sessionId, task } = await newTask(db);
+      const attempts = new OpenCodeCheckpointAttemptRepository(db);
+      const tasksRepo = new TaskRepository(db);
+      const storeId = generateId();
+      const holderId = generateId();
+      const first = await attempts.begin({
+        taskId: task.task_id,
+        holderInstanceId: holderId,
+        storeId,
+        binding: binding(sessionId, task.task_id, storeId, holderId, ownerId),
+      });
+      expect(first).toMatchObject({ outcome: 'admitted', input: null });
+      await attempts.abandon(task.task_id, holderId);
+      await update(db, taskRows)
+        .set({ status: TaskStatus.FAILED, completed_at: new Date() })
+        .where(eq(taskRows.task_id, task.task_id))
+        .run();
+
+      const next = await tasksRepo.create({
+        task_id: generateId(),
+        session_id: sessionId,
+        created_by: ownerId,
+        full_prompt: 'retry after failed first use',
+        status: TaskStatus.DISPATCHING,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: new Date().toISOString(),
+        },
+        git_state: { ref_at_start: 'main', sha_at_start: 'first-use-retry' },
+      });
+      const connected = await tasksRepo.connectExecutor(next.task_id);
+      if (!connected) throw new Error('Task connection failed');
+      await tasksRepo.stampManagedOpenCodeProtocol(next.task_id);
+      const nextHolder = generateId();
+      await expect(
+        attempts.begin({
+          taskId: next.task_id,
+          holderInstanceId: nextHolder,
+          storeId,
+          binding: binding(sessionId, next.task_id, storeId, nextHolder, ownerId),
+        })
+      ).resolves.toMatchObject({ outcome: 'admitted', input: null });
+    }
+  );
+
+  dbTest(
     'bounded cleanup rotation reaches a healthy successor beyond 32 ineligible rows',
     async ({ db }) => {
       const { ownerId, sessionId, task: firstTask } = await newTask(db);

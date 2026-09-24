@@ -6,7 +6,7 @@ import { generateId } from '../../lib/ids';
 import { createDatabase, type Database } from '../client';
 import { isPostgresDatabase, select, update } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
-import { opencodeCheckpointAttempts, tasks as taskRows } from '../schema';
+import { opencodeCheckpointAttempts, sessions, tasks as taskRows } from '../schema';
 import { BranchRepository } from './branches';
 import { OpenCodeCheckpointAttemptRepository } from './opencode-checkpoint-attempts';
 import { RepoRepository } from './repos';
@@ -173,6 +173,71 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           ),
         })
       ).resolves.toMatchObject({ outcome: 'rejected', code: 'already_admitted' });
+    });
+
+    it('rejects a completed checkpoint whose Session pointer was removed by an older writer', async () => {
+      const { ownerId, sessionId } = await createManagedSession();
+      const task = await createManagedTask(sessionId, ownerId);
+      const storeId = generateId();
+      const holderId = generateId();
+      const attempts = new OpenCodeCheckpointAttemptRepository(dbA);
+      const granted = await attempts.begin({
+        taskId: task.task_id,
+        holderInstanceId: holderId,
+        storeId,
+        binding: binding(sessionId, task.task_id, ownerId, storeId, holderId),
+      });
+      if (granted.outcome !== 'admitted') throw new Error('holder was not admitted');
+      const published = {
+        version: 3 as const,
+        storeId,
+        attemptTaskId: task.task_id,
+        digest: `sha256:${'d'.repeat(64)}`,
+        bytes: 1024,
+        openCodeSessionId: 'pg-lost-pointer',
+        openCodeVersion: '1.18.31',
+        publishedAt: new Date().toISOString(),
+      };
+      await attempts.seal(task.task_id, holderId, published);
+      await new TaskRepository(dbA).completeWithNativeStatePublication(
+        task.task_id,
+        { status: TaskStatus.COMPLETED, native_state_attempt: published },
+        holderId
+      );
+      const before = await select(dbA)
+        .from(sessions)
+        .where(eq(sessions.session_id, sessionId))
+        .one();
+      if (!before) throw new Error('Session missing');
+      const {
+        sdk_native_state: _pointer,
+        sdk_native_state_store_id: _storeId,
+        ...oldWriterData
+      } = before.data;
+      await update(dbA, sessions)
+        .set({ data: oldWriterData })
+        .where(eq(sessions.session_id, sessionId))
+        .run();
+      const next = await createManagedTask(sessionId, ownerId);
+      const nextHolder = generateId();
+      const request = {
+        taskId: next.task_id,
+        holderInstanceId: nextHolder,
+        storeId,
+        binding: binding(sessionId, next.task_id, ownerId, storeId, nextHolder),
+      };
+      await expect(attempts.begin(request)).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'legacy_state',
+      });
+      await update(dbA, sessions)
+        .set({ data: { ...oldWriterData, sdk_native_state_store_id: storeId } })
+        .where(eq(sessions.session_id, sessionId))
+        .run();
+      await expect(attempts.begin(request)).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'legacy_state',
+      });
     });
 
     it('serializes completion against cleanup so a published attempt cannot be retired', async () => {
