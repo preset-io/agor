@@ -13,15 +13,14 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import {
-  getDefaultPermissionMode,
-  isAgenticToolName,
-  mapToCodexPermissionConfig,
-} from '@agor-live/client';
+import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
 import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
-import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
+import {
+  buildModelConfigFromFormValues,
+  getEffectiveCodexFormValues,
+} from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
   getUserAgenticToolDefault,
@@ -90,8 +89,6 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         (sameToolAsParent ? session?.permission_config?.mode : undefined) ??
         getDefaultPermissionMode(agentTool);
       const parentCodex = sameToolAsParent ? session?.permission_config?.codex : undefined;
-      const codexDefaults =
-        agentTool === 'codex' ? mapToCodexPermissionConfig(permissionMode) : undefined;
       return {
         agent: agentTool,
         // Seed the config source from the parent (same tool): the parent's preset
@@ -111,20 +108,12 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         // Surfaced as its own field (the effort chip binds to it), folded back
         // into model_config on submit.
         effort: modelConfig?.effort,
-        // Custom sends saved user values explicitly; otherwise the child would
-        // inherit same-tool parent fields, then fall back to the mapped mode.
-        // Show and send those effective values instead of an unchecked switch
-        // that silently inherits true. Nullish fallback preserves explicit false.
-        codexSandboxMode:
-          userDefaults?.codexSandboxMode ?? parentCodex?.sandboxMode ?? codexDefaults?.sandboxMode,
-        codexApprovalPolicy:
-          userDefaults?.codexApprovalPolicy ??
-          parentCodex?.approvalPolicy ??
-          codexDefaults?.approvalPolicy,
-        codexNetworkAccess:
-          userDefaults?.codexNetworkAccess ??
-          parentCodex?.networkAccess ??
-          codexDefaults?.networkAccess,
+        // Seed only genuinely configured values (user → same-tool parent).
+        // Missing values stay derived from the current mode, not frozen at the
+        // opening mode. Display and submit complete them without mutating state.
+        codexSandboxMode: userDefaults?.codexSandboxMode ?? parentCodex?.sandboxMode,
+        codexApprovalPolicy: userDefaults?.codexApprovalPolicy ?? parentCodex?.approvalPolicy,
+        codexNetworkAccess: userDefaults?.codexNetworkAccess ?? parentCodex?.networkAccess,
       };
     },
     [currentUser, session]
@@ -210,9 +199,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               modelConfig: values.modelConfig,
               effort: values.effort,
             });
-            spawnConfig.codexSandboxMode = values.codexSandboxMode;
-            spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
-            spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
+            if (spawnConfig.agent === 'codex') {
+              // Explicitly send what the controls show, including derived false:
+              // omission would let the child resolver inherit unrelated parent values.
+              Object.assign(spawnConfig, getEffectiveCodexFormValues(values));
+            }
           }
           // MCP attachments are session-scoped and remain editable regardless
           // of whether the agent configuration comes from a preset or inline.
@@ -382,7 +373,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 />
 
                 {selectedAgent === 'codex' && isInlineConfig && (
-                  <CodexSettingsForm showHelpText={false} />
+                  <CodexSettingsForm showHelpText={false} showEffectiveDefaults />
                 )}
 
                 {/* Session-scope env var selections (only the creator / admin

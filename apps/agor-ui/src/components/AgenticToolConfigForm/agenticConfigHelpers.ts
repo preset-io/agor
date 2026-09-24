@@ -17,7 +17,23 @@ import type {
   PersistedScheduleAgenticToolConfig,
   ScheduleAgenticToolConfig,
 } from '@agor-live/client';
-import { getDefaultPermissionMode } from '@agor-live/client';
+import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+
+/**
+ * Complete display/transport values, not editable form state: undefined advanced
+ * fields must keep following the permission mode until explicitly chosen.
+ * Resolve only this configuration; a detached preset must not borrow a parent.
+ */
+export function getEffectiveCodexFormValues(config: DefaultAgenticToolConfig) {
+  const defaults = mapToCodexPermissionConfig(
+    config.permissionMode ?? getDefaultPermissionMode('codex')
+  );
+  return {
+    codexSandboxMode: config.codexSandboxMode ?? defaults.sandboxMode,
+    codexApprovalPolicy: config.codexApprovalPolicy ?? defaults.approvalPolicy,
+    codexNetworkAccess: config.codexNetworkAccess ?? defaults.networkAccess,
+  };
+}
 
 /**
  * Form field values shape used by AgenticToolConfigForm.
