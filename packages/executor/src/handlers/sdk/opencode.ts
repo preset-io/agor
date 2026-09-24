@@ -60,6 +60,7 @@ import {
   settleTaskFailure,
 } from './base-executor.js';
 import { OpenCodeCleanupOperation } from './opencode-cleanup.js';
+import { managedOpenCodePermissionTasksService } from './opencode-permission-tasks.js';
 
 interface ManagedOpenCodeStateService {
   closeRead(input: {
@@ -339,19 +340,11 @@ export async function executeOpenCodeTask(params: {
 
     const assistantMessageId = generateId() as MessageID;
     const permissionLocks = new Map<SessionID, Promise<void>>();
-    const permissionTasksService = committedGrant
-      ? {
-          get: (id: string) => repos.tasksService.get(id),
-          patch: (id: string, data: Partial<import('@agor/core/types').Task>) => {
-            if (id !== taskId) throw new Error('Permission patch is not scoped to this task');
-            return repos.tasksService.patch(id, {
-              ...data,
-              native_state_holder_instance_id: committedGrant.attempt.holder_instance_id,
-            } as Partial<import('@agor/core/types').Task>);
-          },
-          emit: (event: string, data: unknown) => repos.tasksService.emit(event, data),
-        }
-      : repos.tasksService;
+    const permissionTasksService = managedOpenCodePermissionTasksService(
+      repos.tasksService,
+      taskId,
+      committedGrant?.attempt.holder_instance_id
+    );
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
         const reporter = collectWithheldMcpServers();

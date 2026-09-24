@@ -277,7 +277,7 @@ async function runObserver(
   );
 }
 
-function runObserverProcess(
+export function runObserverProcess(
   command: string,
   timeoutMs: number,
   request: ObserverRequest

@@ -27,9 +27,14 @@ import {
   feathersExpress,
   socketio,
 } from '@agor/core/feathers';
-import { TaskStatus } from '@agor/core/types';
+import { PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createFeathersBackedRepositories } from '../../../packages/executor/src/db/feathers-repositories.js';
+import { managedOpenCodePermissionTasksService } from '../../../packages/executor/src/handlers/sdk/opencode-permission-tasks.js';
+import { PermissionService } from '../../../packages/executor/src/permissions/permission-service.js';
+import { EMPTY_MCP_TOOL_PERMISSION_INDEX } from '../../../packages/executor/src/sdk-handlers/base/mcp-tool-permissions.js';
+import { createCanUseToolCallback } from '../../../packages/executor/src/sdk-handlers/base/permission-hooks.js';
 import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-admission.js';
 import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
@@ -263,6 +268,51 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const grant = await remoteState.begin(input);
         expect(grant.outcome).toBe('admitted');
         if (grant.outcome !== 'admitted') throw new Error('Expected managed admission');
+        const repos = createFeathersBackedRepositories(client);
+        let permissionService!: PermissionService;
+        permissionService = new PermissionService(async (_event, data) => {
+          const request = data as { requestId: string; taskId: typeof taskId };
+          setTimeout(() => {
+            permissionService.resolvePermission({
+              requestId: request.requestId,
+              taskId: request.taskId,
+              allow: true,
+              remember: false,
+              scope: PermissionScope.ONCE,
+              decidedBy: userId,
+            });
+          }, 10);
+        }, 2_000);
+        const canUseTool = createCanUseToolCallback(sessionId, taskId, {
+          permissionService,
+          tasksService: managedOpenCodePermissionTasksService(
+            repos.tasksService,
+            taskId,
+            input.holder_instance_id
+          ),
+          messagesRepo: repos.messages,
+          messagesService: repos.messagesService,
+          permissionLocks: new Map(),
+          mcpServerRepo: repos.mcpServers,
+          sessionMCPRepo: repos.sessionMCP,
+          mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
+        });
+        await expect(
+          canUseTool(
+            'Bash',
+            { command: 'echo permitted' },
+            { signal: new AbortController().signal }
+          )
+        ).resolves.toMatchObject({ behavior: 'allow' });
+        expect((await client.service('tasks').get(taskId)).status).toBe(TaskStatus.RUNNING);
+        const permissionMessages = await client.service('messages').find({
+          query: { task_id: taskId, type: 'permission_request' },
+        });
+        const permissionRows = Array.isArray(permissionMessages)
+          ? permissionMessages
+          : permissionMessages.data;
+        expect(permissionRows).toHaveLength(1);
+        expect(permissionRows[0].content).toMatchObject({ status: PermissionStatus.APPROVED });
         await expect(
           client.service('tasks').reportRuntimeTelemetry({
             task_id: taskId,
