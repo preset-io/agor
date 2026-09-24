@@ -634,6 +634,10 @@ pipeline is involved. Older executors omit the optional field; older daemons can
 ignore it. Memory observations are not persisted on Tasks or sent to community
 telemetry. Export requires an accepted runtime authority check.
 
+When a heartbeat callback command is configured, its stdin JSON also carries
+the optional top-level `memory: { current: { ... } }` sample with the same
+validation. Missing or entirely invalid samples omit `memory`, not the heartbeat.
+
 `executor.memory.current.<field>_bytes` distributions have six fixed fields:
 `rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`.
 They describe the executor's Node wrapper process only, using synchronous

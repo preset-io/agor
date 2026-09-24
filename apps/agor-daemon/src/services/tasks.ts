@@ -46,6 +46,7 @@ import type {
   BranchID,
   CancelQueuedTasksInput,
   ContentBlock,
+  ExecutorMemorySample,
   ExecutorTerminationCompleteInput,
   MessageID,
   Paginated,
@@ -73,7 +74,7 @@ import {
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
-import { recordExecutorMemory } from '../metrics/executor-memory.js';
+import { recordExecutorMemory, sanitizeExecutorMemory } from '../metrics/executor-memory.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -702,12 +703,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return result;
   }
 
-  private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
+  private async handleExecutorHeartbeat(
+    task: Task,
+    heartbeatAt: string,
+    memory?: ExecutorMemorySample
+  ): Promise<void> {
     const payload: ExecutorHeartbeatCallbackPayload = {
       event: 'executor_heartbeat',
       task_id: task.task_id,
       session_id: task.session_id,
       last_executor_heartbeat_at: heartbeatAt,
+      ...(memory ? { memory } : {}),
     };
 
     try {
@@ -1766,13 +1772,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       { userId: task.created_by }
     );
     if (this.heartbeatCallbackRunner.isConfigured()) {
+      // Capture only the bounded projection, never the raw request, in deferred work.
+      const memory = sanitizeExecutorMemory(data.memory);
       // Heartbeats arrive inside the request's tenant DB transaction. The
       // optional callback performs a later branch-pointer projection, so
       // retain only the trusted tenant identity and re-enter after commit
       // instead of inheriting a committed DB scope into detached work.
       deferWithTenantContext(
         params,
-        () => this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!),
+        () => this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!, memory),
         (error) => console.warn('Executor heartbeat callback failed:', error)
       );
     }
