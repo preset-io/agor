@@ -15,6 +15,7 @@ describe('MobileNavTree settings navigation', () => {
           commentById={new Map()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
         />
       </MemoryRouter>
     );
@@ -37,6 +38,7 @@ describe('MobileNavTree settings navigation', () => {
           commentById={new Map()}
           onOpenWorkspaceSettings={onOpenWorkspaceSettings}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
           onNavigate={onNavigate}
         />
       </MemoryRouter>
