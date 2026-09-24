@@ -1099,7 +1099,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         this.app,
         'git.branch.add',
         userId,
-        branch.branch_id
+        branch.branch_id,
+        attemptId
       );
 
       // Retry/watchdog callers have no pre-resolved routing; create passes its

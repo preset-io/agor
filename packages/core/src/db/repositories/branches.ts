@@ -16,6 +16,7 @@ import type {
   Branch,
   BranchID,
   BranchProvisioningOutcome,
+  BranchProvisioningProvenance,
   EffectiveBranchAccess,
   GroupID,
   SessionPromptAuthority,
@@ -32,6 +33,7 @@ import {
   BRANCH_FILESYSTEM_ACTIONS,
   getTeammateConfig,
   isBranchProvisioningOutcome,
+  isBranchProvisioningProvenance,
 } from '../../types/branch';
 import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import { getBranchUrl } from '../../utils/url';
@@ -747,6 +749,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
             'storage_mode',
             'clone_depth',
             'base_ref',
+            'base_sha',
+            'base_source',
             'new_branch',
             'ref_type',
           ].some((key) => Object.hasOwn(updates, key)) ||
@@ -1003,6 +1007,52 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       },
       // Read-then-write provisioning fence: SQLite must take the write lock
       // up front so two concurrent attempts cannot both observe the old row.
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Resolve source before Git writes, without opening generic update's input fence. */
+  async recordProvisioningProvenance(
+    id: string,
+    provenance: BranchProvisioningProvenance,
+    expectedAttemptId: string
+  ): Promise<Branch> {
+    if (!isBranchProvisioningProvenance(provenance) || !expectedAttemptId) {
+      throw new RepositoryError('Invalid attempt-scoped branch provenance');
+    }
+    const existing = await this.findById(id);
+    if (!existing) throw new EntityNotFoundError('Branch', id);
+    const baseUrl = await getBaseUrl(this.db);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, existing.branch_id));
+        const row = await select(tx)
+          .from(branches)
+          .where(eq(branches.branch_id, existing.branch_id))
+          .one();
+        if (!row) throw new EntityNotFoundError('Branch', id);
+        if (
+          row.archived ||
+          row.deletion_status ||
+          row.data.maintenance ||
+          row.filesystem_status !== 'creating' ||
+          row.data.provisioning_attempt_id !== expectedAttemptId ||
+          row.data.provisioning_operation === 'restore'
+        ) {
+          // Unlike a stale terminal ack, this must stop the executor before Git I/O.
+          throw new RepositoryError('Branch source resolution is not admitted for this attempt');
+        }
+        const saved = await update(tx, branches)
+          .set({
+            updated_at: new Date(),
+            data: { ...row.data, ...provenance, base_source: provenance.base_source },
+          })
+          .where(eq(branches.branch_id, existing.branch_id))
+          .returning()
+          .one();
+        return this.rowToBranch(saved, baseUrl);
+      },
       { sqliteImmediate: true }
     );
   }

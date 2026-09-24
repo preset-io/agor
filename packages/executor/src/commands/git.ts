@@ -878,6 +878,7 @@ export async function handleGitBranchAdd(
 
   let client: AgorClient | null = null;
   let materializationWritesSettled = false;
+  let sourceResolutionAdmitted = false;
   let localHome = false;
   let filesystemRecovery = false;
 
@@ -1015,6 +1016,7 @@ export async function handleGitBranchAdd(
 
     if (resolvedStartingRef) {
       await client.service('branches').patch(branchId, {
+        ...attemptFence,
         base_ref: resolvedStartingRef.ref,
         base_sha: resolvedStartingRef.sha,
         ...(resolvedStartingRef.remoteUrl
@@ -1031,6 +1033,8 @@ export async function handleGitBranchAdd(
       );
     }
 
+    // A rejected provenance capability must not create even a fallback directory.
+    sourceResolutionAdmitted = true;
     if (alreadyMaterialized) {
       console.log(
         `[git.branch.add] Existing checkout for '${branch}' already present at ${branchPath} — adopting it (idempotent retry)`
@@ -1226,6 +1230,7 @@ export async function handleGitBranchAdd(
     let fallbackCreated = false;
     if (
       fallbackPath &&
+      sourceResolutionAdmitted &&
       !materializationWritesSettled &&
       !localHome &&
       !filesystemRecovery &&

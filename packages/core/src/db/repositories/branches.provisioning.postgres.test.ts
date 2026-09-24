@@ -34,6 +34,70 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       for (const db of [first, second])
         await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
     });
+    it('records creation provenance only inside the owning tenant and active generation', async () => {
+      const one = createTenantScopedDatabaseProxy(first, { requireScope: true });
+      const two = createTenantScopedDatabaseProxy(second, { requireScope: true });
+      const a = `source-a-${generateId()}` as TenantID;
+      const b = `source-b-${generateId()}` as TenantID;
+      const provenance = { base_ref: 'refs/heads/main', base_sha: 'a'.repeat(40) };
+      const branch = await runWithTenantDatabaseScope(one, a, async () => {
+        const owner = await new UsersRepository(one).create({
+          email: 'source@example.test',
+          role: 'member',
+        });
+        const repo = await new RepoRepository(one).create({
+          name: 'Source',
+          slug: 'fixture/source',
+          repo_type: 'local',
+          local_path: '/fixture/source',
+          default_branch: 'main',
+        });
+        return new BranchRepository(one).create({
+          repo_id: repo.repo_id,
+          created_by: owner.user_id,
+          name: 'Source',
+          ref: 'feature',
+          path: '/fixture/feature',
+          branch_unique_id: 1,
+          filesystem_status: 'creating',
+          provisioning_operation: 'create',
+          provisioning_attempt_id: 'current',
+        });
+      });
+      await runWithTenantDatabaseScope(two, b, async () => {
+        await expect(
+          new BranchRepository(two).recordProvisioningProvenance(
+            branch.branch_id,
+            provenance,
+            'current'
+          )
+        ).rejects.toThrow();
+      });
+      await runWithTenantDatabaseScope(two, a, async () => {
+        const rows = new BranchRepository(two);
+        await expect(
+          rows.recordProvisioningProvenance(branch.branch_id, provenance, 'stale')
+        ).rejects.toThrow('not admitted');
+        await expect(rows.update(branch.branch_id, provenance)).rejects.toThrow(
+          'materialization inputs'
+        );
+        expect(
+          await rows.recordProvisioningProvenance(branch.branch_id, provenance, 'current')
+        ).toMatchObject({ ...provenance, filesystem_status: 'creating' });
+        expect(
+          (
+            await rows.acknowledgeProvisioningAttempt(
+              branch.branch_id,
+              { filesystem_status: 'ready' },
+              'current'
+            )
+          ).applied
+        ).toBe(true);
+        await expect(
+          rows.recordProvisioningProvenance(branch.branch_id, provenance, 'current')
+        ).rejects.toThrow('not admitted');
+      });
+    });
     it.each(['failed', 'cleaned'] as const)(
       'admits only one %s recovery, fences stale outcomes and denies a foreign tenant',
       async (status) => {
@@ -99,6 +163,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             new BranchRepository(two).claimForProvisioning(branch.branch_id, 'foreign', {
               restore: true,
             })
+          ).rejects.toThrow();
+          await expect(
+            new BranchRepository(two).recordProvisioningProvenance(
+              branch.branch_id,
+              { base_ref: 'refs/heads/main', base_sha: 'a'.repeat(40) },
+              attempt!
+            )
           ).rejects.toThrow();
           await expect(
             new BranchRepository(two).acknowledgeProvisioningAttempt(

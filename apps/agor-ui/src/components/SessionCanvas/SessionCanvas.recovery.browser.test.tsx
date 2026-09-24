@@ -78,9 +78,16 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
   fireEvent.click(await screen.findByRole('button', { name: 'Recover' }));
   await waitFor(() => expect(create).toHaveBeenCalledWith({}));
   expect(service).toHaveBeenCalledWith(`branches/${branch.branch_id}/retry-provisioning`);
-  view.rerender(compose({ ...branch, filesystem_status: 'creating' }));
+  view.rerender(
+    compose({ ...branch, filesystem_status: 'creating', provisioning_operation: 'restore' })
+  );
   expect(await screen.findByText('Filesystem recovery in progress')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Recover' })).toBeNull();
+  view.rerender(
+    compose({ ...branch, filesystem_status: 'creating', provisioning_operation: 'create' })
+  );
+  expect(await screen.findByText('Filesystem provisioning in progress')).toBeVisible();
+  expect(screen.queryByText('Filesystem recovery in progress')).toBeNull();
   view.rerender(
     compose({ ...branch, filesystem_status: 'failed', error_message: 'Repair Git linkage' })
   );

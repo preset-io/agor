@@ -55,6 +55,79 @@ async function seedFailedBranch(
 }
 
 describe('BranchRepository provisioning CAS', () => {
+  dbTest(
+    'source provenance is a strict active-attempt CAS, not a materialization edit exemption',
+    async ({ db }) => {
+      const { branchRepo, branchId } = await seedFailedBranch(db, {
+        notes: 'Retained metadata',
+        base_source: { name: 'old', remote_url: 'https://example.test/old.git' },
+      });
+      const provenance = { base_ref: 'refs/heads/main', base_sha: 'a'.repeat(40) };
+      await branchRepo.claimForProvisioning(branchId, 'first');
+      for (const edit of [
+        provenance,
+        { base_ref: 'main' },
+        { base_sha: provenance.base_sha },
+        { base_source: undefined },
+      ]) {
+        await expect(branchRepo.update(branchId, edit)).rejects.toThrow('materialization inputs');
+      }
+      for (const extra of [
+        { path: '/wrong' },
+        { filesystem_status: 'ready' },
+        { new_branch: false },
+      ]) {
+        await expect(
+          branchRepo.recordProvisioningProvenance(branchId, { ...provenance, ...extra }, 'first')
+        ).rejects.toThrow('Invalid');
+      }
+      for (const attempt of ['', 'stale']) {
+        await expect(
+          branchRepo.recordProvisioningProvenance(branchId, provenance, attempt)
+        ).rejects.toThrow();
+      }
+      const resolved = await branchRepo.recordProvisioningProvenance(branchId, provenance, 'first');
+      expect(resolved).toMatchObject({
+        ...provenance,
+        filesystem_status: 'creating',
+        notes: 'Retained metadata',
+      });
+      expect(resolved.base_source).toBeUndefined();
+      await branchRepo.acknowledgeProvisioningAttempt(
+        branchId,
+        { filesystem_status: 'failed' },
+        'first'
+      );
+      await branchRepo.claimForProvisioning(branchId, 'second');
+      await expect(
+        branchRepo.recordProvisioningProvenance(branchId, provenance, 'first')
+      ).rejects.toThrow('not admitted');
+      expect(
+        (
+          await branchRepo.acknowledgeProvisioningAttempt(
+            branchId,
+            { filesystem_status: 'ready' },
+            'first'
+          )
+        ).applied
+      ).toBe(false);
+      await branchRepo.recordProvisioningProvenance(branchId, provenance, 'second');
+      await branchRepo.acknowledgeProvisioningAttempt(
+        branchId,
+        { filesystem_status: 'ready' },
+        'second'
+      );
+      await expect(
+        branchRepo.recordProvisioningProvenance(branchId, provenance, 'second')
+      ).rejects.toThrow('not admitted');
+      await branchRepo.update(branchId, { filesystem_status: 'cleaned' });
+      await branchRepo.claimForProvisioning(branchId, 'restore', { restore: true });
+      await expect(
+        branchRepo.recordProvisioningProvenance(branchId, provenance, 'restore')
+      ).rejects.toThrow('not admitted');
+    }
+  );
+
   dbTest('claimForProvisioning flips failed→creating and clears the error', async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db);
 

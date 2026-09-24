@@ -66,6 +66,7 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import { stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -99,6 +100,7 @@ import {
   getTeammateConfig,
   hasMinimumRole,
   isBranchProvisioningOutcome,
+  isBranchProvisioningProvenance,
   isCanonicalTeammateFrameworkRepo,
   isTeammate,
   ROLES,
@@ -108,6 +110,7 @@ import {
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   isExecutorSessionTokenPayload,
@@ -1460,11 +1463,52 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     operationDb?: TenantScopedDatabase
   ): Promise<BranchWithZoneAndSessions> {
     if (
-      params?.provider &&
-      (Object.hasOwn(data, 'provisioning_operation') ||
-        (Object.hasOwn(data, 'provisioning_attempt_id') &&
-          !Object.hasOwn(data, 'filesystem_status')))
-    )
+      Object.hasOwn(data, 'provisioning_attempt_id') &&
+      !Object.hasOwn(data, 'filesystem_status')
+    ) {
+      const { provisioning_attempt_id: attemptId, ...provenance } = data;
+      const authenticated = params as AuthenticatedParams | undefined;
+      const token = authenticated?.authentication?.payload;
+      if (
+        !params?.provider ||
+        !matchesExecutorCommandRuntimeScope(params, 'git.branch.add', id) ||
+        typeof attemptId !== 'string' ||
+        !attemptId ||
+        token?.provisioning_attempt_id !== attemptId ||
+        !authenticated?.user ||
+        token?.sub !== authenticated.user.user_id ||
+        !params.tenant?.tenant_id ||
+        token?.tenant_id !== params.tenant.tenant_id ||
+        getCurrentTenantId() !== params.tenant.tenant_id
+      ) {
+        throw new Forbidden(
+          'Source resolution requires this tenant, branch and provisioning attempt executor.'
+        );
+      }
+      if (
+        !isBranchProvisioningProvenance(provenance) ||
+        (provenance.base_source &&
+          stripGitUrlCredentials(provenance.base_source.remote_url) !==
+            provenance.base_source.remote_url)
+      ) {
+        throw new BadRequest(
+          'Source resolution must contain only valid, credential-free provenance.'
+        );
+      }
+      const branch = await super.get(id, params);
+      await ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        authenticated.user.user_id,
+        authenticated.user.role as UserRole,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      );
+      const saved = await this.branchRepo.recordProvisioningProvenance(id, provenance, attemptId);
+      return (await this.branchRepo.enrichWithZoneInfo(saved)) as BranchWithZoneAndSessions;
+    }
+    if (params?.provider && Object.hasOwn(data, 'provisioning_operation'))
       throw new BadRequest('Provisioning ownership is server-managed.');
     if (params?.provider && Object.hasOwn(data, 'filesystem_status')) {
       const token = (params as AuthenticatedParams).authentication?.payload;
@@ -1473,6 +1517,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         token.purpose !== EXECUTOR_COMMAND_TOKEN_PURPOSE ||
         token.session_id !== 'git.branch.add' ||
         token.branch_id !== id ||
+        (token.provisioning_attempt_id !== undefined &&
+          token.provisioning_attempt_id !== data.provisioning_attempt_id) ||
         !['ready', 'failed'].includes(String(data.filesystem_status))
       ) {
         throw new BadRequest('filesystem_status is managed by branch materialization.');
