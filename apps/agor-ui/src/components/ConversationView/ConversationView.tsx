@@ -333,6 +333,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       [reactiveSession]
     );
 
+    const handleRetainTaskDetails = useCallback(
+      (taskId: string) => reactiveSession?.retainTaskDetails(taskId),
+      [reactiveSession]
+    );
+
     const [loadingOlder, setLoadingOlder] = useState(false);
     const olderInflight = useRef<object | null>(null);
     const previousScrollTop = useRef(0);
@@ -575,6 +580,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
                 }
                 taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
                 onLoadTaskMessages={handleLoadTaskMessages}
+                onRetainTaskDetails={handleRetainTaskDetails}
                 teammateEmoji={teammateEmoji}
                 isLatestTask={taskIndex === tasks.length - 1}
                 client={client}

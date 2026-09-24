@@ -2059,3 +2059,88 @@ it('retains consecutive tool activity across partial persistence, duplicate even
     handle.dispose();
   }
 });
+
+it('bounds 100 completed live tool payloads, pins independent consumers, and rehydrates evicted history', async () => {
+  const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+  const mock = createMockClient(opts);
+  const handle = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  const second = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const unpinA = handle.retainTaskDetails('live-000');
+  const unpinB = second.retainTaskDetails('live-000');
+  for (let i = 0; i < 100; i++) {
+    const task = makeTask(`live-${String(i).padStart(3, '0')}`, TaskStatus.RUNNING);
+    opts.tasks.push(task);
+    mock.emitServiceEvent('tasks', 'created', task);
+    const message = {
+      ...makeMessage(task.task_id, i),
+      content: [
+        { type: 'text', text: `Answer ${i}` },
+        { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+        { type: 'tool_result', tool_use_id: `tool-${i}`, content: 'x'.repeat(70_000) },
+      ],
+      metadata: { raw: 'x'.repeat(10_000), model: 'test' },
+    } as unknown as Message;
+    opts.messagesByTask[task.task_id] = [message];
+    mock.emitServiceEvent('messages', 'created', message);
+    const completed = { ...task, status: TaskStatus.COMPLETED };
+    opts.tasks[i] = completed;
+    mock.emitServiceEvent('tasks', 'patched', completed);
+  }
+  const fullBuckets = () =>
+    [...handle.state.messagesByTask.values()].filter((messages) =>
+      JSON.stringify(messages).includes('tool_result')
+    );
+  expect(handle.state.messagesByTask.size).toBe(100); // history is not deleted
+  expect(fullBuckets()).toHaveLength(11); // ten recent + one pinned by two consumers
+  expect(JSON.stringify([...handle.state.messagesByTask.values()]).length).toBeLessThan(950_000);
+  handle.unloadTaskMessages('live-000');
+  unpinA();
+  unpinA();
+  expect(fullBuckets()).toHaveLength(11);
+  unpinB();
+  expect(fullBuckets()).toHaveLength(10);
+  const lean = handle.state.messagesByTask.get('live-000')![0];
+  expect(lean.content).toEqual(
+    expect.arrayContaining([
+      { type: 'text', text: 'Answer 0' },
+      { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+    ])
+  );
+  // A late persisted patch is projected, not dropped or retained as a full old turn.
+  mock.emitServiceEvent('messages', 'patched', {
+    ...opts.messagesByTask['live-000'][0],
+    content_preview: 'late',
+  });
+  expect(fullBuckets()).toHaveLength(10);
+  const unpinReloaded = handle.retainTaskDetails('live-000');
+  await handle.loadTaskMessages('live-000');
+  expect(handle.state.messagesByTask.get('live-000')).toEqual(opts.messagesByTask['live-000']);
+  await handle.resync();
+  expect(handle.state.messagesByTask.get('live-000')).toEqual(opts.messagesByTask['live-000']);
+  releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  expect(second.state.messagesByTask.size).toBe(100);
+  unpinReloaded();
+  releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  expect(handle.state.messagesByTask.size).toBe(0);
+});
+
+it('keeps payloads arriving before their active Task and ignores foreign-session payloads', async () => {
+  const mock = createMockClient({ tasks: [], messagesByTask: {} });
+  const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const message = {
+    ...makeMessage('early', 1),
+    content: [{ type: 'tool_result', content: 'early output' }],
+  } as Message;
+  mock.emitServiceEvent('messages', 'created', message);
+  mock.emitServiceEvent('tasks', 'created', makeTask('early', TaskStatus.RUNNING));
+  expect(handle.state.messagesByTask.get('early')).toEqual([message]);
+  mock.emitServiceEvent('messages', 'created', {
+    ...message,
+    session_id: 'foreign',
+    task_id: 'foreign',
+  });
+  expect(handle.state.messagesByTask.has('foreign')).toBe(false);
+  handle.dispose();
+});

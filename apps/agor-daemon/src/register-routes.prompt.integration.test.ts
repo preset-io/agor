@@ -34,7 +34,7 @@ afterEach(() => {
   for (const close of cleanup.splice(0)) close();
 });
 
-async function fixture() {
+async function fixture(throughQueue = false) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   cleanup.push(() => (rawDb as unknown as { $client: { close(): void } }).$client.close());
   await runMigrations(rawDb);
@@ -100,6 +100,9 @@ async function fixture() {
     materializeAgenticToolPreset: async (value: Session) => value,
     executeTask,
     triggerQueueProcessing,
+    setQueueProcessor: () => {
+      if (throughQueue) throw stopRegistration;
+    },
   };
   app.use('sessions', sessionsService);
   app.use('messages', {
@@ -120,8 +123,10 @@ async function fixture() {
   // upload/health infrastructure. The prompt service and its hooks are unmodified.
   const stopRegistration = new Error('prompt route registered');
   const use = app.use.bind(app);
+  let queueRegistered = false;
   const useSpy = vi.spyOn(app, 'use').mockImplementation((...args) => {
-    if (args[0] === '/tasks/:id/run') throw stopRegistration;
+    if (throughQueue ? queueRegistered : args[0] === '/tasks/:id/run') throw stopRegistration;
+    if (args[0] === '/sessions/:id/tasks/queue') queueRegistered = true;
     return use(...args);
   });
   try {
@@ -150,6 +155,7 @@ async function fixture() {
       tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
     } as AuthenticatedParams) as Promise<Task>;
   return {
+    app,
     scoped,
     session,
     actor,
@@ -223,4 +229,22 @@ describe('registered prompt route launch handoff', () => {
       session_id: f.session.session_id,
     });
   });
+});
+
+it('registers the parameterized queue route and resolves params.route.id inside tenant scope', async () => {
+  const f = await fixture(true);
+  const queued = await f.scoped(() =>
+    f.taskRepo.createPending({
+      session_id: f.session.session_id,
+      created_by: f.actor.user_id,
+      full_prompt: 'queued fixture',
+      status: TaskStatus.QUEUED,
+    })
+  );
+  const result = await f.app.service('sessions/:id/tasks/queue').find({
+    route: { id: f.session.session_id },
+    user: f.actor,
+    tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
+  });
+  expect(result.data.map((task: Task) => task.task_id)).toEqual([queued.task_id]);
 });

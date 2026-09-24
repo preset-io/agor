@@ -247,7 +247,8 @@ export class CodexTool implements ITool {
         taskId,
         permissionMode,
         abortController,
-        streamingCallbacks?.onPulse
+        streamingCallbacks?.onPulse,
+        false
       )) {
         // Detect if execution was stopped early
         if (event.type === 'stopped') {

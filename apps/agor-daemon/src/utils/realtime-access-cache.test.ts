@@ -249,3 +249,67 @@ describe('RealtimeAccessCache', () => {
     expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
   });
 });
+
+it('bounds all three maps and reclaims expired keys on any lookup without a timer', async () => {
+  let now = 0;
+  const cache = new RealtimeAccessCache({
+    maxEntries: 32,
+    ttlMs: 100,
+    now: () => now,
+    branchRepository: {
+      findRealtimeVisibilityBranch: async (id) => ({ branch_id: id as BranchID }),
+      findRealtimeViewUserIds: async () => [],
+    },
+    sessionsRepository: {
+      findBranchIdBySessionId: async () => null,
+      findCreatedByBySessionId: async () => null,
+    },
+  });
+  for (let i = 0; i < 10_000; i++) {
+    await cache.getBranchVisibility(`b-${i}` as BranchID);
+    await cache.getBranchIdForSession(`s-${i}`);
+    await cache.getSessionOwnerId(`s-${i}`);
+  }
+  const maps = ['branchVisibility', 'sessionBranches', 'sessionOwners'].map(
+    (key) => Reflect.get(cache, key) as Map<string, unknown>
+  );
+  expect(maps.map((map) => map.size)).toEqual([32, 32, 32]);
+  now = 101;
+  await cache.getBranchIdForSession('new');
+  expect(maps.map((map) => map.size)).toEqual([0, 1, 0]);
+});
+
+it('capacity eviction and expiry cannot remove the in-flight revocation fence', async () => {
+  const oldGrant = deferred<import('@agor/core/types').UUID[]>();
+  let first = true;
+  let now = 0;
+  const cache = new RealtimeAccessCache({
+    maxEntries: 1,
+    ttlMs: 1,
+    now: () => now,
+    branchRepository: {
+      findRealtimeVisibilityBranch: async (id) => ({ branch_id: id as BranchID }),
+      findRealtimeViewUserIds: async (id) => {
+        if (id === 'revoked' && first) {
+          first = false;
+          return oldGrant.promise;
+        }
+        return [];
+      },
+    },
+    sessionsRepository: {
+      findBranchIdBySessionId: async () => null,
+      findCreatedByBySessionId: async () => null,
+    },
+  });
+  const pending = cache.getBranchVisibility('revoked' as BranchID);
+  await Promise.resolve();
+  cache.invalidateBranch('revoked');
+  await cache.getBranchVisibility('other' as BranchID);
+  now = 2;
+  await cache.getBranchVisibility('third' as BranchID);
+  oldGrant.resolve(['old-authorized-user' as import('@agor/core/types').UUID]);
+  const visibility = { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: new Set() };
+  await expect(pending).resolves.toEqual(visibility);
+  await expect(cache.getBranchVisibility('revoked' as BranchID)).resolves.toEqual(visibility);
+});

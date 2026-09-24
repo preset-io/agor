@@ -25,7 +25,7 @@ import {
 import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -83,6 +83,7 @@ interface TaskBlockProps {
   taskMessages: Message[];
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
+  onRetainTaskDetails?: (taskId: string) => (() => void) | undefined;
   teammateEmoji?: string;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
@@ -676,6 +677,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessages,
     taskMessagesLoaded,
     onLoadTaskMessages,
+    onRetainTaskDetails,
     teammateEmoji,
     onOpenAgenticToolSettings,
     isLatestTask = false,
@@ -870,6 +872,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       </Flex>
     );
 
+    const retainDetails = useCallback(
+      () => onRetainTaskDetails?.(task.task_id),
+      [onRetainTaskDetails, task.task_id]
+    );
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
@@ -880,12 +886,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       setDetailsError(null);
       setRevealLoadedActivity(true);
       setEmptyActivityExpanded(true);
+      const release = retainDetails();
       try {
         await onLoadTaskMessages(task.task_id);
       } catch {
         setDetailsError('Could not load tool activity. Try again.');
       } finally {
         setDetailsLoading(false);
+        release?.();
       }
     };
     const firstPromptId = messages.find(
@@ -1059,6 +1067,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             return (
               <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                 <AgentChain
+                  retainDetails={retainDetails}
                   messages={block.messages}
                   revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
                   latestActivity={
