@@ -47,6 +47,7 @@ export function buildResolvedConfigSlice(config: DeepReadonly<AgorConfig>): Reso
   executionSlice.executor_heartbeat = {
     enabled: heartbeat.enabled,
     interval_ms: heartbeat.interval_ms,
+    ...(heartbeat.memory_sampling ? { memory_sampling: true } : {}),
   };
   executionSlice.sdk_watchdog = resolveSdkWatchdogConfig(config.execution);
   if (Object.keys(executionSlice).length > 0) slice.execution = executionSlice;

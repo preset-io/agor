@@ -7,6 +7,13 @@ import {
 } from './executor-heartbeat';
 
 describe('resolveExecutorHeartbeatConfig', () => {
+  it('keeps memory sampling opt-in', () => {
+    expect(resolveExecutorHeartbeatConfig().memory_sampling).toBeUndefined();
+    expect(
+      resolveExecutorHeartbeatConfig({ executor_heartbeat: { memory_sampling: true } })
+        .memory_sampling
+    ).toBe(true);
+  });
   it('defaults to enabled with a 10s interval and conservative stale threshold', () => {
     expect(resolveExecutorHeartbeatConfig()).toEqual({
       enabled: true,

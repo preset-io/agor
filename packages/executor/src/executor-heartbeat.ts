@@ -1,5 +1,6 @@
 import { shortId } from '@agor/core/db';
 import type { ExecutorPulseKind, Task, TaskID } from '@agor/core/types';
+import { ExecutorMemorySampler } from './executor-memory.js';
 import type { AgorClient } from './services/feathers-client.js';
 
 export interface ExecutorHeartbeatOptions {
@@ -7,6 +8,7 @@ export interface ExecutorHeartbeatOptions {
   taskId: TaskID | string;
   enabled?: boolean;
   intervalMs?: number;
+  memorySampling?: boolean;
   warn?: (...args: unknown[]) => void;
   log?: (...args: unknown[]) => void;
   /** Observe the durable Task returned by any daemon handling this heartbeat. */
@@ -34,6 +36,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       : DEFAULT_INTERVAL_MS;
   const warn = options.warn ?? console.warn;
   const log = options.log ?? console.log;
+  const memorySampler = options.memorySampling ? new ExecutorMemorySampler() : undefined;
   let stopped = false;
   let inFlight = false;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -46,9 +49,14 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     if (stopped || inFlight) return;
     inFlight = true;
     try {
+      const memory = memorySampler
+        ? await memorySampler.sample().catch(() => undefined)
+        : undefined;
+      if (stopped) return;
       const task = await options.client.service('tasks').reportRuntimeTelemetry({
         task_id: options.taskId,
         ...(latestPulse ? { pulse: latestPulse } : {}),
+        ...(memory ? { memory } : {}),
       });
       if (consecutiveFailures > 0) {
         log(

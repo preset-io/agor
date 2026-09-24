@@ -17,6 +17,7 @@ vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
   withFreshTenantWrite,
 }));
 
+import { NOOP_METRICS } from '../metrics/noop.js';
 import { TasksService } from './tasks.js';
 
 const task = {
@@ -169,4 +170,28 @@ describe('TasksService heartbeat authority control', () => {
     expect(reportRuntimeTelemetry).not.toHaveBeenCalled();
     expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
+});
+
+it('exports memory only after accepted authority, never for another tenant or a revoked task', async () => {
+  for (const outcome of ['continued', 'scope_mismatch', 'authorization_revoked']) {
+    const { service } = serviceHarness({
+      report: { outcome, task, reason: 'branch_capability_revoked' },
+    });
+    const distribution = vi.fn();
+    Reflect.set(service, 'app', {
+      get: () => ({ ...NOOP_METRICS, enabled: true, distribution }),
+      service: () => ({ emit: vi.fn() }),
+    });
+    const input = {
+      task_id: task.task_id,
+      memory: { current: { rss: 123 }, sampled_peak: { rss: 456 } },
+    };
+    await service
+      .reportRuntimeTelemetry(
+        input,
+        runtimeParams(outcome === 'scope_mismatch' ? { tenant_id: 'tenant-b' } : {})
+      )
+      .catch(() => undefined);
+    expect(distribution.mock.calls.length).toBe(outcome === 'continued' ? 2 : 0);
+  }
 });

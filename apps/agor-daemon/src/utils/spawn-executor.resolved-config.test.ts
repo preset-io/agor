@@ -244,3 +244,11 @@ describe('withResolvedConfig', () => {
     expect(after.resolvedConfig).toEqual({ execution: { permission_timeout_ms: 123_456 } });
   });
 });
+
+it('passes opt-in memory sampling in the backward-compatible resolved slice', async () => {
+  const { buildResolvedConfigSlice } = await import('./build-resolved-config-slice.js');
+  expect(
+    buildResolvedConfigSlice({ execution: { executor_heartbeat: { memory_sampling: true } } })
+      .execution?.executor_heartbeat?.memory_sampling
+  ).toBe(true);
+});

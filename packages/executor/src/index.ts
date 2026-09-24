@@ -438,6 +438,7 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
+      memorySampling: heartbeatConfig?.memory_sampling,
       onTask: (task) => this.handleTaskLifecycleUpdate(task, 'heartbeat'),
     });
     const watchdogConfig =

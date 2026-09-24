@@ -159,3 +159,28 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 });
+
+it('samples opt-in memory through the heartbeat and stops the same timer', async () => {
+  const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+  const handle = startExecutorHeartbeat({
+    client: { service: () => ({ reportRuntimeTelemetry }) } as never,
+    taskId: 'task-1',
+    intervalMs: 20,
+    memorySampling: true,
+  });
+  try {
+    await vi.waitFor(() => expect(reportRuntimeTelemetry).toHaveBeenCalled());
+    expect(reportRuntimeTelemetry.mock.calls[0][0]).toMatchObject({
+      task_id: 'task-1',
+      memory: {
+        current: { rss: expect.any(Number), heap_used: expect.any(Number) },
+        sampled_peak: { rss: expect.any(Number) },
+      },
+    });
+  } finally {
+    handle.stop();
+  }
+  const calls = reportRuntimeTelemetry.mock.calls.length;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(calls);
+});

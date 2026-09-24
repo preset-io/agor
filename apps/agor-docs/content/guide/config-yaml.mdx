@@ -619,3 +619,38 @@ If `trace_services` is enabled but no tracer resolves, the daemon logs a
 one-time warning at startup and continues with Feathers tracing disabled — it
 never fails closed or blocks requests. This setting carries no credentials; span
 delivery is handled entirely by the ambient Datadog tracer/Agent.
+
+## Optional executor memory sampling
+
+```yaml
+execution:
+  executor_heartbeat:
+    memory_sampling: true # default: false; requires enabled heartbeats
+```
+
+Samples use the existing task-scoped heartbeat and configured daemon DogStatsD
+metrics exporter. No provider call, GC request, heap snapshot, or new background
+pipeline is involved. Older executors omit the optional field; older daemons can
+ignore it. Memory observations are not persisted on Tasks or sent to community
+telemetry. Export requires an accepted runtime authority check.
+
+`executor.memory.current.<field>_bytes` and
+`executor.memory.sampled_peak.<field>_bytes` are distributions with fixed fields:
+`rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`,
+`direct_children_rss`, `cgroup_current`, `cgroup_limit`, `cgroup_anon`,
+`cgroup_file`, and `cgroup_kernel`. They add no tenant, session, task, PID, command,
+or content labels. **Array buffers are a subset of external memory**, not an
+additional category to sum.
+
+Linux process reads cover at most 32 direct children of the executor's main
+thread, not a recursive process tree. Cgroup v2 and conventional v1 memory mounts
+are best-effort; unsupported mounts, unlimited limits, inaccessible or oversized
+files, and incomplete child reads omit the affected metric rather than report
+zero. Cgroup usage describes the containing cgroup, which may be shared with
+other workloads; it is not necessarily exclusive executor usage.
+
+Peaks are maxima **observed since task heartbeat sampling began**. Samples can
+miss short-lived processes and between-sample spikes; a crash can lose the last
+observation. Distributions are heartbeat-weighted running observations/peaks,
+not distinct-executor counts or one terminal peak per run. Do not use them alone
+to infer a leak, OOM cause, fleet concurrency, or required memory sizing.

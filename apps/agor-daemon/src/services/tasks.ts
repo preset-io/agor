@@ -73,6 +73,7 @@ import {
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
+import { recordExecutorMemory } from '../metrics/executor-memory.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -1753,6 +1754,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
     const task = report.task;
+    recordExecutorMemory(getDaemonMetrics(this.app), data.memory);
     analyticsLogger.track(
       'executor.heartbeat',
       {
