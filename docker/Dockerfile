@@ -7,6 +7,10 @@
 #
 # Or use docker-compose which automatically selects the right target
 
+# Platforms without a --target option can select the final runtime through a
+# build argument. Preserve the historical default; explicit targets are unchanged.
+ARG AGOR_RUNTIME_TARGET=production-source-ha
+
 # ============================================================================
 # Stage 0: Security-pinned bubblewrap
 # ============================================================================
@@ -229,7 +233,8 @@ COPY . .
 # surfaces at startup. CI passes --build-arg AGOR_BUILD_SHA=<github.sha>; left
 # empty (local builds) the stamp falls back to the 'dev' sentinel.
 ARG AGOR_BUILD_SHA=""
-ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
+ARG RAILWAY_GIT_COMMIT_SHA=""
+ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA:-${RAILWAY_GIT_COMMIT_SHA}}
 
 # Install workspace deps (dev deps needed for the turbo build), build the exact
 # release artifacts, then perform a script-disabled install. Supplying the
@@ -298,3 +303,7 @@ RUN install -d -o root -g root -m 0755 /etc/agor \
 USER agor
 
 ENTRYPOINT ["/usr/local/bin/agor-ha-entrypoint"]
+
+# Railway supplies AGOR_RUNTIME_TARGET=production-source as a build argument.
+# This reuses the source-built SQLite runtime, not the npm-latest or HA image.
+FROM ${AGOR_RUNTIME_TARGET} AS runtime

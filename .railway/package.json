@@ -1,0 +1,15 @@
+{
+  "name": "agor-railway-config",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "railway": "3.11.0"
+  },
+  "devDependencies": {
+    "@railway/cli": "5.62.1"
+  },
+  "scripts": {
+    "plan": "railway config plan",
+    "apply": "railway config apply"
+  }
+}
