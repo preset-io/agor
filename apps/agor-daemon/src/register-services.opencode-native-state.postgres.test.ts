@@ -1,21 +1,27 @@
 /** Real service registration, tenant hooks, startup gates and authorized admission. */
+
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  eq,
   generateId,
   initializeDatabase,
   type RawDatabase,
   RepoRepository,
   runWithTenantDatabaseScope,
   SessionRepository,
+  select,
+  sessions,
   TaskRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -27,7 +33,7 @@ import {
   feathersExpress,
   socketio,
 } from '@agor/core/feathers';
-import { PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
+import { PermissionScope, PermissionStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createFeathersBackedRepositories } from '../../../packages/executor/src/db/feathers-repositories.js';
@@ -46,6 +52,7 @@ import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-po
 import { assertTenantServiceClassification } from './utils/tenant-service-classification.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
+const execFileAsync = promisify(execFile);
 
 describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
   'registered managed OpenCode admission',
@@ -424,6 +431,109 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(completed).toMatchObject({
           status: TaskStatus.COMPLETED,
           native_state_attempt: manifest,
+        });
+        const nextTaskId = await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+          const sessionRepo = new SessionRepository(scoped);
+          const readPointer = async () => {
+            const row = await select(scoped)
+              .from(sessions)
+              .where(eq(sessions.session_id, sessionId))
+              .one();
+            expect(row).toBeDefined();
+            expect(row?.data.sdk_native_state).toEqual(manifest);
+            expect(row?.data.sdk_native_state_store_id).toBe(manifest.storeId);
+          };
+          // The public completion path must perform its idle projection before
+          // returning, without erasing the exact accepted checkpoint.
+          expect((await sessionRepo.findById(sessionId))?.status).toBe(SessionStatus.IDLE);
+          await readPointer();
+          await sessionRepo.update(sessionId, { title: 'kept through title' });
+          await sessionRepo.update(sessionId, { status: SessionStatus.IDLE });
+          await sessionRepo.update(sessionId, { archived: true });
+          await readPointer();
+          await sessionRepo.update(sessionId, { archived: false });
+          for (const key of [
+            'sdk_native_state',
+            'sdk_native_state_store_id',
+            'opencode_cleanup_cursor',
+          ] as const) {
+            await expect(sessionRepo.update(sessionId, { [key]: null } as never)).rejects.toThrow(
+              'server-managed'
+            );
+          }
+          await readPointer();
+
+          const nextTaskId = generateId();
+          const tasks = new TaskRepository(scoped);
+          await tasks.create({
+            task_id: nextTaskId,
+            session_id: sessionId,
+            created_by: userId,
+            full_prompt: 'resume accepted state',
+            status: TaskStatus.DISPATCHING,
+            message_range: {
+              start_index: 0,
+              end_index: 0,
+              start_timestamp: new Date().toISOString(),
+            },
+            git_state: { ref_at_start: 'main', sha_at_start: 'next' },
+          });
+          await tasks.bindExecutorLaunchAuthority(nextTaskId);
+          await tasks.stampManagedOpenCodeProtocol(nextTaskId);
+          return nextTaskId;
+        });
+        const nextToken = await runWithTenantDatabaseScope(db, tenantId, () =>
+          tokens.generateToken(sessionId, userId, { taskId: nextTaskId, branchId })
+        );
+        const child = new URL(
+          '../../../packages/executor/src/testing/managed-opencode-smoke-child.ts',
+          import.meta.url
+        );
+        const childResult = await execFileAsync(
+          process.execPath,
+          ['--import', 'tsx', child.pathname],
+          {
+            env: {
+              ...process.env,
+              NODE_OPTIONS: [process.env.NODE_OPTIONS, '--conditions=source']
+                .filter(Boolean)
+                .join(' '),
+              AGOR_TEST_EXECUTOR_CONFIG: JSON.stringify({
+                sessionToken: nextToken,
+                sessionId,
+                taskId: nextTaskId,
+                prompt: 'resume accepted state',
+                tool: 'opencode',
+                daemonUrl: `http://127.0.0.1:${address.port}`,
+                agenticToolContext: { version: 3, mode: 'managed-projection' },
+                managedOpenCodeLocator: {
+                  runId: 'run-next',
+                  cellId: 'cell-1',
+                  namespace: 'tenant-ns',
+                  podName: 'pod-next',
+                  podUid: 'pod-uid-next',
+                  containerName: 'executor',
+                },
+              }),
+              AGOR_TEST_EXPECTED_INPUT: JSON.stringify(manifest),
+              AGOR_DEBUG_EXECUTOR: '1',
+            },
+            timeout: 30_000,
+          }
+        ).catch((error: Error & { stdout?: string; stderr?: string }) => {
+          throw new Error(
+            `Synthetic executor failed: ${error.message}\n${error.stdout ?? ''}\n${error.stderr ?? ''}`
+          );
+        });
+        expect(childResult.stdout).toContain('managed-resume-input-pinned');
+        await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+          const nextTask = await new TaskRepository(scoped).findById(nextTaskId);
+          expect(nextTask?.status).toBe(TaskStatus.COMPLETED);
+          const row = await select(scoped)
+            .from(sessions)
+            .where(eq(sessions.session_id, sessionId))
+            .one();
+          expect(row?.data.sdk_native_state).toMatchObject({ attemptTaskId: nextTaskId });
         });
       } finally {
         client?.io.close();
