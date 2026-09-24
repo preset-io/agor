@@ -118,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"24.19.0"}]' || '[{"os":"ubuntu-latest","node":"22.12.0"},{"os":"ubuntu-latest","node":"24.19.0"},{"os":"ubuntu-latest","node":"26"},{"os":"macos-latest","node":"24.19.0"}]') }}
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"24.19.0"}]' || '[{"os":"ubuntu-latest","node":"22.13.0"},{"os":"ubuntu-latest","node":"24.19.0"},{"os":"ubuntu-latest","node":"26"},{"os":"macos-latest","node":"24.19.0"}]') }}
     steps:
       - uses: actions/checkout@v7
 
