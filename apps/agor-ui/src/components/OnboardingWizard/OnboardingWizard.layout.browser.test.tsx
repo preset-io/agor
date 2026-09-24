@@ -12,7 +12,8 @@
  *
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
-import { type BoardID, boardPath, type User } from '@agor-live/client';
+import type { MCPCatalogEntry } from '@agor/core/types';
+import { type BoardID, boardPath, type FindResult, type User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import { type ComponentProps, useEffect, useState } from 'react';
@@ -48,6 +49,21 @@ function makeUser(): User {
   } as unknown as User;
 }
 
+function makeCatalogService() {
+  // These layout flows do not connect tools. Model a successful empty catalog,
+  // rather than omitting the async inventory read performed by the tools step.
+  return {
+    find: vi.fn(
+      async (): Promise<FindResult<MCPCatalogEntry>> => ({
+        data: [],
+        total: 0,
+        limit: 0,
+        skip: 0,
+      })
+    ),
+  };
+}
+
 function renderWizardAt(
   initialStep: WizardStep,
   options: { allowClaudeOAuthSignIn?: boolean } = {}
@@ -60,11 +76,13 @@ function renderWizardAt(
     })),
   };
   const user = makeUser();
+  const catalogService = makeCatalogService();
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return { get: vi.fn(async () => user) };
+      if (name === 'mcp-catalog') return catalogService;
       return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
     }),
   };
@@ -110,11 +128,13 @@ describe('OnboardingWizard layout (real browser)', () => {
       })),
     };
     const usersService = { get: vi.fn(async () => user) };
+    const catalogService = makeCatalogService();
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
+        if (name === 'mcp-catalog') return catalogService;
         return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
       }),
     };
@@ -193,6 +213,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     await screen.findByText('Connect your AI');
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText('Choose your tools');
+    await waitFor(() => expect(screen.queryByLabelText('Loading suggested MCP tools')).toBeNull());
     fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
     await screen.findByText("You're ready to build.");
     const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
@@ -480,6 +501,7 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/^connect →/i).closest('button') as HTMLElement);
 
     await screen.findByText('Choose your tools');
+    await waitFor(() => expect(screen.queryByLabelText('Loading suggested MCP tools')).toBeNull());
     fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // done — teammate-centric success screen.
