@@ -293,6 +293,7 @@ function createServiceHarness() {
   return {
     service,
     branchRepo,
+    reposService,
     boardObjectsService,
     sessionsService,
     branchesService,
@@ -1399,8 +1400,28 @@ describe('BranchesService.unarchive', () => {
   // Filesystem restoration, failure publication, and missing homes are tested
   // through real repositories and executor handlers in branches.restore.integration.test.ts.
 
+  it.each([false, true])(
+    'compares explicit placement inside admission, not preflight (moved=%s)',
+    async (moved) => {
+      const { service, reposService } = createServiceHarness();
+      const branchId = 'wt-raced' as BranchID;
+      const requested = 'board-requested' as BoardID;
+      const other = 'board-other' as BoardID;
+      const base = { branch_id: branchId, name: 'Raced', archived: true };
+      vi.spyOn(service, 'get')
+        .mockResolvedValue({ ...base, board_id: moved ? other : requested } as never)
+        .mockResolvedValueOnce({ ...base, board_id: moved ? requested : other } as never);
+      const patch = vi.spyOn(service, 'patch').mockResolvedValue(base as never);
+      await service.unarchive(branchId, { boardId: requested }, userParams);
+      expect(patch).toHaveBeenCalledTimes(moved ? 1 : 0);
+      if (moved) expect(patch).toHaveBeenCalledWith(branchId, { board_id: requested }, userParams);
+      expect(reposService.retryBranchProvisioning).toHaveBeenCalledWith(branchId, userParams, true);
+    }
+  );
+
   it('preserves existing board_id when options.boardId is not provided', async () => {
-    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService, sessionsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-a' });
     const branchId = 'wt-1' as BranchID;
     const existingBoardId = 'board-a' as BoardID;
 
@@ -1441,7 +1462,8 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('does not create a new board object when one already exists', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-b' });
     const branchId = 'wt-2' as BranchID;
     const boardId = 'board-b' as BoardID;
 
@@ -1468,7 +1490,8 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('uses explicit options.boardId override for patch and placement', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-new' });
     const branchId = 'wt-3' as BranchID;
     const oldBoardId = 'board-old' as BoardID;
     const newBoardId = 'board-new' as BoardID;

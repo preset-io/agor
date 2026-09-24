@@ -368,6 +368,11 @@ Unarchive admits an executor restore and clears the archive timestamp and actor
 atomically. Wait for `filesystem_status: ready` before starting a session; acceptance
 alone is not completion. A failure remains visible with a retryable error.
 
+If the unarchive acknowledgement is lost, the UI stops waiting after 30 seconds
+and reports an **unknown outcome**, not failure or readiness. Refresh the page to read the current state; do not assume an active branch's
+filesystem is ready. The UI does not automatically replay the request. A late
+acknowledgement updates the message, but acceptance still is not recovery completion.
+
 An already-active branch left with `preserved`, `cleaned`, or `deleted` status can
 use **Recover** on its card or in the board primary teammate panel,
 `agor_branches_retry_provisioning`, or

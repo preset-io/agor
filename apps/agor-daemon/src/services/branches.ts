@@ -2358,19 +2358,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     console.log(`📦 Unarchiving branch: ${branch.name}`);
 
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
-    const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
-
     const reposService = this.app.service('repos') as unknown as ReposService;
     const admit = async () => {
-      // Reuse board-movement authorization and its existing transaction. A
-      // refused recovery must roll back placement, policy and board objects too.
-      if (boardIdExplicitlyProvided) {
-        await this.patch(id, { board_id: options?.boardId }, params);
-      }
       return reposService.retryBranchProvisioning(branch.branch_id, params, true);
     };
     const restored = boardIdExplicitlyProvided
-      ? await runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, admit)
+      ? await runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
+          // Use the same lock order as board movement before reading placement.
+          // A preflight comparison can race a move and silently ignore the
+          // requested destination. Real moves still use patch's authorization,
+          // commit-deferred events and eviction; refused admission rolls it back.
+          await lockTenantAuthorizationFence(db, params);
+          await lockBranchReferenceMutation(db);
+          const current = await this.get(id, params);
+          if (current.board_id !== options?.boardId) {
+            await this.patch(id, { board_id: options?.boardId }, params);
+          }
+          // Same-board requests still undergo locked recovery authorization and
+          // validation, but must not emit an ACL patch that disconnects the
+          // requesting socket before the outer unarchive acknowledgement.
+          return admit();
+        })
       : await admit();
     await this.withTenantDatabase(params, () =>
       this.maintainPrimaryTeammateAfterPatch(branch, restored, params)
@@ -2378,6 +2386,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Ensure a board object exists when unarchiving to a board.
     // Older archived branches may have had their board object removed.
+    const targetBoardId = restored.board_id;
     if (targetBoardId) {
       const boardObjectsService = this.getBoardObjectsService();
       try {
