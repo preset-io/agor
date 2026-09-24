@@ -523,7 +523,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
     state.services['opencode-native-state'].seal
-      .mockRejectedValueOnce({ code: 'ECONNRESET' })
+      .mockRejectedValueOnce(new Error('socket has been disconnected'))
       .mockResolvedValueOnce(undefined);
 
     await execute(state.value, new AbortController(), managedContext, managedAdmission);
@@ -544,7 +544,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
     state.services.tasks.patch
-      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce(new Error('operation has timed out'))
       .mockResolvedValueOnce({ status: 'completed', native_state_attempt: published });
     await execute(state.value, new AbortController(), managedContext, managedAdmission);
     expect(state.services.tasks.patch).toHaveBeenCalledTimes(2);
@@ -555,7 +555,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       nativeStateAttempt: published,
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
-    accepted.services.tasks.patch.mockRejectedValueOnce({ code: 503 });
+    accepted.services.tasks.patch.mockRejectedValueOnce(new Error('socket has been disconnected'));
     accepted.services.tasks.get.mockResolvedValueOnce({
       status: 'completed',
       native_state_attempt: published,
@@ -599,7 +599,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     mocks.messagesCreate.mockImplementationOnce(async (message) => {
       // PostgreSQL JSONB can reorder keys; the daemon may also sanitize content.
       committedMessage = { ...message, content: [{ text: '[sanitized]', type: 'text' }] };
-      throw { code: 503 };
+      throw new Error('socket has been disconnected');
     });
 
     await execute(state.value, new AbortController(), managedContext, managedAdmission);
@@ -702,6 +702,57 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       state.services.tasks.patch.mock.calls.every(([, patch]) => patch.status === 'completed')
     ).toBe(true);
     expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  });
+
+  it('bounds socket retries after a committed completion revokes the connection', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    try {
+      const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+      mocks.runTurn.mockResolvedValueOnce({
+        nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+        finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      });
+      state.services.tasks.patch
+        .mockRejectedValueOnce(new Error('socket has been disconnected'))
+        .mockImplementationOnce(async () => {
+          now.mockReturnValue(15 * 60_000 + 1);
+          throw new Error('operation has timed out');
+        });
+
+      await expect(
+        execute(state.value, new AbortController(), managedContext, managedAdmission)
+      ).rejects.toThrow('operation has timed out');
+
+      expect(state.services.tasks.patch).toHaveBeenCalledTimes(2);
+      expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('bounds persistent 503 seal retries and preserves the uncertain output', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    try {
+      const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+      mocks.runTurn.mockResolvedValueOnce({
+        nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+        finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      });
+      state.services['opencode-native-state'].seal.mockImplementationOnce(async () => {
+        now.mockReturnValue(15 * 60_000 + 1);
+        throw { code: 503 };
+      });
+
+      await expect(
+        execute(state.value, new AbortController(), managedContext, managedAdmission)
+      ).rejects.toThrow();
+
+      expect(state.services['opencode-native-state'].seal).toHaveBeenCalledOnce();
+      expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+      expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('drains two cleanup reservations before a short healthy managed turn completes', async () => {

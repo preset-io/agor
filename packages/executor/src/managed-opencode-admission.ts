@@ -12,7 +12,17 @@ function isObserverBusy(error: unknown): boolean {
 
 export function isRetryableTransportFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const candidate = error as { code?: unknown };
+  const candidate = error as { code?: unknown; name?: unknown; message?: unknown };
+  // Socket.IO rejects lost acknowledgements with plain Errors, not Node error
+  // codes. Match only its exact transport messages: a generic code-less Error
+  // may instead be a local integrity failure that must not be retried.
+  if (
+    candidate.name === 'Error' &&
+    candidate.code === undefined &&
+    (candidate.message === 'socket has been disconnected' ||
+      candidate.message === 'operation has timed out')
+  )
+    return true;
   return (
     candidate.code === 408 ||
     candidate.code === 502 ||

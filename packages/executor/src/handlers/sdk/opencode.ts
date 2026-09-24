@@ -95,6 +95,10 @@ function managedStateService(client: AgorClient): ManagedOpenCodeStateService {
 }
 
 const MANAGED_WRITE_RETRY_DELAYS_MS = [200, 500, 1_000, 2_000, 5_000] as const;
+// Bound retries even when a revoked socket keeps returning transport-shaped
+// errors. On expiry the holder exits nonzero and leaves all uncertain pins for
+// observer proof; it never manufactures FAILED or abandons a possible seal.
+const MANAGED_WRITE_RETRY_BUDGET_MS = 15 * 60_000;
 
 function samePublishedAttempt(left: unknown, right: ManagedNativeManifest): boolean {
   if (!left || typeof left !== 'object') return false;
@@ -444,6 +448,7 @@ export async function executeOpenCodeTask(params: {
       throw new Error('OpenCode managed turn completed without a published checkpoint');
     }
     if (managed && committedGrant && publishedManifest) {
+      const sealStartedAt = Date.now();
       for (let attempt = 0; ; attempt += 1) {
         if (params.abortController.signal.aborted) return;
         try {
@@ -458,6 +463,7 @@ export async function executeOpenCodeTask(params: {
           // Retry ambiguous transport errors while the holder remains live.
           // A deterministic refusal leaves the attempt for guarded settlement.
           sealAmbiguous = true;
+          if (Date.now() - sealStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
           if (attempt === 0 || attempt % 12 === 0)
             console.warn('[opencode] event=managed_seal_retry_pending');
           await waitForManagedWriteRetry(attempt, params.abortController.signal);
@@ -498,6 +504,7 @@ export async function executeOpenCodeTask(params: {
         : {}),
     } as Partial<import('@agor/core/types').Task>;
     let messageCommitted = false;
+    const publicationStartedAt = Date.now();
     for (let attempt = 0; ; attempt += 1) {
       if (params.abortController.signal.aborted) return;
       try {
@@ -564,6 +571,7 @@ export async function executeOpenCodeTask(params: {
           )
             break;
         }
+        if (Date.now() - publicationStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
         if (attempt === 0 || attempt % 12 === 0)
           console.warn('[opencode] event=managed_publication_retry_pending');
         await waitForManagedWriteRetry(attempt, params.abortController.signal);
