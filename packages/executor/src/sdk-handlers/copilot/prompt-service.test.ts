@@ -7,6 +7,11 @@ const mocks = vi.hoisted(() => ({
   configured: vi.fn(),
 }));
 
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+}));
+
 vi.mock('@agor/core/mcp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/mcp')>()),
   getMcpServersForSession: mocks.getMcpServersForSession,

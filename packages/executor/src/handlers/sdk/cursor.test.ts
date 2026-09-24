@@ -8,6 +8,11 @@ import {
 } from './cursor.js';
 
 const mocks = vi.hoisted(() => ({ send: vi.fn(), configured: vi.fn() }));
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+}));
+
 vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(async () => {
     const agent = {
