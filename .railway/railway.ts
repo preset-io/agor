@@ -12,7 +12,8 @@ export default defineRailway(() => {
     healthcheck: '/health',
     healthcheckTimeout: 120,
     deploy: {
-      restartPolicyType: 'ON_FAILURE',
+      // ON_FAILURE is Railway's default; spelling it out causes false drift
+      // in CLI 5.62.1 because the importer omits the default enum value.
       restartPolicyMaxRetries: 3,
       overlapSeconds: 0,
     },

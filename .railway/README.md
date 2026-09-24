@@ -12,7 +12,7 @@ using a different baseline or enabling Railway PR environments. A local
 ## Configuration
 
 Install the isolated tooling with `npm ci --prefix .railway`, then from `.railway`
-run `npm run plan` before `npm run apply`. Authenticate through your secret store:
+run `npm test` and `npm run plan` before `npm run apply`. Authenticate through your secret store:
 `RAILWAY_TOKEN` is an environment-scoped project token. Never put it in app
 variables, this file, a Docker build argument, or a committed `.env` file.
 For programmatic CLI invocation, ensure `_` names the Railway executable (SDK
@@ -42,6 +42,8 @@ SQLite, configuration, signing/encryption keys, repositories, and branch homes
 survive redeployment on the volume. Stop retains data; deleting the volume or PR
 environment is destructive. Back up before cleanup. Storage can accrue charges
 even when compute is stopped. No automatic PR fan-out is enabled by this config.
+The initial volume is only 500 MB to fit the trial plan: do not clone large
+repositories or install agent runtimes until capacity is reviewed.
 
 This is a trusted single-operator bootstrap, not a verified multi-tenant hosting
 recipe. Default `simple` execution does not isolate users' processes or files.
