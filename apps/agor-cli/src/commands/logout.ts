@@ -7,6 +7,7 @@
  * settings are never deleted here because they may be used elsewhere.
  */
 
+import { USER_API_KEYS_SERVICE_PATH } from '@agor/core/types';
 import { createRestClient } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -60,7 +61,7 @@ export default class Logout extends Command {
     }
     try {
       const client = await createRestClient(auth.target.url, auth.apiKey);
-      await client.service('api/v1/user/api-keys').remove(auth.apiKeyId);
+      await client.service(USER_API_KEYS_SERVICE_PATH).remove(auth.apiKeyId);
       return "This machine's CLI key was deleted on the server.";
     } catch (error) {
       const code = (error as { code?: unknown }).code;

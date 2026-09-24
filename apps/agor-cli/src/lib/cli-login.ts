@@ -7,7 +7,6 @@
  * re-login on the same machine replaces its own.
  */
 
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -54,22 +53,4 @@ export function cliLoginPageUrl(uiBaseUrl: string, keyName: string): string {
   const url = new URL(`${uiBaseUrl.replace(/\/$/, '')}/cli-login`);
   url.searchParams.set('name', keyName);
   return url.toString();
-}
-
-/** Open a URL without a shell. Resolves false when no browser could be launched. */
-export function openInBrowser(url: string): Promise<boolean> {
-  const [command, args] =
-    process.platform === 'darwin'
-      ? ['open', [url]]
-      : process.platform === 'win32'
-        ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
-        : ['xdg-open', [url]];
-  return new Promise((resolve) => {
-    try {
-      const child = execFile(command, args, { timeout: 10_000 }, (error) => resolve(!error));
-      child.on('error', () => resolve(false));
-    } catch {
-      resolve(false);
-    }
-  });
 }

@@ -11,13 +11,20 @@ import {
   requireDeploymentId,
   resolveDaemonUrl,
 } from '@agor/core/config';
+import {
+  type CurrentUserIdentity,
+  isUserApiKeySource,
+  PERSONAL_API_KEY_PREFIX,
+  USER_IDENTITY_SERVICE_PATH,
+} from '@agor/core/types';
 import { normalizeHttpBaseUrl } from '@agor/core/utils/url';
 import { createRestClient } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { saveToken } from '../lib/auth';
-import { cliKeyName, cliLoginPageUrl, openInBrowser } from '../lib/cli-login';
+import { openInBrowser } from '../lib/browser';
+import { cliKeyName, cliLoginPageUrl } from '../lib/cli-login';
 import { getUIUrl } from '../lib/context';
 import { probeAgorDaemon } from '../lib/daemon-probe';
 
@@ -304,17 +311,19 @@ export default class Login extends Command {
     deploymentId: string,
     apiKey: string
   ): Promise<void> {
-    if (!apiKey.startsWith(API_KEY_PREFIX)) {
+    if (!apiKey.startsWith(PERSONAL_API_KEY_PREFIX)) {
       this.error(
-        `${chalk.red('✗ Invalid API key format')}\n\nPersonal API keys start with ${API_KEY_PREFIX}.`
+        `${chalk.red('✗ Invalid API key format')}\n\nPersonal API keys start with ${PERSONAL_API_KEY_PREFIX}.`
       );
     }
 
     const client = await createRestClient(daemonUrl, apiKey);
-    let me: ApiKeyIdentity;
+    let me: CurrentUserIdentity;
     try {
       this.log(chalk.dim('Verifying API key...'));
-      me = (await client.service('api/v1/user/me').find()) as unknown as ApiKeyIdentity;
+      me = (await client
+        .service(USER_IDENTITY_SERVICE_PATH)
+        .find()) as unknown as CurrentUserIdentity;
     } catch (error) {
       const status = (error as { code?: unknown }).code;
       if (status === 401 || status === 403) {
@@ -342,9 +351,7 @@ export default class Login extends Command {
       },
       apiKey,
       ...(me.api_key_id ? { apiKeyId: me.api_key_id } : {}),
-      ...(me.api_key_source === 'cli_login' || me.api_key_source === 'manual'
-        ? { apiKeySource: me.api_key_source }
-        : {}),
+      ...(isUserApiKeySource(me.api_key_source) ? { apiKeySource: me.api_key_source } : {}),
       user: {
         user_id: me.user_id,
         email: me.email,
@@ -371,18 +378,6 @@ export default class Login extends Command {
     );
     this.log('');
   }
-}
-
-const API_KEY_PREFIX = 'agor_sk_';
-
-interface ApiKeyIdentity {
-  user_id: string;
-  email: string;
-  name?: string;
-  role?: string;
-  tenant_id?: string;
-  api_key_id?: string;
-  api_key_source?: string;
 }
 
 function isLoopbackOrHttps(url: string): boolean {

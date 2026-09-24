@@ -7,14 +7,16 @@ import { CLILoginPage, parseCliKeyName } from './CLILoginPage';
 
 function renderAt(path: string, create = vi.fn()) {
   const client = { service: vi.fn(() => ({ create })) } as unknown as AgorClient;
-  render(
+  const page = (userId: string, email: string) => (
     <App>
       <MemoryRouter initialEntries={[path]}>
-        <CLILoginPage client={client} currentUserEmail="alice@acme.example.test" />
+        <CLILoginPage client={client} currentUserId={userId} currentUserEmail={email} />
       </MemoryRouter>
     </App>
   );
-  return { client, create };
+  const view = render(page('user-alice', 'alice@acme.example.test'));
+  const switchUser = () => view.rerender(page('user-bob', 'bob@acme.example.test'));
+  return { client, create, switchUser };
 }
 
 describe('CLI login page', () => {
@@ -69,5 +71,36 @@ describe('CLI login page', () => {
 
     await waitFor(() => expect(screen.getByText('Maximum of 25 API keys per user')).toBeTruthy());
     expect(screen.getByRole('button', { name: 'Create CLI key' })).toBeTruthy();
+  });
+
+  it('erases a displayed key when the signed-in user changes', async () => {
+    const create = vi.fn(async () => ({ rawKey: 'agor_sk_alice', replaced: 0 }));
+    const { switchUser } = renderAt('/cli-login?name=agor-cli-laptop-1a2b', create);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create CLI key' }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'CLI key' })).toBeTruthy());
+
+    switchUser();
+
+    expect(screen.queryByRole('textbox', { name: 'CLI key' })).toBeNull();
+    expect(screen.getByText('Signed in as bob@acme.example.test')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create CLI key' })).toBeTruthy();
+  });
+
+  it('discards a key that arrives after the signed-in user changed', async () => {
+    let resolveCreate: (value: { rawKey: string }) => void = () => {};
+    const create = vi.fn(
+      () => new Promise<{ rawKey: string }>((resolve) => (resolveCreate = resolve))
+    );
+    const { switchUser } = renderAt('/cli-login?name=agor-cli-laptop-1a2b', create);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create CLI key' }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    switchUser();
+    resolveCreate({ rawKey: 'agor_sk_late' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByRole('textbox', { name: 'CLI key' })).toBeNull();
+    expect(screen.queryByDisplayValue('agor_sk_late')).toBeNull();
   });
 });

@@ -5,10 +5,15 @@
  * All operations are scoped to the authenticated user.
  */
 
-import type { UserApiKeySource, UserApiKeysRepository } from '@agor/core/db';
-import { isUserApiKeySource, shortId } from '@agor/core/db';
+import type { UserApiKeysRepository } from '@agor/core/db';
+import { shortId } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams } from '@agor/core/types';
+import {
+  type AuthenticatedParams,
+  type CreateUserApiKeyRequest,
+  isUserApiKeySource,
+  type UserApiKeySource,
+} from '@agor/core/types';
 
 export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
   return {
@@ -20,10 +25,7 @@ export function createUserApiKeysService(apiKeysRepo: UserApiKeysRepository) {
     },
 
     /** Create a new API key */
-    async create(
-      data: { name: string; source?: UserApiKeySource; replace_previous?: boolean },
-      params: AuthenticatedParams
-    ) {
+    async create(data: CreateUserApiKeyRequest, params: AuthenticatedParams) {
       const user = params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
 

@@ -2092,7 +2092,11 @@ function AppContent() {
   const mcpConnectElement = <MCPOAuthConnectPage client={client} />;
 
   const cliLoginElement = (
-    <CLILoginPage client={client} currentUserEmail={currentUser?.email ?? null} />
+    <CLILoginPage
+      client={client}
+      currentUserId={currentUser?.user_id ?? null}
+      currentUserEmail={currentUser?.email ?? null}
+    />
   );
 
   // The post-onboarding connect-AI / integrations banners. Shared verbatim by

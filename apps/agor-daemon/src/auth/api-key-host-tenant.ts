@@ -38,10 +38,8 @@ import {
   TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { TenantContext, TenantID } from '@agor/core/types';
+import { PERSONAL_API_KEY_PREFIX, type TenantContext, type TenantID } from '@agor/core/types';
 import { resolveRequestHost } from './launch-auth.js';
-
-export const PERSONAL_API_KEY_PREFIX = 'agor_sk_';
 
 /** Deliberately identical to the resolver's generic missing-tenant failure. */
 const MISSING_TENANT_MESSAGE = 'Missing tenant context for multi_tenancy.required_from_auth';

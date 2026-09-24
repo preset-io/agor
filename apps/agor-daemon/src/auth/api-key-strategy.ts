@@ -7,6 +7,7 @@
 
 import type { UserApiKeysRepository } from '@agor/core/db';
 import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
+import { isUserApiKeySource, PERSONAL_API_KEY_PREFIX } from '@agor/core/types';
 import { markAuthenticationUserLookup } from '../services/users.js';
 import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 
@@ -28,7 +29,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     }
 
     const apiKey = authentication.apiKey;
-    if (!apiKey?.startsWith('agor_sk_')) {
+    if (!apiKey?.startsWith(PERSONAL_API_KEY_PREFIX)) {
       throw new NotAuthenticated('Invalid API key format');
     }
 
@@ -70,7 +71,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       authentication: {
         strategy: 'api-key',
         api_key_id: keyRow.id,
-        api_key_source: keyRow.source ?? 'manual',
+        api_key_source: isUserApiKeySource(keyRow.source) ? keyRow.source : 'manual',
       },
       user,
     };
@@ -88,7 +89,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
 
     // Check X-API-Key header first
     const xApiKey = req.headers?.['x-api-key'];
-    if (xApiKey && typeof xApiKey === 'string' && xApiKey.startsWith('agor_sk_')) {
+    if (xApiKey && typeof xApiKey === 'string' && xApiKey.startsWith(PERSONAL_API_KEY_PREFIX)) {
       return { strategy: 'api-key', apiKey: xApiKey };
     }
 
@@ -96,7 +97,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     const authorization = req.headers?.authorization;
     if (authorization && typeof authorization === 'string') {
       const [scheme, token] = authorization.split(' ');
-      if (scheme?.toLowerCase() === 'bearer' && token?.startsWith('agor_sk_')) {
+      if (scheme?.toLowerCase() === 'bearer' && token?.startsWith(PERSONAL_API_KEY_PREFIX)) {
         return { strategy: 'api-key', apiKey: token };
       }
     }

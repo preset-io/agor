@@ -1,5 +1,6 @@
 import {
   type AgorConfig,
+  isMissingTenantContextError,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -225,8 +226,10 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       // An external request presenting only an opaque personal API key has no
       // signed tenant. Route it by the trusted workspace Host; the key is then
       // verified under that tenant's RLS by the api-key strategy.
+      // Only when no tenant identity was presented at all: a malformed or
+      // conflicting identity stays terminal and is never rescued by the Host.
       if (
-        error instanceof TenantResolutionError &&
+        isMissingTenantContextError(error) &&
         resolveApiKeyHostTenant &&
         context.params.provider &&
         hasPersonalApiKeyHeader(paramsWithConnectionTenant.headers)

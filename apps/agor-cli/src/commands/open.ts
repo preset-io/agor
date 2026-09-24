@@ -2,18 +2,15 @@
  * `agor open` - Open Agor UI in browser
  */
 
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
+import { openInBrowser } from '../lib/browser.js';
 import { getUIUrl } from '../lib/context.js';
 import { probeAgorDaemon } from '../lib/daemon-probe.js';
 import {
   resolveConnectedDeploymentTarget,
   resolveLocalDeploymentTarget,
 } from '../lib/deployment-target.js';
-
-const execAsync = promisify(exec);
 
 export default class Open extends Command {
   static description = 'Open the local deployment in a browser';
@@ -80,28 +77,13 @@ export default class Open extends Command {
     }
     const uiUrl = getUIUrl(daemonUrl, localDevelopmentTarget);
 
-    // Local environment: try to open browser
-    try {
-      this.log(chalk.green('Opening Agor UI in browser...'));
-      this.log(chalk.dim(`URL: ${uiUrl}`));
-      this.log('');
+    this.log(chalk.green('Opening Agor UI in browser...'));
+    this.log(chalk.dim(`URL: ${uiUrl}`));
+    this.log('');
 
-      // Platform-specific open command
-      const platform = process.platform;
-      let command: string;
-
-      if (platform === 'darwin') {
-        command = `open "${uiUrl}"`;
-      } else if (platform === 'win32') {
-        command = `start "" "${uiUrl}"`;
-      } else {
-        // Linux/Unix
-        command = `xdg-open "${uiUrl}"`;
-      }
-
-      await execAsync(command);
+    if (await openInBrowser(uiUrl)) {
       this.log(chalk.green('✓ Browser opened'));
-    } catch (_error) {
+    } else {
       this.log(chalk.yellow('⚠ Could not open browser automatically'));
       this.log('');
       this.log('Visit this URL manually:');

@@ -9,14 +9,19 @@
  * machine's previous CLI key server-side.
  */
 
+import { type CreateUserApiKeyRequest, USER_API_KEYS_SERVICE_PATH } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Spin, Typography } from 'antd';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../hooks/useAuthorityOperationGuard';
 import { copyToClipboard } from '../utils/clipboard';
 import { useThemedMessage } from '../utils/message';
-import { SlackOAuthActionShell } from './slackOAuthActionPage';
+import { ActionPageShell } from './ActionPageShell';
 
 /** Must match the name the CLI generates (`agor-cli-<host>-<id>`). */
 const CLI_KEY_NAME = /^agor-cli-[a-z0-9][a-z0-9-]{0,80}$/;
@@ -33,26 +38,44 @@ export function parseCliKeyName(value: string | null): string | null {
 
 export interface CLILoginPageProps {
   client: AgorClient | null;
+  currentUserId?: string | null;
   currentUserEmail?: string | null;
 }
 
-export function CLILoginPage({ client, currentUserEmail }: CLILoginPageProps) {
+export function CLILoginPage({ client, currentUserId, currentUserEmail }: CLILoginPageProps) {
   const [searchParams] = useSearchParams();
   const keyName = parseCliKeyName(searchParams.get('name'));
   const [state, setState] = useState<CliLoginState>({ kind: 'idle' });
   const { showSuccess, showError } = useThemedMessage();
+  // The displayed key belongs to one caller and one machine name. A different
+  // user, link, client, or auth generation erases it and discards late replies.
+  const identityKey = currentUserId && keyName ? `${currentUserId}:${keyName}` : null;
+  const authority = useAuthenticatedAuthorityScope(client, identityKey);
+  const operationGuard = useAuthorityOperationGuard(authority.operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the displayed raw key
+  useLayoutEffect(() => {
+    setState({ kind: 'idle' });
+  }, [identityKey]);
 
   const create = async () => {
-    if (!client || !keyName) return;
+    const operation = operationGuard.begin();
+    if (!client || !keyName || !operation.isCurrent()) return;
     setState({ kind: 'creating' });
     try {
-      const result = (await client.service('api/v1/user/api-keys').create({
+      const request: CreateUserApiKeyRequest = {
         name: keyName,
         source: 'cli_login',
         replace_previous: true,
-      })) as { rawKey: string; replaced?: number };
+      };
+      const result = (await client.service(USER_API_KEYS_SERVICE_PATH).create(request)) as {
+        rawKey: string;
+        replaced?: number;
+      };
+      if (!operation.isCurrent()) return;
       setState({ kind: 'created', rawKey: result.rawKey, replaced: result.replaced ?? 0 });
     } catch (error) {
+      if (!operation.isCurrent()) return;
       setState({
         kind: 'failed',
         message: error instanceof Error ? error.message : 'Could not create a CLI key',
@@ -131,7 +154,7 @@ export function CLILoginPage({ client, currentUserEmail }: CLILoginPageProps) {
     ) : undefined;
 
   return (
-    <SlackOAuthActionShell
+    <ActionPageShell
       titleId="cli-login-title"
       title="Sign in to the Agor CLI"
       subtitle={currentUserEmail ? `Signed in as ${currentUserEmail}` : 'Agor command-line access'}

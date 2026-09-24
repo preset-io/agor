@@ -18,6 +18,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgorConfig } from '@agor/core/config';
 import {
+  isMissingTenantContextError,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -30,8 +31,14 @@ import {
   UserApiKeysRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
-import { MCP_CLIENT_HINT_HEADER } from '@agor/core/types';
+import {
+  MCP_CLIENT_HINT_HEADER,
+  PERSONAL_API_KEY_PREFIX,
+  type Session,
+  type SessionID,
+  type TenantContext,
+  type UserID,
+} from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
@@ -612,7 +619,7 @@ export function setupMCPRoutes(
       let userId: UserID;
       let sessionId: SessionID | undefined;
       let tenant: TenantContext;
-      const isPersonalApiKey = credential.startsWith('agor_sk_');
+      const isPersonalApiKey = credential.startsWith(PERSONAL_API_KEY_PREFIX);
 
       if (isPersonalApiKey) {
         try {
@@ -624,7 +631,9 @@ export function setupMCPRoutes(
           try {
             tenant = resolveTenantContext(multiTenancy, { headers: tenantHeaders });
           } catch (error) {
-            if (!(error instanceof TenantResolutionError) || !resolveApiKeyHostTenant) throw error;
+            // Only a missing identity may fall back to Host routing; malformed
+            // or conflicting trusted tenant headers stay terminal.
+            if (!isMissingTenantContextError(error) || !resolveApiKeyHostTenant) throw error;
             tenant = await resolveApiKeyHostTenant(tenantHeaders);
           }
         } catch (error) {

@@ -79,6 +79,8 @@ import type {
   BoardComment,
   BoardCommentReposition,
   BranchArchiveOrDeleteOptions,
+  CreateUserApiKeyRequest,
+  CurrentUserIdentity,
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
@@ -113,6 +115,7 @@ import {
   isBranchArchiveOrDeleteOptions,
   isCanonicalFullUuid,
   isTaskPendingDispatch,
+  isUserApiKeySource,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
@@ -4017,15 +4020,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
+    // Literal on purpose: the realtime-publish and tenant-classification source
+    // scans read registered paths from this file (USER_API_KEYS_SERVICE_PATH).
     '/api/v1/user/api-keys',
     {
       async find(params: AuthenticatedParams) {
         return userApiKeysService.find(params);
       },
-      async create(
-        data: Parameters<typeof userApiKeysService.create>[0],
-        params: AuthenticatedParams
-      ) {
+      async create(data: CreateUserApiKeyRequest, params: AuthenticatedParams) {
         return userApiKeysService.create(data, params);
       },
       async patch(id: string, data: { name?: string }, params: AuthenticatedParams) {
@@ -4052,13 +4054,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // refresh-capable browser tokens.
   registerAuthenticatedRoute(
     app,
-    '/api/v1/user/me',
+    '/api/v1/user/me', // USER_IDENTITY_SERVICE_PATH; literal for the source scans
     {
-      async find(params: AuthenticatedParams) {
+      async find(params: AuthenticatedParams): Promise<CurrentUserIdentity> {
         const user = params.user;
         if (!user) throw new NotAuthenticated('Authentication required');
         const authentication = params.authentication as
-          | { strategy?: string; api_key_id?: unknown; api_key_source?: string }
+          | { strategy?: string; api_key_id?: unknown; api_key_source?: unknown }
           | undefined;
         return {
           user_id: user.user_id,
@@ -4071,7 +4073,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           typeof authentication.api_key_id === 'string'
             ? {
                 api_key_id: authentication.api_key_id,
-                api_key_source: authentication.api_key_source ?? 'manual',
+                api_key_source: isUserApiKeySource(authentication.api_key_source)
+                  ? authentication.api_key_source
+                  : 'manual',
               }
             : {}),
         };

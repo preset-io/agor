@@ -7,6 +7,7 @@
 import { chmod, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ensureAgorHome, getAgorHome } from '@agor/core/config';
+import { PERSONAL_API_KEY_PREFIX, type UserApiKeySource } from '@agor/core/types';
 
 const AGOR_DIR = getAgorHome();
 const TOKEN_FILE = join(AGOR_DIR, 'cli-token');
@@ -47,7 +48,7 @@ export interface StoredApiKeyAuth {
   /** Server id of the key (never secret); lets `agor logout` delete a CLI-minted key. */
   apiKeyId?: string;
   /** `cli_login` keys were minted for this machine and are deleted on logout. */
-  apiKeySource?: 'manual' | 'cli_login';
+  apiKeySource?: UserApiKeySource;
   user: StoredAuthUser;
 }
 
@@ -90,7 +91,7 @@ export async function loadToken(): Promise<StoredAuth | null> {
       auth.target?.url &&
       auth.target?.origin &&
       typeof auth.apiKey === 'string' &&
-      auth.apiKey.startsWith('agor_sk_') &&
+      auth.apiKey.startsWith(PERSONAL_API_KEY_PREFIX) &&
       auth.user
     ) {
       return auth as unknown as StoredApiKeyAuth;

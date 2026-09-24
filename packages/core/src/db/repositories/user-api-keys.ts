@@ -9,23 +9,20 @@ import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { and, eq, ne } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import {
+  isUserApiKeySource,
+  PERSONAL_API_KEY_PREFIX,
+  type UserApiKeySource,
+} from '../../types/user-api-key';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { userApiKeys } from '../schema';
 import { enqueueTenantDatabasePostCommitCallback } from '../tenant-context';
 
-const KEY_PREFIX = 'agor_sk_';
+const KEY_PREFIX = PERSONAL_API_KEY_PREFIX;
 const KEY_PREFIX_LENGTH = 12;
 const KEY_RANDOM_BYTES = 32;
 const BCRYPT_ROUNDS = 10;
-
-/** Where a key came from. `cli_login` keys are minted by `agor login` per machine. */
-export const USER_API_KEY_SOURCES = ['manual', 'cli_login'] as const;
-export type UserApiKeySource = (typeof USER_API_KEY_SOURCES)[number];
-
-export function isUserApiKeySource(value: unknown): value is UserApiKeySource {
-  return typeof value === 'string' && (USER_API_KEY_SOURCES as readonly string[]).includes(value);
-}
 
 function toSource(value: unknown): UserApiKeySource {
   return isUserApiKeySource(value) ? value : 'manual';

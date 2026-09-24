@@ -1,3 +1,4 @@
+import { USER_API_KEYS_SERVICE_PATH, type UserApiKeySource } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import {
@@ -30,7 +31,7 @@ interface ApiKeyEntry {
   name: string;
   prefix: string;
   /** `cli_login` keys are minted per machine by `agor login`. */
-  source?: 'manual' | 'cli_login';
+  source?: UserApiKeySource;
   created_at: string;
   last_used_at?: string;
 }
@@ -82,7 +83,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
       if (!client || !request.isCurrent()) return;
       setLoading(true);
       try {
-        const result = await client.service('api/v1/user/api-keys').findAll({});
+        const result = await client.service(USER_API_KEYS_SERVICE_PATH).findAll({});
         if (!request.isCurrent()) return;
         setKeys(result as ApiKeyEntry[]);
       } catch (err) {
@@ -105,7 +106,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     const name = newKeyName.trim();
     setCreating(true);
     try {
-      const result = (await client.service('api/v1/user/api-keys').create({ name })) as {
+      const result = (await client.service(USER_API_KEYS_SERVICE_PATH).create({ name })) as {
         rawKey: string;
         key: ApiKeyEntry;
       };
@@ -126,7 +127,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     if (!client || !operation.isCurrent()) return;
     setDeletingId(id);
     try {
-      await client.service('api/v1/user/api-keys').remove(id);
+      await client.service(USER_API_KEYS_SERVICE_PATH).remove(id);
       if (!operation.isCurrent()) return;
       showSuccess('API key revoked');
       await fetchKeys(operation);

@@ -477,6 +477,19 @@ describe('POST /mcp token source', () => {
   });
 });
 
+/** Launch config under which personal keys may be routed by the trusted Host. */
+const HOST_ROUTING_LAUNCH_CONFIG = {
+  enabled: true,
+  exchange_url: 'https://issuer.example.test/exchange',
+  issuer: 'https://issuer.example.test',
+  audience: 'runtime:test',
+  instance_id: 'instance-1',
+  dev_shared_secret: 'launch-test-secret-0123456789abcdef',
+  service_credential: 'exchange-credential',
+  forward_request_host: true,
+  trusted_host_header: 'host',
+};
+
 describe('POST /mcp with personal API keys', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -900,8 +913,14 @@ describe('POST /mcp with personal API keys', () => {
   ])(
     'rejects $label duplicate on-wire trusted tenant headers before API-key lookup',
     async ({ tenantHeaders, errorMessage }) => {
-      const { UserApiKeysRepository } = await import('@agor/core/db');
+      const { TenantPublicRoutingDiscoveryRepository, UserApiKeysRepository } = await import(
+        '@agor/core/db'
+      );
       const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+      const hostDiscovery = vi.spyOn(
+        TenantPublicRoutingDiscoveryRepository.prototype,
+        'findTenantIdsByRequestHost'
+      );
 
       await withMcpServer(
         {},
@@ -945,12 +964,16 @@ describe('POST /mcp with personal API keys', () => {
             error: { message: errorMessage },
           });
           expect(verifyKey).not.toHaveBeenCalled();
+          // A malformed/conflicting identity is terminal: never rescued by Host routing.
+          expect(hostDiscovery).not.toHaveBeenCalled();
         },
         {
           multi_tenancy: {
             mode: 'required_from_auth',
             trusted_header: 'x-agor-tenant-id',
           },
+          // Host routing is available here, so the test proves it is not used.
+          external_launch: HOST_ROUTING_LAUNCH_CONFIG,
         }
       );
     }
