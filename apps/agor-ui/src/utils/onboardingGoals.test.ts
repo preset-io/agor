@@ -7,6 +7,7 @@ import {
   mergeGoalIntegrationRecs,
   ONBOARDING_GOALS,
   ONBOARDING_INTEGRATION_RECOMMENDATIONS,
+  visibleOnboardingIntegrationRecs,
 } from './onboardingGoals';
 
 describe('buildCompletedOnboardingPreferences', () => {
@@ -254,4 +255,17 @@ describe('onboarding catalog contract', () => {
       expect(rec.connectMode, entryName).toBe(entry?.auth_type);
     }
   });
+});
+
+it('filters hidden and missing onboarding recommendations but retains non-catalog setup', async () => {
+  const catalog = await loadCatalog();
+  const recs = Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS);
+  const hidden = catalog.map((entry) => ({ ...entry, hidden: entry.name === 'com.asana/mcp' }));
+  expect(visibleOnboardingIntegrationRecs(recs, hidden).some((rec) => rec.id === 'asana')).toBe(
+    false
+  );
+  expect(visibleOnboardingIntegrationRecs(recs, catalog).some((rec) => rec.id === 'asana')).toBe(
+    true
+  );
+  expect(visibleOnboardingIntegrationRecs(recs, []).map((rec) => rec.id)).toEqual(['slack']);
 });

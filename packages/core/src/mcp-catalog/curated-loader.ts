@@ -92,6 +92,7 @@ const catalogEntryCredentialsSchema = z
 const catalogEntrySchema = z
   .object({
     name: nonEmpty,
+    hidden: z.boolean().optional(),
     category: z.enum(MCP_CATALOG_CATEGORIES),
     capabilities: z.array(z.enum(MCP_CATALOG_CAPABILITIES)).min(1).max(6),
     benefit: nonEmpty,
@@ -206,7 +207,8 @@ function assertEntryIsServable(entry: {
 /**
  * Parse the catalog file.
  *
- * Both top-level lists are one catalog: every entry in either is offered. The
+ * Both top-level lists are one catalog, including hidden definitions. Visibility
+ * is applied after validation, never instead of it. The
  * split records how the entry's `name` was arrived at — the registry publishes
  * a server under exactly that name, or Agor inferred it from the vendor's
  * domain. That is a curation fact, checked by a reviewer against a diff, and it

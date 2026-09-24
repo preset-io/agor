@@ -744,3 +744,27 @@ describe('the shipped catalog — everything on the shelf can be taken off it', 
     expect(entries.filter((entry) => entry.transport === 'stdio')).toEqual([]);
   });
 });
+
+describe('catalog visibility validation', () => {
+  it('preserves optional boolean visibility without excluding definitions', () => {
+    expect(parseCuratedCatalog(VALID_ENTRY)[0].hidden).toBeUndefined();
+    for (const hidden of [true, false]) {
+      expect(parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${hidden}\n`)[0].hidden).toBe(hidden);
+    }
+  });
+
+  it.each(['"true"', '"false"', '1', 'null'])('rejects non-boolean hidden: %s', (value) => {
+    expect(() => parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${value}\n`)).toThrow(/hidden/);
+  });
+
+  it('still validates hidden definitions, including transport and duplicate identities', () => {
+    const hidden = `${VALID_ENTRY}    hidden: true\n`;
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('category: dev-tools', 'category: invalid'))
+    ).toThrow(/category/);
+    expect(() => parseCuratedCatalog(`${hidden}    transport: stdio\n`)).toThrow(/stdio/);
+    expect(() => parseCuratedCatalog(hidden + hidden.replace('entries:', 'unpublished:'))).toThrow(
+      /duplicate entry name/
+    );
+  });
+});

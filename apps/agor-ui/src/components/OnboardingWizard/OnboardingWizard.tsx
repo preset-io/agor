@@ -40,6 +40,7 @@ import {
   mergeGoalIntegrationRecs,
   ONBOARDING_GOALS,
   type OnboardingIntegrationRecommendation,
+  visibleOnboardingIntegrationRecs,
 } from '../../utils/onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from '../../utils/onboardingSlack';
 import {
@@ -1217,7 +1218,7 @@ export function OnboardingWizard({
             isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
         };
         const name = teammateName.trim();
-        const suggestedIntegrations =
+        let suggestedIntegrations =
           !toolsConfirmed || toolsSkipped
             ? []
             : mergeGoalIntegrationRecs(selectedGoals).filter(
@@ -1232,6 +1233,16 @@ export function OnboardingWizard({
           if (!isCurrent()) return;
           if (!client) throw new Error('Not connected - try again when Agor reconnects.');
 
+          // Re-read visibility before seeding recommendations into the first session.
+          // Saved connections below are independent and remain attached even if hidden.
+          if (suggestedIntegrations.some((rec) => rec.setup.surface === 'marketplace')) {
+            const catalog = await client.service('mcp-catalog').find();
+            if (!completionAttempt.isCurrent()) return;
+            suggestedIntegrations = visibleOnboardingIntegrationRecs(
+              suggestedIntegrations,
+              Array.isArray(catalog) ? catalog : catalog.data
+            );
+          }
           const boardId = await ensureBoard();
           if (!completionAttempt.isCurrent()) return;
           await observeSlowCompletion(

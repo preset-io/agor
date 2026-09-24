@@ -67,7 +67,7 @@ async function click(name: RegExp | string) {
   await userEvent.click(await screen.findByRole('button', { name }));
 }
 async function openGitHub() {
-  const card = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
+  const card = (await screen.findByText('GitHub')).closest<HTMLElement>('.ant-card')!;
   await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
   const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
   const dialog = input.closest<HTMLElement>('[role="dialog"]')!;
@@ -153,7 +153,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
       standard.unmount();
 
       render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
-      const row = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
+      const row = (await screen.findByText('GitHub')).closest<HTMLElement>('.ant-card')!;
       await userEvent.click(within(row).getByRole('button', { name: /^Sign in through Catalog/ }));
       const onboardingDialog = await screen.findByRole('dialog', { name: /GitHub/ });
       await within(onboardingDialog).findByRole('button', {
@@ -200,14 +200,16 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(rect.left).toBeGreaterThanOrEqual(0);
       expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
     }
-    const suggestion = screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
+    const suggestion = await screen.findByRole('checkbox', {
+      name: 'Suggest GitHub to my teammate',
+    });
     suggestion.focus();
     await userEvent.keyboard(' ');
     expect(suggestion).not.toBeChecked();
     await click(/^Continue/);
     await click(/Back$/);
     expect(
-      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
+      await screen.findByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
     ).not.toBeChecked();
     const { input, drawer } = await openGitHub();
     expect(input).toHaveAttribute('type', 'password');

@@ -4,6 +4,29 @@ Agor can attach external MCP servers to individual sessions. Use **Catalog** for
 
 Open **MCP Catalog** from the header’s shop icon or the same icon in the session’s **MCP** popover. Search the session picker to find existing servers; its no-match action also opens the Catalog. Catalog **Connect** adds a server to **My Servers**, without creating a session. Choose **Start new session** afterward to select an eligible teammate and agent tool; its starter prompt opens in the composer as editable, unsent text. To attach a saved server to the current conversation, select it in that picker.
 
+## Catalog visibility
+
+Curators can set `hidden: true` on an entry in
+`packages/core/src/mcp-catalog/curated.yaml` to remove it from catalog discovery,
+search, recommendations, and new catalog installs by name. Hidden names return
+not found on catalog lookup, readiness, connect, and catalog start-session routes;
+there is no request parameter to reveal them. Omit `hidden` or set it to `false`
+and redeploy to offer the entry again. All definitions remain validated.
+
+This is not a runtime disable or authorization revocation. Saved connections,
+grants, attachment, and reconnect through **My Servers** (or an OAuth widget
+naming the saved server ID) retain their existing security and canonical catalog
+policy checks. Full definitions remain available internally for those checks and
+maintenance, even while hidden.
+
+Vercel, Intercom, Square, Canva, Dropbox, and New Relic are currently hidden based
+on the September 9–10 review, not a new provider certification. The first four had
+documented provider-client or callback approval requirements. Dropbox involved
+trusted-client DCR admission; its observed nonspecific `403` did not prove
+callback rejection. New Relic DCR succeeded, but subsequent authorization failed;
+allowlisting was not confirmed. Asana, incident.io, and Datadog are not hidden by
+this change.
+
 ## Authentication
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:

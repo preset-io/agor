@@ -2,8 +2,8 @@
  * Narrowing and ordering the catalog.
  *
  * Separate from `catalog.ts` because this is the half with no filesystem in it.
- * The browser is now the only caller that narrows — the daemon hands over the
- * whole catalog and the Marketplace filters what it already holds — so this
+ * The daemon excludes hidden entries before handing over the visible catalog;
+ * the Marketplace and MCP tools narrow that inventory further. This
  * module has to be importable from a bundle, and `catalog.ts` cannot be: it
  * reads `curated.yaml` off disk.
  *
@@ -20,6 +20,11 @@ import {
   type MCPCatalogFilters,
   type MCPCatalogSort,
 } from '../types/mcp-catalog';
+
+/** Shared discovery boundary. Not a runtime policy or saved-connection gate. */
+export function isCatalogEntryVisible(entry: MCPCatalogEntry): boolean {
+  return entry.hidden !== true;
+}
 
 /** Case-insensitive substring test that tolerates an absent field. */
 function contains(haystack: string | undefined, needle: string): boolean {
@@ -40,6 +45,7 @@ function contains(haystack: string | undefined, needle: string): boolean {
  * this?" with servers that only mention the word while asking permission.
  */
 function matches(entry: MCPCatalogEntry, filters: MCPCatalogFilters): boolean {
+  if (!isCatalogEntryVisible(entry)) return false;
   const search = filters.search?.trim().toLowerCase();
   if (
     search &&

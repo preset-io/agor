@@ -1,3 +1,4 @@
+import { loadCatalog } from '@agor/core/mcp-catalog';
 import type { MCPCatalogEntry, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,7 +14,7 @@ const entry = {
   remote_url: 'https://provider.example/mcp',
   transport: 'streamable-http',
   has_remote: true,
-  category: 'developer-tools',
+  category: 'dev-tools',
   capabilities: [],
   benefit: 'Test',
   starter_prompt: 'Test',
@@ -45,6 +46,21 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
       reason: 'current_catalog_marketplace',
       catalogEntryName: entry.name,
     });
+  });
+
+  it('preserves saved canonical policy and drift checks when a definition is hidden', async () => {
+    const server = catalogServer();
+    const before = structuredClone(server);
+    const hidden = { ...entry, hidden: true };
+    expect(await resolveMCPOAuthCompatibilityPolicy(server, [hidden])).toEqual(
+      await resolveMCPOAuthCompatibilityPolicy(server, [entry])
+    );
+    await expect(
+      resolveMCPOAuthCompatibilityPolicy(catalogServer({ url: 'https://different.example/mcp' }), [
+        hidden,
+      ])
+    ).resolves.toMatchObject({ mode: 'strict', reason: 'catalog_configuration_drift' });
+    expect(server).toEqual(before);
   });
 
   it('reconciles an existing install with a newly explicit current strict policy', async () => {
@@ -172,4 +188,21 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
       /must be either strict or legacy/
     );
   });
+});
+
+it('resolves actual hidden saved installs through the full runtime catalog, without mutation', async () => {
+  const definitions = (await loadCatalog()).filter((entry) => entry.hidden);
+  expect(definitions).toHaveLength(6);
+  for (const definition of definitions) {
+    const server = catalogServer({
+      catalog_entry_name: definition.name,
+      url: definition.remote_url,
+    });
+    const before = structuredClone(server);
+    expect(await resolveMCPOAuthCompatibilityPolicy(server)).toEqual(
+      await resolveMCPOAuthCompatibilityPolicy(server, [{ ...definition, hidden: false }])
+    );
+    expect(await resolveMCPOAuthCompatibilityPolicy(server)).toMatchObject({ mode: 'marketplace' });
+    expect(server).toEqual(before);
+  }
 });
