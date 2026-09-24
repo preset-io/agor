@@ -317,6 +317,14 @@ replacement while a previous Job is unreachable.
   admit against the terminal/STOPPING Task. This is not holder authority and
   never releases an existing pin. Emergency exit leaves pins open for exact
   Cloud observation.
+  After a managed output seals, exact Socket.IO acknowledgement/disconnect
+  faults and transient service refusals retry the same holder's seal, fixed-ID
+  message, and completion for at most 15 minutes per phase, using a monotonic
+  clock. A permanent refusal, revoked credential, or exhausted budget exits
+  nonzero without abandoning possibly sealed output or manufacturing FAILED.
+  Stale-heartbeat containment remains unverified for OpenCode; an owner may
+  need to force-fail the Task after separate closure proof. This is recovery
+  from an ambiguous response, not automatic replay of a provider turn.
   Templated containment stays "remote executor quiescence"; the OpenCode
   descriptor's `unverifiedTerminationReason` continues to mark substrate
   termination as unverified. Task terminality/force-fail is not process/I/O

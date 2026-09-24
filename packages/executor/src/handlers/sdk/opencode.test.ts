@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -705,7 +706,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
   });
 
   it('bounds socket retries after a committed completion revokes the connection', async () => {
-    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
     try {
       const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
       mocks.runTurn.mockResolvedValueOnce({
@@ -731,7 +732,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
   });
 
   it('bounds persistent 503 seal retries and preserves the uncertain output', async () => {
-    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
     try {
       const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
       mocks.runTurn.mockResolvedValueOnce({

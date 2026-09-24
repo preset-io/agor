@@ -5,6 +5,7 @@
  * Task settlement remains OpenCode-scoped until the generic runner migration lands.
  */
 
+import { performance } from 'node:perf_hooks';
 import {
   buildOpenCodeAuthContent,
   hostedCredentialFieldForProvider,
@@ -448,7 +449,7 @@ export async function executeOpenCodeTask(params: {
       throw new Error('OpenCode managed turn completed without a published checkpoint');
     }
     if (managed && committedGrant && publishedManifest) {
-      const sealStartedAt = Date.now();
+      const sealStartedAt = performance.now();
       for (let attempt = 0; ; attempt += 1) {
         if (params.abortController.signal.aborted) return;
         try {
@@ -463,7 +464,7 @@ export async function executeOpenCodeTask(params: {
           // Retry ambiguous transport errors while the holder remains live.
           // A deterministic refusal leaves the attempt for guarded settlement.
           sealAmbiguous = true;
-          if (Date.now() - sealStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
+          if (performance.now() - sealStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
           if (attempt === 0 || attempt % 12 === 0)
             console.warn('[opencode] event=managed_seal_retry_pending');
           await waitForManagedWriteRetry(attempt, params.abortController.signal);
@@ -504,7 +505,7 @@ export async function executeOpenCodeTask(params: {
         : {}),
     } as Partial<import('@agor/core/types').Task>;
     let messageCommitted = false;
-    const publicationStartedAt = Date.now();
+    const publicationStartedAt = performance.now();
     for (let attempt = 0; ; attempt += 1) {
       if (params.abortController.signal.aborted) return;
       try {
@@ -571,7 +572,7 @@ export async function executeOpenCodeTask(params: {
           )
             break;
         }
-        if (Date.now() - publicationStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
+        if (performance.now() - publicationStartedAt >= MANAGED_WRITE_RETRY_BUDGET_MS) throw error;
         if (attempt === 0 || attempt % 12 === 0)
           console.warn('[opencode] event=managed_publication_retry_pending');
         await waitForManagedWriteRetry(attempt, params.abortController.signal);
