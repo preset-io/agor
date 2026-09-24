@@ -5,8 +5,6 @@
  * Task settlement remains OpenCode-scoped until the generic runner migration lands.
  */
 
-import { isDeepStrictEqual } from 'node:util';
-
 import {
   buildOpenCodeAuthContent,
   hostedCredentialFieldForProvider,
@@ -455,10 +453,10 @@ export async function executeOpenCodeTask(params: {
             manifest: publishedManifest,
           });
           break;
-        } catch (_error) {
-          // Any lost response may conceal a committed seal, including a 500
-          // after the DB write. Keep the heartbeat alive until exact replay
-          // confirms it or Stop takes over; never fail/retire this output.
+        } catch (error) {
+          if (!isRetryableTransportFailure(error)) throw error;
+          // Retry ambiguous transport errors while the holder remains live.
+          // A deterministic refusal leaves the attempt for guarded settlement.
           sealAmbiguous = true;
           if (attempt === 0 || attempt % 12 === 0)
             console.warn('[opencode] event=managed_seal_retry_pending');
@@ -507,11 +505,11 @@ export async function executeOpenCodeTask(params: {
           const existing = managed ? await repos.messages.findById(assistantMessageId) : null;
           if (existing) {
             if (
+              existing.message_id !== assistantMessageId ||
               existing.session_id !== sessionId ||
               existing.task_id !== taskId ||
               existing.type !== 'assistant' ||
-              existing.role !== MessageRole.ASSISTANT ||
-              !isDeepStrictEqual(existing.content, finalMessage.content)
+              existing.role !== MessageRole.ASSISTANT
             )
               throw new Error('Managed OpenCode message ID does not match this turn');
             messageCommitted = true;
@@ -540,6 +538,17 @@ export async function executeOpenCodeTask(params: {
         break;
       } catch (error) {
         if (!publicationSealed || !managed || !publishedManifest) throw error;
+        if (
+          !isRetryableTransportFailure(error) &&
+          !(
+            !messageCommitted &&
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 409
+          )
+        )
+          throw error;
         // A message or completion may have committed before its response was
         // lost. Re-read by the fixed message ID and retry the holder-qualified
         // completion while this executor's heartbeat remains alive. A revoked
@@ -598,8 +607,11 @@ export async function executeOpenCodeTask(params: {
       // An accepted write can have lost only its response. Never abandon or
       // terminalize a possibly sealed object from an ambiguous transport fact.
       console.warn('[opencode] event=managed_publication_unverified');
-      if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
-      return;
+      if (params.abortController.signal.aborted) {
+        await cleanupOperation?.stopAndDrain();
+        return;
+      }
+      throw failure;
     }
     if (committedGrant && !managedIoSettled) {
       try {
@@ -609,8 +621,11 @@ export async function executeOpenCodeTask(params: {
         await closeInputAndAbandon();
       } catch {
         console.warn('[opencode] managed checkpoint I/O drain unverified; task remains guarded');
-        if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
-        return;
+        if (params.abortController.signal.aborted) {
+          await cleanupOperation?.stopAndDrain();
+          return;
+        }
+        throw failure;
       }
     }
     if (params.abortController.signal.aborted) {

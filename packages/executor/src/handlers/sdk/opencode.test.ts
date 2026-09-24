@@ -587,7 +587,7 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
       finalMessage: {
         content: 'done',
-        contentBlocks: [{ type: 'text', text: 'done' }],
+        contentBlocks: [{ type: 'text', text: 'done', optional: undefined }],
         toolUses: [],
         metadata: {},
       },
@@ -597,8 +597,8 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       .mockResolvedValueOnce(null)
       .mockImplementation(async () => committedMessage);
     mocks.messagesCreate.mockImplementationOnce(async (message) => {
-      // PostgreSQL JSONB can reorder object keys on readback.
-      committedMessage = { ...message, content: [{ text: 'done', type: 'text' }] };
+      // PostgreSQL JSONB can reorder keys; the daemon may also sanitize content.
+      committedMessage = { ...message, content: [{ text: '[sanitized]', type: 'text' }] };
       throw { code: 503 };
     });
 
@@ -648,6 +648,61 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     ).toBe(true);
     expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
   }, 10_000);
+
+  it('fails a definitely refused seal only after abandoning its still-open output', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services['opencode-native-state'].seal.mockRejectedValueOnce({ code: 400 });
+
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow();
+
+    expect(state.services['opencode-native-state'].abandon).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch.mock.calls.at(-1)?.[1]).toMatchObject({ status: 'failed' });
+  });
+
+  it('exits nonzero without retiring an uncertain seal when credentials are revoked', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services['opencode-native-state'].seal
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 401 });
+
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow();
+
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
+  it('exits nonzero after a lost committed completion revokes its token', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services.tasks.patch
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 401 });
+
+    await expect(
+      execute(state.value, new AbortController(), managedContext, managedAdmission)
+    ).rejects.toThrow();
+
+    expect(state.services.tasks.patch).toHaveBeenCalledTimes(2);
+    expect(
+      state.services.tasks.patch.mock.calls.every(([, patch]) => patch.status === 'completed')
+    ).toBe(true);
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  });
 
   it('drains two cleanup reservations before a short healthy managed turn completes', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
