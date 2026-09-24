@@ -96,14 +96,20 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
   });
   const tag = usage.querySelector('.ant-tag')!;
   const label = screen.getByTestId('turn-usage-label');
-  await waitFor(() => expect(getComputedStyle(label).color).toBe(label.style.color));
-  await waitFor(() => expect(getComputedStyle(tag).color).toBe(getComputedStyle(label).color));
+  const expectStableUsageColor = async () =>
+    waitFor(() => {
+      // Both elements animate on reveal. Do not compare two in-flight frames:
+      // wait for the label to reach its target, then require the Tag to match.
+      expect(getComputedStyle(label).color).toBe(label.style.color);
+      expect(getComputedStyle(tag).color).toBe(label.style.color);
+    });
+  await expectStableUsageColor();
   expect(usage).toHaveClass('ant-btn');
   await act(async () => userEvent.keyboard('{Tab}'));
   act(() => usage.focus());
   expect(usage).toHaveFocus();
   expect(getComputedStyle(usage).outlineStyle).not.toBe('none');
-  expect(getComputedStyle(tag).color).toBe(getComputedStyle(label).color);
+  await expectStableUsageColor();
   await act(async () => userEvent.keyboard('{Enter}'));
   expect(usage).toHaveAttribute('aria-expanded', 'true');
   await waitFor(() => expect(screen.getByText('Context Window Usage')).toBeVisible());

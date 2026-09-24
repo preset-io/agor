@@ -73,9 +73,13 @@ export function ContextUsageRule({
         setDismissed(false);
       }}
       onMouseLeave={() => setHovered(false)}
-      onFocusCapture={() => {
-        setFocused(true);
-        setDismissed(false);
+      onFocusCapture={(event) => {
+        // Clicking the answer can focus this tabIndex=0 section. That focus
+        // must not keep the footer open after the pointer leaves; only
+        // keyboard-visible focus reveals it beyond hover.
+        const keyboardFocus = event.target.matches(':focus-visible');
+        setFocused(keyboardFocus);
+        if (keyboardFocus) setDismissed(false);
       }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
