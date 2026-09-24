@@ -225,9 +225,9 @@ describe('ReposService .agor.yml normalized branch access', () => {
       (
         instance as unknown as {
           runAgorYmlExecutorCommand(
-            repo: typeof repo,
-            branch: typeof branch,
-            command: typeof command,
+            repoInput: typeof repo,
+            branchInput: typeof branch,
+            commandInput: typeof command,
             params: Record<string, unknown>,
             serviceParams: unknown
           ): Promise<unknown>;
@@ -266,8 +266,8 @@ describe('ReposService .agor.yml normalized branch access', () => {
       (
         instance as unknown as {
           runAgorYmlExecutorCommand(
-            repo: typeof repo,
-            branch: typeof branch,
+            repoInput: typeof repo,
+            branchInput: typeof branch,
             command: 'branch.agor-yml.export',
             params: Record<string, unknown>,
             serviceParams: unknown
@@ -1435,10 +1435,25 @@ describe('ReposService branch provisioning lifecycle', () => {
       vi.fn(async () => repo);
 
     await expect(service.retryBranchProvisioning('b1', externalParams())).rejects.toThrow(
-      'already active'
+      'already in progress'
     );
 
     expect(branchRepoMock.claimForProvisioning).toHaveBeenCalledTimes(1);
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('a racing retry that observes durable ready is a no-op', async () => {
+    const get = vi.fn(async () => branch({ filesystem_status: 'failed' }));
+    branchRepoMock.claimForProvisioning.mockResolvedValue({
+      claimed: false,
+      branch: branch({ filesystem_status: 'ready' }),
+    });
+    const { service } = makeService({ get, patch: vi.fn() });
+    (service as unknown as { repoRepo: { findById: ReturnType<typeof vi.fn> } }).repoRepo.findById =
+      vi.fn(async () => repo);
+    expect(await service.retryBranchProvisioning('b1', externalParams())).toMatchObject({
+      filesystem_status: 'ready',
+    });
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 

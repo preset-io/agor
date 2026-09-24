@@ -845,28 +845,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     });
   }
 
-  /**
-   * Atomically claim a `failed` branch for a provisioning retry: flip it to
-   * `creating` and clear the stored error, but ONLY if it is still `failed`
-   * while we hold the row lock. Returns `{ claimed: false }` when another caller
-   * (a double-click on Retry, or a concurrent retry) already moved it out of
-   * `failed`, so retry can never spawn two materializers for the same branch.
-   *
-   * This is the fencing that lets the daemon avoid a general provisioning-job
-   * framework: the state transition itself is the lock.
-   *
-   * `attemptId` stamps the row with the generation that now owns `creating`, so
-   * a superseded attempt's late acknowledgement can be told apart from the
-   * current one's. The winner's branch (with the id applied) is returned; the
-   * caller passes that same id to the executor it dispatches.
-   */
-  async claimFailedForProvisioningRetry(
-    id: string,
-    attemptId: string
-  ): Promise<{ claimed: boolean; branch: Branch }> {
-    return this.claimForProvisioning(id, attemptId);
-  }
-
   /** Restore and retry share one Branch-row admission and attempt fence. */
   async claimForProvisioning(
     id: string,

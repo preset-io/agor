@@ -1706,7 +1706,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_unarchive',
     {
       description:
-        'Restore a previously archived branch. Optionally place it back on a board. Also unarchives all sessions that were archived as part of the branch archival.',
+        'Request asynchronous restoration of an archived branch, optionally onto a board. Unarchives branch-archived sessions. Acceptance is not filesystem readiness: use agor_branches_wait_for_ready before starting work.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',

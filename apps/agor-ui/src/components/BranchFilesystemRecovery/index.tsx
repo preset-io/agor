@@ -42,7 +42,9 @@ export function BranchFilesystemRecovery({
       type={creating ? 'info' : 'error'}
       title={
         creating
-          ? 'Filesystem recovery in progress'
+          ? branch.provisioning_operation === 'restore'
+            ? 'Filesystem recovery in progress'
+            : 'Filesystem provisioning in progress'
           : readiness === 'failed'
             ? 'Provisioning failed'
             : 'Filesystem unavailable'

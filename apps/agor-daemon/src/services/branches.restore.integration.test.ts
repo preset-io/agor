@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
+  BoardRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   BranchWorkspaceOperationRepository,
@@ -11,7 +12,10 @@ import {
   generateId,
   RepoRepository,
   runWithTenantContext,
+  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { AuthenticationService } from '@agor/core/feathers';
@@ -28,6 +32,7 @@ import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy';
 import { initMcpTokens } from '../mcp/tokens';
 import type { RegisterHooksContext } from '../register-hooks';
 import { configureResolvedConfigSlice } from '../utils/build-resolved-config-slice';
+import type { BoardObjectsService } from './board-objects';
 import type { BranchesService } from './branches';
 import { ExecutorGitEnvironmentService } from './executor-git-environment';
 import { ReposService } from './repos';
@@ -58,6 +63,9 @@ for (const scenario of [
   'active-concurrent',
   'active-caller',
   'active-rollback',
+  'board-admission-rollback',
+  'active-delegated',
+  'stale-registration',
   'interrupted',
   'deleted-git',
   'retained-ahead',
@@ -192,6 +200,7 @@ for (const scenario of [
     }
     if (scenario === 'missing-home' || scenario === 'missing-workspace')
       await rm(path, { recursive: true });
+    if (scenario === 'stale-registration') await rm(path, { recursive: true });
     if (scenario.startsWith('missing-retained')) await git.raw(['worktree', 'remove', path]);
     if (scenario === 'deleted-git') {
       await git.raw(['worktree', 'remove', '--force', path]);
@@ -216,11 +225,15 @@ for (const scenario of [
       'wrong-ref',
       'missing-home',
       'missing-workspace',
+      'stale-registration',
     ].includes(scenario);
     const db = createTenantScopedDatabaseProxy(raw, { label: 'restore-integration' });
     const config = {
       database: { dialect: 'sqlite' },
-      execution: {},
+      execution:
+        scenario === 'active-delegated'
+          ? { unix_user_mode: 'delegated', executor_command_template: 'fixture-launcher {user_id}' }
+          : {},
       multi_tenancy: { mode: 'static', static_tenant_id: tenantId },
     } as RegisterHooksContext['config'];
     const tokens = new SessionTokenService(
@@ -321,6 +334,71 @@ for (const scenario of [
         await expect(
           repos.retryBranchProvisioning(branch.branch_id, { tenant }, true)
         ).rejects.toThrow();
+        if (scenario === 'board-admission-rollback') {
+          const boards = new BoardRepository(raw);
+          const source = await boards.create({ name: 'Source', created_by: user.user_id });
+          const destination = await boards.create({
+            name: 'Destination',
+            created_by: user.user_id,
+          });
+          await rows.update(branch.branch_id, { board_id: source.board_id });
+          const objects = server.app.service('board-objects') as unknown as BoardObjectsService;
+          const placement = await objects.create({
+            board_id: source.board_id,
+            branch_id: branch.branch_id,
+            position: { x: 10, y: 20 },
+          });
+          const session = await new SessionRepository(raw).create({
+            branch_id: branch.branch_id,
+            created_by: user.user_id,
+            agentic_tool: 'codex',
+          });
+          await new TaskRepository(raw).create({
+            session_id: session.session_id,
+            created_by: user.user_id,
+            status: 'queued',
+          });
+          const before = await rows.findById(branch.branch_id);
+          await expect(
+            (server.app.service('branches') as unknown as BranchesService).unarchive(
+              branch.branch_id,
+              { boardId: destination.board_id },
+              { user, tenant }
+            )
+          ).rejects.toThrow('unfinished tasks');
+          expect(await rows.findById(branch.branch_id)).toMatchObject({
+            board_id: source.board_id,
+            archived: true,
+            filesystem_status: 'cleaned',
+            archived_at: before?.archived_at,
+            archived_by: before?.archived_by,
+          });
+          expect(
+            await runWithTenantDatabaseScope(db, tenantId, () =>
+              objects.findByBranchId(branch.branch_id)
+            )
+          ).toMatchObject({
+            object_id: placement.object_id,
+            board_id: source.board_id,
+            position: { x: 10, y: 20 },
+          });
+          expect(executions).toHaveLength(0);
+          return;
+        }
+        if (scenario === 'active-delegated') {
+          await new UsersRepository(raw).update(outsider.user_id, {
+            unix_username: 'manager-home',
+          });
+          Object.assign(outsider, { unix_username: 'manager-home' });
+          await setTestBranchUserRole(
+            raw,
+            branch.branch_id,
+            outsider.user_id,
+            'manager',
+            'write',
+            user.user_id
+          );
+        }
         if (scenario === 'active-cleaned') {
           for (const [role, access] of [
             ['manager', 'read'],
@@ -381,11 +459,32 @@ for (const scenario of [
           ]);
           expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
           expect(executions).toHaveLength(1);
+          expect(attempts.find((attempt) => attempt.status === 'rejected')).toMatchObject({
+            reason: { data: { code: 'BRANCH_PROVISIONING_IN_PROGRESS' } },
+          });
         } else if (scenario.startsWith('active')) {
           await repos.retryBranchProvisioning(branch.branch_id, {
-            user: scenario === 'active-caller' ? outsider : user,
+            user: ['active-caller', 'active-delegated'].includes(scenario) ? outsider : user,
             tenant,
           });
+          if (scenario === 'active-delegated') {
+            expect(dispatch.spawnExecutorFireAndForget).toHaveBeenLastCalledWith(
+              expect.objectContaining({
+                params: expect.objectContaining({
+                  userId: outsider.user_id,
+                  branchId: branch.branch_id,
+                  principalBranchAccess: 'write',
+                }),
+              }),
+              expect.objectContaining({
+                delegatedHomeKey: 'manager-home',
+                templateVariables: expect.objectContaining({
+                  user_id: outsider.user_id,
+                  branch_id: branch.branch_id,
+                }),
+              })
+            );
+          }
           if (scenario === 'active-caller')
             expect(dispatch.spawnExecutorFireAndForget).toHaveBeenLastCalledWith(
               expect.objectContaining({
@@ -417,6 +516,8 @@ for (const scenario of [
           const failed = await rows.findById(branch.branch_id);
           expect(failed?.filesystem_status).toBe('failed');
           expect(failed?.error_message).toBeTruthy();
+          if (scenario === 'stale-registration')
+            expect(failed?.error_message).toContain('target-scoped repair');
           await expect(
             sessions.create(
               {
@@ -443,7 +544,11 @@ for (const scenario of [
         expect((await git.revparse(['refs/heads/home'])).trim()).toBe(retainedSha);
         expect((await createGit(path).git.revparse(['HEAD'])).trim()).toBe(retainedSha);
       }
-      if (scenario === 'missing-home' || scenario === 'missing-workspace') {
+      if (
+        scenario === 'missing-home' ||
+        scenario === 'missing-workspace' ||
+        scenario === 'stale-registration'
+      ) {
         await expect(readFile(join(path, 'personal.md'))).rejects.toThrow();
         await expect(import('node:fs/promises').then(({ lstat }) => lstat(path))).rejects.toThrow();
       } else if (scenario !== 'deleted-git')

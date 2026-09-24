@@ -1,5 +1,4 @@
 import { eq } from 'drizzle-orm';
-import { classifyBranchFilesystemReadiness } from '../types/branch';
 import type { Database } from './client';
 import { lockRowForUpdate, select } from './database-wrapper';
 import { EntityNotFoundError, RepositoryError } from './repositories/base';
@@ -8,14 +7,17 @@ import { branches, sessions } from './schema';
 /**
  * Shared Branch-first admission boundary. Call inside a short write transaction
  * before locking a Session/Task or committing new branch work. Filesystem
- * producers must set requireFilesystemReady (historical-session work does so).
+ * producers must set requireRecoveryReady (historical-session work does so).
+ * Only persisted restore lineage adds a new producer fence; unrelated legacy
+ * cleaned/preserved rows keep historical admission. Session creation and
+ * environment commands retain their separate, broader readiness rules.
  * Metadata references and initial Session bootstrap deliberately omit it.
  * Holding this lock is not a process-containment proof; lifecycle owners must settle admitted work.
  */
 export async function lockBranchForAdmission(
   db: Database,
   branchId: string,
-  options: { primaryDesignationOnly?: boolean; requireFilesystemReady?: boolean } = {}
+  options: { primaryDesignationOnly?: boolean; requireRecoveryReady?: boolean } = {}
 ) {
   await lockRowForUpdate(db, db, branches, eq(branches.branch_id, branchId));
   const branch = await select(db).from(branches).where(eq(branches.branch_id, branchId)).one();
@@ -27,7 +29,7 @@ export async function lockBranchForAdmission(
 /** Inspect only while holding the Branch row lock at the write boundary. */
 export function assertBranchActivityAllowed(
   branch: typeof branches.$inferSelect,
-  options: { primaryDesignationOnly?: boolean; requireFilesystemReady?: boolean } = {}
+  options: { primaryDesignationOnly?: boolean; requireRecoveryReady?: boolean } = {}
 ): void {
   // Restore excludes producers on historical sessions until executor validation.
   // Initial creation retains its existing metadata/bootstrap admission behavior.
@@ -50,12 +52,9 @@ export function assertBranchActivityAllowed(
     throw new RepositoryError('Branch maintenance is in progress; new activity is disabled');
   }
   if (
-    options.requireFilesystemReady &&
-    classifyBranchFilesystemReadiness({
-      archived: branch.archived,
-      filesystem_status: branch.filesystem_status ?? undefined,
-      deletion_status: branch.deletion_status ?? undefined,
-    }) !== 'ready'
+    options.requireRecoveryReady &&
+    branch.data.provisioning_operation === 'restore' &&
+    branch.filesystem_status !== 'ready'
   ) {
     throw new RepositoryError(
       'Branch filesystem is not ready; recover it before starting new activity'
@@ -71,7 +70,7 @@ export async function lockSessionBranchForAdmission(db: Database, sessionId: str
     .one();
   if (!session) throw new EntityNotFoundError('Session', sessionId);
   const branch = await lockBranchForAdmission(db, session.branch_id, {
-    requireFilesystemReady: true,
+    requireRecoveryReady: true,
   });
   await lockRowForUpdate(db, db, sessions, eq(sessions.session_id, sessionId));
   const current = await select(db, { branch_id: sessions.branch_id })

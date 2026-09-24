@@ -83,7 +83,7 @@ export async function validateExistingRestore(branch: Branch, repo: Repo): Promi
     return true;
   } catch {
     throw new Error(
-      'Existing workspace has invalid Git linkage, ownership, or ref. Repair it in the executor storage context; recovery will not overwrite personal files.'
+      'Existing workspace has invalid Git linkage, ownership, or ref. An operator must verify storage and backups before target-scoped repair in the executor storage context; recovery will not overwrite personal files. Do not run global worktree repair or prune.'
     );
   }
 }

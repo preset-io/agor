@@ -54,6 +54,11 @@ it.each(['failed', 'cleaned', 'preserved', 'deleted'] as const)(
       expect(screen.getByRole('button', { name: /Retry|Recover/ })).not.toBeDisabled()
     );
     mounted.rerender(view({ ...branch, filesystem_status: 'creating' }));
+    expect(screen.getByText('Filesystem provisioning in progress')).toBeVisible();
+    mounted.rerender(
+      view({ ...branch, filesystem_status: 'creating', provisioning_operation: 'restore' })
+    );
+    expect(screen.getByText('Filesystem recovery in progress')).toBeVisible();
     expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
     mounted.rerender(view({ ...branch, filesystem_status: 'failed' }));
     await userEvent.click(screen.getByRole('button', { name: /Retry/ }));

@@ -90,3 +90,22 @@ dbTest(
     await new UploadRepository(db).reserve(owner, metadata);
   }
 );
+
+for (const status of ['preserved', 'cleaned', 'failed'] as const) {
+  dbTest(`legacy ${status} is not retroactively fenced as a recovery`, async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const session = await new SessionRepository(db).create({
+      branch_id: branch.branch_id,
+      created_by: user.user_id,
+      agentic_tool: 'codex',
+    });
+    await new BranchRepository(db).update(branch.branch_id, { filesystem_status: status });
+    expect(
+      await new TaskRepository(db).create({
+        session_id: session.session_id,
+        created_by: user.user_id,
+        status: 'queued',
+      })
+    ).toMatchObject({ status: 'queued' });
+  });
+}

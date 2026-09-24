@@ -55,28 +55,22 @@ async function seedFailedBranch(
 }
 
 describe('BranchRepository provisioning CAS', () => {
-  dbTest(
-    'claimFailedForProvisioningRetry flips failed→creating and clears the error',
-    async ({ db }) => {
-      const { branchRepo, branchId } = await seedFailedBranch(db);
+  dbTest('claimForProvisioning flips failed→creating and clears the error', async ({ db }) => {
+    const { branchRepo, branchId } = await seedFailedBranch(db);
 
-      const { claimed, branch } = await branchRepo.claimFailedForProvisioningRetry(
-        branchId,
-        'attempt-new'
-      );
+    const { claimed, branch } = await branchRepo.claimForProvisioning(branchId, 'attempt-new');
 
-      expect(claimed).toBe(true);
-      expect(branch.filesystem_status).toBe('creating');
-      expect(branch.error_message ?? undefined).toBeUndefined();
+    expect(claimed).toBe(true);
+    expect(branch.filesystem_status).toBe('creating');
+    expect(branch.error_message ?? undefined).toBeUndefined();
 
-      const reloaded = await branchRepo.findById(branchId);
-      expect(reloaded?.filesystem_status).toBe('creating');
-      // Assert against the reloaded row, not just the returned object: clearing
-      // the error has to reach the column, or the stale failure text keeps
-      // showing in the UI while the branch is legitimately provisioning again.
-      expect(reloaded?.error_message ?? undefined).toBeUndefined();
-    }
-  );
+    const reloaded = await branchRepo.findById(branchId);
+    expect(reloaded?.filesystem_status).toBe('creating');
+    // Assert against the reloaded row, not just the returned object: clearing
+    // the error has to reach the column, or the stale failure text keeps
+    // showing in the UI while the branch is legitimately provisioning again.
+    expect(reloaded?.error_message ?? undefined).toBeUndefined();
+  });
 
   dbTest('claim is a no-op when the branch is not failed (e.g. already ready)', async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db, {
@@ -84,10 +78,7 @@ describe('BranchRepository provisioning CAS', () => {
       error_message: undefined,
     });
 
-    const { claimed, branch } = await branchRepo.claimFailedForProvisioningRetry(
-      branchId,
-      'attempt-new'
-    );
+    const { claimed, branch } = await branchRepo.claimForProvisioning(branchId, 'attempt-new');
 
     expect(claimed).toBe(false);
     expect(branch.filesystem_status).toBe('ready');
@@ -103,8 +94,8 @@ describe('BranchRepository provisioning CAS', () => {
       // SQLITE_BUSY). Either way the CAS guarantees at most one WINNER, so a
       // double-click / concurrent retry can never dispatch two materializers.
       const settled = await Promise.allSettled([
-        branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-a'),
-        branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-b'),
+        branchRepo.claimForProvisioning(branchId, 'attempt-a'),
+        branchRepo.claimForProvisioning(branchId, 'attempt-b'),
       ]);
 
       const winners = settled.filter((r) => r.status === 'fulfilled' && r.value.claimed);
@@ -161,10 +152,7 @@ describe('BranchRepository provisioning CAS', () => {
       provisioning_attempt_id: 'attempt-old',
     });
 
-    const { claimed, branch } = await branchRepo.claimFailedForProvisioningRetry(
-      branchId,
-      'attempt-new'
-    );
+    const { claimed, branch } = await branchRepo.claimForProvisioning(branchId, 'attempt-new');
 
     expect(claimed).toBe(true);
     expect(branch.provisioning_attempt_id).toBe('attempt-new');
@@ -179,7 +167,7 @@ describe('BranchRepository provisioning CAS', () => {
       const { branchRepo, branchId } = await seedFailedBranch(db, {
         provisioning_attempt_id: 'attempt-A',
       });
-      await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B');
+      await branchRepo.claimForProvisioning(branchId, 'attempt-B');
 
       // Now A's delayed onExit fires, still carrying its own generation.
       const { changed, branch } = await branchRepo.markProvisioningFailedIfCreating(
@@ -197,10 +185,7 @@ describe('BranchRepository provisioning CAS', () => {
 
   dbTest("the current attempt's own onExit still applies", async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db);
-    const { branch: claimed } = await branchRepo.claimFailedForProvisioningRetry(
-      branchId,
-      'attempt-B'
-    );
+    const { branch: claimed } = await branchRepo.claimForProvisioning(branchId, 'attempt-B');
     expect(claimed.filesystem_status).toBe('creating');
 
     const { changed, branch } = await branchRepo.markProvisioningFailedIfCreating(
@@ -236,7 +221,7 @@ describe('BranchRepository provisioning CAS', () => {
     'terminal acknowledgement applies only to its current creating generation',
     async ({ db }) => {
       const { branchRepo, branchId } = await seedFailedBranch(db);
-      await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B');
+      await branchRepo.claimForProvisioning(branchId, 'attempt-B');
 
       const stale = await branchRepo.acknowledgeProvisioningAttempt(
         branchId,
@@ -258,7 +243,7 @@ describe('BranchRepository provisioning CAS', () => {
 
   dbTest('terminal acknowledgements cannot mutate branch metadata', async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db);
-    await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B');
+    await branchRepo.claimForProvisioning(branchId, 'attempt-B');
     const before = await branchRepo.findById(branchId);
     for (const extra of [{ name: 'moved' }, { board_id: generateId() }, { archived: true }]) {
       await expect(
@@ -293,9 +278,7 @@ describe('BranchRepository provisioning CAS', () => {
           })
           .where(eq(branches.branch_id, branchId))
           .run();
-        expect(
-          (await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B')).claimed
-        ).toBe(false);
+        expect((await branchRepo.claimForProvisioning(branchId, 'attempt-B')).claimed).toBe(false);
         await update(db, branches)
           .set({ filesystem_status: 'creating' })
           .where(eq(branches.branch_id, branchId))
@@ -323,9 +306,7 @@ describe('BranchRepository provisioning CAS', () => {
         })
         .where(eq(branches.branch_id, branchId))
         .run();
-      expect(
-        (await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B')).claimed
-      ).toBe(true);
+      expect((await branchRepo.claimForProvisioning(branchId, 'attempt-B')).claimed).toBe(true);
       expect(
         (
           await branchRepo.acknowledgeProvisioningAttempt(
@@ -345,7 +326,7 @@ describe('BranchRepository provisioning CAS', () => {
 
   dbTest('archive cannot race an in-flight provisioning attempt', async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db);
-    await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B');
+    await branchRepo.claimForProvisioning(branchId, 'attempt-B');
     await expect(
       branchRepo.update(branchId, { archived: true, filesystem_status: 'preserved' })
     ).rejects.toThrow(/provisioning is in progress/i);
@@ -362,7 +343,7 @@ describe('BranchRepository provisioning CAS', () => {
 
   dbTest('legacy acknowledgements cannot overwrite a generated attempt', async ({ db }) => {
     const { branchRepo, branchId } = await seedFailedBranch(db);
-    await branchRepo.claimFailedForProvisioningRetry(branchId, 'attempt-B');
+    await branchRepo.claimForProvisioning(branchId, 'attempt-B');
 
     const result = await branchRepo.acknowledgeProvisioningAttempt(branchId, {
       filesystem_status: 'failed',

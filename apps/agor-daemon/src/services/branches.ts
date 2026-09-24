@@ -2291,15 +2291,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    if (
-      (branch.storage_mode ?? 'worktree') === 'worktree' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
-    ) {
-      throw new BadRequest(
-        'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
-      );
-    }
-
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
     }
@@ -2323,15 +2314,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const boardIdExplicitlyProvided = options !== undefined && 'boardId' in options;
     const targetBoardId = boardIdExplicitlyProvided ? options?.boardId : branch.board_id;
 
-    // Placement still goes through the existing board authorization machinery.
-    // Do not clear archival state before the atomic provisioning admission.
-    if (boardIdExplicitlyProvided) {
-      await this.withTenantDatabase(params, () =>
-        this.patch(id, { board_id: options?.boardId }, params)
-      );
-    }
     const reposService = this.app.service('repos') as unknown as ReposService;
-    const restored = await reposService.retryBranchProvisioning(branch.branch_id, params, true);
+    const admit = async () => {
+      // Reuse board-movement authorization and its existing transaction. A
+      // refused recovery must roll back placement, policy and board objects too.
+      if (boardIdExplicitlyProvided) {
+        await this.patch(id, { board_id: options?.boardId }, params);
+      }
+      return reposService.retryBranchProvisioning(branch.branch_id, params, true);
+    };
+    const restored = boardIdExplicitlyProvided
+      ? await runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, admit)
+      : await admit();
     await this.withTenantDatabase(params, () =>
       this.maintainPrimaryTeammateAfterPatch(branch, restored, params)
     );

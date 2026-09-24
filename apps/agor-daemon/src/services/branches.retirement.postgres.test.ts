@@ -15,6 +15,7 @@ import {
 } from '@agor/core/db';
 import type { TenantID } from '@agor/core/types';
 import { expect, it, vi } from 'vitest';
+import { retirementRouteApp } from '../../test/retirement-route-app';
 import { BoardsService } from './boards';
 import {
   barrier,
@@ -127,6 +128,59 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       vi.restoreAllMocks();
       for (const handle of [raw, peerRaw])
         await (handle as unknown as Database & { $client: { end(): Promise<void> } }).$client.end();
+    }
+  },
+  60000
+);
+
+it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
+  'registered retirement route refuses another tenant before clearing any preferences (RLS)',
+  async () => {
+    const raw = createDatabase({ dialect: 'postgresql', url: url! });
+    const db = createTenantScopedDatabaseProxy(raw, { requireScope: true });
+    const tenantA = `route-a-${generateId()}` as TenantID;
+    const tenantB = `route-b-${generateId()}` as TenantID;
+    try {
+      await initializeDatabase(raw);
+      const a = await runWithTenantDatabaseScope(db, tenantA, () => seedPreferenceRace(db));
+      const b = await runWithTenantDatabaseScope(db, tenantB, () => seedPreferenceRace(db));
+      const app = await retirementRouteApp(db, {
+        multi_tenancy: { mode: 'required_from_auth' },
+        execution: {},
+      });
+      const route = app.service('branches/:id/retire-teammate');
+      const foreignParams = {
+        route: { id: a.branch.branch_id },
+        user: b.user,
+        tenant: { tenant_id: tenantB, source: 'auth_claim' as const },
+      };
+      await expect(route.create({}, foreignParams)).rejects.toThrow();
+      await runWithTenantDatabaseScope(db, tenantA, async () => {
+        expect((await new BranchRepository(db).findById(a.branch.branch_id))?.archived).toBe(false);
+        expect((await new UsersRepository(db).findById(a.user.user_id))?.primary_teammate_id).toBe(
+          a.branch.branch_id
+        );
+      });
+      const ownerParams = {
+        route: { id: a.branch.branch_id },
+        user: a.user,
+        tenant: { tenant_id: tenantA, source: 'auth_claim' as const },
+      };
+      await route.create({}, ownerParams);
+      await runWithTenantDatabaseScope(db, tenantA, async () => {
+        expect((await new BranchRepository(db).findById(a.branch.branch_id))?.archived).toBe(true);
+        expect(
+          (await new UsersRepository(db).findById(a.user.user_id))?.primary_teammate_id
+        ).toBeUndefined();
+      });
+      await runWithTenantDatabaseScope(db, tenantB, async () => {
+        expect((await new BranchRepository(db).findById(b.branch.branch_id))?.archived).toBe(false);
+        expect((await new UsersRepository(db).findById(b.user.user_id))?.primary_teammate_id).toBe(
+          b.branch.branch_id
+        );
+      });
+    } finally {
+      await (raw as unknown as Database & { $client: { end(): Promise<void> } }).$client.end();
     }
   },
   60000

@@ -1382,8 +1382,26 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       })
     );
     if (!claimed) {
+      // A competing attempt can finish before our locked read. Returning its
+      // durable ready state is a safe no-op, never another executor admission.
+      if (
+        !claimedBranch.archived &&
+        !claimedBranch.deletion_status &&
+        claimedBranch.filesystem_status === 'ready'
+      )
+        return claimedBranch;
+      if (claimedBranch.filesystem_status === 'creating') {
+        throw new Conflict(
+          'Branch provisioning is already in progress. Wait for it to finish before retrying.',
+          {
+            code: 'BRANCH_PROVISIONING_IN_PROGRESS',
+            branchId: claimedBranch.branch_id,
+            filesystemStatus: 'creating',
+          }
+        );
+      }
       throw new Conflict(
-        'Branch recovery is already active or blocked by maintenance. Refresh before retrying.'
+        'Branch recovery is blocked or its state changed. Refresh before retrying.'
       );
     }
     this.emitBranchPatched(claimedBranch, params);

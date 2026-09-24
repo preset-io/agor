@@ -1678,7 +1678,10 @@ function AppContent() {
     try {
       showLoading('Unarchiving branch...', { key: 'unarchive' });
       await client.service(`branches/${branchId}/unarchive`).create(options || {});
-      showSuccess('Branch unarchived successfully!', { key: 'unarchive' });
+      showSuccess(
+        'Unarchive accepted; wait for filesystem recovery to finish before starting work.',
+        { key: 'unarchive' }
+      );
     } catch (error) {
       showError(
         `Failed to unarchive branch: ${error instanceof Error ? error.message : String(error)}`,

@@ -1251,7 +1251,13 @@ export async function handleGitBranchAdd(
     // the word "branch", which also appears in the non-empty-directory message
     // and would otherwise be misreported as a ref collision.
     let userMessage = errorMessage;
-    if (errorMessage.includes('is in use by another')) {
+    if (
+      payload.params.restoreMode &&
+      /is in use by another|already registered|already checked out/.test(errorMessage)
+    ) {
+      userMessage =
+        'Recovery cannot attach this checkout: Git registration is stale or the ref is occupied. Keep files and refs intact. An operator must verify the target storage and backups in the executor storage context before target-scoped repair; do not run global worktree repair or prune.';
+    } else if (errorMessage.includes('is in use by another')) {
       userMessage = `A branch named '${resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
     } else if (errorMessage.includes('already exists') && errorMessage.includes('not empty')) {
       userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists and is not empty. An archived or partially-cleaned branch may still occupy this path.`;
