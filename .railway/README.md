@@ -34,6 +34,25 @@ target environment; do not apply it to an environment with unrelated resources.
 
 ## Access and persistence
 
+For operator-selected bootstrap passwords, save `RAILWAY_AGOR_ADMIN_PASSWORD` in
+the launching user's secure global environment, then run
+`node .railway/secrets.mjs` before planning/applying infrastructure. The helper
+targets only this initial project's existing service/environment. It sends the
+value directly to Railway as `AGOR_ADMIN_PASSWORD`, with deployment suppressed.
+The IaC file uses `preserve()` so it neither embeds nor deletes that secret.
+Railway operators with variable access can access this value; use a unique
+preview-only password and do not share it across untrusted deployments.
+
+Do not use `{{ user.env.RAILWAY_AGOR_ADMIN_PASSWORD }}` in `.agor.yml`: rendered
+commands are persisted branch metadata. Lifecycle scripts should read the
+invoking user's process environment instead. Agor's environment executor already
+resolves user-global environment variables for its authorized execution user.
+The helper is not yet wired into Play, and is not a per-branch provisioning API.
+
+This is **bootstrap-only**. Updating the Railway variable does not rotate an
+existing user's password. Change an existing password through Agor's authenticated
+user settings/API, not by wiping the volume or re-running bootstrap on every start.
+
 First startup generates a random admin password in the volume's
 `admin-credentials` file, mode 0600, without logging it. Retrieve it privately
 using Railway's authenticated terminal, or supply `AGOR_ADMIN_PASSWORD` securely

@@ -1,4 +1,4 @@
-import { defineRailway, github, project, service, volume } from 'railway/iac';
+import { defineRailway, github, preserve, project, service, volume } from 'railway/iac';
 
 // SQLite-only, single-replica bootstrap for the first Railway deployment.
 // Before using this as a PR-environment template, replace the bootstrap branch
@@ -18,6 +18,8 @@ export default defineRailway(() => {
       overlapSeconds: 0,
     },
     env: {
+      // Set with secrets.mjs first; never evaluate the password into this graph.
+      AGOR_ADMIN_PASSWORD: preserve(),
       AGOR_RUNTIME_TARGET: 'production-source',
       RAILWAY_DOCKERFILE_PATH: 'docker/Dockerfile',
       NODE_ENV: 'production',

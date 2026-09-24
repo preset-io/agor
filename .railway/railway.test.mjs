@@ -21,14 +21,10 @@ test('SQLite bootstrap is one source-built service with private persistent state
   assert.equal(app.variables.PORT.value, app.variables.DAEMON_PORT.value);
   assert.equal(app.variables.CORS_ORIGIN.value, app.variables.AGOR_BASE_URL.value);
   assert.notEqual(app.variables.CORS_ORIGIN.value, '*');
-  for (const key of [
-    'RAILWAY_TOKEN',
-    'RAILWAY_API_TOKEN',
-    'RAILWAY_API_KEY',
-    'AGOR_ADMIN_PASSWORD',
-  ]) {
+  for (const key of ['RAILWAY_TOKEN', 'RAILWAY_API_TOKEN', 'RAILWAY_API_KEY']) {
     assert.equal(app.variables[key], undefined);
   }
+  assert.equal(app.variables.AGOR_ADMIN_PASSWORD.type, 'preserve');
 });
 
 test('platform runtime selection preserves explicit Docker targets and historical default', async () => {

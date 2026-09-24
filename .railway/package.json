@@ -9,7 +9,8 @@
     "@railway/cli": "5.62.1"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test railway.test.mjs",
+    "test": "node --experimental-strip-types --test *.test.mjs",
+    "secrets": "node secrets.mjs",
     "plan": "railway config plan",
     "apply": "railway config apply"
   }
