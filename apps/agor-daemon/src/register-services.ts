@@ -14,7 +14,10 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
-import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
+import {
+  ensureEmptyCredentialMountpoint,
+  openCredentialFileForBind,
+} from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
   getBranchHomePath,
@@ -1551,9 +1554,10 @@ function createExecuteHandler(
           // Bubblewrap requires an existing file mountpoint. Keep the
           // branch-owned inode deliberately empty: the caller credential is
           // visible only as a per-executor mount and is never copied into
-          // shared branch state. The capability-based writer refuses symlinked
-          // parent directories and replaces an adversarial final symlink.
-          await mutateCredentialFile({ target: destination, content: '' });
+          // shared branch state. Never replace this dentry: existing executors
+          // on this branch have their caller overlays attached to it. Unsafe
+          // or nonempty mountpoints fail closed rather than being repaired live.
+          await ensureEmptyCredentialMountpoint(destination);
           branchCodexAuthBind = {
             source: join(credentialRoute.codexHome, 'auth.json'),
             destination,
