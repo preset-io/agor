@@ -272,7 +272,13 @@ export function getMessageSpeaker(message: Message): 'user' | 'agent' | null {
   if (
     message.type === 'permission_request' ||
     message.type === 'input_request' ||
-    message.type === 'widget_request'
+    message.type === 'widget_request' ||
+    message.type === 'daemon_restart' ||
+    message.type === 'daemon_crash' ||
+    (message.role === 'system' &&
+      (message.metadata?.is_btw_result ||
+        message.metadata?.error_kind === 'missing_credential' ||
+        message.metadata?.error_kind === 'provider_credit_exhausted'))
   ) {
     return null;
   }
@@ -283,8 +289,8 @@ export function getMessageSpeaker(message: Message): 'user' | 'agent' | null {
 }
 
 /**
- * Holds the avatar column open for a message whose avatar was suppressed by
- * grouping. Zero height so it reserves gutter width without padding the row.
+ * Holds the avatar column open for a second bubble within the same message,
+ * which has no separate timestamp trigger. Zero height avoids padding the row.
  */
 const AvatarGutterSpacer: React.FC = () => (
   <span
@@ -742,11 +748,32 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   /**
    * The avatar column for one bubble. Grouping replaces the avatar with a
-   * spacer; a message that renders both a pre-tool and a post-tool bubble only
-   * introduces its speaker once, on whichever bubble comes first.
+   * timestamp trigger; a message that renders both a pre-tool and a post-tool
+   * bubble only introduces its speaker once, on whichever bubble comes first.
    */
   const renderAvatarSlot = (avatar: React.ReactNode, isFirstBubble = true): React.ReactNode => {
-    if (!showAvatar || !isFirstBubble) return <AvatarGutterSpacer />;
+    if (!isFirstBubble) return <AvatarGutterSpacer />;
+    if (!showAvatar) {
+      if (!message.timestamp) return <AvatarGutterSpacer />;
+      const timestamp = formatTimestampWithRelative(message.timestamp, message.index);
+      return (
+        <Tooltip title={timestamp} trigger={['hover', 'focus']} mouseEnterDelay={0.5} fresh>
+          <button
+            type="button"
+            aria-label={`Message ${message.index} timestamp: ${timestamp}`}
+            style={{
+              display: 'block',
+              width: IDENTITY_AVATAR_SIZE,
+              height: IDENTITY_AVATAR_SIZE,
+              padding: 0,
+              border: 0,
+              background: 'transparent',
+              cursor: 'help',
+            }}
+          />
+        </Tooltip>
+      );
+    }
     if (!message.timestamp) return avatar;
     return (
       <Tooltip

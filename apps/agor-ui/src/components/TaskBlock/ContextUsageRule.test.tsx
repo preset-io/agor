@@ -196,6 +196,24 @@ describe('ContextUsageRule in a task turn', () => {
     expect(within(screen.getByTestId('turn-usage-label')).getByText('12%')).toBeVisible();
   });
 
+  it('lifts the actual percentage Tag color when the turn is revealed', () => {
+    turn({
+      ...baseTask,
+      computed_context_window: 12_000,
+      normalized_sdk_response: {
+        contextWindowLimit: 100_000,
+        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    } as unknown as Task);
+    const tag = screen.getByText('12%');
+    const turnRegion = screen.getByLabelText('Turn and its metadata');
+    expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.rest));
+    fireEvent.mouseEnter(turnRegion);
+    expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.revealed));
+    fireEvent.mouseLeave(turnRegion);
+    expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.rest));
+  });
+
   it('adds nothing to a turn the executor reported no usage for', () => {
     turn(baseTask);
 

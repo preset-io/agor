@@ -26,6 +26,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
+import { useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -426,6 +427,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   taskMetadata,
   style,
 }) => {
+  const [open, setOpen] = useState(false);
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
   // authoritative (agent-reported), and its `percentage` matches the agent's
   // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
@@ -464,11 +466,33 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         />
       }
       title={null}
-      trigger="hover"
+      trigger={['hover', 'click']}
+      open={open}
+      onOpenChange={setOpen}
       placement="top"
       mouseEnterDelay={0.3}
     >
-      {pill}
+      <button
+        type="button"
+        aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
+        aria-expanded={open}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        style={{
+          display: 'inline-flex',
+          padding: 0,
+          border: 0,
+          background: 'transparent',
+          color: 'inherit',
+          cursor: 'pointer',
+        }}
+      >
+        {pill}
+      </button>
     </Popover>
   );
 };

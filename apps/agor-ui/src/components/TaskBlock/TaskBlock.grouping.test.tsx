@@ -41,7 +41,9 @@ const view = (taskMessages: Message[]) =>
 
 const counts = (container: HTMLElement) => ({
   avatars: container.querySelectorAll('.ant-bubble-avatar .ant-avatar').length,
-  spacers: container.querySelectorAll('[data-testid="avatar-spacer"]').length,
+  timestampTriggers: container.querySelectorAll(
+    'button[aria-label^="Message "][aria-label*="timestamp:"]'
+  ).length,
 });
 
 /** A turn still running, so the footer and avatars are exercised mid-stream. */
@@ -65,7 +67,7 @@ describe('TaskBlock avatar grouping', () => {
     ]);
 
     // One avatar for the prompt, one for the agent run that follows it.
-    expect(counts(container)).toEqual({ avatars: 2, spacers: 2 });
+    expect(counts(container)).toEqual({ avatars: 2, timestampTriggers: 2 });
   });
 
   it('re-introduces a speaker when the run is broken by the other speaker', () => {
@@ -76,7 +78,36 @@ describe('TaskBlock avatar grouping', () => {
       message(3, MessageRole.ASSISTANT, 'Stopped'),
     ]);
 
-    expect(counts(container)).toEqual({ avatars: 4, spacers: 0 });
+    expect(counts(container)).toEqual({ avatars: 4, timestampTriggers: 0 });
+  });
+
+  it.each([
+    ['btw result', { role: MessageRole.SYSTEM, type: 'system', metadata: { is_btw_result: true } }],
+    ['daemon restart', { role: MessageRole.SYSTEM, type: 'daemon_restart' }],
+    ['daemon crash', { role: MessageRole.SYSTEM, type: 'daemon_crash' }],
+    [
+      'credential recovery',
+      {
+        role: MessageRole.SYSTEM,
+        type: 'system',
+        metadata: { error_kind: 'missing_credential', tool: 'claude' },
+      },
+    ],
+  ])('does not let a separate %s hide the first assistant avatar', (_name, notice) => {
+    const middle = { ...message(1, MessageRole.SYSTEM, 'A separate notice'), ...notice } as Message;
+    const { container } = view([
+      message(0, MessageRole.USER, 'Do the thing'),
+      middle,
+      message(2, MessageRole.ASSISTANT, 'Answer after notice'),
+    ]);
+
+    expect(container.textContent).toContain('Answer after notice');
+    const answer = [...container.querySelectorAll('[data-conversation-block]')].find((block) =>
+      block.textContent?.includes('Answer after notice')
+    );
+    expect(answer).toBeDefined();
+    expect(answer?.querySelector('.ant-bubble-avatar .ant-avatar')).toBeTruthy();
+    expect(counts(container).timestampTriggers).toBe(0);
   });
 });
 
@@ -91,7 +122,7 @@ describe('TaskBlock avatars while streaming', () => {
     // what matters is that streaming adds no avatar and moves none.
     const avatarNodes = () => [...container.querySelectorAll('.ant-bubble-avatar .ant-avatar')];
     const before = avatarNodes();
-    expect(counts(container).spacers).toBe(0);
+    expect(counts(container).timestampTriggers).toBe(0);
 
     for (const [index, extra] of ['Second', 'Third'].entries()) {
       streamed.push(message(2 + index, MessageRole.ASSISTANT, extra));
@@ -100,8 +131,8 @@ describe('TaskBlock avatars while streaming', () => {
       const now = avatarNodes();
       expect(now).toHaveLength(before.length);
       for (const [i, node] of before.entries()) expect(now[i]).toBe(node);
-      // Each appended message extends the run with a spacer instead.
-      expect(counts(container).spacers).toBe(index + 1);
+      // Each appended message extends the run with a timestamp trigger instead.
+      expect(counts(container).timestampTriggers).toBe(index + 1);
     }
   });
 });

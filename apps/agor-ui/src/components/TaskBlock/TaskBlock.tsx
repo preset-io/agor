@@ -725,8 +725,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // One avatar per run of consecutive messages from the same speaker. A
     // repeated avatar down a column of agent replies carries no information
     // and is the transcript's loudest bit of noise; the messages after the
-    // first in a run keep gutter alignment with a spacer instead. Anything
-    // that isn't a plain speaker bubble (agent chains, SDK status notices,
+    // first in a run keep gutter alignment with a quiet timestamp trigger.
+    // Anything that isn't a plain speaker bubble (agent chains, SDK status notices,
     // permission prompts) ends the run, so the next message re-introduces
     // its speaker.
     const groupedAvatarMessageIds = useMemo(() => {
@@ -796,7 +796,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     // plain text, so the breakdown popover stays reachable from the number.
     const contextUsageLabel = hasContextWindowUsage ? (
       <ContextWindowPill
-        style={plainPillStyle}
+        style={{ ...plainPillStyle, color: 'inherit' }}
         used={contextWindowUsed}
         limit={contextWindowLimit || 0}
         taskMetadata={{
@@ -1001,6 +1001,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       task hydration, a block settling after streaming) apart
                       from per-frame streaming churn inside a block. */}
         {blocks.map((block, blockIndex) => {
+          // A widget is intentionally the final actionable content of a turn.
+          // Render it after the footer and outcome, not inside taskContent.
+          if (block.type === 'message' && block.message.type === 'widget_request') return null;
           if (block.type === 'message') {
             // Find if this is a permission request and if it's the first pending one
             const isPermissionRequest = block.message.type === 'permission_request';
@@ -1238,6 +1241,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
         ) : (
           <TurnOutcome task={task} />
+        )}
+        {blocks.map((block) =>
+          block.type === 'message' && block.message.type === 'widget_request' ? (
+            <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+              <MessageBlock message={block.message} client={client} />
+            </div>
+          ) : null
         )}
       </div>
     );
