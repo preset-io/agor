@@ -1,9 +1,11 @@
 /** Real service registration, tenant hooks, startup gates and authorized admission. */
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorClient, createClient } from '@agor/core/api';
+import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabase,
@@ -18,13 +20,23 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
+import {
+  AuthenticationService,
+  authenticate,
+  feathers,
+  feathersExpress,
+  socketio,
+} from '@agor/core/feathers';
 import { TaskStatus } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { getOrCreateExecutorConnectionRevocationFence } from './auth/executor-connection-admission.js';
+import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
 import { registerHooks } from './register-hooks.js';
 import { registerServices } from './register-services.js';
 import type { SessionTokenService } from './services/session-token-service.js';
+import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { assertTenantServiceClassification } from './utils/tenant-service-classification.js';
 
@@ -133,10 +145,30 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
       } as AgorConfig;
       const app = feathersExpress(feathers());
-      app.configure(socketio());
       app.set('config', config);
       app.set('db', db);
       const secret = 'synthetic-opencode-registration-jwt';
+      app.set('authentication', {
+        secret,
+        entity: 'user',
+        entityId: 'user_id',
+        service: 'users',
+        authStrategies: ['jwt'],
+        jwtOptions: {
+          header: { typ: 'access' },
+          audience: RUNTIME_JWT_AUDIENCE,
+          issuer: RUNTIME_JWT_ISSUER,
+          algorithm: 'HS256',
+          expiresIn: '15m',
+        },
+      });
+      const multiTenancy = resolveMultiTenancyConfig(config);
+      const socketConfig = createSocketIOConfig(app as never, {
+        corsOrigin: '*',
+        credentialsAllowed: false,
+        multiTenancy,
+      });
+      app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
       const registration = {
         app,
         db,
@@ -147,21 +179,34 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         DAEMON_PORT: 3030,
         UI_PORT: 5173,
         allowSuperadmin: false,
-        requireAuth: async (context: never) => context,
+        requireAuth: authenticate({ strategies: ['jwt'] }),
         deployment: { mode: 'standalone' as const },
       };
       const services = await registerServices(registration as never);
+      const tokens = (app as unknown as { sessionTokenService: SessionTokenService })
+        .sessionTokenService;
+      tokens.setJwtSecret(secret);
+      const authentication = new AuthenticationService(app);
+      authentication.register(
+        'jwt',
+        new RuntimeJWTStrategy({
+          sessionTokenService: tokens,
+          executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+          multiTenancy,
+        })
+      );
+      app.use('authentication', authentication);
       registerHooks({
         ...registration,
         ...services,
         superadminOpts: { allowSuperadmin: false },
       } as never);
+      configureChannels(app as never);
       expect(() => assertRealtimePublishPolicyCoverage(app)).not.toThrow();
       expect(() => assertTenantServiceClassification(app)).not.toThrow();
 
-      const tokens = (app as unknown as { sessionTokenService: SessionTokenService })
-        .sessionTokenService;
-      tokens.setJwtSecret(secret);
+      let server: Server | undefined;
+      let client: AgorClient | undefined;
       try {
         const token = await runWithTenantDatabaseScope(db, tenantId, () =>
           tokens.generateToken(sessionId, userId, { taskId, branchId })
@@ -194,9 +239,107 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await expect(
           nativeState.begin(input, { ...params, tenant: { tenant_id: `${tenantId}-foreign` } })
         ).rejects.toThrow('Conflicting tenant identities');
-        const grant = await nativeState.begin(input, params);
+        server = await new Promise<Server>((resolve) => {
+          const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+        });
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Expected test listener');
+        client = createClient(`http://127.0.0.1:${address.port}`, false, {
+          reconnectionAttempts: 0,
+          ackTimeout: 5_000,
+          socketAuthentication: { accessToken: token },
+        });
+        client.io.connect();
+        if (!client.io.connected) {
+          await new Promise<void>((resolve, reject) => {
+            client!.io.once('connect', resolve);
+            client!.io.once('connect_error', reject);
+          });
+        }
+        const remoteState = client.service('opencode-native-state');
+        await expect(remoteState.begin({ ...input, task_id: generateId() })).rejects.toThrow(
+          /token scoped to this executor task/i
+        );
+        const grant = await remoteState.begin(input);
         expect(grant.outcome).toBe('admitted');
+        if (grant.outcome !== 'admitted') throw new Error('Expected managed admission');
+        await expect(
+          client.service('tasks').reportRuntimeTelemetry({
+            task_id: taskId,
+            holder_instance_id: generateId(),
+          })
+        ).rejects.toThrow();
+        let previousHeartbeat = 0;
+        for (let sequence = 1; sequence <= 3; sequence++) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          const heartbeat = await client.service('tasks').reportRuntimeTelemetry({
+            task_id: taskId,
+            holder_instance_id: input.holder_instance_id,
+            pulse: { sequence, kind: 'progress', detail: `test.${sequence}` },
+          });
+          const observed = Date.parse(heartbeat.last_executor_heartbeat_at ?? '');
+          expect(observed).toBeGreaterThan(previousHeartbeat);
+          expect(heartbeat.latest_executor_pulse?.sequence).toBe(sequence);
+          previousHeartbeat = observed;
+        }
+        await expect(
+          client.service('tasks').reportSdkHealthFailure({
+            task_id: taskId,
+            holder_instance_id: generateId(),
+            reason: 'unknown_activity',
+            elapsed_ms: 1_000,
+            watchdog_action: 'would_fire',
+          })
+        ).rejects.toThrow();
+        const watchdog = await client.service('tasks').reportSdkHealthFailure({
+          task_id: taskId,
+          holder_instance_id: input.holder_instance_id,
+          reason: 'unknown_activity',
+          elapsed_ms: 1_000,
+          watchdog_action: 'would_fire',
+        });
+        expect(watchdog.sdk_failure).toMatchObject({
+          reason: 'unknown_activity',
+          watchdog_action: 'would_fire',
+          termination: 'not_requested',
+        });
+        const manifest = {
+          version: 3 as const,
+          storeId: grant.attempt.store_id,
+          attemptTaskId: taskId,
+          digest: `sha256:${'d'.repeat(64)}`,
+          bytes: 1024,
+          openCodeSessionId: 'ses_registration',
+          openCodeVersion: '1.18.31',
+          publishedAt: new Date().toISOString(),
+        };
+        await expect(
+          remoteState.seal({ task_id: taskId, holder_instance_id: generateId(), manifest })
+        ).rejects.toThrow();
+        await remoteState.seal({
+          task_id: taskId,
+          holder_instance_id: input.holder_instance_id,
+          manifest,
+        });
+        await expect(
+          client.service('tasks').patch(taskId, {
+            status: TaskStatus.COMPLETED,
+            native_state_attempt: manifest,
+            native_state_holder_instance_id: generateId(),
+          })
+        ).rejects.toThrow();
+        const completed = await client.service('tasks').patch(taskId, {
+          status: TaskStatus.COMPLETED,
+          native_state_attempt: manifest,
+          native_state_holder_instance_id: input.holder_instance_id,
+        });
+        expect(completed).toMatchObject({
+          status: TaskStatus.COMPLETED,
+          native_state_attempt: manifest,
+        });
       } finally {
+        client?.io.close();
+        if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
         tokens.close();
       }
     }, 30_000);

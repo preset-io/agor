@@ -477,6 +477,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         storeId: next.input.storeId,
         taskId: next.input.attemptTaskId,
       });
+      await expect(
+        attemptsA.begin({
+          taskId: publisher.task_id,
+          holderInstanceId: publisherHolder,
+          storeId,
+          binding: binding(sessionId, publisher.task_id, ownerId, storeId, publisherHolder),
+        })
+      ).resolves.toMatchObject({ outcome: 'rejected', code: 'already_admitted' });
       const nextManifest = {
         ...firstManifest,
         attemptTaskId: publisher.task_id,

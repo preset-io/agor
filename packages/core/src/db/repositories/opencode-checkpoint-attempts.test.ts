@@ -681,6 +681,16 @@ describe('OpenCodeCheckpointAttemptRepository', () => {
         storeId,
         taskId: firstTask.task_id,
       });
+      // A lost begin response may be replayed only while its input pin is live.
+      // Never hand a closed grant back as if the old checkpoint were still pinned.
+      await expect(
+        attempts.begin({
+          taskId: publisher.task_id,
+          holderInstanceId: publisherHolder,
+          storeId,
+          binding: binding(sessionId, publisher.task_id, storeId, publisherHolder, ownerId),
+        })
+      ).resolves.toMatchObject({ outcome: 'rejected', code: 'already_admitted' });
       const nextManifest = {
         ...manifest(publisher.task_id, storeId),
         publishedAt: '2026-09-23T00:00:00.000Z',

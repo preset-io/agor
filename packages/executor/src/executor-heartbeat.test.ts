@@ -12,26 +12,37 @@ describe('startExecutorHeartbeat', () => {
       request.resume();
       request.on('end', () => {
         response.setHeader('Content-Type', 'application/json');
-        response.end(JSON.stringify({ task_id: 'task-1', status: 'running' }));
+        response.end(
+          JSON.stringify({
+            task_id: 'task-1',
+            status: 'running',
+            last_executor_heartbeat_at: new Date(Date.now() + methods.length).toISOString(),
+          })
+        );
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const client = await createRestClient(url, 'test-only-key');
-      let observed!: (task: unknown) => void;
-      const reported = new Promise<unknown>((resolve) => {
-        observed = resolve;
-      });
+      const observed: unknown[] = [];
       const handle = startExecutorHeartbeat({
         client: client as never,
         taskId: 'task-1',
-        intervalMs: 60_000,
-        onTask: observed,
+        intervalMs: 20,
+        onTask: (task) => observed.push(task),
       });
       try {
-        await expect(reported).resolves.toMatchObject({ task_id: 'task-1' });
-        expect(methods).toEqual(['reportRuntimeTelemetry']);
+        await vi.waitFor(() => expect(observed.length).toBeGreaterThanOrEqual(3), {
+          timeout: 1_000,
+        });
+        expect(methods.slice(0, 3)).toEqual(Array(3).fill('reportRuntimeTelemetry'));
+        const firstThree = observed
+          .slice(0, 3)
+          .map(
+            (task) => (task as { last_executor_heartbeat_at: string }).last_executor_heartbeat_at
+          );
+        expect(new Set(firstThree).size).toBe(3);
       } finally {
         handle.stop();
       }

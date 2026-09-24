@@ -214,6 +214,7 @@ export class OpenCodeCheckpointAttemptRepository {
             (!taskIsActive && !stoppingReplay) ||
             current.retired_at ||
             current.write_state !== 'open' ||
+            (current.input_task_id && current.input_read_closed_at) ||
             current.holder_instance_id !== input.holderInstanceId ||
             !exactManifest(current.binding, input.binding)
           ) {

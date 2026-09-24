@@ -1,3 +1,6 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createRestClient } from '@agor/core/api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const runtime = vi.hoisted(() => ({
@@ -73,6 +76,30 @@ describe('AgorExecutor watchdog handoff', () => {
     runtime.execute.mockResolvedValue(undefined);
     runtime.refreshMcp.mockResolvedValue({});
     runtime.createExecutorClient.mockReset();
+  });
+
+  it('reports SDK health through a bound method on a real Feathers client', async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => {
+      methods.push(String(request.headers['x-service-method']));
+      request.resume();
+      request.on('end', () => {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ task_id: 'task-1', status: 'running' }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const executor = harness(async () => ({}));
+      executor.client = (await createRestClient(url, 'test-only-key')) as never;
+      await executor.handleWatchdogDecision(evidence);
+      expect(methods).toEqual(['reportSdkHealthFailure']);
+      expect(executor.abortController.signal.aborted).toBe(true);
+      expect(executor.heartbeat?.stop).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('keeps a recovered non-managed Stop exit successful', async () => {
