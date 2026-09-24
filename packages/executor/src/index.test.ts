@@ -75,6 +75,43 @@ describe('AgorExecutor watchdog handoff', () => {
     runtime.createExecutorClient.mockReset();
   });
 
+  it('keeps a recovered non-managed Stop exit successful', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    runtime.createExecutorClient.mockResolvedValue({
+      service: () => ({
+        on: vi.fn(),
+        connectExecutor: vi.fn(async () => ({
+          task_id: 'task-1',
+          session_id: 'session-1',
+          status: 'running',
+        })),
+      }),
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    });
+    const methods = executor as unknown as {
+      setupShutdownHandlers: () => void;
+      executeTask: () => Promise<void>;
+      recoverTerminationAfterExecutionError: () => Promise<boolean>;
+    };
+    methods.setupShutdownHandlers = vi.fn();
+    methods.executeTask = vi.fn(async () => {
+      throw new Error('Stop raced the provider');
+    });
+    methods.recoverTerminationAfterExecutionError = vi.fn(async () => true);
+
+    await executor.start();
+    expect(methods.recoverTerminationAfterExecutionError).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
   it('admits one of two outer invocations before heartbeat/provider work', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);

@@ -268,7 +268,7 @@ export class AgorExecutor {
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
             'code=0 reason=termination_recovered'
         );
-        process.exit(1);
+        process.exit(0);
         return;
       }
       console.error(
@@ -733,7 +733,7 @@ export class AgorExecutor {
         // Out-of-band signals are not proof that provider, source-read, or
         // checkpoint-write I/O drained. Leave all holder pins open for exact
         // trusted Cloud observation instead of synthesizing quiescence.
-        process.exit(0);
+        process.exit(1);
         return;
       }
 
