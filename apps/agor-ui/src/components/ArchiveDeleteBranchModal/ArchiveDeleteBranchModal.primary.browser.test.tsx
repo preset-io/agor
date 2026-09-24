@@ -8,7 +8,12 @@ import { makeRepo, makeTeammateBranch, makeUser } from '../BranchModal/testUtils
 import { ArchiveDeleteBranchModal } from './ArchiveDeleteBranchModal';
 
 afterEach(cleanup);
-function mount(canEditBoard = true, canManageBranch = true, boardPrimary = true) {
+function mount(
+  canEditBoard = true,
+  canManageBranch = true,
+  boardPrimary = true,
+  boardRead: 'ok' | 'absent' | 'forbidden' | 'failed' | 'access-failed' = 'ok'
+) {
   const branch = makeTeammateBranch({
     custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
   });
@@ -31,9 +36,20 @@ function mount(canEditBoard = true, canManageBranch = true, boardPrimary = true)
   const services = {
     branches: { get: async () => branch, on: vi.fn(), removeListener: vi.fn() },
     repos: { get: async () => makeRepo(), on: vi.fn(), removeListener: vi.fn() },
-    boards: { get: async () => board, clearPrimaryTeammate: clear },
+    boards: {
+      get: async () => {
+        if (boardRead === 'absent') return undefined;
+        if (boardRead === 'forbidden') throw new Error('Forbidden');
+        if (boardRead === 'failed') throw new Error('Network unavailable');
+        return board;
+      },
+      clearPrimaryTeammate: clear,
+    },
     'boards/:id/effective-access': {
-      find: async () => ({ capabilities: canEditBoard ? ['board.edit'] : [] }),
+      find: async () => {
+        if (boardRead === 'access-failed') throw new Error('Access unavailable');
+        return { capabilities: canEditBoard ? ['board.edit'] : [] };
+      },
     },
     'branches/:id/effective-access': {
       find: async () => ({
@@ -139,6 +155,52 @@ it('branch management does not confer board-primary authority', async () => {
 it('a non-Manager cannot retire, even with board edit access', async () => {
   mount(true, false);
   await screen.findAllByText('Branch Manager authority is required to archive or delete.');
+  expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled();
+});
+
+for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as const) {
+  it(`board ${boardRead} leaves independent Manager retirement available, with server protection`, async () => {
+    const f = mount(true, true, false, boardRead);
+    await screen.findByText(/Board details or permissions are unavailable/);
+    expect(screen.queryByText('Branch permissions could not be loaded.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Clear board primary' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open board to replace primary' })).toBeNull();
+    // Data can resolve before AntD's entrance animation makes the modal visible.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Any active teammate may be someone else's private primary/)
+      ).toBeVisible()
+    );
+    const trigger = screen.getByRole('button', { name: 'Retire teammate — keep files' });
+    expect(trigger).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+    f.retire.mockRejectedValueOnce(
+      new Error('Clear or replace the board primary before retirement')
+    );
+    await click(trigger);
+    const confirm = await screen.findByRole('button', { name: 'Retire teammate' });
+    await waitFor(() => expect(confirm).toBeVisible());
+    await click(confirm);
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Teammate action failed' }).textContent).toContain(
+        'Clear or replace the board primary'
+      )
+    );
+    expect(f.clear).not.toHaveBeenCalled();
+    expect(f.cancel).not.toHaveBeenCalled();
+  });
+}
+
+it('a known board primary still blocks retirement when its access lookup fails', async () => {
+  mount(true, true, true, 'access-failed');
+  await screen.findByText(/Board details or permissions are unavailable/);
+  expect(screen.queryByRole('button', { name: 'Clear board primary' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled();
+});
+
+it('unavailable board visibility does not grant a non-Manager retirement authority', async () => {
+  mount(true, false, false, 'forbidden');
+  await screen.findByText(/Board details or permissions are unavailable/);
   expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled();
 });
 

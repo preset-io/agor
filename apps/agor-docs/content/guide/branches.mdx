@@ -427,8 +427,11 @@ versions against recovery work. No schema change is needed, but that is not a
 readiness or storage preflight.
 
 The new task/upload/terminal admission fence is **only for persisted recovery
-lineage** (`provisioning_operation: restore`) until durable `ready`. It survives a
-failed attempt and subsequent retries. It does not retroactively fence historical
+lineage** (`provisioning_operation: restore`) whenever the filesystem is not `ready`.
+Lineage is sticky: successful recovery does not clear it. If that branch later
+becomes nonready (including standalone Clean), producers are fenced again until
+Recover validates readiness. It survives failed attempts and subsequent retries.
+It does not retroactively fence historical
 active `cleaned`/`preserved` rows that have never entered recovery. Existing broader
 session-creation and environment-command readiness checks still apply; metadata
 references are not filesystem readiness. Coordinate a maintenance window with

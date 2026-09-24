@@ -37,7 +37,7 @@ dbTest('a paused generic board rename cannot erase a new primary designation', a
 });
 
 dbTest(
-  'failed restore keeps historical task admission fenced through the next retry',
+  'restore lineage fences failed retries and later nonready state even after successful recovery',
   async ({ db }) => {
     const { branch, user } = await seedEnvironmentCommandBranch(db);
     const branches = new BranchRepository(db);
@@ -88,6 +88,11 @@ dbTest(
     );
     expect(await attempt()).toMatchObject({ status: 'queued' });
     await new UploadRepository(db).reserve(owner, metadata);
+    expect((await branches.findById(branch.branch_id))?.provisioning_operation).toBe('restore');
+    // Readiness releases admission, not lineage. A subsequent Clean must not
+    // turn a recovered branch back into an unfenced legacy workspace.
+    await branches.update(branch.branch_id, { filesystem_status: 'cleaned' });
+    await rejectProducers();
   }
 );
 

@@ -35,6 +35,7 @@ export function useArchiveDeleteEligibility(
     repo: Repo;
     access: EffectiveBranchAccess;
     board?: Board;
+    boardUnavailable: boolean;
     canEditBoard: boolean;
     scope: readonly unknown[] | null;
   } | null>(null);
@@ -52,24 +53,32 @@ export function useArchiveDeleteEligibility(
       client.service('branches/:id/effective-access').find({ route: { id: branch.branch_id } }),
     ])
       .then(async ([currentBranch, repo, access]) => {
-        const board =
-          isTeammate(currentBranch) && currentBranch.board_id
-            ? await client.service('boards').get(currentBranch.board_id)
-            : undefined;
-        const boardAccess = board
-          ? await client
-              .service('boards/:id/effective-access')
-              .find({ route: { id: board.board_id } })
-          : undefined;
+        let board: Board | undefined;
+        let boardAccess: EffectiveCapabilityPolicyAccess | undefined;
+        let boardUnavailable = false;
+        // Board visibility/control is independent of branch Manager authority.
+        // Keep a successfully read primary designation even if its access read fails.
+        if (isTeammate(currentBranch) && currentBranch.board_id) {
+          try {
+            board = await client.service('boards').get(currentBranch.board_id);
+            if (board) {
+              boardAccess = (await client.service('boards/:id/effective-access').find({
+                route: { id: board.board_id },
+              })) as unknown as EffectiveCapabilityPolicyAccess;
+            } else {
+              boardUnavailable = true;
+            }
+          } catch {
+            boardUnavailable = true;
+          }
+        }
         if (operation.isCurrent())
           setLoaded({
             branch: currentBranch,
             repo,
             board,
-            canEditBoard:
-              (boardAccess as EffectiveCapabilityPolicyAccess | undefined)?.capabilities.includes(
-                'board.edit'
-              ) ?? false,
+            boardUnavailable,
+            canEditBoard: boardAccess?.capabilities.includes('board.edit') ?? false,
             access: access as unknown as EffectiveBranchAccess,
             scope: authority.operationScope,
           });
@@ -121,6 +130,7 @@ export function useArchiveDeleteEligibility(
   return {
     policy,
     board: current?.board,
+    boardUnavailable: current?.boardUnavailable ?? false,
     canEditBoard: current?.canEditBoard ?? false,
     cleanupReason,
     managementReason,

@@ -65,7 +65,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const [confirmPrimary, setConfirmPrimary] = useState<'clear' | 'retire' | null>(null);
   const [primaryError, setPrimaryError] = useState<string>();
   const teammate = isTeammate(branch) && !branch.archived;
-  const boardPrimary = eligibility.board?.primary_teammate_id === branch.branch_id;
+  // Unavailable board data is unknown, not proof this teammate is non-primary.
+  // The server independently enforces clearance before admitting retirement.
+  const boardPrimary = eligibility.board
+    ? eligibility.board.primary_teammate_id === branch.branch_id
+    : undefined;
   const ownPrimary = currentUser?.primary_teammate_id === branch.branch_id;
   const primaryReason = teammate
     ? 'For an active teammate, use explicit file-preserving retirement below. Permanent deletion is available after retirement.'
@@ -202,10 +206,19 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             description={
               <Space orientation="vertical">
                 <Text>
-                  Primary teammates cannot be implicitly archived, cleaned or deleted. Retirement
-                  archives this teammate and its sessions, preserves all files, and clears
-                  everyone's personal primary preference for it. It does not choose a replacement.
+                  Any active teammate may be someone else's private primary. This dialog uses
+                  explicit retirement for all active teammates because those preferences are not
+                  visible to you. Retirement archives this teammate and its sessions, preserves all
+                  files, and clears everyone's personal primary preference for it. It does not
+                  choose a replacement.
                 </Text>
+                {eligibility.boardUnavailable && (
+                  <Text>
+                    Board details or permissions are unavailable; board controls are disabled.
+                    Retirement still checks board-primary protection on the server. A board Editor
+                    or Manager must clear or replace any board primary designation first.
+                  </Text>
+                )}
                 {boardPrimary && (
                   <>
                     <Text>
@@ -226,9 +239,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                           Clear board primary
                         </Button>
                       )}
-                      <Typography.Link href={eligibility.board?.url}>
-                        Open board to replace primary
-                      </Typography.Link>
+                      {!eligibility.boardUnavailable && (
+                        <Typography.Link href={eligibility.board?.url}>
+                          Open board to replace primary
+                        </Typography.Link>
+                      )}
                     </Space>
                     {!eligibility.canEditBoard && (
                       <Text>A board Editor or Manager must clear or replace the primary.</Text>

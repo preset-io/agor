@@ -18,6 +18,6 @@ export async function assertNotPrimaryTeammate(db: Database, branchId: string): 
     .one();
   if (board || user)
     throw new RepositoryError(
-      'Primary teammate is protected. In Archive, clear or replace its board primary, then choose Retire teammate to preserve files and clear personal primary preferences.'
+      'Primary teammate is protected from cleanup, archive, and deletion. Keep it active for routine maintenance; use a separately reviewed, target-specific cleanup procedure. Intentional retirement is a separate file-preserving action in Archive.'
     );
 }

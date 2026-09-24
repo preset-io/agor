@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { type AgorClient, createClient } from '@agor/core/api';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BoardRepository,
@@ -19,7 +20,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { AuthenticationService } from '@agor/core/feathers';
-import type { BranchID, TenantID } from '@agor/core/types';
+import type { Branch, BranchID, HookContext, TenantID } from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
 import { runBranchWorkspaceFiles } from '../../../../packages/executor/src/commands/branch-cleanup';
@@ -64,6 +65,8 @@ for (const scenario of [
   'active-caller',
   'active-rollback',
   'board-admission-rollback',
+  'board-admission-success',
+  'board-post-admission-rollback',
   'active-delegated',
   'stale-registration',
   'interrupted',
@@ -227,7 +230,10 @@ for (const scenario of [
       'missing-workspace',
       'stale-registration',
     ].includes(scenario);
-    const db = createTenantScopedDatabaseProxy(raw, { label: 'restore-integration' });
+    const db = createTenantScopedDatabaseProxy(raw, {
+      label: 'restore-integration',
+      requireScope: true,
+    });
     const config = {
       database: { dialect: 'sqlite' },
       execution:
@@ -316,6 +322,7 @@ for (const scenario of [
         return undefined as never;
       });
     }
+    const observers: AgorClient[] = [];
     try {
       const sessions = server.app.service('sessions') as unknown as SessionsService;
       await runWithTenantContext(tenantId, async () => {
@@ -334,7 +341,7 @@ for (const scenario of [
         await expect(
           repos.retryBranchProvisioning(branch.branch_id, { tenant }, true)
         ).rejects.toThrow();
-        if (scenario === 'board-admission-rollback') {
+        if (scenario.startsWith('board-')) {
           const boards = new BoardRepository(raw);
           const source = await boards.create({ name: 'Source', created_by: user.user_id });
           const destination = await boards.create({
@@ -348,6 +355,142 @@ for (const scenario of [
             branch_id: branch.branch_id,
             position: { x: 10, y: 20 },
           });
+          const observe = async (userId: typeof user.user_id) => {
+            const client = createClient(server.url, false, {
+              reconnectionAttempts: 0,
+              socketAuthentication: {
+                accessToken: server.headers(userId).authorization.slice('Bearer '.length),
+              },
+            });
+            observers.push(client);
+            await new Promise<void>((resolve, reject) => {
+              client.io.once('connect', resolve);
+              client.io.once('connect_error', reject);
+              client.io.connect();
+            });
+            const events: Branch[] = [];
+            client.service('branches').on('patched', (value) => events.push(value));
+            return events;
+          };
+          const delivered = await observe(user.user_id);
+          const denied = await observe(outsider.user_id);
+          // Positive control: authenticated delivery through production hooks,
+          // tenant channels and branch RBAC, not just an internal emit listener.
+          await (server.app.service('branches') as unknown as BranchesService).patch(
+            branch.branch_id,
+            { notes: 'control' },
+            {
+              user,
+              tenant,
+            }
+          );
+          await vi.waitFor(() => expect(delivered).toHaveLength(1));
+          expect(denied).toHaveLength(0);
+          delivered.length = 0;
+          const settleDelivery = () => new Promise((resolve) => setTimeout(resolve, 75));
+          const patched = vi.fn<(value: Branch, hook: HookContext) => void>();
+          server.app.service('branches').on('patched', patched);
+          if (scenario !== 'board-admission-rollback') {
+            const unarchive = () =>
+              (server.app.service('branches') as unknown as BranchesService).unarchive(
+                branch.branch_id,
+                { boardId: destination.board_id },
+                { user, tenant }
+              );
+            const admission = () =>
+              runWithTenantDatabaseTransaction(db, tenantId, async () => {
+                await unarchive();
+                // The explicit-board move nests in this transaction. Both its
+                // creating event and executor dispatch must await outer commit.
+                await settleDelivery();
+                expect(delivered, 'no authenticated delivery before commit').toHaveLength(0);
+                expect(patched).not.toHaveBeenCalled();
+                expect(executions).toHaveLength(0);
+                if (scenario === 'board-post-admission-rollback')
+                  throw new Error('rollback after admission');
+              });
+            if (scenario === 'board-post-admission-rollback') {
+              await expect(admission()).rejects.toThrow('rollback after admission');
+              await settleDelivery();
+              expect(delivered).toHaveLength(0);
+              expect(patched).not.toHaveBeenCalled();
+              expect(executions).toHaveLength(0);
+              expect(await rows.findById(branch.branch_id)).toMatchObject({
+                board_id: source.board_id,
+                archived: true,
+                filesystem_status: 'cleaned',
+              });
+            } else {
+              await admission();
+              const moved = patched.mock.calls.filter(
+                ([value]) => value.filesystem_status === 'cleaned'
+              );
+              expect(moved).toHaveLength(1);
+              expect(moved[0][0]).toMatchObject({
+                board_id: destination.board_id,
+                archived: true,
+              });
+              const creating = patched.mock.calls.filter(
+                ([value]) => value.filesystem_status === 'creating'
+              );
+              expect(creating).toHaveLength(1);
+              expect(creating[0]).toEqual([
+                expect.objectContaining({
+                  branch_id: branch.branch_id,
+                  board_id: destination.board_id,
+                  archived: false,
+                }),
+                expect.objectContaining({
+                  path: 'branches',
+                  params: expect.objectContaining({ tenant }),
+                }),
+              ]);
+              expect(executions).toHaveLength(1);
+              await Promise.all(executions.splice(0));
+              // A board move intentionally evicts user sockets after commit.
+              // Move + creating arrive first; readiness is available on refresh.
+              await vi.waitFor(() =>
+                expect(observers.every((client) => !client.io.connected)).toBe(true)
+              );
+              expect(delivered).toHaveLength(2);
+              expect(patched.mock.calls.map(([value]) => value.filesystem_status)).toEqual([
+                'cleaned',
+                'creating',
+                'ready',
+              ]);
+              expect(delivered.map((value) => value.filesystem_status)).toEqual([
+                'cleaned',
+                'creating',
+              ]);
+              expect(delivered.every((value) => value.board_id === destination.board_id)).toBe(
+                true
+              );
+              expect(await rows.findById(branch.branch_id)).toMatchObject({
+                board_id: destination.board_id,
+                archived: false,
+                filesystem_status: 'ready',
+              });
+            }
+            expect(denied).toHaveLength(0);
+            const finalPlacement = await runWithTenantDatabaseScope(db, tenantId, () =>
+              objects.findByBranchId(branch.branch_id)
+            );
+            if (scenario === 'board-post-admission-rollback') {
+              expect(finalPlacement).toMatchObject({
+                object_id: placement.object_id,
+                board_id: source.board_id,
+                position: { x: 10, y: 20 },
+              });
+            } else {
+              // Moving recreates placement; rollback alone preserves its identity.
+              expect(finalPlacement).toMatchObject({
+                branch_id: branch.branch_id,
+                board_id: destination.board_id,
+              });
+              expect(finalPlacement?.object_id).not.toBe(placement.object_id);
+            }
+            return;
+          }
           const session = await new SessionRepository(raw).create({
             branch_id: branch.branch_id,
             created_by: user.user_id,
@@ -382,7 +525,11 @@ for (const scenario of [
             board_id: source.board_id,
             position: { x: 10, y: 20 },
           });
+          await settleDelivery();
+          expect(delivered, 'no authenticated delivery on admission rollback').toHaveLength(0);
+          expect(denied).toHaveLength(0);
           expect(executions).toHaveLength(0);
+          expect(patched).not.toHaveBeenCalled();
           return;
         }
         if (scenario === 'active-delegated') {
@@ -554,6 +701,7 @@ for (const scenario of [
       } else if (scenario !== 'deleted-git')
         expect(await readFile(join(path, 'personal.md'), 'utf8')).toBe('irreplaceable memory');
     } finally {
+      for (const client of observers) client.io.close();
       await server.close();
       await rm(root, { recursive: true, force: true });
     }
