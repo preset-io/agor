@@ -1,9 +1,9 @@
 /** Synthetic-provider child for the registered daemon/executor PG smoke test. */
 
 import { TaskStatus } from '@agor/core/types';
-import { ToolRegistry } from '../handlers/sdk/tool-registry.js';
-import { AgorExecutor, type ExecutorConfig } from '../index.js';
-import type { ManagedOpenCodeNativeStateManifest } from '../managed-opencode-admission.js';
+import { ToolRegistry } from '../src/handlers/sdk/tool-registry.js';
+import { AgorExecutor, type ExecutorConfig } from '../src/index.js';
+import type { ManagedOpenCodeNativeStateManifest } from '../src/managed-opencode-admission.js';
 
 const configText = process.env.AGOR_TEST_EXECUTOR_CONFIG;
 const expectedText = process.env.AGOR_TEST_EXPECTED_INPUT;

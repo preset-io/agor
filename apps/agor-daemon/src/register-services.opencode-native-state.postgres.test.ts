@@ -486,7 +486,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           tokens.generateToken(sessionId, userId, { taskId: nextTaskId, branchId })
         );
         const child = new URL(
-          '../../../packages/executor/src/testing/managed-opencode-smoke-child.ts',
+          '../../../packages/executor/test/managed-opencode-smoke-child.ts',
           import.meta.url
         );
         const childResult = await execFileAsync(
