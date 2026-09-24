@@ -128,6 +128,27 @@ export class AgorExecutor {
     await tryMarkTaskTerminal(this.client, this.config.taskId, status, errorMessage);
   }
 
+  /** No native-state grant was accepted here; the repository verifies that fact under its lock. */
+  private async settleManagedOpenCodeBeforeAdmission(): Promise<void> {
+    if (!this.client) return;
+    await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+    if (this.terminationRequest) {
+      await this.reportTerminationComplete().catch(() => undefined);
+    } else {
+      await this.tryMarkTaskTerminal(
+        TaskStatus.FAILED,
+        'Managed OpenCode admission failed before provider I/O'
+      );
+      // A Stop may win between the first read and terminal patch; the service
+      // then leaves terminality with the coordinator rather than applying our
+      // failure. Re-read and acknowledge that exact request before exit.
+      await this.refreshTerminationState('startup_recovery').catch(() => undefined);
+      if (this.terminationRequest) {
+        await this.reportTerminationComplete().catch(() => undefined);
+      }
+    }
+  }
+
   /**
    * Start the executor process
    */
@@ -175,6 +196,7 @@ export class AgorExecutor {
         if (this.terminationRequest || this.abortController.signal.aborted) {
           this.managedOpenCodeAdmissionState = 'rejected';
           console.warn('[executor.opencode] event=admission_skipped reason=stop_before_begin');
+          await this.settleManagedOpenCodeBeforeAdmission();
           process.exit(1);
           return;
         }
@@ -185,6 +207,7 @@ export class AgorExecutor {
           console.error(
             '[executor.opencode] event=admission_rejected reason=cloud_identity_missing'
           );
+          await this.settleManagedOpenCodeBeforeAdmission();
           process.exit(1);
           return;
         }
@@ -216,6 +239,7 @@ export class AgorExecutor {
           console.warn(
             `[executor.opencode] event=admission_rejected code=${admission.outcome === 'rejected' ? admission.code : 'binding_mismatch'}`
           );
+          await this.settleManagedOpenCodeBeforeAdmission();
           process.exit(1);
           return;
         }
@@ -247,6 +271,7 @@ export class AgorExecutor {
       if (this.managedOpenCodeCandidate && this.managedOpenCodeAdmissionState !== 'admitted') {
         this.managedOpenCodeAdmissionState = 'rejected';
         console.warn('[executor.opencode] event=admission_aborted reason=pre_admission_error');
+        await this.settleManagedOpenCodeBeforeAdmission();
         process.exit(1);
         return;
       }

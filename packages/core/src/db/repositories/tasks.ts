@@ -1622,14 +1622,22 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     const mutate = async (txDb: Database, row: TaskRow, fullId: string) => {
       let managedLedger: typeof opencodeCheckpointAttempts.$inferSelect | undefined;
       if (row.data.managed_opencode_protocol === 3) {
-        managedLedger = await this.requireManagedOpenCodeHolder(
-          txDb,
-          row,
-          input.holder_instance_id
-        );
+        if (input.holder_instance_id) {
+          managedLedger = await this.requireManagedOpenCodeHolder(
+            txDb,
+            row,
+            input.holder_instance_id
+          );
+        } else {
+          // Stop can win before begin commits. No managed I/O is possible
+          // without an attempt; this check and the quiescence write hold the
+          // same Session→Task locks that begin takes before inserting one.
+          await this.assertNoManagedOpenCodeAttempt(txDb, row);
+        }
         if (
-          (managedLedger.input_task_id && !managedLedger.input_read_closed_at) ||
-          managedLedger.write_state === 'open'
+          managedLedger &&
+          ((managedLedger.input_task_id && !managedLedger.input_read_closed_at) ||
+            managedLedger.write_state === 'open')
         ) {
           throw new RepositoryError('Managed OpenCode I/O has not drained before quiescence');
         }
@@ -2065,6 +2073,24 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** Prove pre-admission absence under the same Session/Task locks taken by begin. */
+  private async assertNoManagedOpenCodeAttempt(txDb: Database, taskRow: TaskRow): Promise<void> {
+    const existing = await select(txDb, { attempt_id: opencodeCheckpointAttempts.attempt_id })
+      .from(opencodeCheckpointAttempts)
+      .where(
+        and(
+          eq(opencodeCheckpointAttempts.tenant_id, getCurrentTenantId() ?? 'default'),
+          eq(opencodeCheckpointAttempts.session_id, taskRow.session_id),
+          eq(opencodeCheckpointAttempts.task_id, taskRow.task_id)
+        )
+      )
+      .limit(1)
+      .one();
+    if (existing) {
+      throw new RepositoryError('Managed OpenCode lifecycle requires an admitted holder');
+    }
+  }
+
   /** Require the exact unretired holder row while the Session/Task locks are held. */
   private async requireManagedOpenCodeHolder(
     txDb: Database,
@@ -2198,7 +2224,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     updates: Partial<Task>,
     executorUpdate: boolean,
     holderId?: string,
-    nativeStatePublication = false
+    nativeStatePublication = false,
+    preAdmissionNoAttempt = false
   ): Promise<Task> {
     console.debug(
       `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
@@ -2213,7 +2240,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       throw new RepositoryError('Managed OpenCode completion requires sealed publication');
     }
 
-    if (executorUpdate && currentRow.data.managed_opencode_protocol === 3) {
+    if (
+      executorUpdate &&
+      currentRow.data.managed_opencode_protocol === 3 &&
+      !preAdmissionNoAttempt
+    ) {
       await this.requireManagedOpenCodeHolder(txDb, currentRow, holderId);
     }
 
@@ -2762,6 +2793,25 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       return this.mutateLockedSessionTask(
         id,
         async (txDb, taskRow, _sessionRow, resolvedId) => {
+          if (
+            !holderId &&
+            (updates.status === TaskStatus.FAILED || updates.status === TaskStatus.STOPPED) &&
+            updates.native_state_attempt === undefined
+          ) {
+            // Only the task-scoped executor may request this path. It is safe
+            // before begin and impossible after begin under the shared locks.
+            await this.assertNoManagedOpenCodeAttempt(txDb, taskRow);
+            return this.applyTaskUpdate(
+              txDb,
+              taskRow,
+              resolvedId,
+              updates,
+              true,
+              undefined,
+              false,
+              true
+            );
+          }
           const ledger = await this.requireManagedOpenCodeHolder(txDb, taskRow, holderId);
           if (
             updates.native_state_attempt !== undefined ||

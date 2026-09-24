@@ -2,11 +2,27 @@
 import { OPENCODE_OBSERVER_BUSY_REASON } from '@agor/core/types';
 
 const OBSERVER_BUSY_DELAYS_MS = [150, 300, 600, 1_200, 2_400] as const;
+const TRANSPORT_DELAYS_MS = [200, 500] as const;
 
 function isObserverBusy(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const candidate = error as { code?: unknown; data?: { reason?: unknown } };
   return candidate.code === 429 && candidate.data?.reason === OPENCODE_OBSERVER_BUSY_REASON;
+}
+
+function isRetryableTransportFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown };
+  return (
+    candidate.code === 408 ||
+    candidate.code === 502 ||
+    candidate.code === 503 ||
+    candidate.code === 504 ||
+    candidate.code === 'ECONNRESET' ||
+    candidate.code === 'ECONNREFUSED' ||
+    candidate.code === 'EPIPE' ||
+    candidate.code === 'ETIMEDOUT'
+  );
 }
 
 function waitBeforeRetry(ms: number, signal: AbortSignal): Promise<void> {
@@ -24,7 +40,7 @@ function waitBeforeRetry(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** Retry only the daemon's typed capacity refusal, before any provider or checkpoint I/O. */
+/** Retry bounded pre-I/O capacity and ambiguous transport failures with the same holder. */
 export async function beginManagedOpenCodeWithBusyRetry<T>(
   begin: () => Promise<T>,
   signal: AbortSignal,
@@ -32,13 +48,19 @@ export async function beginManagedOpenCodeWithBusyRetry<T>(
   wait: (ms: number, signal: AbortSignal) => Promise<void> = waitBeforeRetry,
   random: () => number = Math.random
 ): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
+  let busyAttempts = 0;
+  let transportAttempts = 0;
+  for (;;) {
     if (signal.aborted || shouldStop()) throw new Error('Managed OpenCode admission was stopped');
     try {
       return await begin();
     } catch (error) {
-      if (!isObserverBusy(error) || attempt >= OBSERVER_BUSY_DELAYS_MS.length) throw error;
-      const base = OBSERVER_BUSY_DELAYS_MS[attempt];
+      if (isRetryableTransportFailure(error) && transportAttempts < TRANSPORT_DELAYS_MS.length) {
+        await wait(TRANSPORT_DELAYS_MS[transportAttempts++], signal);
+        continue;
+      }
+      if (!isObserverBusy(error) || busyAttempts >= OBSERVER_BUSY_DELAYS_MS.length) throw error;
+      const base = OBSERVER_BUSY_DELAYS_MS[busyAttempts++];
       const jitter = Math.floor(random() * Math.min(100, base / 4));
       await wait(base + jitter, signal);
     }

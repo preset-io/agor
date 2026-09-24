@@ -52,6 +52,18 @@ export class RepositoryError extends Error {
   }
 }
 
+/** Permanent native-state refusal; callers must not treat this as a transient DB failure. */
+export class OpenCodeNativeStateHandoffRequiredError extends RepositoryError {
+  readonly code = 'opencode_native_state_handoff_required';
+
+  constructor(resource: 'session' | 'user' | 'branch') {
+    super(
+      `opencode_native_state_handoff_required: ${resource} contains managed OpenCode state and requires whole-home process/queued-launch fencing`
+    );
+    this.name = 'OpenCodeNativeStateHandoffRequiredError';
+  }
+}
+
 /**
  * Entity not found error
  */

@@ -214,6 +214,95 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(exit).toHaveBeenLastCalledWith(0);
   });
 
+  it('reports a pre-admission rejection as a task failure without starting provider work', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const patch = vi.fn().mockResolvedValue({ status: 'failed' });
+    const begin = vi.fn().mockResolvedValue({ outcome: 'rejected', code: 'identity_invalid' });
+    runtime.createExecutorClient.mockResolvedValue({
+      service(path: string) {
+        if (path === 'tasks')
+          return {
+            on: vi.fn(),
+            connectExecutor: vi
+              .fn()
+              .mockResolvedValue({ task_id: 'task-1', session_id: 'session-1', status: 'running' }),
+            get: vi
+              .fn()
+              .mockResolvedValue({ task_id: 'task-1', session_id: 'session-1', status: 'running' }),
+            patch,
+          };
+        if (path === 'opencode-native-state') return { begin };
+        return { on: vi.fn() };
+      },
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+      agenticToolContext: { version: 3, mode: 'managed-projection' },
+      managedOpenCodeLocator: {
+        runId: 'run-1',
+        cellId: 'cell-1',
+        namespace: 'tenant-ns',
+        podName: 'pod-1',
+        podUid: 'pod-uid-1',
+        containerName: 'executor',
+      },
+    });
+    (executor as unknown as { setupShutdownHandlers: () => void }).setupShutdownHandlers = vi.fn();
+
+    await executor.start();
+
+    expect(begin).toHaveBeenCalledOnce();
+    expect(patch).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));
+    expect(runtime.execute).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenLastCalledWith(1);
+  });
+
+  it('acknowledges Stop when it wins the pre-admission failure-patch race', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const requestedAt = '2026-09-24T00:00:00.000Z';
+    const running = { task_id: 'task-1', session_id: 'session-1', status: 'running' };
+    const stopping = {
+      ...running,
+      status: 'stopping',
+      termination_request: { cause: 'user_stop', requested_at: requestedAt },
+    };
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(running)
+      .mockResolvedValueOnce(stopping);
+    const patch = vi.fn().mockResolvedValue(stopping);
+    const reportTerminationComplete = vi.fn().mockResolvedValue(stopping);
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'opencode',
+      daemonUrl: 'http://daemon',
+      agenticToolContext: { version: 3, mode: 'managed-projection' },
+    }) as unknown as {
+      client: object;
+      settleManagedOpenCodeBeforeAdmission(): Promise<void>;
+    };
+    executor.client = { service: () => ({ get, patch, reportTerminationComplete }) };
+
+    await executor.settleManagedOpenCodeBeforeAdmission();
+
+    expect(patch).toHaveBeenCalledOnce();
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: requestedAt,
+    });
+  });
+
   it('starts SDK observation before invoking the tool', async () => {
     const executor = new AgorExecutor({
       sessionToken: 'token',

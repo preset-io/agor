@@ -121,6 +121,60 @@ async function attemptFor(
 }
 
 describe('TaskRepository.completeWithNativeStatePublication', () => {
+  dbTest('settles pre-admission failure only while no attempt exists', async ({ db }) => {
+    const sessionId = await createSession(db);
+    const taskRepo = new TaskRepository(db);
+    const unadmitted = await runningTask(db, sessionId);
+    await expect(
+      taskRepo.updateFromExecutor(unadmitted.task_id, {
+        status: TaskStatus.FAILED,
+        error_message: 'admission failed',
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.FAILED });
+
+    const admitted = await runningTask(db, sessionId);
+    await attemptFor(db, admitted, sessionId);
+    await expect(
+      taskRepo.updateFromExecutor(admitted.task_id, { status: TaskStatus.FAILED })
+    ).rejects.toThrow(/holder/);
+    expect((await taskRepo.findById(admitted.task_id))?.status).toBe(TaskStatus.RUNNING);
+  });
+
+  dbTest(
+    'accepts a pre-admission Stop report but never a holder-less post-begin report',
+    async ({ db }) => {
+      const sessionId = await createSession(db);
+      const taskRepo = new TaskRepository(db);
+      const unadmitted = await runningTask(db, sessionId);
+      const first = await taskRepo.claimTermination({
+        taskId: unadmitted.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped',
+      });
+      if (first.outcome !== 'claimed') throw new Error('Stop claim did not succeed');
+      await expect(
+        taskRepo.recordExecutorQuiescence({
+          task_id: unadmitted.task_id,
+          requested_at: first.task.termination_request!.requested_at,
+        })
+      ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+
+      const admitted = await runningTask(db, sessionId);
+      await attemptFor(db, admitted, sessionId);
+      const second = await taskRepo.claimTermination({
+        taskId: admitted.task_id,
+        cause: 'user_stop',
+        errorMessage: 'Stopped',
+      });
+      if (second.outcome !== 'claimed') throw new Error('Stop claim did not succeed');
+      await expect(
+        taskRepo.recordExecutorQuiescence({
+          task_id: admitted.task_id,
+          requested_at: second.task.termination_request!.requested_at,
+        })
+      ).rejects.toThrow(/holder/);
+    }
+  );
   dbTest('rejects generic managed completion before and after seal', async ({ db }) => {
     const sessionId = await createSession(db);
     const task = await runningTask(db, sessionId);

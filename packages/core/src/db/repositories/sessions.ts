@@ -60,6 +60,7 @@ import {
   attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
+  OpenCodeNativeStateHandoffRequiredError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
   resolveByShortIdPrefix,
@@ -1127,9 +1128,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       .limit(1)
       .one();
     if (attempt || row.data.sdk_native_state || row.data.sdk_native_state_store_id) {
-      throw new RepositoryError(
-        'opencode_native_state_handoff_required: session has managed OpenCode state and requires whole-home process/queued-launch fencing'
-      );
+      throw new OpenCodeNativeStateHandoffRequiredError('session');
     }
   }
 
@@ -1151,6 +1150,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         throw new EntityNotFoundError('Session', id);
       }
     } catch (error) {
+      if (error instanceof OpenCodeNativeStateHandoffRequiredError) throw error;
       console.error(`❌ [SessionRepo] Failed to delete session ${id}:`, sanitizeDbError(error));
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(

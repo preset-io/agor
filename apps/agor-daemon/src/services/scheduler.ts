@@ -63,6 +63,7 @@ import {
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
   isPostgresDatabaseHandle,
+  OpenCodeNativeStateHandoffRequiredError,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -1587,10 +1588,19 @@ export class SchedulerService {
 
     if (sessionsToDelete.length > 0) {
       const sessionService = this.app.service('sessions');
+      let deletedCount = 0;
+      let handoffSkipped = 0;
       for (const session of sessionsToDelete) {
         try {
           await sessionService.remove(session.session_id, { provider: undefined });
+          deletedCount += 1;
         } catch (error) {
+          // Hosted native state cannot be erased by retention. It is a durable
+          // handoff refusal, not an initialization failure of the new occurrence.
+          if (error instanceof OpenCodeNativeStateHandoffRequiredError) {
+            handoffSkipped += 1;
+            continue;
+          }
           // Concurrent reconcilers may have deleted the same retained-out row.
           // Re-read once; absence is idempotent success, presence is a real
           // failure and keeps the schedule due for another bounded retry.
@@ -1598,14 +1608,25 @@ export class SchedulerService {
             this.sessionRepo.findById(session.session_id)
           );
           if (stillPresent) throw error;
+          deletedCount += 1;
         }
       }
 
-      this.logWorkEvent('info', 'retention_deleted', {
-        schedule_id: schedule.schedule_id,
-        deleted_count: sessionsToDelete.length,
-        retention: schedule.retention,
-      });
+      if (handoffSkipped > 0) {
+        this.logWorkEvent('info', 'retention_deferred', {
+          schedule_id: schedule.schedule_id,
+          skipped_handoff_count: handoffSkipped,
+          retention: schedule.retention,
+        });
+      }
+
+      if (deletedCount > 0) {
+        this.logWorkEvent('info', 'retention_deleted', {
+          schedule_id: schedule.schedule_id,
+          deleted_count: deletedCount,
+          retention: schedule.retention,
+        });
+      }
     }
   }
 }

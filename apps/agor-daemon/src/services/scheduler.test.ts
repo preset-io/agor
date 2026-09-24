@@ -5,6 +5,7 @@ import {
   createTenantScopedDatabaseProxy,
   generateId,
   MCPServerRepository,
+  OpenCodeNativeStateHandoffRequiredError,
   RepoRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -924,6 +925,68 @@ describe('scheduler HA occurrence recovery', () => {
     expect(removeSession).toHaveBeenCalledWith(olderActive.session_id, { provider: undefined });
     expect(await sessions.findById(olderActive.session_id)).toBeNull();
   });
+
+  dbTest(
+    'retention defers native-state handoff without blocking the new occurrence marker',
+    async ({ db }) => {
+      const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
+        db,
+        { email: `scheduler-native-retention-${Math.random()}@example.com` },
+        { agentic_tool: 'opencode' }
+      );
+      const schedule = await new ScheduleRepository(db).update(createdSchedule.schedule_id, {
+        retention: 1,
+      });
+      const sessions = new SessionRepository(db);
+      const older = await sessions.create({
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'opencode',
+        status: SessionStatus.COMPLETED,
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW - 60_000,
+        schedule_id: schedule.schedule_id,
+      });
+      const newest = await sessions.create({
+        branch_id: schedule.branch_id,
+        created_by: creator.user_id,
+        agentic_tool: 'opencode',
+        status: SessionStatus.COMPLETED,
+        scheduled_from_branch: true,
+        scheduled_run_at: NOW,
+        schedule_id: schedule.schedule_id,
+      });
+      await sessions.markScheduledInitializationComplete(older.session_id);
+      const { app, removeSession } = createSchedulerApp(db);
+      removeSession.mockRejectedValueOnce(new OpenCodeNativeStateHandoffRequiredError('session'));
+      const scheduler = new SchedulerService(db, app);
+      await (
+        scheduler as unknown as {
+          finalizeScheduledSession(input: {
+            schedule: Schedule;
+            scheduleId: Schedule['schedule_id'];
+            session: Session;
+            scheduledRunAt: number;
+            now: number;
+            runTestHooks: boolean;
+          }): Promise<void>;
+        }
+      ).finalizeScheduledSession({
+        schedule,
+        scheduleId: schedule.schedule_id,
+        session: newest,
+        scheduledRunAt: NOW,
+        now: NOW,
+        runTestHooks: false,
+      });
+      expect(removeSession).toHaveBeenCalledWith(older.session_id, { provider: undefined });
+      expect(await sessions.findById(older.session_id)).not.toBeNull();
+      expect(await sessions.isScheduledInitializationComplete(newest.session_id)).toBe(true);
+      expect(
+        (await new ScheduleRepository(db).findById(schedule.schedule_id))?.last_run_session_id
+      ).toBe(newest.session_id);
+    }
+  );
 });
 
 describe('renderSchedulePrompt', () => {

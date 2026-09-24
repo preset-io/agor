@@ -23,7 +23,11 @@ import {
 import { branches, opencodeCheckpointAttempts, sessions, uploads } from '../schema';
 import { requireCurrentTenantId } from '../tenant-context';
 import { assertTenantWritable } from '../tenant-write-gate';
-import { EntityNotFoundError, RepositoryError } from './base';
+import {
+  EntityNotFoundError,
+  OpenCodeNativeStateHandoffRequiredError,
+  RepositoryError,
+} from './base';
 import { TaskRepository } from './tasks';
 
 /**
@@ -89,10 +93,12 @@ export class BranchMaintenanceRepository {
       }
       const overlap = await select(tx, { branch_id: branches.branch_id })
         .from(branches)
-        .where(sql`${branches.branch_id} <> ${branchId} AND (
+        .where(
+          sql`${branches.branch_id} <> ${branchId} AND (
           ${branches.data} ->> 'path' = ${row.data.path}
           OR ${branches.data} ->> 'path' LIKE ${`${row.data.path}/%`}
-          OR ${row.data.path} LIKE ((${branches.data} ->> 'path') || '/%'))`)
+          OR ${row.data.path} LIKE ((${branches.data} ->> 'path') || '/%'))`
+        )
         .limit(1)
         .one();
       if (overlap)
@@ -132,22 +138,24 @@ export class BranchMaintenanceRepository {
           .one()) ||
           (await select(tx)
             .from(sessions)
-            .where(sql`${sessions.branch_id} = ${branchId}
+            .where(
+              sql`${sessions.branch_id} = ${branchId}
               AND (${sessions.data} -> 'sdk_native_state' IS NOT NULL
-                OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`)
+                OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`
+            )
             .limit(1)
             .one()))
       ) {
-        throw new RepositoryError(
-          'opencode_native_state_handoff_required: branch contains managed OpenCode state and requires whole-home process/queued-launch fencing'
-        );
+        throw new OpenCodeNativeStateHandoffRequiredError('branch');
       }
       if (
         kind === 'delete' &&
         (await select(tx)
           .from(sessions)
-          .where(sql`${sessions.branch_id} = ${branchId}
-        AND ${sessions.sdk_home_scope} = 'execution_home' AND (${sessions.data} ->> 'sdk_session_id') IS NOT NULL`)
+          .where(
+            sql`${sessions.branch_id} = ${branchId}
+        AND ${sessions.sdk_home_scope} = 'execution_home' AND (${sessions.data} ->> 'sdk_session_id') IS NOT NULL`
+          )
           .limit(1)
           .one())
       ) {

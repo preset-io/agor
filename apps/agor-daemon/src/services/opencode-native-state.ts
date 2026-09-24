@@ -42,6 +42,18 @@ const NATIVE_STATE_HOLDER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const SAFE_CLOUD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const SAFE_CONTAINER_ID = /^[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[A-Za-z0-9._:-]{1,220}$/;
 const SAFE_IMAGE_ID = /^(?:[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,1023}@)?sha256:[0-9a-f]{64}$/;
+
+/** A committed same-holder begin must replay its immutable store binding. */
+export function selectManagedOpenCodeAdmissionStoreId(
+  existingStoreId: string | undefined,
+  storedId: unknown,
+  pointerStoreId: unknown
+): string {
+  if (existingStoreId) return existingStoreId;
+  if (typeof storedId === 'string') return storedId;
+  if (typeof pointerStoreId === 'string') return pointerStoreId;
+  return generateId();
+}
 interface OpenCodeCheckpointRepository {
   begin(input: {
     taskId: string;
@@ -445,6 +457,7 @@ export class OpenCodeNativeStateService {
       }
       const existing = await select(this.options.db, {
         holder_instance_id: opencodeCheckpointAttempts.holder_instance_id,
+        store_id: opencodeCheckpointAttempts.store_id,
       })
         .from(opencodeCheckpointAttempts)
         .where(
@@ -464,12 +477,14 @@ export class OpenCodeNativeStateService {
         pointer && typeof pointer === 'object' && 'storeId' in pointer
           ? (pointer as { storeId?: unknown }).storeId
           : undefined;
-      const storeId =
-        typeof storedId === 'string'
-          ? storedId
-          : typeof pointerStoreId === 'string'
-            ? pointerStoreId
-            : generateId();
+      // A retry after a committed begin but lost response must reuse the
+      // original binding, including its store. Otherwise the same holder is
+      // falsely rejected and cannot recover its admitted attempt.
+      const storeId = selectManagedOpenCodeAdmissionStoreId(
+        existing?.store_id,
+        storedId,
+        pointerStoreId
+      );
       return { sessionId: session.session_id, ownerUserId: session.created_by, storeId };
     });
 

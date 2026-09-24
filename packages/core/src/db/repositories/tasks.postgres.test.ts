@@ -38,6 +38,69 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
     ]);
   });
 
+  it('settles a managed task before begin and fences a Stop report without a holder', async () => {
+    const owner = await new UsersRepository(db).create({
+      email: `postgres-opencode-admission-${generateId()}@example.invalid`,
+      role: 'member',
+    });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId(),
+      slug: `postgres-opencode-admission-${generateId()}`,
+      name: 'Postgres OpenCode admission',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/postgres-opencode-admission.git',
+      local_path: `/tmp/${generateId()}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(db).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: `postgres-opencode-admission-${generateId()}`,
+      ref: 'main',
+      branch_unique_id: (Date.now() + 67) % 1_000_000,
+      path: `/tmp/${generateId()}`,
+      created_by: owner.user_id,
+    });
+    const session = await new SessionRepository(db).create({
+      session_id: generateId(),
+      branch_id: branch.branch_id,
+      agentic_tool: 'opencode',
+      created_by: owner.user_id,
+    });
+    const tasks = new TaskRepository(db);
+    const makeConnected = async () => {
+      const created = await tasks.create({
+        task_id: generateId(),
+        session_id: session.session_id,
+        created_by: owner.user_id,
+        full_prompt: 'admission',
+        status: TaskStatus.DISPATCHING,
+        message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+        git_state: { ref_at_start: 'main', sha_at_start: 'postgres-test' },
+      });
+      await tasks.connectExecutor(created.task_id);
+      await tasks.stampManagedOpenCodeProtocol(created.task_id);
+      return created.task_id;
+    };
+    const failedId = await makeConnected();
+    await expect(
+      tasks.updateFromExecutor(failedId, { status: TaskStatus.FAILED })
+    ).resolves.toMatchObject({ status: TaskStatus.FAILED });
+    const stoppedId = await makeConnected();
+    const claim = await tasks.claimTermination({
+      taskId: stoppedId,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+    if (claim.outcome !== 'claimed') throw new Error('Stop claim failed');
+    await expect(
+      tasks.recordExecutorQuiescence({
+        task_id: stoppedId,
+        requested_at: claim.task.termination_request!.requested_at,
+      })
+    ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+  });
+
   it('preserves the claimed UTC instant across an idempotent reread in a non-UTC timezone', async () => {
     expect(new Date('2026-07-11T00:00:00').getTimezoneOffset()).toBe(180);
 

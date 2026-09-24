@@ -1,6 +1,24 @@
 import { OPENCODE_OBSERVER_BUSY_REASON } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { parseResolvedLocator, withOpenCodeObserverSlot } from './opencode-native-state';
+import {
+  parseResolvedLocator,
+  selectManagedOpenCodeAdmissionStoreId,
+  withOpenCodeObserverSlot,
+} from './opencode-native-state';
+
+describe('managed OpenCode admission retry store binding', () => {
+  it('reuses a committed attempt store after a lost response instead of generating a new one', () => {
+    expect(selectManagedOpenCodeAdmissionStoreId('admitted-store', undefined, undefined)).toBe(
+      'admitted-store'
+    );
+    expect(
+      selectManagedOpenCodeAdmissionStoreId('admitted-store', 'stale-session', 'stale-pointer')
+    ).toBe('admitted-store');
+    expect(selectManagedOpenCodeAdmissionStoreId(undefined, 'session-store', undefined)).toBe(
+      'session-store'
+    );
+  });
+});
 
 function resolvedLocator(containerId: string) {
   return {

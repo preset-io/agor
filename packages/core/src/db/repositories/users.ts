@@ -35,6 +35,7 @@ import { isExecutionHomeKeyAvailable } from '../user-execution-home';
 import {
   type BaseRepository,
   EntityNotFoundError,
+  OpenCodeNativeStateHandoffRequiredError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
   resolveByShortIdPrefix,
@@ -600,15 +601,15 @@ export class UsersRepository
       .one();
     const pointer = await select(this.db, { session_id: sessions.session_id })
       .from(sessions)
-      .where(sql`${sessions.created_by} = ${fullId}
+      .where(
+        sql`${sessions.created_by} = ${fullId}
         AND (${sessions.data} -> 'sdk_native_state' IS NOT NULL
-          OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`)
+          OR ${sessions.data} -> 'sdk_native_state_store_id' IS NOT NULL)`
+      )
       .limit(1)
       .one();
     if (attempt || pointer) {
-      throw new RepositoryError(
-        'opencode_native_state_handoff_required: user owns managed OpenCode state and requires whole-home process/queued-launch fencing'
-      );
+      throw new OpenCodeNativeStateHandoffRequiredError('user');
     }
   }
 
