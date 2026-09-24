@@ -293,7 +293,7 @@ visible and tenant-scoped:
 | Thread mode            | Explicit `public_thread_per_summon`; read-only compatibility for current existing-thread encodings may be retained during migration                                       |
 | Catch-up bounds        | Maximum pages, messages, prompt bytes/characters, request time, and bounded rate-limit retry policy; values must be validated and have safe ceilings                      |
 | File capability        | Explicit `files` capability, disabled by default for the inbound core. Attachment staging is not part of this design slice                                                |
-| Agent-tool capability  | Explicit per-channel `agent_tools` allowlist, empty or least-privilege by default; a provider read/write tool must not appear merely because the bot can read Discord     |
+| Agent-tool capability  | Explicit per-channel `agent_tools` toggles, all off by default; a provider tool must not appear merely because the bot can read Discord                                   |
 | Proactive outbound     | `outbound_enabled` and an allowed `channel:<snowflake>` target remain branch-bound and text-only for compatibility; proactive sends do not silently create summon threads |
 
 Configuration changes stop and restart the affected transport with fresh
@@ -468,7 +468,9 @@ This design does not add:
 
 - progress messages, typing, presence, or other live status surfaces;
 - attachment ingestion, attachment persistence, or a durable file mirror;
-- a mapped-thread history RPC or shared conversation-history store for agents;
+- a shared conversation-history store for agents (the gated live-read tool in
+  [Agent channel-history capability](#agent-channel-history-capability) is not
+  a store: it reads Discord on demand and keeps no provider-history mirror);
 - automatic application, guild, role, permission, or channel mutation;
 - repair, replay, or cursor-edit APIs;
 - DMs at launch;
@@ -478,6 +480,200 @@ This design does not add:
 - autonomous Tasks for mentions missed while the listener was unavailable;
 - a Discord transcript in the Agor database, S3, logs, or any other durable
   storage.
+
+## Agent channel-history capability
+
+**Status:** Ready. All decisions are resolved and spec review findings are
+reconciled.
+
+### Problem statement
+
+An agent working from a Discord gateway cannot see what was said in a Discord
+channel beyond the bounded catch-up interval of its own summon thread. Workflows
+that depend on channel context, such as a scheduled session that checks a
+channel for missing status updates, have no supported path. The only workaround
+is to give the session the bot token and call Discord directly, which exposes
+the credential to the agent. Slack gateways already offer an opt-in,
+token-safe channel-history tool (`agor_gateway_slack_channel_history_get`);
+Discord gateways reject every agent tool (`agent_tools` must be `[]`).
+
+### Evidence and current behavior
+
+- `validateDiscordConfig` rejects any non-empty `agent_tools`, and the type is
+  `never[]`. The Settings UI and the public guide describe `agent_tools:[]` as
+  the only value.
+- The daemon already reads Discord REST history for catch-up, but only as one
+  exact `(cursor, live mention]` interval inside a summon thread, failing closed
+  when coverage cannot be proven. It is not a "latest N messages" reader.
+- Discord's `GET /channels/{channel.id}/messages` returns messages newest
+  first, accepts one of `before`/`after`/`around` plus `limit` 1–100, needs
+  `VIEW_CHANNEL`, returns nothing without `READ_MESSAGE_HISTORY`, and returns
+  empty content fields without the Message Content intent (Discord API
+  reference, Message resource). Every valid Discord row already requires the
+  intent and the documented invite includes both permissions, so no new
+  Discord permission or intent is needed.
+- Slack's tool is off by default per channel, bound to the calling session's
+  branch, limited by `allowed_channel_ids` at the connector, labels content
+  untrusted, and never returns the token.
+
+### Desired outcome
+
+An admin can opt one Discord gateway channel into agent channel-history reads.
+Sessions allowed to use that gateway channel can then read recent messages from
+its allowlisted public parent channels, and from public threads under them,
+without ever holding the bot token. Nothing changes for rows that do not opt in.
+
+### Accepted behavior
+
+- **SC-01 Off by default.** A Discord row whose `agent_tools` is absent, `[]`,
+  or `{ channel_history: false }` rejects the tool with an error that names the
+  capability and how an admin enables it. No Discord request is made.
+- **SC-02 Enable.** An admin enables the capability with
+  `agent_tools: { channel_history: true }` through Settings → Gateway Channels,
+  `agor_gateway_channels_create`/`_update`, or the `channelHistory` option of
+  `agor_gateway_discord_setup`. The stored value round-trips through edit
+  without being reset.
+- **SC-03 Default target.** Called from a session created by a Discord summon
+  with no explicit channel, the tool reads the allowlisted parent channel of
+  that session's thread.
+- **SC-04 Explicit target.** `discordChannelId` may name an allowlisted parent
+  channel or a public thread whose parent is allowlisted. Any other channel
+  (not allowlisted, private thread, thread under a non-allowlisted parent,
+  another guild, a DM) is refused. A caller without a Discord gateway source
+  must pass `gatewayChannelId` and `discordChannelId`.
+- **SC-05 Result.** The tool returns up to `limit` matching messages (default
+  50, maximum 200) in chronological order. With no cursor or with `before`, it
+  returns the newest matches older than the cursor. With `after`, it returns
+  the oldest matches newer than the cursor. Cursors are exclusive message IDs;
+  `before` and `after` cannot be combined. Bot and system messages are omitted
+  unless `includeBotMessages` is true; `limit` counts returned messages, not
+  scanned ones. Each message carries its ID, ISO time,
+  author ID and display label, text, bot/mention flags, attachment metadata
+  (filename, content type, size; no URLs), and the ID of a thread it started,
+  if any. The result carries the untrusted-content warning, the gateway channel
+  and target branch, the read channel ID, `has_more`, and the cursor for the
+  next call in the same direction. A `markdown` format returns the same content
+  as a transcript.
+- **SC-05a Bounded reads.** Each call scans at most the row's
+  `catch_up.max_pages` Discord pages and returns at most
+  `catch_up.max_prompt_bytes` of message text, within the row's timeout and
+  rate-limit budget. When a page or byte budget stops the read before `limit`
+  matches are found, the tool returns what it collected with `has_more: true`
+  and a next cursor from the last scanned message, so the caller can continue.
+  `has_more` is false only when Discord returned a short page in the read
+  direction. If the first matching message alone exceeds the byte budget, its
+  text is cut to the budget and marked truncated so paging still progresses.
+  A timeout or exhausted rate-limit budget is an error, not a partial result. The tool never advances a catch-up cursor or admits a Task.
+- **SC-06 Access.** A session may use the tool only through a gateway channel
+  whose target branch is the session's branch, including scheduled or
+  manually created sessions on that branch. A caller with no session context
+  needs admin role or `all` branch permission. A disabled row or a non-Discord
+  gateway channel is refused.
+- **SC-07 Provider failure.** Before reading, the tool confirms that the bot's
+  effective permissions on the target include View Channel and Read Message
+  History, because Discord returns an empty list rather than an error when
+  Read Message History is missing. A missing permission, unknown channel,
+  timeout, or rate limit beyond the row's catch-up budget returns a clear,
+  content-free error; an empty channel with both permissions returns an empty
+  result. If Discord returns empty content for an ordinary user message with no
+  supported rich payload (Message Content unavailable), the read fails rather
+  than returning silently blank messages.
+
+### Applicable non-negotiable constraints
+
+- **Credential boundary.** The bot token never appears in tool input, output,
+  errors, logs, or session context.
+- **Tenant boundary.** Gateway channel, branch, and session resolution use the
+  caller's trusted tenant scope; another tenant's `gatewayChannelId` is
+  indistinguishable from a missing one.
+- **Read boundary.** Reads are limited to the row's `allowed_channel_ids` and
+  public threads under them (Richard, SC-04). A denial does not reveal the
+  target's branch, name, or content.
+- **No provider-history mirror.** The tool writes no Discord messages to its
+  own storage, caches, or logs. Tool results enter the calling session's record
+  like any other tool result (see Resolved decisions).
+- **Untrusted content.** Output is labeled as untrusted external content.
+- **Compatibility.** Existing rows with `agent_tools: []` or no `agent_tools`
+  keep validating and mean all capabilities off. The listener, catch-up,
+  cursor, and delivery behavior are unchanged.
+
+### Externally observable contracts
+
+- **Config.** Discord `agent_tools` accepts `[]` (legacy, all off) or an object
+  whose only key is `channel_history` with a boolean value. Non-empty arrays,
+  unknown keys, and non-boolean values are rejected.
+- **MCP tool** `agor_gateway_discord_channel_history_get`, read-only, with
+  inputs `gatewayChannelId?`, `discordChannelId?`, `before?`, `after?`,
+  `limit?` (1–200), `includeBotMessages?`, and `format?`
+  (`messages` | `markdown`), returning the SC-05 result.
+- **Setup and create tools.** `agor_gateway_discord_setup` gains
+  `channelHistory` (default `false`), and the create/update descriptions stop
+  requiring `agent_tools:[]`.
+- **Settings UI.** The Discord row shows a channel-history toggle, off by
+  default.
+- **Docs.** The Discord section of the Message Gateway guide describes the
+  capability, its read boundary, and its untrusted-content label.
+
+### Resolved decisions and assumptions
+
+| Decision                 | Resolution                                                                                                                                                                                                                                               | Decided by                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Readable channels        | Allowlisted parent channels plus public threads under them                                                                                                                                                                                               | Richard, 2026-09-24                                    |
+| Config shape             | Slack-style object `agent_tools: { channel_history: true }`; `[]` stays valid as all off                                                                                                                                                                 | Richard, 2026-09-24                                    |
+| Scope                    | Channel history only; DM-on-join and guild search are separate work                                                                                                                                                                                      | Richard, 2026-09-24                                    |
+| Default                  | Off per row; admin opt-in                                                                                                                                                                                                                                | Slack precedent and this design's least-privilege rule |
+| Access                   | Same branch binding and no-session privilege rule as the Slack tools                                                                                                                                                                                     | Existing Slack tool contract                           |
+| Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds                                                                                                                                                                                      | Reversible default; separate budgets deferred          |
+| Session-record retention | Tool results, including Discord messages from people who never mentioned the bot, are stored in the calling session's transcript like any tool result, as summon catch-up prompts already are. "No transcript" means no separate provider-history mirror | Richard, 2026-09-24                                    |
+
+### Success and proof boundary
+
+Scenario and consistency checks for this spec: every scenario maps to one
+contract above, and no scenario contradicts the governing decision or the
+catch-up contract.
+
+Implementation proof, against a real Discord guild through a locally running
+daemon:
+
+| Claim        | Exercise                                                                                                             | Expected observation                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| SC-05a       | Read a channel where bot messages fill the scanned pages                                                             | Partial result with `has_more: true` and a working next cursor               |
+| SC-07        | Remove Read Message History from the bot on one allowlisted channel, then read it; read an empty allowlisted channel | Permission error for the first; empty result for the second                  |
+| SC-01        | Call the tool on a row with `agent_tools: []`                                                                        | Capability-disabled error; no Discord request                                |
+| SC-02        | Enable the toggle in Settings, reopen the row                                                                        | Stored `{ channel_history: true }` survives edit                             |
+| SC-03, SC-05 | Summon the bot, then call the tool from that session with no target                                                  | Latest parent-channel messages, chronological, bots omitted, warning present |
+| SC-04        | Call with an allowlisted thread, a non-allowlisted channel, and a private thread                                     | Thread read succeeds; the other two are refused without content              |
+| SC-05        | Page with `before`, then call with both cursors                                                                      | Older page returned; both cursors rejected                                   |
+| SC-06        | Call from a session on another branch                                                                                | Refused without revealing the target branch                                  |
+| Credential   | Search tool output and daemon logs for the token                                                                     | Not present                                                                  |
+
+Automated coverage adds config validation (including the legacy `[]`),
+cross-tenant `gatewayChannelId` refusal, read-boundary refusal,
+Message-Content-missing failure, permission-missing versus empty-channel,
+filtered pages, an exactly full final page, `after` paging, and provider-error
+shaping at the smallest existing test seam.
+
+Implementation note (review R4): the capability belongs in the shared Discord
+setup decisions, artifact builder, and validator used by both Settings and
+`agor_gateway_discord_setup`, so the toggle cannot be reset on edit or built
+two ways. The effective-permission check reuses the connector's existing
+permission computation from the connection test.
+
+### Out of scope
+
+- DM-on-join, member-join events, the Server Members intent, and outbound to
+  users.
+- Discord guild message search (`/guilds/{guild.id}/messages/search`).
+- Reactions, file download or upload, and any other Discord agent tool.
+- Private threads, DMs, and channels outside `allowed_channel_ids`.
+- Changes to summon catch-up, cursors, or delivery.
+
+### Deferred hardening
+
+- A per-read audit event, if admins need visibility into which sessions read
+  channel history.
+- Separate read budgets for the tool, if shared catch-up limits prove too
+  small or too large in practice.
 
 ## Public implementation references
 
