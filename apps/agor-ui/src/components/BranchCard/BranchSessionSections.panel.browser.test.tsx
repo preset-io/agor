@@ -154,11 +154,17 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     expect(dot.getBoundingClientRect().right).toBeLessThanOrEqual(panelRight);
   }
 
-  // Rows sit flush: their own hover/selection fill separates them, so pitch is the row height.
+  // A one-size-unit gap keeps adjacent hover/selection fills from touching.
+  const rowGap = theme.getDesignToken(config).sizeUnit;
   expect(
     row('Astra recheck — Abuse').getBoundingClientRect().top -
       row('Security agor').getBoundingClientRect().top
-  ).toBeCloseTo(expectedHeight, 0);
+  ).toBeCloseTo(expectedHeight + rowGap, 0);
+  // Level guides reach across the gap, so a subtree still reads as one group.
+  const guide = row('Astra recheck — Abuse')
+    .closest('.ant-tree-treenode')!
+    .querySelector('.ant-tree-indent-unit')!;
+  expect(getComputedStyle(guide, '::before').bottom).toBe(`${-rowGap}px`);
 
   expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
   // Running is a spinner, distinct from the pulsing dots that wait on the user.
@@ -423,11 +429,11 @@ it('keeps gateway channels on the title line and scheduled runs on the title col
   expect(within(gateway).getByText('#eng-deploys')).toBeVisible();
   expect(gateway.querySelector('.ant-tag')).toBeNull();
   expect(gateway.getBoundingClientRect().height).toBeCloseTo(expectedHeight, 0);
-  // Paged scheduled rows keep the same flush rhythm as tree rows.
+  // Paged scheduled rows keep the same rhythm (row plus one-size-unit gap) as tree rows.
   expect(
     row('Weekly security digest').getBoundingClientRect().top -
       row('Nightly dependency audit').getBoundingClientRect().top
-  ).toBeCloseTo(expectedHeight, 0);
+  ).toBeCloseTo(expectedHeight + theme.getDesignToken(config).sizeUnit, 0);
 
   // Every section shares one title column and the same read-state tone.
   const title = (name: string) => within(row(name)).getByText(new RegExp(`^${name}`));
@@ -468,6 +474,30 @@ it('lets read sessions recede one step while sessions that need you stay full st
   probe.remove();
 });
 
+it('shows a title tooltip only when the title is truncated, without taking over the row', async () => {
+  const { onSessionClick } = mount();
+  const title = (name: string) => within(row(name)).getByText(new RegExp(`^${name}`));
+
+  // Titles that fit get no tooltip, native or otherwise.
+  const fits = title('Security agor');
+  expect(fits).not.toHaveAttribute('title');
+  expect(fits.scrollWidth).toBeLessThanOrEqual(fits.clientWidth);
+  await act(async () => page.elementLocator(fits).hover());
+  await act(() => new Promise((resolve) => setTimeout(resolve, 800)));
+  expect(screen.queryByRole('tooltip')).toBeNull();
+
+  const fullTitle = 'Execution security — implementation and regression validation';
+  const truncated = title('Execution security — implementation');
+  expect(truncated).not.toHaveAttribute('title');
+  expect(truncated.scrollWidth).toBeGreaterThan(truncated.clientWidth);
+  await act(async () => page.elementLocator(truncated).hover());
+  expect(await screen.findByRole('tooltip', {}, { timeout: 2000 })).toHaveTextContent(fullTitle);
+
+  // The row still opens its session on click.
+  await act(async () => page.elementLocator(truncated).click());
+  expect(onSessionClick).toHaveBeenCalledExactlyOnceWith('exec-impl');
+});
+
 it('re-renders memoized rows when a context-only input changes', async () => {
   const { onOpenSessionSettings, rerenderWith } = mount();
   const replacement = vi.fn();
@@ -504,9 +534,10 @@ it('tints failed rows, drops the logo outline, and mirrors row insets', () => {
   );
 
   const style = getComputedStyle(row('Security agor'));
-  // Equal insets on both sides keep the status mark mirrored with the logo.
-  expect(parseFloat(style.paddingRight)).toBe(token.paddingXXS);
-  expect(parseFloat(style.paddingLeft)).toBe(token.paddingXXS);
+  // Equal insets on both sides keep the status mark mirrored with the logo, and
+  // keep the fill from hugging either.
+  expect(parseFloat(style.paddingRight)).toBe(token.paddingXS);
+  expect(parseFloat(style.paddingLeft)).toBe(token.paddingXS);
   probe.remove();
 });
 
@@ -587,7 +618,12 @@ it('shares the fill-mode panel between sessions, scheduled runs, and gateway ses
   mount(mixed(2), { fillAvailableHeight: true });
   await waitFor(() => {
     expect(scheduledList().scrollHeight).toBe(scheduledList().clientHeight);
-    expect(section('Scheduled Runs').height).toBeLessThan(section('Sessions').height - 32);
+    // The list is exactly as tall as its rows, not an equal share of the panel.
+    expect(scheduledList().clientHeight).toBeCloseTo(
+      (scheduledList().firstElementChild as HTMLElement).offsetHeight,
+      0
+    );
+    expect(section('Scheduled Runs').height).toBeLessThan(section('Sessions').height);
     expect(section('Sessions').height).toBeCloseTo(section('Gateway Sessions').height, 0);
   });
 });

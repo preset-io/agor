@@ -1,5 +1,5 @@
 import type { Branch, Session } from '@agor-live/client';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -93,7 +93,7 @@ it('keeps card rows, chevrons and hover actions aligned at canvas zooms', async 
       await waitFor(() => {
         expect(getComputedStyle(actions).opacity).toBe('1');
         const bounds = row.getBoundingClientRect();
-        // Borderless single-line rows share the panel's row height and flush pitch.
+        // Borderless single-line rows share the panel's row height and pitch.
         expect(bounds.height / zoom).toBeCloseTo(rowHeight, 0);
         expect(Math.abs(centerY(bounds) - centerY(actions.getBoundingClientRect()))).toBeLessThan(
           0.5
@@ -105,9 +105,10 @@ it('keeps card rows, chevrons and hover actions aligned at canvas zooms', async 
         row.contains(document.elementFromPoint(bounds.left + 10 * zoom, centerY(bounds)))
       ).toBe(true);
     }
+    // A one-size-unit gap separates adjacent fills.
     expect(
       (rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().bottom) / zoom
-    ).toBeCloseTo(0, 0);
+    ).toBeCloseTo(theme.getDesignToken({ algorithm: theme.darkAlgorithm }).sizeUnit, 0);
     // The chevron is centered on its row, not on Tree's first line.
     const chevron = screen.getByRole('button', { name: 'Collapse Parent' }).querySelector('svg')!;
     expect(
@@ -134,6 +135,24 @@ it('keeps card rows, chevrons and hover actions aligned at canvas zooms', async 
   act(() => rows[1].blur());
   await waitFor(() => expect(getComputedStyle(actions).opacity).toBe('0'));
   expect(getComputedStyle(actions).pointerEvents).toBe('none');
+});
+
+it('shows the full title in a tooltip only for truncated card rows', async () => {
+  mount();
+  const [fits, truncated] = sessions.map((session) =>
+    within(screen.getByRole('button', { name: rowName(session.title!) })).getByText(session.title!)
+  );
+  expect(fits.scrollWidth).toBeLessThanOrEqual(fits.clientWidth);
+  await act(async () => page.elementLocator(fits).hover());
+  await act(() => new Promise((resolve) => setTimeout(resolve, 800)));
+  expect(screen.queryByRole('tooltip')).toBeNull();
+
+  expect(truncated.scrollWidth).toBeGreaterThan(truncated.clientWidth);
+  await act(async () => page.elementLocator(truncated).hover());
+  expect(await screen.findByRole('tooltip', {}, { timeout: 2000 })).toHaveTextContent(
+    sessions[1].title!
+  );
+  await page.screenshot({ path: `./.vitest/title-tooltip-card-${window.innerWidth}.png` });
 });
 
 it('toggles card subtrees with the chevron by mouse and keyboard at canvas zooms', async () => {
