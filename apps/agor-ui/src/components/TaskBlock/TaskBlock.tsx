@@ -794,20 +794,21 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     // The footer prints one percentage. Render it as the pill rather than as
     // plain text, so the breakdown popover stays reachable from the number.
-    const contextUsageLabel = hasContextWindowUsage ? (
-      <ContextWindowPill
-        style={{ ...plainPillStyle, color: 'inherit' }}
-        used={contextWindowUsed}
-        limit={contextWindowLimit || 0}
-        taskMetadata={{
-          model: task.model,
-          duration_ms: task.duration_ms,
-          agentic_tool,
-          raw_sdk_response: task.raw_sdk_response,
-          normalized_sdk_response: normalized ?? undefined,
-        }}
-      />
-    ) : undefined;
+    const contextUsageLabel =
+      isLatestTask && hasContextWindowUsage ? (
+        <ContextWindowPill
+          style={{ ...plainPillStyle, color: 'inherit' }}
+          used={contextWindowUsed}
+          limit={contextWindowLimit || 0}
+          taskMetadata={{
+            model: task.model,
+            duration_ms: task.duration_ms,
+            agentic_tool,
+            raw_sdk_response: task.raw_sdk_response,
+            normalized_sdk_response: normalized ?? undefined,
+          }}
+        />
+      ) : undefined;
 
     const metadataPills = (
       <Flex
@@ -1227,9 +1228,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           </>
         )}
         <ContextUsageRule
-          used={contextWindowUsed}
-          limit={contextWindowLimit}
-          snapshot={contextSnapshot}
+          // Keep the wrapper and metadata for every turn, but reserve the
+          // session's context gauge for its latest turn only.
+          used={isLatestTask ? contextWindowUsed : undefined}
+          limit={isLatestTask ? contextWindowLimit : undefined}
+          snapshot={isLatestTask ? contextSnapshot : undefined}
           metadata={metadataPills}
           usageLabel={contextUsageLabel}
         >

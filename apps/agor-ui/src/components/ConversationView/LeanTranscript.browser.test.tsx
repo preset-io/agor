@@ -289,6 +289,59 @@ const longMetadata = (
   </Flex>
 );
 
+it('shows context usage only below the latest turn as a new turn streams and older history pages in', async () => {
+  const withUsage = (task: Task) =>
+    ({
+      ...task,
+      computed_context_window: 22_000,
+      normalized_sdk_response: {
+        contextWindowLimit: 100_000,
+        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    }) as unknown as Task;
+  const first = withUsage(tasks[18]);
+  const second = { ...tasks[19], status: TaskStatus.RUNNING };
+  state = { ...state, tasks: [first], hasOlderTasks: false };
+  const { container } = render(<ConversationView client={null} sessionId={sessionId} />);
+  const oldTurn = container.querySelector<HTMLElement>(`[data-task-block="${first.task_id}"]`)!;
+  const oldAnswer = screen.getByText(/Answer 18\./);
+  const oldRegion = oldTurn.querySelector<HTMLElement>('[aria-label="Turn and its metadata"]')!;
+  const oldFooter = oldTurn.querySelector<HTMLElement>('[aria-label="Turn metadata"]')!;
+  const oldFooterHeight = oldFooter.parentElement!.parentElement!.getBoundingClientRect().height;
+  expect(oldTurn.querySelector('[data-testid="context-usage-rule"]')).not.toBeNull();
+  expect(oldTurn.querySelector('[data-testid="turn-usage-label"]')).toHaveTextContent('22%');
+
+  act(() => update({ ...state, tasks: [first, second] }));
+  expect(container.querySelectorAll('[data-testid="context-usage-rule"]')).toHaveLength(0);
+  expect(container.querySelectorAll('[data-testid="turn-usage-label"]')).toHaveLength(0);
+  expect(screen.getByText(/Answer 18\./)).toBe(oldAnswer);
+  expect(oldFooter.parentElement!.parentElement!.getBoundingClientRect().height).toBe(
+    oldFooterHeight
+  );
+
+  await userEvent.hover(oldAnswer);
+  await waitFor(() => expect(oldFooter).toBeVisible());
+  expect(oldFooter.querySelector('.anticon-check-circle')).not.toBeNull();
+  expect(oldFooter.querySelector('.anticon-thunderbolt')).not.toBeNull();
+  expect(oldFooter).toHaveTextContent('synthetic-model');
+  expect(oldFooter).toHaveTextContent('test');
+  fireEvent.mouseLeave(oldRegion);
+  await waitFor(() => expect(oldFooter).not.toBeVisible());
+  await userEvent.tab();
+  act(() => oldRegion.focus());
+  expect(oldRegion).toHaveFocus();
+  await waitFor(() => expect(oldFooter).toBeVisible());
+
+  act(() => update({ ...state, tasks: [tasks[17], first, withUsage(second)] }));
+  expect(container.querySelectorAll('[data-testid="context-usage-rule"]')).toHaveLength(1);
+  expect(container.querySelectorAll('[data-testid="turn-usage-label"]')).toHaveLength(1);
+  expect(oldTurn.querySelector('[data-testid="context-usage-rule"]')).toBeNull();
+  expect(oldTurn.querySelector('[data-testid="turn-usage-label"]')).toBeNull();
+  expect(screen.getByText(/Answer 18\./)).toBe(oldAnswer);
+  const newest = container.querySelector<HTMLElement>(`[data-task-block="${second.task_id}"]`)!;
+  expect(newest.querySelector('[data-testid="turn-usage-label"]')).toHaveTextContent('22%');
+});
+
 it('reveals the answer footer metadata on keyboard focus and dismisses on Escape', async () => {
   render(footer(longMetadata));
   expect(screen.getByText('synthetic-model')).not.toBeVisible();

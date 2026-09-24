@@ -175,6 +175,7 @@ describe('ContextUsageRule in a task turn', () => {
     render(
       <TaskBlock
         task={task}
+        isLatestTask
         taskMessages={[answer]}
         taskMessagesLoaded
         onLoadTaskMessages={vi.fn()}
@@ -219,5 +220,66 @@ describe('ContextUsageRule in a task turn', () => {
 
     expect(screen.getByText('Here is the answer')).toBeVisible();
     expect(rule()).toBeNull();
+  });
+
+  it('moves the sole gauge to a new turn without remounting the old answer or losing its metadata', () => {
+    const withUsage = (task: Task) =>
+      ({
+        ...task,
+        computed_context_window: 12_000,
+        normalized_sdk_response: {
+          contextWindowLimit: 100_000,
+          tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        },
+      }) as unknown as Task;
+    const first = withUsage(baseTask);
+    const second = withUsage({ ...baseTask, task_id: generateId(), full_prompt: 'Next turn' });
+    const secondAnswer = {
+      ...answer,
+      task_id: second.task_id,
+      message_id: generateId(),
+      content: 'Second answer',
+    };
+    const history = (showSecond: boolean) => (
+      <>
+        <TaskBlock
+          key={first.task_id}
+          task={first}
+          isLatestTask={!showSecond}
+          taskMessages={[answer]}
+          taskMessagesLoaded
+          onLoadTaskMessages={vi.fn()}
+        />
+        {showSecond && (
+          <TaskBlock
+            key={second.task_id}
+            task={second}
+            isLatestTask
+            taskMessages={[secondAnswer]}
+            taskMessagesLoaded
+            onLoadTaskMessages={vi.fn()}
+          />
+        )}
+      </>
+    );
+    const { rerender, container } = render(history(false));
+    const oldTurn = container.querySelector<HTMLElement>(`[data-task-block="${first.task_id}"]`)!;
+    const oldAnswer = screen.getByText('Here is the answer');
+    expect(within(oldTurn).getByTestId('context-usage-rule')).toBeInTheDocument();
+
+    rerender(history(true));
+
+    expect(container.querySelectorAll('[data-testid="context-usage-rule"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-testid="turn-usage-label"]')).toHaveLength(1);
+    expect(within(oldTurn).queryByTestId('context-usage-rule')).toBeNull();
+    expect(within(oldTurn).queryByTestId('turn-usage-label')).toBeNull();
+    expect(oldTurn.querySelector('[aria-label="Turn metadata"]')).not.toBeNull();
+    expect(oldTurn).toContainElement(oldAnswer);
+    expect(screen.getByText('Here is the answer')).toBe(oldAnswer);
+    expect(
+      within(
+        container.querySelector<HTMLElement>(`[data-task-block="${second.task_id}"]`)!
+      ).getByTestId('turn-usage-label')
+    ).toHaveTextContent('12%');
   });
 });
