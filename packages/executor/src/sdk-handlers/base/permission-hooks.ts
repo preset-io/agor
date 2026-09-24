@@ -48,7 +48,7 @@ export function createCanUseToolCallback(
     /** Per-tool `tool_permissions` from the session's resolved MCP servers. */
     mcpToolPermissions: McpToolPermissionIndex;
     /** Managed turns keep the output pin open until provider finalization. */
-    terminalizeOnTimeout?: boolean;
+    terminalizeInsidePermissionHook?: boolean;
   }
 ) {
   return async (
@@ -276,7 +276,7 @@ export function createCanUseToolCallback(
       // A managed turn cannot enter a terminal state while its output pin is
       // open. Deny this tool, restore active state, and let normal provider
       // finalization close the pin before publishing a terminal Task.
-      if (decision.timedOut && deps.terminalizeOnTimeout !== false) {
+      if (decision.timedOut && deps.terminalizeInsidePermissionHook !== false) {
         console.log(
           `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
         );
@@ -387,21 +387,36 @@ export function createCanUseToolCallback(
       console.error('[canUseTool] Error in permission flow:', error);
 
       try {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const timestamp = new Date().toISOString();
-
-        // Update task status to failed
-        await deps.tasksService.patch(taskId, {
-          status: TaskStatus.FAILED,
-          report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
-        });
+        if (deps.terminalizeInsidePermissionHook === false) {
+          // The managed output pin is still open. Restore a promptable active
+          // state and let the holder finalize after its checkpoint drains.
+          await deps.tasksService.patch(taskId, { status: TaskStatus.RUNNING });
+          if (deps.sessionsService) {
+            await deps.sessionsService.patch(sessionId, {
+              status: SessionStatus.RUNNING,
+              ready_for_prompt: false,
+            });
+          }
+        } else {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const timestamp = new Date().toISOString();
+          await deps.tasksService.patch(taskId, {
+            status: TaskStatus.FAILED,
+            report: `Error: ${errorMessage}\nTimestamp: ${timestamp}`,
+          });
+        }
       } catch (updateError) {
         console.error('[canUseTool] Failed to update task status:', updateError);
       }
 
       return {
         behavior: 'deny' as const,
-        message: error instanceof Error ? error.message : 'Unknown error in permission flow',
+        message:
+          deps.terminalizeInsidePermissionHook === false
+            ? `Permission handling failed for tool: ${toolName}.`
+            : error instanceof Error
+              ? error.message
+              : 'Unknown error in permission flow',
       };
     } finally {
       // STEP 3: Always release the lock when done (success or error)

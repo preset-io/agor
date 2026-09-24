@@ -236,7 +236,7 @@ describe('createCanUseToolCallback', () => {
     });
 
     it('denies a timed-out managed tool without terminalizing an open output pin', async () => {
-      const deps = { ...createBaseDeps(), terminalizeOnTimeout: false };
+      const deps = { ...createBaseDeps(), terminalizeInsidePermissionHook: false };
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
         timedOut: true,
@@ -269,6 +269,36 @@ describe('createCanUseToolCallback', () => {
         'test-generated-id',
         expect.objectContaining({ content: expect.objectContaining({ status: 'timed_out' }) })
       );
+      expect(deps.permissionLocks.size).toBe(0);
+    });
+
+    it('restores an active managed turn after a permission-flow error', async () => {
+      const deps = { ...createBaseDeps(), terminalizeInsidePermissionHook: false };
+      deps.permissionService.waitForDecision.mockRejectedValue(
+        new Error('synthetic private failure')
+      );
+
+      const result = await createCanUseToolCallback(sessionId, taskId, deps)(
+        'Bash',
+        { command: 'ls' },
+        noopOptions
+      );
+
+      expect(result).toEqual({
+        behavior: 'deny',
+        message: 'Permission handling failed for tool: Bash.',
+      });
+      expect(deps.tasksService.patch).toHaveBeenLastCalledWith(taskId, {
+        status: 'running',
+      });
+      expect(deps.tasksService.patch).not.toHaveBeenCalledWith(
+        taskId,
+        expect.objectContaining({ status: 'failed' })
+      );
+      expect(deps.sessionsService.patch).toHaveBeenLastCalledWith(sessionId, {
+        status: 'running',
+        ready_for_prompt: false,
+      });
       expect(deps.permissionLocks.size).toBe(0);
     });
 

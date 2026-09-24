@@ -95,10 +95,10 @@ describe.skipIf(!helperPath || !existsSync(helperPath))(
           },
         });
         expect(observed).toEqual({ version: 1, action: 'observe', outcome: 'unknown' });
-        expect(paths).toEqual([
-          '/api/internal/runtime/executor-runs/run-contract/opencode-native-state/resolve',
-          '/api/internal/runtime/executor-runs/run-contract/opencode-native-state/observe',
-        ]);
+        // The cross-repo contract is stdout shape, not the private router's
+        // path vocabulary (asserted in the companion repository).
+        expect(paths).toHaveLength(2);
+        expect(paths[0]).not.toBe(paths[1]);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }

@@ -328,7 +328,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           mcpServerRepo: repos.mcpServers,
           sessionMCPRepo: repos.sessionMCP,
           mcpToolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX,
-          terminalizeOnTimeout: false,
+          terminalizeInsidePermissionHook: false,
         });
         await expect(
           timedOutPermission(
