@@ -271,7 +271,7 @@ export const ONBOARDING_GOALS = [
     title: 'Build me an app',
     description: 'A working app or dashboard on a live test env.',
     icon: BuildOutlined,
-    integrationRecs: ['github', 'supabase', 'figma', 'context7', 'gitlab'],
+    integrationRecs: ['github', 'supabase', 'context7', 'gitlab'],
     bootstrapLine:
       'Desired outcome: a working build, not a spec. A first win is starting the requested prototype, internal tool, or dashboard live on the board.',
   },
