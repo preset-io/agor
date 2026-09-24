@@ -42,4 +42,12 @@ env -i PATH="$PATH" HOME="$HOME" \
   packages/agor-live/release/agor-live-client-*.tgz \
   packages/agor-live/release/agor-live-[0-9]*.tgz
 export PATH="/opt/agor-runtime/bin:$PATH"
+# Explicit opt-in migration for an existing deployment; normal compose and
+# production bootstrap policy remain unchanged. Never pass operator secrets to npm.
+if [ -n "${AGOR_RUNTIME_ADD_TOOLS:-}" ]; then
+  env -i PATH="$PATH" HOME="$HOME" agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" \
+    --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
+  node /app/docker/runtime-tools.mjs
+  env -i PATH="$PATH" HOME="$HOME" agor install --sync
+fi
 exec /usr/local/bin/docker-entrypoint-prod.sh

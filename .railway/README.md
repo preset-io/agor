@@ -20,8 +20,8 @@ For programmatic CLI invocation, ensure `_` names the Railway executable (SDK
 
 The Dockerfile's `AGOR_RUNTIME_TARGET=runtime-build` selects the shared
 dependency image and builds the branch release at startup (details below). It serves the UI and API on port 3030, runs SQLite
-migrations at startup with the volume mounted, and installs no agent runtimes by
-default. Railway's generated domain must target port 3030; `AGOR_BASE_URL` and
+migrations at startup with the volume mounted, and enables Claude Code, Codex,
+OpenCode, and Copilot. Railway's generated domain must target port 3030; `AGOR_BASE_URL` and
 the exact `CORS_ORIGIN` follow that domain. The base URL alone does not authorize
 browser origins; omitting CORS causes even same-origin module assets to fail.
 Keep CSP and login enabled. Do not use a pre-deploy migration command: the SQLite volume is not
@@ -72,7 +72,7 @@ This is a trusted single-operator bootstrap, not a verified multi-tenant hosting
 recipe. Default `simple` execution does not isolate users' processes or files.
 Do not invite untrusted users; sandbox/bubblewrap support on Railway and delegated
 execution need separate validation. No nested Docker support is assumed. Agent
-credentials and tool installation are separate from verifying the UI/API.
+credentials remain per-user and must be connected separately in the UI.
 
 References: [Railway IaC](https://docs.railway.com/infrastructure-as-code),
 [Dockerfiles](https://docs.railway.com/builds/dockerfiles),
@@ -120,3 +120,18 @@ source, package staging, and the installed release, not only the final daemon.
 Warm Turbo hits avoid compilation but still pack and install the release.
 
 Local preparation tests: `node --test docker/runtime-checkout.test.mjs`.
+
+## Runtime agent tools
+
+`AGOR_RUNTIME_ADD_TOOLS` explicitly adds the four configured tools to an existing
+volume's `agentic_tools.installed` policy before the daemon starts. It leaves
+other selected tools and unrelated settings intact, creates a private backup of
+changed config, and performs an atomic replacement. A read-only or symlinked
+config fails closed; this opt-in helper is only for the owned runtime-build
+volume, not general compose or externally managed configuration.
+
+`agor install --sync` then installs exact-version integrations into the persistent
+`.agor/agentic-tools` directory, using its existing installer lock and validation.
+The normal installer removes stale versions/unselected packages. Authentication
+is separate: each user connects provider credentials through Agor, never through
+committed config. Existing password and account data are not reset.

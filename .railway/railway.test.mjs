@@ -28,6 +28,8 @@ test('SQLite bootstrap is one source-built service with private persistent state
     assert.equal(app.variables[key], undefined);
   }
   assert.equal(app.variables.AGOR_ADMIN_PASSWORD.type, 'preserve');
+  assert.equal(app.variables.AGOR_RUNTIME_ADD_TOOLS.value, 'claude-code,codex,opencode,copilot');
+  assert.equal(app.variables.AGOR_AGENTIC_TOOLS.value, app.variables.AGOR_RUNTIME_ADD_TOOLS.value);
 });
 
 test('platform runtime selection preserves explicit Docker targets and historical default', async () => {

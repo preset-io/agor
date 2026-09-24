@@ -29,7 +29,8 @@ export default defineRailway(() => {
       PORT: '3030',
       DAEMON_PORT: '3030',
       DAEMON_HOST: '0.0.0.0',
-      AGOR_AGENTIC_TOOLS: 'none',
+      AGOR_AGENTIC_TOOLS: 'claude-code,codex,opencode,copilot',
+      AGOR_RUNTIME_ADD_TOOLS: 'claude-code,codex,opencode,copilot',
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Railway resolves this reference, not JavaScript.
       AGOR_BASE_URL: 'https://${{RAILWAY_PUBLIC_DOMAIN}}',
       // Public URL and browser-origin authorization are separate Agor settings.
