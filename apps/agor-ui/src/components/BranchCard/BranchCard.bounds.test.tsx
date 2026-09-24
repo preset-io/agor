@@ -11,7 +11,7 @@ vi.mock('../../hooks/useProgressiveMount', () => ({ useProgressiveMount: () => f
 beforeEach(() => localStorage.clear());
 
 it.each([
-  { count: 2, collapsed: false, height: 138 },
+  { count: 2, collapsed: false, height: 118 },
   { count: 1001, collapsed: false, height: 454 },
   { count: 1001, collapsed: true, height: 54 },
 ])(

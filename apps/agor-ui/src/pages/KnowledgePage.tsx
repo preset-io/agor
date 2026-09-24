@@ -23,7 +23,12 @@ import {
   titleFromKnowledgeContent,
   validateKnowledgePath as validateSharedKnowledgePath,
 } from '@agor/core/types';
-import type { AgorClient, Group, User } from '@agor-live/client';
+import {
+  type AgorClient,
+  type Group,
+  KNOWLEDGE_DOCUMENT_PAGINATION,
+  type User,
+} from '@agor-live/client';
 import {
   ApartmentOutlined,
   ArrowLeftOutlined,
@@ -1202,8 +1207,9 @@ export function KnowledgePage({
   const loadMentionDocs = useCallback(async () => {
     if (!client) return;
     try {
-      const result = await client.service('kb/documents').find({ query: { archived: false } });
-      const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]);
+      const rows = (await client.service('kb/documents').findAll({
+        query: { archived: false, $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT },
+      })) as KnowledgeDocument[];
       const mentions = rows
         .map((doc) => kbMentionFromDocument(doc, '/kb'))
         .filter((doc): doc is KbDocMention => Boolean(doc));
@@ -1237,16 +1243,18 @@ export function KnowledgePage({
       void loadMentionDocs();
       const kind = kindForSegment(requestedKindFilter);
       const namespaceFilter = requestedActiveSpace === 'all' ? undefined : requestedActiveSpace;
-      const result = await client.service('kb/documents').find({
+      // The sidebar tree needs every readable doc; the server pages the list.
+      const rows = (await client.service('kb/documents').findAll({
         query: {
           namespace_slug: namespaceFilter,
           kind,
           archived: false,
           include_indexing: true,
+          $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT,
         },
-      });
+      })) as KnowledgeDocument[];
       if (!isCurrent()) return;
-      setDocuments(normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[]));
+      setDocuments(rows);
     } catch (err) {
       if (!isCurrent()) return;
       console.error('Failed to load Knowledge:', err);

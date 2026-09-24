@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   __resetConfigCacheForTests,
   type AgorConfig,
+  KNOWLEDGE_DOCUMENT_PAGINATION,
   loadConfig,
   saveConfigForTests,
 } from '@agor/core/config';
@@ -12,6 +13,7 @@ import {
   eq,
   GroupRepository,
   generateId,
+  KnowledgeAttributionRepository,
   KnowledgeDocumentRepository,
   KnowledgeNamespaceRepository,
   kbDocumentUnits,
@@ -346,6 +348,121 @@ describe('KnowledgeNamespacesService permissions', () => {
 });
 
 describe('KnowledgeDocumentsService permissions', () => {
+  dbTest('pages readable documents with a default and maximum page size', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const other = await seedUser(db, 'other');
+    const namespace = await seedNamespace(db);
+    const secondNamespace = await seedNamespace(db);
+    const repo = new KnowledgeDocumentRepository(db);
+    const seed = (namespaceId: string, docPath: string, visibility: 'public' | 'private') =>
+      repo.create({
+        namespace_id: namespaceId as KnowledgeDocument['namespace_id'],
+        path: docPath,
+        title: docPath,
+        visibility,
+        status: 'published',
+        edit_policy: 'owner',
+        content_text: `# ${docPath}`,
+        created_by: owner.user_id as UserID,
+      });
+    for (const docPath of ['a.md', 'b.md', 'c.md', 'd.md']) {
+      await seed(namespace.namespace_id, docPath, 'public');
+    }
+    await seed(secondNamespace.namespace_id, 'e.md', 'public');
+    await seed(namespace.namespace_id, 'secret.md', 'private');
+    const service = new KnowledgeDocumentsService(db);
+    const scope = { namespace_id: namespace.namespace_id };
+
+    // Totals and pages count only what the caller may read.
+    const first = await service.find(params(other, { ...scope, $limit: 2, $sort: { path: 1 } }));
+    expect(first).toMatchObject({ total: 4, limit: 2, skip: 0 });
+    expect(first.data.map((doc) => doc.path)).toEqual(['a.md', 'b.md']);
+    const second = await service.find(
+      params(other, { ...scope, $limit: 2, $skip: 2, $sort: { path: 1 } })
+    );
+    expect(second.data.map((doc) => doc.path)).toEqual(['c.md', 'd.md']);
+    const ownerPage = await service.find(params(owner, { ...scope, $limit: 0 }));
+    expect(ownerPage).toMatchObject({ total: 5, limit: 0, data: [] });
+
+    // No caller can raise the page above the maximum; omitting $limit uses the default.
+    await expect(service.find(params(other, { $limit: 1_000_000 }))).resolves.toMatchObject({
+      limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT,
+    });
+    await expect(service.find(params(other))).resolves.toMatchObject({
+      limit: KNOWLEDGE_DOCUMENT_PAGINATION.DEFAULT_LIMIT,
+    });
+  });
+
+  dbTest('enforces read access, sort, and page size in the database query', async ({ db }) => {
+    const owner = await seedUser(db, 'owner');
+    const other = await seedUser(db, 'other');
+    const admin = await seedUser(db, 'admin', ROLES.ADMIN);
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const open = await seedNamespace(db);
+    const closed = await namespaces.create({
+      slug: `closed-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      display_name: 'Closed',
+      others_can: 'none',
+      owner_user_id: owner.user_id as UserID,
+    });
+    const repo = new KnowledgeDocumentRepository(db);
+    const seed = (
+      namespaceId: string,
+      docPath: string,
+      visibility: 'public' | 'private' = 'public'
+    ) =>
+      repo.create({
+        namespace_id: namespaceId as KnowledgeDocument['namespace_id'],
+        path: docPath,
+        title: docPath,
+        visibility,
+        status: 'published',
+        edit_policy: 'owner',
+        content_text: `# ${docPath}`,
+        created_by: owner.user_id as UserID,
+      });
+    for (const docPath of ['a.md', 'b.md', 'c.md']) await seed(open.namespace_id, docPath);
+    await seed(open.namespace_id, 'private.md', 'private');
+    await seed(closed.namespace_id, 'closed.md');
+    const service = new KnowledgeDocumentsService(db);
+
+    // Namespace ACLs and the visibility overlay match canReadKnowledgeDocument.
+    const paths = async (user: User) =>
+      (await service.find(params(user, { $sort: { path: 1 } }))).data.map((doc) => doc.path);
+    expect(await paths(other)).toEqual(['a.md', 'b.md', 'c.md']);
+    expect(await paths(owner)).toEqual(['a.md', 'b.md', 'c.md', 'closed.md', 'private.md']);
+    expect(await paths(admin)).toEqual(['a.md', 'b.md', 'c.md', 'closed.md', 'private.md']);
+    for (const doc of (await service.find(params(other))).data) {
+      await expect(service.get(doc.document_id, params(other))).resolves.toBeTruthy();
+    }
+
+    // Only the requested page is read from the database, never the whole list.
+    const materialize = vi.spyOn(KnowledgeDocumentRepository.prototype, 'rowToDocument');
+    const findAll = vi.spyOn(KnowledgeDocumentRepository.prototype, 'findAll');
+    const attach = vi.spyOn(KnowledgeAttributionRepository.prototype, 'attachToDocuments');
+    try {
+      const page = await service.find(params(owner, { $limit: 2, $skip: 1, $sort: { title: -1 } }));
+      expect(page.total).toBe(5);
+      expect(page.data.map((doc) => doc.path)).toEqual(['closed.md', 'c.md']);
+      expect(materialize).toHaveBeenCalledTimes(2);
+      expect(attach.mock.lastCall?.[0]).toHaveLength(2);
+      expect(findAll).not.toHaveBeenCalled();
+
+      materialize.mockClear();
+      const hydrated = await service.find(
+        params(owner, { namespace_id: open.namespace_id, include_content: true, $limit: 1 })
+      );
+      expect(hydrated.total).toBe(4);
+      expect(hydrated.data).toHaveLength(1);
+      expect(hydrated.data[0]).toHaveProperty('content');
+      expect(materialize).toHaveBeenCalledTimes(1);
+    } finally {
+      materialize.mockRestore();
+      findAll.mockRestore();
+      attach.mockRestore();
+    }
+  });
+
   dbTest(
     'enforces private/public read access and owner/admin visibility changes',
     async ({ db }) => {
@@ -620,7 +737,7 @@ describe('KnowledgeDocumentsService permissions', () => {
         },
       });
 
-      const hydratedList = await documents.find(
+      const { data: hydratedList } = await documents.find(
         params(owner, { namespace_id: namespace.namespace_id, include_content: true })
       );
       expect(hydratedList).toHaveLength(1);
@@ -1161,10 +1278,10 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
       const documents = new KnowledgeDocumentsService(db);
       const search = new KnowledgeSearchService(db);
 
-      const ownerTree = await documents.find(params(owner, { archived: false }));
+      const { data: ownerTree } = await documents.find(params(owner, { archived: false }));
       expect(ownerTree.map((doc) => doc.document_id)).toContain(draftDoc.document_id);
 
-      const ownerTreeWithIndexing = await documents.find(
+      const { data: ownerTreeWithIndexing } = await documents.find(
         params(owner, { archived: false, include_indexing: true })
       );
       expect(
@@ -1172,7 +1289,7 @@ describe('KnowledgeSearchService and KnowledgeVersionsService permissions', () =
           ?.indexing_status
       ).toMatchObject({ state: 'not_configured', total_units: 1 });
 
-      const otherTree = await documents.find(params(other, { archived: false }));
+      const { data: otherTree } = await documents.find(params(other, { archived: false }));
       expect(otherTree.map((doc) => doc.document_id)).not.toContain(draftDoc.document_id);
       expect(otherTree.map((doc) => doc.document_id)).toContain(publishedDoc.document_id);
 

@@ -163,10 +163,11 @@ describe('S3UploadStagingStore', () => {
       owner,
       name: '../report.txt',
       mimeType: 'text/plain',
-      provenance: 'browser',
+      provenance: 'gateway-discord',
       body: Readable.from('0123456789'),
     });
     expect(metadata.name).toBe('report.txt');
+    expect(metadata.provenance).toBe('gateway-discord');
     expect([...client.objects.keys()][0]).toMatch(
       /^uploads\/agor\/tenants\/tenant-a\/uploads\/objects\/[0-9a-f]{2}\/upl_/
     );

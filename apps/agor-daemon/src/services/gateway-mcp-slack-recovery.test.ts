@@ -1,4 +1,10 @@
-import { runWithTenantContext } from '@agor/core/db';
+import {
+  createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
+  getMCPEgressGatewayMode,
+  runMigrations,
+  runWithTenantContext,
+} from '@agor/core/db';
 import type { MCPSlackRecoveryNotice, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -222,13 +228,17 @@ describe('Slack MCP recovery presentation', () => {
 });
 
 describe('Slack MCP recovery durable delivery', () => {
-  function deliveryHarness(sendMessage: ReturnType<typeof vi.fn>) {
+  function deliveryHarness(
+    sendMessage: ReturnType<typeof vi.fn>,
+    noticeOverrides: Partial<MCPSlackRecoveryNotice> = {}
+  ) {
     let currentTask = task({
       metadata: {
         ...task().metadata,
         mcp_slack_recovery_notice: notice({
           expires_at: new Date(now - 1).toISOString(),
           next_repair_at: new Date(now).toISOString(),
+          ...noticeOverrides,
         }),
       },
     });
@@ -296,6 +306,123 @@ describe('Slack MCP recovery durable delivery', () => {
       rendered_state: 'expired_or_superseded',
     });
     expect(harness.current()?.next_repair_at).toBeUndefined();
+  });
+
+  /**
+   * The bounded repair sweep holds tenant CONTEXT and no tenant database
+   * SCOPE. `syncMcpSlackRecoveryNotice` reads two app-variable settings on its
+   * first line, and neither goes through a repository bound to a tenant unit
+   * of work — so against the production guard both threw
+   * `MissingTenantDatabaseScopeError` into the sweep's `.catch(() =>
+   * undefined)`, and this lane's repair path has never repaired anything.
+   *
+   * A missing task is enough to prove it: the settings are read BEFORE the
+   * task lookup, so the call either gets past them or it does not.
+   */
+  it('reads its settings inside a scope, on a caller that holds only tenant context', async () => {
+    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+    await runMigrations(rawDb);
+    const guarded = createTenantScopedDatabaseProxy(rawDb, {
+      requireScope: true,
+      label: 'recovery notice scope guard',
+    });
+    await expect(getMCPEgressGatewayMode(guarded)).rejects.toThrow(/tenant database scope/i);
+
+    const service = new GatewayService(guarded as never, {} as never);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      taskRepo: { findById: async () => null },
+    });
+    await expect(
+      runWithTenantContext('tenant-a', () => service.syncMcpSlackRecoveryNotice('missing-task'))
+    ).resolves.toBeUndefined();
+    await service.stopListeners();
+  });
+
+  /**
+   * D2 on this lane: an unbuildable base URL withholds the BUTTON, it does not
+   * throw the delivery away.
+   *
+   * `mcpSlackRecoveryUrl` threw on an empty base URL, which is the same shape
+   * D1 closed on the connect lane: the throw lands above the settlement CAS
+   * while this pass holds the claim, so the notice's overdue `next_repair_at`
+   * brought it around the sweep every thirty seconds and nothing said why.
+   * `undefined` is what this lane has always answered for an absent
+   * `AGOR_MASTER_SECRET` and for a consumed token — the card goes out, without
+   * a button — and an unusable public URL is the same kind of fact.
+   */
+  it('posts a recovery card without a button when no public URL can be built', async () => {
+    const previousSecret = process.env.AGOR_MASTER_SECRET;
+    const previousBaseUrl = process.env.AGOR_BASE_URL;
+    process.env.AGOR_MASTER_SECRET = 'recovery-no-public-url-test-secret';
+    // The static fallback a deployment that never configured a public URL
+    // gets: a perfectly well-formed URL that works for nobody in the thread.
+    process.env.AGOR_BASE_URL = 'http://localhost:3030';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const sendMessage = vi.fn(async () => '1700000000.000003');
+      const harness = deliveryHarness(sendMessage, {
+        // Live, so the rendered state is `reconnect_required` — the one state
+        // that offers a link at all.
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        next_repair_at: new Date().toISOString(),
+      });
+
+      // A card, not an exception.
+      await harness.deliver();
+
+      expect(sendMessage).toHaveBeenCalledOnce();
+      const blocks = (sendMessage.mock.calls[0]![0] as { blocks: { type: string }[] }).blocks;
+      expect(blocks.some((block) => block.type === 'actions')).toBe(false);
+      // And the card settled rather than leaking its claim.
+      expect(harness.current()?.delivery_claim).toBeUndefined();
+      expect(harness.current()?.rendered_state).toBe('reconnect_required');
+      expect(
+        warn.mock.calls.some(
+          (call) =>
+            typeof call[0] === 'string' &&
+            call[0].includes('lane=recovery') &&
+            call[0].includes('reason=no_public_url')
+        )
+      ).toBe(true);
+      await harness.service.stopListeners();
+    } finally {
+      warn.mockRestore();
+      if (previousSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousSecret;
+      if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+      else process.env.AGOR_BASE_URL = previousBaseUrl;
+    }
+  });
+
+  it('posts a recovery card whose button is on the deployment public origin', async () => {
+    const previousSecret = process.env.AGOR_MASTER_SECRET;
+    const previousBaseUrl = process.env.AGOR_BASE_URL;
+    process.env.AGOR_MASTER_SECRET = 'recovery-public-url-test-secret';
+    process.env.AGOR_BASE_URL = 'https://agor.example.test';
+    try {
+      const sendMessage = vi.fn(async () => '1700000000.000004');
+      const harness = deliveryHarness(sendMessage, {
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        next_repair_at: new Date().toISOString(),
+      });
+
+      await harness.deliver();
+
+      const blocks = (
+        sendMessage.mock.calls[0]![0] as {
+          blocks: { type: string; elements?: { url?: string }[] }[];
+        }
+      ).blocks;
+      const url = blocks.find((block) => block.type === 'actions')?.elements?.[0]?.url;
+      expect(url).toMatch(/#token=/);
+      expect(new URL(url as string).origin).toBe('https://agor.example.test');
+      await harness.service.stopListeners();
+    } finally {
+      if (previousSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousSecret;
+      if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+      else process.env.AGOR_BASE_URL = previousBaseUrl;
+    }
   });
 
   it('retries a terminal projection within a durable window after browser expiry', async () => {

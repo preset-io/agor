@@ -322,9 +322,12 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
   fromBlob(
     blob: import('@agor/core/types').BoardExportBlob,
     params?: FeathersParams
-  ): Promise<Board>;
+  ): Promise<import('@agor/core/types').BoardImportResult>;
   toYaml(boardId: string, params?: FeathersParams): Promise<string>;
-  fromYaml(yamlContent: string, params?: FeathersParams): Promise<Board>;
+  fromYaml(
+    yamlContent: string,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BoardImportResult>;
   clone(boardId: string, newName: string, params?: FeathersParams): Promise<Board>;
   setPrimaryTeammate(
     data: { id?: string; boardId?: string; branchId: string },

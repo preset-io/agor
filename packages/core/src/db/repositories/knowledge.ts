@@ -14,6 +14,7 @@ import type {
   KnowledgeDocumentID,
   KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
+  KnowledgeDocumentSortField,
   KnowledgeDocumentStatus,
   KnowledgeDocumentUnitID,
   KnowledgeDocumentVersion,
@@ -52,7 +53,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -130,6 +131,23 @@ export interface KnowledgeDocumentFilters {
   include_other_user_drafts?: boolean;
   draft_filter_user_id?: UserID;
 }
+
+export interface KnowledgeDocumentPageOptions {
+  limit: number;
+  offset: number;
+  /** Feathers `$sort`; keys outside KNOWLEDGE_DOCUMENT_SORT_FIELDS are ignored. */
+  sort?: Record<string, 1 | -1>;
+  read: KnowledgeDocumentReadScope;
+}
+
+/**
+ * Who a document list is read for. Admins read every document; everyone else
+ * must name the namespaces they can read, so omitting them cannot silently
+ * drop the namespace restriction.
+ */
+export type KnowledgeDocumentReadScope =
+  | { as_admin: true }
+  | { as_admin: false; user_id?: UserID; namespace_ids: KnowledgeNamespaceID[] };
 
 export interface CreateKnowledgeDocumentInput extends Partial<KnowledgeDocument> {
   namespace_slug?: string;
@@ -303,6 +321,34 @@ function makeSnippet(content: string | null | undefined, q: string): string | nu
   const start = Math.max(0, index - 80);
   const end = Math.min(content.length, index + needle.length + 160);
   return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`;
+}
+
+/**
+ * SQL form of `canReadKnowledgeDocument`: readable namespaces plus the
+ * visibility overlay (public, own, or admin). Returns null when nothing can be
+ * read. `namespaceIds` undefined means no namespace restriction.
+ * `KnowledgeDocumentReadScope` (document lists) only allows that for admins;
+ * the older `KnowledgeSearchQuery` contract still treats the IDs as optional,
+ * and its service always supplies them for non-admins.
+ */
+function knowledgeDocumentReadConditions(options: {
+  asAdmin: boolean;
+  userId?: UserID;
+  namespaceIds?: readonly KnowledgeNamespaceID[];
+}): SQL[] | null {
+  const conditions: SQL[] = [];
+  if (options.namespaceIds) {
+    if (options.namespaceIds.length === 0) return null;
+    conditions.push(inArray(kbDocuments.namespace_id, [...options.namespaceIds]));
+  }
+  if (!options.asAdmin) {
+    conditions.push(
+      options.userId
+        ? or(eq(kbDocuments.visibility, 'public'), eq(kbDocuments.created_by, options.userId))!
+        : eq(kbDocuments.visibility, 'public')
+    );
+  }
+  return conditions;
 }
 
 function knowledgeDraftVisibilityCondition(options: {
@@ -1304,7 +1350,8 @@ export class KnowledgeDocumentRepository
     return Array.isArray(documents) ? withStatus : withStatus[0];
   }
 
-  async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {
+  /** SQL predicates for a document filter, or null when nothing can match. */
+  private async documentConditions(filters?: KnowledgeDocumentFilters) {
     const conditions = [];
     let namespaceId = filters?.namespace_id;
     if (!namespaceId && filters?.namespace_slug) {
@@ -1312,7 +1359,7 @@ export class KnowledgeDocumentRepository
         filters.namespace_slug
       );
       namespaceId = namespace?.namespace_id;
-      if (!namespaceId) return [];
+      if (!namespaceId) return null;
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (filters?.path) conditions.push(eq(kbDocuments.path, normalizeKnowledgePath(filters.path)));
@@ -1333,18 +1380,24 @@ export class KnowledgeDocumentRepository
           and ${kbNamespaces.archived} = false
       )`);
     }
+    return conditions;
+  }
 
-    const rows = await select(this.db)
-      .from(kbDocuments)
-      .where(and(...conditions))
-      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
-      .all();
+  private async rowsToDocuments(rows: KBDocumentRow[]): Promise<KnowledgeDocument[]> {
+    if (rows.length === 0) return [];
+    const namespaceIds = [...new Set(rows.map((row) => row.namespace_id))];
     const [baseUrl, namespaceRows] = await Promise.all([
       getBaseUrl(this.db),
-      select(this.db).from(kbNamespaces).all(),
+      select(this.db, { namespace_id: kbNamespaces.namespace_id, slug: kbNamespaces.slug })
+        .from(kbNamespaces)
+        .where(inArray(kbNamespaces.namespace_id, namespaceIds))
+        .all(),
     ]);
     const namespaceSlugById = new Map<string, string>(
-      namespaceRows.map((row: KBNamespaceRow) => [row.namespace_id, row.slug])
+      namespaceRows.map((row: { namespace_id: string; slug: string }) => [
+        row.namespace_id,
+        row.slug,
+      ])
     );
     return rows.map((row: KBDocumentRow) =>
       this.rowToDocument(row, {
@@ -1352,6 +1405,66 @@ export class KnowledgeDocumentRepository
         namespaceSlug: namespaceSlugById.get(row.namespace_id),
       })
     );
+  }
+
+  async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {
+    const conditions = await this.documentConditions(filters);
+    if (!conditions) return [];
+    const rows = await select(this.db)
+      .from(kbDocuments)
+      .where(and(...conditions))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
+      .all();
+    return this.rowsToDocuments(rows);
+  }
+
+  /**
+   * One page of documents the caller can read. Read access, sort,
+   * LIMIT/OFFSET and the total (a separate COUNT) are all evaluated in SQL, so
+   * the database never returns rows the caller could not read.
+   */
+  async findPage(
+    filters: KnowledgeDocumentFilters,
+    page: KnowledgeDocumentPageOptions
+  ): Promise<{ total: number; data: KnowledgeDocument[] }> {
+    const conditions = await this.documentConditions(filters);
+    const readConditions = knowledgeDocumentReadConditions(
+      page.read.as_admin
+        ? { asAdmin: true }
+        : { asAdmin: false, userId: page.read.user_id, namespaceIds: page.read.namespace_ids }
+    );
+    if (!conditions || !readConditions) return { total: 0, data: [] };
+    const where = and(...conditions, ...readConditions);
+
+    const countRow = await select(this.db, { count: sql<number>`count(*)` })
+      .from(kbDocuments)
+      .where(where)
+      .one();
+    const total = Number(countRow?.count ?? 0);
+    if (page.limit === 0 || page.offset >= total) return { total, data: [] };
+
+    const sortColumns = {
+      updated_at: kbDocuments.updated_at,
+      created_at: kbDocuments.created_at,
+      path: kbDocuments.path,
+      title: kbDocuments.title,
+    } as const satisfies Record<KnowledgeDocumentSortField, unknown>;
+    const orderBy: SQL[] = [];
+    for (const [field, direction] of Object.entries(page.sort ?? {})) {
+      const column = sortColumns[field as keyof typeof sortColumns];
+      if (!column) continue;
+      orderBy.push(direction === -1 ? desc(column) : asc(column));
+    }
+    // Default order and tie-break: most recently updated first, then by id.
+    orderBy.push(desc(kbDocuments.updated_at), asc(kbDocuments.document_id));
+    const rows = await select(this.db)
+      .from(kbDocuments)
+      .where(where)
+      .orderBy(...orderBy)
+      .limit(page.limit)
+      .offset(page.offset)
+      .all();
+    return { total, data: await this.rowsToDocuments(rows) };
   }
 
   async update(id: string, updates: KnowledgeDocumentWriteInput): Promise<KnowledgeDocument> {
@@ -1590,14 +1703,16 @@ export class KnowledgeSearchRepository {
       if (!namespaceId) return [];
     }
 
-    const conditions = [];
+    const readConditions = knowledgeDocumentReadConditions({
+      asAdmin: query.readable_as_admin === true,
+      userId: query.readable_by_user_id,
+      namespaceIds: query.readable_namespace_ids,
+    });
+    if (!readConditions) return [];
+    const conditions = [...readConditions];
     if (!query.include_archived) {
       conditions.push(eq(kbDocuments.archived, false));
       conditions.push(eq(kbNamespaces.archived, false));
-    }
-    if (query.readable_namespace_ids) {
-      if (query.readable_namespace_ids.length === 0) return [];
-      conditions.push(inArray(kbDocuments.namespace_id, query.readable_namespace_ids));
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {
@@ -1615,16 +1730,6 @@ export class KnowledgeSearchRepository {
       includeOtherUserDrafts: query.include_other_user_drafts ?? query.includeOtherUserDrafts,
     });
     if (draftCondition) conditions.push(draftCondition);
-    if (!query.readable_as_admin) {
-      conditions.push(
-        query.readable_by_user_id
-          ? or(
-              eq(kbDocuments.visibility, 'public'),
-              eq(kbDocuments.created_by, query.readable_by_user_id)
-            )!
-          : eq(kbDocuments.visibility, 'public')
-      );
-    }
 
     const needle = q.toLowerCase();
     const terms = needle

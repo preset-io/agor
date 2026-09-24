@@ -2937,6 +2937,22 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.setup_artifact.draft.enabled).toBe(false);
     expect(payload.setup_artifact.draft.config.bot_token).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain('bot_token');
+
+    const imagePayload = JSON.parse(
+      (
+        await tools.agor_gateway_discord_setup.handler({
+          applicationId: '111111111111111111',
+          guildId: '222222222222222222',
+          messageContentAcknowledged: true,
+          allowedChannelIds: ['333333333333333333'],
+          allowedUserIds: ['444444444444444444'],
+          allowedRoleIds: [],
+          agorUserId: '00000000-0000-4000-8000-000000000001',
+          files: true,
+        })
+      ).content[0].text
+    );
+    expect(imagePayload.config_hint.files).toBe(true);
   });
 
   it('keeps Discord setup and channel creation admin-only', async () => {

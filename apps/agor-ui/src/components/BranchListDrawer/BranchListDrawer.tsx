@@ -1,9 +1,12 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { SearchOutlined } from '@ant-design/icons';
-import { Badge, Drawer, Tooltip, Typography, theme } from 'antd';
+import { AimOutlined, BranchesOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Drawer, Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { memo, useDeferredValue, useMemo, useState } from 'react';
+import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
+import { useIdleReady } from '../../hooks/useIdleReady';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import {
   getMatchSnippet,
   isSessionSearchActive,
@@ -13,15 +16,21 @@ import {
   sessionToolMatches,
   sortSessions,
 } from '../../utils/sessionSearch';
-import { getSessionStatusTone, type StatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
-import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { HighlightMatch } from '../HighlightMatch';
-import { BranchPill } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
+import {
+  getSessionRowFill,
+  getSessionRowStateLabel,
+  getSessionRowTitleStyle,
+  isSessionRowFailed,
+  isSessionRowRead,
+  SESSION_ROW_LOGO_SIZE,
+  SessionRowLogo,
+  SessionStatusMark,
+} from '../SessionRow';
 import { SessionRelevanceLabel, SessionSearchToolbar } from '../SessionSearchControls';
-import { ToolIcon } from '../ToolIcon';
 
 interface BranchListDrawerProps {
   open: boolean;
@@ -45,18 +54,217 @@ export interface BoardSessionListProps {
   onAfterSessionClick?: () => void;
 }
 
+interface BoardSessionRowProps {
+  session: Session;
+  branch?: Branch;
+  repo?: Repo;
+  query: string;
+  onOpen: (sessionId: string) => void;
+  /** List-level idle flag; until it flips, the toolbar mounts on first hover/focus. */
+  toolbarReady: boolean;
+}
+
 /**
- * Drawer suppresses badges for the "boring" tones (`success`/`default`) so
- * idle and completed rows show a clean avatar with no decoration. The absence
- * of a badge becomes its own signal: "nothing to see here". `processing` uses
- * Ant's pulsing animation so it doubles as a live-activity indicator.
+ * One-line session row in the teammate panel's row grammar: logo, title, quiet
+ * branch metadata and a trailing status mark. Time and the board locator
+ * appear on hover/focus. Memoized so typing in search or live patches to other
+ * sessions don't re-render every row.
  */
-const getBadgeTone = (
-  status: Session['status']
-): Exclude<StatusTone, 'success' | 'default'> | null => {
-  const tone = getSessionStatusTone(status);
-  return tone === 'success' || tone === 'default' ? null : tone;
-};
+const BoardSessionRow = memo(function BoardSessionRow({
+  session,
+  branch,
+  repo,
+  query,
+  onOpen,
+  toolbarReady,
+}: BoardSessionRowProps) {
+  const { token } = theme.useToken();
+  const recenterMap = useRecenterMap();
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const showActions = hovered || focusWithin;
+  // Mount the toolbar on hover/focus or once the list is idle: long lists skip hundreds
+  // of Tooltips/Buttons on first render, while screen readers can still reach them.
+  const [revealedByUser, setRevealedByUser] = useState(false);
+  const toolbarMounted = toolbarReady || revealedByUser;
+
+  const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
+  const descriptionSnippet =
+    query && session.title && session.description
+      ? getMatchSnippet(session.description, query)
+      : null;
+  const toolMatches = Boolean(query) && sessionToolMatches(session, query);
+  const failed = isSessionRowFailed(session);
+  const branchLabel = branch ? (repo ? `${repo.slug} / ${branch.name}` : branch.name) : null;
+  const state = getSessionRowStateLabel(session);
+  const boardId = branch?.board_id;
+  const rowFill = failed
+    ? getSessionRowFill(token, { failed, selected: false })
+    : showActions
+      ? token.controlItemBgHover
+      : undefined;
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        borderRadius: token.borderRadiusSM,
+        background: rowFill,
+        // Long boards: skip layout/paint for off-screen rows.
+        contentVisibility: 'auto',
+        containIntrinsicSize: `auto ${token.controlHeight}px`,
+      }}
+      onMouseEnter={() => {
+        setHovered(true);
+        setRevealedByUser(true);
+      }}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => {
+        setFocusWithin(true);
+        setRevealedByUser(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setFocusWithin(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        data-session-id={session.session_id}
+        aria-label={[
+          `Open session ${titleText}`,
+          branchLabel ? `branch ${branchLabel}` : 'no branch',
+          state,
+        ]
+          .filter(Boolean)
+          .join('; ')}
+        onClick={() => onOpen(session.session_id)}
+        style={{
+          display: 'block',
+          width: '100%',
+          border: 0,
+          background: 'transparent',
+          color: 'inherit',
+          font: 'inherit',
+          textAlign: 'left',
+          cursor: 'pointer',
+          paddingBlock: 0,
+          paddingInlineStart: token.paddingXS,
+          paddingInlineEnd: token.paddingXS,
+        }}
+      >
+        <Flex align="center" gap={token.marginXS} style={{ minHeight: token.controlHeight }}>
+          <SessionRowLogo tool={session.agentic_tool} />
+          <SessionRelationshipIcon session={session} size={10} />
+          {/* Plain spans keep hundreds of rows cheap; styles come from the shared tokens. */}
+          <span
+            title={titleText}
+            style={{
+              color: token.colorText,
+              ...getSessionRowTitleStyle(token, {
+                read: isSessionRowRead(session, false),
+                hug: true,
+              }),
+            }}
+          >
+            <HighlightMatch text={titleText} query={query} />
+          </span>
+          {/* The branch is quiet metadata beside the title, like a gateway channel. */}
+          <span
+            title={branchLabel ?? 'No branch'}
+            style={{
+              color: token.colorTextDescription,
+              fontSize: token.fontSizeSM,
+              // Keep a fixed share for the branch; the title yields space first.
+              flex: '0 0 auto',
+              minWidth: 0,
+              maxWidth: '35%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <BranchesOutlined /> {branch?.name ?? 'No branch'}
+          </span>
+          <span style={{ flex: 1 }} />
+          <SessionStatusMark session={session} />
+        </Flex>
+        {toolMatches && (
+          <Typography.Text
+            type="secondary"
+            style={{
+              display: 'block',
+              fontSize: 11,
+              paddingInlineStart: SESSION_ROW_LOGO_SIZE + token.marginXS,
+            }}
+          >
+            Agent: <HighlightMatch text={session.agentic_tool} query={query} />
+          </Typography.Text>
+        )}
+        {descriptionSnippet && descriptionSnippet !== titleText && (
+          <Typography.Text
+            type="secondary"
+            style={{
+              display: 'block',
+              fontSize: 11,
+              lineHeight: 1.4,
+              fontStyle: 'italic',
+              paddingInlineStart: SESSION_ROW_LOGO_SIZE + token.marginXS,
+              paddingBlockEnd: token.paddingXXS,
+            }}
+          >
+            <HighlightMatch text={descriptionSnippet} query={query} />
+          </Typography.Text>
+        )}
+      </button>
+      {toolbarMounted && (
+        <Flex
+          role="group"
+          aria-label="Session actions"
+          align="center"
+          gap={token.marginXXS}
+          style={{
+            position: 'absolute',
+            insetInlineEnd: token.paddingXXS,
+            top: token.controlHeight / 2,
+            transform: 'translateY(-50%)',
+            // Opaque row fill with a leading fade: covered branch text runs out, never shows through.
+            paddingInlineStart: token.paddingLG,
+            paddingInlineEnd: token.paddingXXS,
+            borderRadius: token.borderRadiusSM,
+            backgroundImage: [rowFill ?? token.colorBgContainer, token.colorBgContainer]
+              .map((fill) => `linear-gradient(to right, transparent, ${fill} ${token.paddingLG}px)`)
+              .join(', '),
+            opacity: showActions ? 1 : 0,
+            pointerEvents: showActions ? 'auto' : 'none',
+            transition: `opacity ${token.motionDurationFast}`,
+          }}
+        >
+          <Tooltip title={formatTimestampWithRelative(session.last_updated)}>
+            <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+              {formatRelativeTime(session.last_updated)}
+            </Typography.Text>
+          </Tooltip>
+          {branch && boardId && (
+            <Tooltip title="Go to card on board">
+              <Button
+                type="text"
+                size="small"
+                aria-label="Go to card on board"
+                icon={<AimOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  recenterMap(branch.branch_id, { boardId });
+                }}
+              />
+            </Tooltip>
+          )}
+        </Flex>
+      )}
+    </div>
+  );
+});
 
 export const BranchListDrawer: React.FC<BranchListDrawerProps> = ({
   open,
@@ -117,10 +325,29 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       }
     }
 
-    return boardBranchIds.flatMap((branchId) => sessionsByBranch.get(branchId) || []);
+    // Remote-created sessions also appear as same-id surrogates under the creator's branch; list each once, preferring the real row.
+    const byId = new Map<string, Session>();
+    for (const branchId of boardBranchIds) {
+      for (const session of sessionsByBranch.get(branchId) ?? []) {
+        const seen = byId.get(session.session_id);
+        if (!seen || (seen.remote_surrogate && !session.remote_surrogate)) {
+          byId.set(session.session_id, session);
+        }
+      }
+    }
+    return [...byId.values()];
   }, [sessionsByBranch, branchById, currentBoardId]);
 
-  const trimmedQuery = searchQuery.trim();
+  // One idle flag mounts every row's hover toolbar in a single commit.
+  const toolbarsReady = useIdleReady(true, 2000);
+  // Stable so memoized rows skip re-rendering when the parent re-renders.
+  const openSession = useStableCallback((sessionId: string) => {
+    onSessionClick(sessionId);
+    onAfterSessionClick?.();
+  });
+
+  // The input updates immediately; the list follows at lower priority so typing stays fluid.
+  const trimmedQuery = useDeferredValue(searchQuery.trim());
   const searchActive = isSessionSearchActive(trimmedQuery);
   const displaySessions = useMemo(
     () =>
@@ -149,8 +376,15 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
         />
       </div>
 
-      {/* Session List */}
-      <div style={{ padding: '8px 0', flex: 1, overflowY: 'auto' }}>
+      {/* Session List: rows inset so their content lines up with the search field. */}
+      <div
+        style={{
+          paddingBlock: token.paddingXS,
+          paddingInline: token.padding,
+          flex: 1,
+          overflowY: 'auto',
+        }}
+      >
         {displaySessions.length === 0 ? (
           searchActive ? (
             <div
@@ -197,132 +431,16 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
         ) : (
           displaySessions.map((session) => {
             const branch = session.branch_id ? branchById.get(session.branch_id) : undefined;
-            const repo = branch ? repoById.get(branch.repo_id) : undefined;
-            const titleText = getSessionDisplayTitle(session, {
-              includeAgentFallback: true,
-            });
-            const descriptionSnippet =
-              searchActive && session.title && session.description
-                ? getMatchSnippet(session.description, trimmedQuery)
-                : null;
-            const toolMatches = searchActive && sessionToolMatches(session, trimmedQuery);
-
             return (
-              <div
+              <BoardSessionRow
                 key={session.session_id}
-                style={{
-                  cursor: 'pointer',
-                  padding: '10px 24px',
-                  transition: 'background 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = token.colorBgTextHover;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent';
-                }}
-                onClick={() => {
-                  onSessionClick(session.session_id);
-                  onAfterSessionClick?.();
-                }}
-              >
-                {/* Line 1: tool icon (with corner status badge) · title · genealogy */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    minWidth: 0,
-                  }}
-                >
-                  <span style={{ flexShrink: 0, display: 'inline-flex' }}>
-                    {(() => {
-                      const tone = getBadgeTone(session.status);
-                      const icon = <ToolIcon tool={session.agentic_tool} size={18} />;
-                      return tone ? (
-                        <Badge dot status={tone} offset={[-3, 3]}>
-                          {icon}
-                        </Badge>
-                      ) : (
-                        icon
-                      );
-                    })()}
-                  </span>
-                  <Typography.Text
-                    ellipsis={{ tooltip: titleText }}
-                    style={{ flex: 1, minWidth: 0 }}
-                  >
-                    <HighlightMatch text={titleText} query={trimmedQuery} />
-                  </Typography.Text>
-                  <SessionRelationshipIcon session={session} />
-                  <BranchBoardLocatorIcon branch={branch} />
-                </div>
-
-                {toolMatches && (
-                  <Typography.Text
-                    type="secondary"
-                    style={{
-                      display: 'block',
-                      fontSize: 11,
-                      marginTop: 3,
-                      marginLeft: 26,
-                    }}
-                  >
-                    Agent: <HighlightMatch text={session.agentic_tool} query={trimmedQuery} />
-                  </Typography.Text>
-                )}
-
-                {descriptionSnippet && descriptionSnippet !== titleText && (
-                  <Typography.Text
-                    type="secondary"
-                    style={{
-                      fontSize: 11,
-                      display: 'block',
-                      marginTop: 3,
-                      marginLeft: 26,
-                      lineHeight: 1.4,
-                      fontStyle: 'italic',
-                    }}
-                  >
-                    <HighlightMatch text={descriptionSnippet} query={trimmedQuery} />
-                  </Typography.Text>
-                )}
-
-                {/* Line 2: compact, non-interactive branch pill · relative timestamp */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    marginTop: 6,
-                    marginLeft: 26, // align under title (icon 18 + gap 8)
-                    minWidth: 0,
-                  }}
-                >
-                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                    {branch ? (
-                      <BranchPill
-                        branch={branch.name}
-                        compact
-                        title={repo ? `${repo.slug} / ${branch.name}` : branch.name}
-                      />
-                    ) : (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        No branch
-                      </Typography.Text>
-                    )}
-                  </div>
-                  <Tooltip title={formatTimestampWithRelative(session.last_updated)}>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}
-                    >
-                      {formatRelativeTime(session.last_updated)}
-                    </Typography.Text>
-                  </Tooltip>
-                </div>
-              </div>
+                session={session}
+                branch={branch}
+                repo={branch ? repoById.get(branch.repo_id) : undefined}
+                query={searchActive ? trimmedQuery : ''}
+                onOpen={openSession}
+                toolbarReady={toolbarsReady}
+              />
             );
           })
         )}

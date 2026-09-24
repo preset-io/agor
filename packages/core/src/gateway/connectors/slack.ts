@@ -25,7 +25,7 @@
 
 import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
-import { WebClient } from '@slack/web-api';
+import slackWebApi, { WebClient, type WebClientOptions } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
 import type {
@@ -67,6 +67,46 @@ const MAX_TABLES_PER_MESSAGE = 1;
 // Slack rejects `chat.postMessage` with more than 50 blocks; if we'd exceed
 // this we drop the blocks payload entirely and let `text` carry the message.
 const MAX_BLOCKS_PER_MESSAGE = 50;
+/**
+ * Message-metadata `event_type` values Agor stamps on its own Slack posts.
+ *
+ * Slack only returns `metadata` on messages that carried it, so this is the
+ * one handle a daemon has on a row it posted but crashed before recording —
+ * `findMessageByMetadata` looks the row up by exactly these values. The list
+ * is an allowlist rather than a passthrough because `sendMessage` accepts its
+ * metadata request from a caller and Slack rejects unknown shapes outright;
+ * every lane that reconciles a posted row must therefore be named here, or its
+ * post goes out bare and its reconciliation can never match.
+ */
+export const SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES = [
+  /** Reactive lane: a mediated MCP call was rejected with `needs_reauth`. */
+  'agor_mcp_recovery',
+  /** Intent-initiated lane: an agent-requested MCP OAuth connect card. */
+  'agor_mcp_connect',
+] as const;
+
+export type SlackAgorMessageMetadataEventType =
+  (typeof SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES)[number];
+
+const SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET: ReadonlySet<string> = new Set(
+  SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES
+);
+
+/**
+ * `sendMessage` metadata asking for ONE attempt bounded by this many
+ * milliseconds, instead of the shared client's retry ladder.
+ *
+ * Only Agor's MCP Slack cards set it. The shared client keeps
+ * `fiveRetriesInFiveMinutes`, which message relay and every other gateway call
+ * rely on. For a card write that ladder is the hazard: a write the caller has
+ * already given up on keeps being retried for minutes, and can land over a card
+ * a later attempt has settled. The card lanes run their own backoff ladder and
+ * reconcile a late receipt themselves, so one attempt is all they want from
+ * here — and the request timeout matching the caller's remaining budget means
+ * the socket is dropped when the caller stops waiting.
+ */
+export const SLACK_REQUEST_TIMEOUT_METADATA_KEY = 'slack_request_timeout_ms';
+
 // Slack error codes that indicate the `blocks` payload was malformed/rejected,
 // where retrying with text-only is the right fallback.
 const BLOCK_PAYLOAD_ERRORS = new Set([
@@ -838,6 +878,50 @@ export function isSlackFileSourceAllowed(
   return sourceConversationIds.some((id) => isSlackWriteTargetAllowed(config, id));
 }
 
+/**
+ * Every Slack Web API call this connector makes, bounded.
+ *
+ * `new WebClient(token)` takes the v7 defaults, and both of them are
+ * unbounded in the ways that matter here: `timeout: 0` is an INFINITE
+ * per-request deadline, and `tenRetriesInAboutThirtyMinutes` gives every
+ * failure its own half-hour ladder. Between them a single unanswered
+ * `chat.update` could hold a caller for thirty minutes, and nothing in Agor
+ * imposed a deadline of its own — so a Slack call that never came back was
+ * indistinguishable, from the outside, from a caller that had simply stopped.
+ *
+ * The calls this connector makes are small JSON requests, so 15s is generous
+ * for one of them and `fiveRetriesInFiveMinutes` is a real ladder rather than
+ * an outage. Neither is a substitute for an Agor-side operation deadline on
+ * work that holds a lease — see `MCP_SLACK_SEND_TIMEOUT_MS` — because five
+ * retries still take five minutes. This is the floor under everything else.
+ *
+ * Agor's MCP Slack card writes opt out of the ladder per call (see
+ * {@link SLACK_REQUEST_TIMEOUT_METADATA_KEY}): for a write the caller has
+ * already abandoned, a retry is a chance to repaint a card someone else has
+ * since settled.
+ *
+ * Deliberately NOT applied to `SocketModeClient`: its internal client's
+ * `{retries: 100, factor: 1.3}` is a RECONNECT policy for a long-lived
+ * listener, not a request deadline, and its liveness is already bounded by
+ * `clientPingTimeout` (5s) and `serverPingTimeout` (30s). Capping its retries
+ * would turn a recoverable disconnect into a permanently dead listener.
+ */
+const SLACK_WEB_API_TIMEOUT_MS = 15_000;
+/**
+ * `@slack/web-api` is CommonJS, and tsup leaves it external, so a built entry
+ * imports it through Node's ESM loader — which only sees the named exports its
+ * static lexer can detect. `WebClient` is one; `retryPolicies` is not, and
+ * naming it failed the daemon at link time. The default export is the whole
+ * `module.exports`, so the policy is read from there. Vitest does its own CJS
+ * interop and cannot observe this; `scripts/packaged-entry-import-smoke.mjs`
+ * imports the built entries under plain Node and does.
+ */
+const { retryPolicies } = slackWebApi;
+const SLACK_WEB_CLIENT_OPTIONS: WebClientOptions = {
+  timeout: SLACK_WEB_API_TIMEOUT_MS,
+  retryConfig: retryPolicies.fiveRetriesInFiveMinutes,
+};
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 
@@ -884,7 +968,7 @@ export class SlackConnector implements GatewayConnector {
     // Debug: Log token status (not the actual token!)
     // Initialization - tokens validated during startListening
 
-    this.web = new WebClient(this.config.bot_token);
+    this.web = new WebClient(this.config.bot_token, SLACK_WEB_CLIENT_OPTIONS);
   }
 
   /**
@@ -893,7 +977,20 @@ export class SlackConnector implements GatewayConnector {
    * tests can stub the app-token client independently of `this.web`.
    */
   protected createWebClient(token: string): WebClient {
-    return new WebClient(token);
+    return new WebClient(token, SLACK_WEB_CLIENT_OPTIONS);
+  }
+
+  /**
+   * A client for one card write: no retries, and a request deadline no longer
+   * than the caller's. See {@link SLACK_REQUEST_TIMEOUT_METADATA_KEY}. Built per
+   * send because `WebClient` takes both only at construction; cards are rare
+   * enough that this costs nothing that matters.
+   */
+  protected createSingleAttemptWebClient(timeoutMs: number): WebClient {
+    return new WebClient(this.config.bot_token, {
+      timeout: Math.min(timeoutMs, SLACK_WEB_API_TIMEOUT_MS),
+      retryConfig: { retries: 0 },
+    });
   }
 
   /**
@@ -1402,12 +1499,21 @@ export class SlackConnector implements GatewayConnector {
     const requestedMessageMetadata = req.metadata?.slack_message_metadata as
       | { event_type?: unknown; event_payload?: { delivery_id?: unknown } }
       | undefined;
+    const requestedEventType = requestedMessageMetadata?.event_type;
+    const requestTimeoutMs = req.metadata?.[SLACK_REQUEST_TIMEOUT_METADATA_KEY];
+    const web =
+      typeof requestTimeoutMs === 'number' &&
+      Number.isFinite(requestTimeoutMs) &&
+      requestTimeoutMs > 0
+        ? this.createSingleAttemptWebClient(Math.ceil(requestTimeoutMs))
+        : this.web;
     const messageMetadata =
-      requestedMessageMetadata?.event_type === 'agor_mcp_recovery' &&
-      typeof requestedMessageMetadata.event_payload?.delivery_id === 'string' &&
+      typeof requestedEventType === 'string' &&
+      SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPE_SET.has(requestedEventType) &&
+      typeof requestedMessageMetadata?.event_payload?.delivery_id === 'string' &&
       requestedMessageMetadata.event_payload.delivery_id.length <= 128
         ? {
-            event_type: 'agor_mcp_recovery',
+            event_type: requestedEventType,
             event_payload: {
               delivery_id: requestedMessageMetadata.event_payload.delivery_id,
             },
@@ -1424,13 +1530,13 @@ export class SlackConnector implements GatewayConnector {
       };
 
       if (updateTs) {
-        return this.web.chat.update({
+        return web.chat.update({
           ...base,
           ts: updateTs,
         });
       }
 
-      return this.web.chat.postMessage({
+      return web.chat.postMessage({
         ...base,
         thread_ts,
         ...(messageMetadata ? { metadata: messageMetadata } : {}),
@@ -2147,6 +2253,22 @@ export class SlackConnector implements GatewayConnector {
     }
 
     const socketLogger = createSlackSdkLoggerController();
+    // Deliberately WITHOUT `clientOptions`, unlike every WebClient this
+    // connector builds (see SLACK_WEB_CLIENT_OPTIONS).
+    //
+    // Do not "tidy this up" by giving it the bounded policy for consistency.
+    // SocketModeClient defaults its internal client to `{retries: 100,
+    // factor: 1.3}`, and that is a RECONNECT policy for a long-lived
+    // listener, not a per-request deadline: disconnects are regular and
+    // expected in Socket Mode, so those retries are how the listener comes
+    // back. Capping them converts a recoverable disconnect into a permanently
+    // dead listener — the channel simply stops receiving messages, with no
+    // error anyone is watching.
+    //
+    // Its liveness is already bounded, by mechanisms of its own: a 5s
+    // `clientPingTimeout` and a 30s `serverPingTimeout`, either of which
+    // triggers a reconnect. It does not need, and must not be given, the
+    // request deadline the Web API clients take.
     const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
       logger: socketLogger.logger,

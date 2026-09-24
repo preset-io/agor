@@ -605,26 +605,30 @@ describe('SessionPanel composer send', () => {
     expect(onBtwFork).not.toHaveBeenCalled();
   });
 
-  it('shows unsupported file intake errors before upload/send', async () => {
+  it('shows oversized file intake errors before upload/send', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
     fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
       dataTransfer: {
         types: ['Files'],
-        files: [new File(['<script>'], 'unsafe.html', { type: 'text/html' })],
+        files: [
+          new File([new Uint8Array(51 * 1024 * 1024)], 'huge.bin', {
+            type: 'application/octet-stream',
+          }),
+        ],
       },
     });
 
     await waitFor(() => {
       expect(
-        screen.getAllByText(/unsafe.html: Unsupported file type: text\/html/).length
+        screen.getAllByText(/huge.bin: File is 51 MB; the per-file limit is 50 MB/).length
       ).toBeGreaterThan(0);
     });
 
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Preview unsafe.html')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview huge.bin')).not.toBeInTheDocument();
   });
 
   it('shows a visible cap error and rejects an incoming batch over 10 files', async () => {
@@ -658,12 +662,14 @@ describe('SessionPanel composer send', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 
-  it('prioritizes the visible cap error for mixed invalid and over-cap batches', async () => {
+  it('prioritizes the visible cap error for mixed oversized and over-cap batches', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
     const files = [
-      new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
+      new File([new Uint8Array(51 * 1024 * 1024)], 'huge.bin', {
+        type: 'application/octet-stream',
+      }),
       ...Array.from(
         { length: 11 },
         (_, index) =>
@@ -687,7 +693,7 @@ describe('SessionPanel composer send', () => {
       ).toBeGreaterThan(0);
     });
 
-    expect(screen.queryByText(/bad.svg: Unsupported file type/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/huge.bin: File is/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Preview pending-00.txt')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Preview pending-10.txt')).not.toBeInTheDocument();
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();

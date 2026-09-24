@@ -88,7 +88,6 @@ import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
   getComposerAttachmentFailureMessage,
-  getComposerUploadAccept,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
@@ -886,7 +885,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <input
           ref={attachmentInputRef}
           type="file"
-          accept={getComposerUploadAccept()}
           multiple
           disabled={composerAttachmentUploading}
           style={{ display: 'none' }}

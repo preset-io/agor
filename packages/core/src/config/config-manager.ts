@@ -1946,10 +1946,23 @@ export async function getDaemonBaseUrl(): Promise<string> {
  * Hosted (`required_from_auth`): use durable routing from the current trusted
  * tenant's verified launch. Missing metadata returns an empty string, so entity
  * projections omit the link until someone opens the workspace through Cloud.
- * No deployment origin fallback is safe in that mode. `db` permits background
- * callers to open a short tenant read without a browser request.
+ * No deployment origin fallback is safe in that mode.
  *
- * Static/local resolution order:
+ * `db` is REQUIRED, and that is the whole point of the parameter. It was
+ * optional until the Slack MCP connect lane shipped two callers that simply
+ * omitted it: in hosted mode the handle is what
+ * {@link getTenantPublicBaseUrl} opens its short tenant read on, and the only
+ * other source is an ambient tenant database scope that background work —
+ * a deferred after-commit job, a repair sweep, a timer, an `identity-only`
+ * route — does not have. Those callers threw
+ * "Tenant public links require a tenant database" on their first line, which
+ * no SQLite/single-tenant suite can reproduce because the hosted branch is
+ * never taken there. Optional meant "forgot to pass it" compiled; required
+ * means it does not. A caller inside an open scope passes
+ * `getCurrentTenantDatabase()` rather than nothing, so the reliance is
+ * written down at the call site.
+ *
+ * Static/local resolution order (the handle is untouched):
  * 1. AGOR_BASE_URL environment variable (highest priority)
  * 2. ui.base_url from config.yaml
  * 3. daemon.base_url from config.yaml
@@ -1957,7 +1970,7 @@ export async function getDaemonBaseUrl(): Promise<string> {
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
-export async function getBaseUrl(db?: Database): Promise<string> {
+export async function getBaseUrl(db: Database): Promise<string> {
   const config = await loadConfig();
   if (config.multi_tenancy?.mode === 'required_from_auth') {
     // Use the canonical DB entrypoint: separately bundled config/DB artifacts

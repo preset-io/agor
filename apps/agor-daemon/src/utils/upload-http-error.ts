@@ -117,3 +117,83 @@ export function toUploadErrorResponse(error: unknown, requestId: string): Upload
     type: isClientError ? 'request' : 'internal',
   };
 }
+
+export type UploadAuthFailureReason =
+  | 'missing_bearer'
+  | 'token_expired'
+  | 'token_invalid'
+  | 'credentials_invalidated'
+  | 'tenant_rejected'
+  | 'not_authenticated'
+  | 'authentication_error';
+
+export interface UploadAuthFailureDiagnostics {
+  reason: UploadAuthFailureReason;
+  /** The rejected token's claimed (unverified) `sub`; a diagnostic hint, never authority. */
+  claimedSubject?: string;
+  /** The rejected token's claimed (unverified) `exp` as an ISO timestamp. */
+  claimedExpiresAt?: string;
+}
+
+// Any UUID version: users created before UUIDv7 IDs still carry v4 IDs.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Log only identifier-shaped values from unauthenticated input; anything
+ * else is caller-controlled text and is omitted.
+ */
+export function uuidOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && UUID_RE.test(value) ? value : undefined;
+}
+
+// ECMAScript Date range; larger values would make toISOString throw.
+const MAX_JWT_EXP_SECONDS = 8.64e12;
+
+type AuthErrorLike = {
+  name?: unknown;
+  className?: unknown;
+  message?: unknown;
+  data?: { name?: unknown } | null;
+};
+
+/**
+ * Classify a rejected upload bearer into a bounded reason for operational
+ * logs. The browser response stays generic; this only exists so a support
+ * reference can be tied to why authentication failed.
+ */
+export function classifyUploadAuthFailure(
+  error: unknown,
+  unverifiedPayload?: { sub?: unknown; exp?: unknown } | null
+): UploadAuthFailureDiagnostics {
+  const candidate = (error !== null && typeof error === 'object' ? error : {}) as AuthErrorLike;
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  const causeName = typeof candidate.data?.name === 'string' ? candidate.data.name : undefined;
+
+  let reason: UploadAuthFailureReason;
+  if (causeName === 'TokenExpiredError' || /jwt expired/i.test(message)) {
+    reason = 'token_expired';
+  } else if (
+    causeName === 'JsonWebTokenError' ||
+    causeName === 'NotBeforeError' ||
+    /jwt (malformed|audience|issuer)|invalid (signature|token)|JWT type is not valid/i.test(message)
+  ) {
+    reason = 'token_invalid';
+  } else if (/Session expired|credential metadata unavailable/i.test(message)) {
+    reason = 'credentials_invalidated';
+  } else if (/tenant/i.test(message)) {
+    reason = 'tenant_rejected';
+  } else if (candidate.className === 'not-authenticated' || candidate.name === 'NotAuthenticated') {
+    reason = 'not_authenticated';
+  } else {
+    reason = 'authentication_error';
+  }
+
+  const claimedSubject = uuidOrUndefined(unverifiedPayload?.sub);
+  const exp = unverifiedPayload?.exp;
+  const claimedExpiresAt =
+    typeof exp === 'number' && Number.isFinite(exp) && Math.abs(exp) <= MAX_JWT_EXP_SECONDS
+      ? new Date(exp * 1000).toISOString()
+      : undefined;
+
+  return { reason, claimedSubject, claimedExpiresAt };
+}

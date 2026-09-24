@@ -3,26 +3,19 @@ import {
   getGatewaySource as getGatewaySourceCore,
   isGatewaySession as isGatewaySessionCore,
   isSessionExecuting,
-  SessionStatus,
 } from '@agor-live/client';
 import {
   ArrowUpOutlined,
-  ClockCircleOutlined,
   DisconnectOutlined,
-  ExclamationCircleOutlined,
   ExportOutlined,
   EyeOutlined,
   LinkOutlined,
-  MessageOutlined,
-  MinusSquareOutlined,
   PlusOutlined,
-  PlusSquareOutlined,
   RightOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import {
   App,
-  Badge,
   Button,
   Collapse,
   ConfigProvider,
@@ -36,6 +29,7 @@ import {
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -61,18 +55,26 @@ import {
   sessionToolMatches,
   sortSessions,
 } from '../../utils/sessionSearch';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
-import { ChannelPill, getChannelIcon } from '../Pill';
+import { getChannelIcon } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
+import {
+  getSessionRowFill,
+  getSessionRowStateLabel,
+  getSessionRowTitleStyle,
+  isSessionRowFailed,
+  isSessionRowRead,
+  SessionRowLogo,
+  SessionStatusMark,
+} from '../SessionRow';
 import {
   SessionRelevanceLabel,
   SessionSearchToolbar,
   SessionSortButton,
 } from '../SessionSearchControls';
-import { ToolIcon } from '../ToolIcon';
 import { BranchSessionTree } from './BranchSessionTree';
 import {
   buildSessionTree,
@@ -85,20 +87,15 @@ import { PagedSessions } from './PagedSessions';
 const NO_MOTION_THEME = { token: { motion: false } };
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
-const PANEL_AGENT_ICON_SIZE = 16;
-const PANEL_STATUS_DOT_SIZE = 6;
 /** Revealed rows animate in with a short stagger; later rows share the last delay. */
 const ROW_ENTER_STAGGER_MS = 15;
 const ROW_ENTER_MAX_STAGGER = 8;
 const ROW_ENTER_CLEAR_MS = 400;
 const EMPTY_ENTERING_ROWS: ReadonlyMap<string, number> = new Map();
+/** Rows carry their own hover/selection fill, so Tree's 4px node gap is just air. */
+const TREE_ROW_STYLES = { item: { marginBottom: 0 } };
 
-const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
-
-function getSessionRowAccessibleLabel(
-  session: Session,
-  panel?: { hiddenChildCount?: number }
-): string {
+function getSessionRowAccessibleLabel(session: Session, hiddenChildCount = 0): string {
   const details = [
     `Open session ${getSessionDisplayTitle(session, { includeAgentFallback: true })}`,
   ];
@@ -106,16 +103,10 @@ function getSessionRowAccessibleLabel(
   if (session.remote_surrogate) {
     details.push('remote session', 'opens in its own branch');
   }
-  // Panel rows show these only as a status mark or count, so the name must carry them.
-  if (panel && isSessionExecuting(session)) {
-    details.push('running');
-  } else if (isSessionFailed(session)) {
-    details.push('latest task failed');
-  } else if (panel && session.ready_for_prompt) {
-    details.push('ready for prompt');
-  }
-  if (panel?.hiddenChildCount) {
-    const { hiddenChildCount } = panel;
+  // Rows show these only as a status mark or count, so the name must carry them.
+  const state = getSessionRowStateLabel(session);
+  if (state) details.push(state);
+  if (hiddenChildCount) {
     details.push(`${hiddenChildCount} hidden child session${hiddenChildCount === 1 ? '' : 's'}`);
   }
 
@@ -155,8 +146,8 @@ const SessionItemWithActions: React.FC<{
   isPeeked?: boolean;
   /** Paint a hover surface for rows that are not inside Tree, which supplies its own. */
   hoverFill?: boolean;
-  /** Mount the toolbar in idle time (or on first hover/focus) so expanding many rows stays cheap. */
-  deferActions?: boolean;
+  /** List-level idle flag: until it flips, the toolbar mounts only on first hover/focus. */
+  actionsReady?: boolean;
   onArchive: (sessionId: string, e: React.MouseEvent) => void;
   onSettings?: (sessionId: string, e: React.MouseEvent) => void;
   onTogglePeek?: (sessionId: string, e: React.MouseEvent) => void;
@@ -177,7 +168,7 @@ const SessionItemWithActions: React.FC<{
   isArchiving,
   isPeeked = false,
   hoverFill = false,
-  deferActions = false,
+  actionsReady = true,
   onArchive,
   onSettings,
   onTogglePeek,
@@ -191,19 +182,10 @@ const SessionItemWithActions: React.FC<{
   const [focusWithin, setFocusWithin] = useState(false);
   const { token } = theme.useToken();
   const showActions = hovered || focusWithin;
-  // Once revealed, stay mounted so the fade-out and focus order behave as before.
-  const [actionsRevealed, setActionsRevealed] = useState(!deferActions);
-  // Idle-time mount keeps the toolbar in the accessibility tree for browse-mode screen readers.
-  useEffect(() => {
-    if (actionsRevealed) return;
-    const reveal = () => setActionsRevealed(true);
-    if ('requestIdleCallback' in window) {
-      const id = window.requestIdleCallback(reveal, { timeout: 1000 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const timer = setTimeout(reveal, 200);
-    return () => clearTimeout(timer);
-  }, [actionsRevealed]);
+  // Once revealed, stay mounted so the fade-out and focus order behave as before. The
+  // idle flag keeps the toolbar in the accessibility tree for browse-mode screen readers.
+  const [revealedByUser, setRevealedByUser] = useState(false);
+  const actionsRevealed = actionsReady || revealedByUser;
 
   const buttonStyle: React.CSSProperties = {
     background: `${token.colorBgContainer}cc`,
@@ -238,12 +220,12 @@ const SessionItemWithActions: React.FC<{
       }}
       onMouseEnter={() => {
         setHovered(true);
-        setActionsRevealed(true);
+        setRevealedByUser(true);
       }}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => {
         setFocusWithin(true);
-        setActionsRevealed(true);
+        setRevealedByUser(true);
       }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
@@ -413,11 +395,22 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const { showSuccess, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const isMobileViewport = useIsMobileViewport();
+  // One idle flag per list mounts every row's hover toolbar in a single commit.
+  const rowActionsReady = useIdleReady();
+  // Compact chevron column and nesting step for Tree (its defaults are controlHeightSM).
+  const compactTreeTheme = useMemo(
+    () => ({
+      components: {
+        Tree: { switcherSize: token.controlHeightXS, indentSize: token.controlHeightXS },
+      },
+    }),
+    [token.controlHeightXS]
+  );
   const prefersReducedMotion = usePrefersReducedMotion();
   const [enteringRows, setEnteringRows] = useState(EMPTY_ENTERING_ROWS);
   const enteringRowsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(enteringRowsTimer.current), []);
-  const panelRowHeight = isMobileViewport ? MOBILE_TOUCH_TARGET : token.controlHeight;
+  const rowHeight = isMobileViewport ? MOBILE_TOUCH_TARGET : token.controlHeight;
   const { archiveSession: archiveSessionUnstable } = useSessionActions(client);
   // useSessionActions returns a new function per render; keep row handlers memo-stable.
   const archiveSession = useStableCallback(archiveSessionUnstable);
@@ -440,6 +433,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const fillPanel = isPanel && fillAvailableHeight;
   const manualTreeSection = useTreeSectionHeight();
   const gatewayTreeSection = useTreeSectionHeight();
+  const scheduledSection = useTreeSectionHeight();
   // Every collapsible node (sections + parent sessions in the tree) defaults
   // to expanded; only user-collapsed exceptions are kept. Board cards persist
   // them per branch in the shared collapsedBranchNodes store; the teammate
@@ -782,10 +776,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   // that newly gain children start expanded, while stored exceptions survive
   // sessions temporarily leaving the tree (archive, lost children).
   const collapsedSessionIds = collapsedNode.sessionIds;
-  const collapsedSessionIdSet = useMemo(
-    () => new Set(isPanel ? collapsedSessionIds : undefined),
-    [collapsedSessionIds, isPanel]
-  );
+  const collapsedSessionIdSet = useMemo(() => new Set(collapsedSessionIds), [collapsedSessionIds]);
   const expandedManualKeys = useMemo(
     () => manualExpandableKeys.filter((key) => !collapsedSessionIds?.includes(String(key))),
     [collapsedSessionIds, manualExpandableKeys]
@@ -859,218 +850,70 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     [updateCollapsedNode]
   );
 
-  const isPanelRowFailed = (session: Session) =>
-    isSessionFailed(session) && !isSessionExecuting(session);
-
-  const sessionRowStyle = (session: Session): React.CSSProperties => {
-    const isSessionSelected = session.session_id === selectedSessionId;
-    const isRemoteSurrogate = Boolean(session.remote_surrogate);
-    if (isPanel) {
-      // Borderless rows: status lives in the trailing dot, selection in the fill.
-      return {
-        border: 0,
-        borderRadius: token.borderRadiusSM,
-        paddingBlock: 0,
-        // A tight lead-in keeps the logo close to the chevron; the trailing status mark
-        // gets more room so it sits comfortably inside a selected or failed fill.
-        paddingInlineStart: token.paddingXXS,
-        paddingInlineEnd: token.paddingSM,
-        minHeight: panelRowHeight,
-        // A failed session tints its whole row so it stands out; the icon keeps it non-color-only.
-        background: isPanelRowFailed(session)
-          ? isSessionSelected
-            ? // Hover is nearly identical to Bg in the light theme; Active reads as selected.
-              token.colorErrorBgActive
-            : token.colorErrorBg
-          : isSessionSelected
-            ? token.colorFillSecondary
-            : 'transparent',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        width: '100%',
-        boxSizing: 'border-box',
-        cursor: 'pointer',
-        color: 'inherit',
-        font: 'inherit',
-        textAlign: 'left',
-        whiteSpace: 'normal',
-        opacity: isRemoteSurrogate ? 0.78 : undefined,
-      };
-    }
-    return {
-      borderWidth: 1,
-      borderStyle: isRemoteSurrogate ? 'dashed' : 'solid',
-      borderColor: session.ready_for_prompt ? token.colorPrimary : token.colorBorderSecondary,
-      borderRadius: 4,
-      padding: 8,
-      background: isRemoteSurrogate ? token.colorFillQuaternary : 'transparent',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'flex-start',
-      width: '100%',
-      height: 'auto',
-      boxSizing: 'border-box',
-      cursor: 'pointer',
-      color: 'inherit',
-      font: 'inherit',
-      textAlign: 'left',
-      whiteSpace: 'normal',
-      marginBottom: 4,
-      opacity: isRemoteSurrogate ? 0.78 : undefined,
-      boxShadow: session.ready_for_prompt ? `0 0 12px ${token.colorPrimary}30` : undefined,
-      ...(isSessionSelected
-        ? { outline: `1px dashed ${token.colorTextBase}`, outlineOffset: -2 }
-        : {}),
-    };
-  };
+  const sessionRowStyle = (session: Session): React.CSSProperties => ({
+    // Borderless rows: status lives in the trailing mark, selection and failure in the fill.
+    border: 0,
+    borderRadius: token.borderRadiusSM,
+    paddingBlock: 0,
+    // Equal, tight insets: the logo sits close to the chevron and the status mark
+    // mirrors it inside a selected or failed fill, on the card's content grid.
+    paddingInlineStart: token.paddingXXS,
+    paddingInlineEnd: token.paddingXXS,
+    minHeight: rowHeight,
+    background: getSessionRowFill(token, {
+      failed: isSessionRowFailed(session),
+      selected: session.session_id === selectedSessionId,
+    }),
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: '100%',
+    boxSizing: 'border-box',
+    cursor: 'pointer',
+    color: 'inherit',
+    font: 'inherit',
+    textAlign: 'left',
+    whiteSpace: 'normal',
+    opacity: session.remote_surrogate ? 0.78 : undefined,
+  });
 
   const renderSessionTitle = (
     session: Session,
-    options: {
-      strong?: boolean;
-      secondary?: boolean;
-      query?: string;
-      hug?: boolean;
-      parent?: boolean;
-    } = {}
+    options: { query?: string; hug?: boolean; parent?: boolean } = {}
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
-    // Panel rows signal failure with the status dot instead of danger-colored text.
-    const failed = !isPanel && isSessionFailed(session);
-    const muted = !isPanel && Boolean(options.secondary);
-    // Panel: sessions already read recede one gentle step; ones that need you stay full strength.
-    const read =
-      isPanel &&
-      !(
-        isSessionExecuting(session) ||
-        isSessionFailed(session) ||
-        session.ready_for_prompt ||
-        session.session_id === selectedSessionId
-      );
-
     return (
       <Typography.Text
-        strong={options.strong}
-        type={failed ? 'danger' : muted ? 'secondary' : undefined}
-        title={isPanel ? titleText : undefined}
-        style={{
-          fontSize: isPanel ? 13 : 12,
-          // Parents anchor the tree's structure; leaves stay regular.
-          fontWeight: isPanel && options.parent ? 500 : undefined,
-          color: read ? token.colorTextSecondary : undefined,
-          flex: options.hug ? '0 1 auto' : 1,
-          minWidth: 0,
-          ...(isPanel
-            ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-            : getSessionTitleStyles(2)),
-        }}
+        title={titleText}
+        style={getSessionRowTitleStyle(token, {
+          read: isSessionRowRead(session, session.session_id === selectedSessionId),
+          parent: options.parent,
+          hug: options.hug,
+        })}
       >
         <HighlightMatch text={titleText} query={options.query ?? ''} />
       </Typography.Text>
     );
   };
 
-  const renderSessionFailureIcon = (session: Session) => {
-    if (isPanel || !isSessionFailed(session)) return null;
-
-    return (
-      <Tooltip title="Latest task failed">
-        <ExclamationCircleOutlined
-          aria-label="Latest task failed"
-          style={{ color: token.colorErrorText, fontSize: 12, flex: '0 0 auto' }}
-        />
-      </Tooltip>
-    );
-  };
-
-  const renderSessionTitleWithFailure = (
-    session: Session,
-    options: {
-      strong?: boolean;
-      secondary?: boolean;
-      query?: string;
-      hug?: boolean;
-      parent?: boolean;
-    } = {}
-  ) => (
-    <>
-      {renderSessionFailureIcon(session)}
-      {renderSessionTitle(session, options)}
-    </>
-  );
-
-  // Panel rows show the agent logo on every row, as one steady brand column.
-  const renderAgentIcon = (session: Session) => {
-    if (isPanel) {
-      return <ToolIcon tool={session.agentic_tool} size={PANEL_AGENT_ICON_SIZE} bordered={false} />;
-    }
-    return isSessionExecuting(session) ? (
-      <Spin size="small" />
-    ) : (
-      <ToolIcon tool={session.agentic_tool} size={20} />
-    );
-  };
-
-  const renderPanelStatusDot = (session: Session) => {
-    if (!isPanel) return null;
-    const running = isSessionExecuting(session);
-    const failed = !running && isSessionFailed(session);
-    if (!running && !failed && !session.ready_for_prompt) return null;
-    if (failed) {
-      // A shape, not just a color, separates failure from the ready dot.
-      return (
-        <ExclamationCircleOutlined
-          role="img"
-          aria-label="Latest task failed"
-          title="Latest task failed"
-          style={{ color: token.colorErrorText, fontSize: token.fontSizeSM, flex: '0 0 auto' }}
-        />
-      );
-    }
-    const label = running ? 'Running' : 'Ready for prompt';
-    return (
-      <span
-        role="img"
-        aria-label={label}
-        title={label}
-        className={running ? 'status-dot-run' : undefined}
-        style={{
-          display: 'inline-block',
-          width: PANEL_STATUS_DOT_SIZE,
-          height: PANEL_STATUS_DOT_SIZE,
-          borderRadius: '50%',
-          flex: '0 0 auto',
-          background: running ? token.colorSuccess : token.colorPrimary,
-        }}
-      />
-    );
-  };
-
-  // Panel section headers use the session panel's uppercase label ("Queued Tasks").
-  const panelSectionLabelStyle: React.CSSProperties = {
+  // Section headers use the session panel's uppercase label ("Queued Tasks").
+  const sectionLabelStyle: React.CSSProperties = {
     fontSize: token.fontSizeSM,
     fontWeight: 500,
     letterSpacing: '0.5px',
     textTransform: 'uppercase',
   };
-  const renderSectionLabel = (label: string) =>
-    isPanel ? (
-      <Typography.Text type="secondary" style={panelSectionLabelStyle}>
-        {label}
-      </Typography.Text>
-    ) : (
-      <Typography.Text strong>{label}</Typography.Text>
-    );
+  const renderSectionLabel = (label: string) => (
+    <Typography.Text type="secondary" style={sectionLabelStyle}>
+      {label}
+    </Typography.Text>
+  );
 
-  const renderSectionCount = (count: number, badgeColor: string) =>
-    isPanel ? (
-      <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-        {count}
-      </Typography.Text>
-    ) : (
-      <Badge count={count} showZero style={{ backgroundColor: badgeColor }} />
-    );
+  const renderSectionCount = (count: number) => (
+    <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+      {count}
+    </Typography.Text>
+  );
 
   const renderFlatSessionRow = (session: Session, query = '') => {
     const callbackToggle = getCallbackToggle(session);
@@ -1092,8 +935,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         key={session.session_id}
         sessionId={session.session_id}
         isArchiving={archivingSessionIds.has(session.session_id)}
-        hoverFill={isPanel}
-        deferActions={isPanel}
+        hoverFill
+        actionsReady={rowActionsReady}
         onArchive={handleArchiveSession}
         callbackToggle={callbackToggle ?? undefined}
         onToggleCallback={callbackToggle ? handleToggleCallback : undefined}
@@ -1116,23 +959,23 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           type="button"
           style={sessionRowStyle(session)}
           data-session-id={session.session_id}
-          aria-label={getSessionRowAccessibleLabel(session, isPanel ? {} : undefined)}
+          aria-label={getSessionRowAccessibleLabel(session)}
           onClick={() => onSessionClick?.(session.session_id)}
         >
           <div
             style={{
               display: 'flex',
-              alignItems: isPanel ? 'center' : 'flex-start',
-              gap: isPanel ? token.marginXS : 4,
+              alignItems: 'center',
+              gap: token.marginXS,
               flex: 1,
               minWidth: 0,
             }}
           >
-            {renderAgentIcon(session)}
+            <SessionRowLogo tool={session.agentic_tool} />
             <SessionRelationshipIcon session={session} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-                {renderSessionTitleWithFailure(session, { query })}
+                {renderSessionTitle(session, { query })}
               </div>
               {(sourceLabel || toolMatches) && (
                 <Typography.Text
@@ -1163,7 +1006,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 </Typography.Text>
               )}
             </div>
-            {renderPanelStatusDot(session)}
+            <SessionStatusMark session={session} />
           </div>
         </button>
       </SessionItemWithActions>
@@ -1171,7 +1014,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   };
 
   // One chevron for panel section headers and tree parents: same glyph, size, color and column.
-  const renderPanelChevron = useCallback(
+  const renderChevron = useCallback(
     (expanded: boolean) => (
       <RightOutlined
         style={{
@@ -1207,67 +1050,56 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       const sessionTitle = nodeProps.session
         ? getSessionDisplayTitle(nodeProps.session, { includeAgentFallback: true })
         : 'session';
-      const Icon = expanded ? MinusSquareOutlined : PlusSquareOutlined;
       const label = `${expanded ? 'Collapse' : 'Expand'} ${sessionTitle}`;
-      const toggle = (event: React.MouseEvent) => {
-        event.stopPropagation();
-        toggleSessionCollapsed(String(key));
-      };
 
-      if (isPanel) {
-        // A compact AntD button owns hover and focus, centered on the row rather than Tree's first line.
-        return (
-          // Inline styles beat the switcher-icon class Tree adds to this clone: its
-          // inline-block breaks centering, and its closed-state rotation stacks on ours.
-          <Flex
-            align="center"
-            justify="center"
-            style={{ display: 'flex', height: panelRowHeight, transform: 'none' }}
-          >
-            <Button
-              type="text"
-              size="small"
-              aria-label={label}
-              aria-expanded={expanded}
-              icon={renderPanelChevron(expanded)}
-              onClick={toggle}
-            />
-          </Flex>
-        );
-      }
-
+      // A compact AntD button owns hover and focus, centered on the row rather than Tree's first line.
       return (
-        <button
-          type="button"
-          aria-label={label}
-          aria-expanded={expanded}
-          onClick={toggle}
+        // Inline styles beat the switcher-icon class Tree adds to this clone: its
+        // inline-block breaks centering, and its closed-state rotation stacks on ours.
+        <Flex
+          align="center"
+          justify="center"
+          // The target overhangs the compact column; lift it above the row so its edges toggle.
           style={{
-            border: 0,
-            background: 'transparent',
-            padding: 0,
-            // Match Tree's first-line hover surface without inline baseline offsets.
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '100%',
-            height: '1lh',
-            lineHeight: 'inherit',
-            cursor: 'pointer',
-            color: 'inherit',
+            height: rowHeight,
+            transform: 'none',
+            position: 'relative',
+            zIndex: 1,
           }}
         >
-          <Icon />
-        </button>
+          <Button
+            type="text"
+            size="small"
+            aria-label={label}
+            aria-expanded={expanded}
+            icon={renderChevron(expanded)}
+            // Overhang only rightward into the row's empty lead-in (the tree viewport clips
+            // the left edge); inline-end padding keeps the glyph centered in the column.
+            style={{
+              width: token.controlHeightXS + token.paddingXXS,
+              minWidth: token.controlHeightXS + token.paddingXXS,
+              paddingInlineStart: 0,
+              paddingInlineEnd: token.paddingXXS,
+              marginInlineEnd: -token.paddingXXS,
+              flexShrink: 0,
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleSessionCollapsed(String(key));
+            }}
+          />
+        </Flex>
       );
     },
-    [isPanel, panelRowHeight, renderPanelChevron, toggleSessionCollapsed]
+    [rowHeight, renderChevron, toggleSessionCollapsed, token.controlHeightXS, token.paddingXXS]
   );
 
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
-    const hiddenChildCount =
-      isPanel && collapsedSessionIdSet.has(session.session_id) ? (node.children?.length ?? 0) : 0;
+    const hiddenChildCount = collapsedSessionIdSet.has(session.session_id)
+      ? (node.children?.length ?? 0)
+      : 0;
     const isRemoteSurrogate = node.relationshipType === 'remote';
     const callbackToggle = getCallbackToggle(session);
     const remoteParentId = getRemoteParentId(session);
@@ -1279,7 +1111,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         sessionId={session.session_id}
         isArchiving={archivingSessionIds.has(session.session_id)}
         isPeeked={peekedIds.has(session.session_id)}
-        deferActions={isPanel}
+        actionsReady={rowActionsReady}
         onArchive={handleArchiveSession}
         onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
         callbackToggle={callbackToggle ?? undefined}
@@ -1301,13 +1133,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       >
         <button
           type="button"
-          // Keep the same total row spacing, but center the border inside Tree's hover fill.
-          style={{ ...sessionRowStyle(session), marginBlock: isPanel ? 0 : 2 }}
+          style={sessionRowStyle(session)}
           data-session-id={session.session_id}
-          aria-label={getSessionRowAccessibleLabel(
-            session,
-            isPanel ? { hiddenChildCount } : undefined
-          )}
+          aria-label={getSessionRowAccessibleLabel(session, hiddenChildCount)}
           onClick={() => onSessionClick?.(session.session_id)}
           onContextMenu={(e) => {
             if (onForkSession || onSpawnSession) {
@@ -1315,77 +1143,52 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             }
           }}
         >
-          <Flex
-            align={isGateway && !isPanel ? 'flex-start' : 'center'}
-            gap={isPanel ? token.marginXS : token.marginXXS}
-            flex={1}
-            style={{ minWidth: 0 }}
-          >
-            {renderAgentIcon(session)}
+          <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
+            <SessionRowLogo tool={session.agentic_tool} />
             {isRemoteSurrogate ? (
               <Tooltip title="Remote session created from this session. Click to open it in its own branch.">
                 <ExportOutlined style={{ fontSize: 11, color: token.colorTextTertiary }} />
               </Tooltip>
-            ) : isPanel && node.relationshipType === 'spawn' ? null : (
-              // Panel indentation already shows a spawn; forks and btw keep their marker.
+            ) : node.relationshipType === 'spawn' ? null : (
+              // Indentation already shows a spawn; forks and btw keep their marker.
               <SessionRelationshipIcon session={session} size={10} />
             )}
-            {isPanel ? (
-              // One-line rows: the channel is quiet metadata beside the title, not a pill below it.
-              <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
-                {renderSessionTitleWithFailure(session, {
-                  hug: isGateway,
-                  parent: Boolean(node.children?.length),
-                })}
-                {isGateway && (
-                  <Typography.Text
-                    type="secondary"
-                    title={gatewaySource?.channel_name ?? 'Gateway'}
-                    style={{
-                      fontSize: token.fontSizeSM,
-                      flex: '0 1 auto',
-                      minWidth: 0,
-                      maxWidth: '45%',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {gatewaySource ? (
-                      <>
-                        {getChannelIcon(gatewaySource.channel_type)} {gatewaySource.channel_name}
-                      </>
-                    ) : (
-                      'Gateway'
-                    )}
-                  </Typography.Text>
-                )}
-              </Flex>
-            ) : (
-              <Flex vertical gap={isGateway ? token.marginXXS : 0} flex={1} style={{ minWidth: 0 }}>
-                <Flex align="center" gap={token.marginXXS} style={{ minWidth: 0 }}>
-                  {renderSessionTitleWithFailure(session)}
-                </Flex>
-                {isGateway &&
-                  (gatewaySource ? (
-                    <ChannelPill
-                      channelType={gatewaySource.channel_type}
-                      channelName={gatewaySource.channel_name}
-                      style={{ alignSelf: 'flex-start' }}
-                    />
+            {/* One-line rows: a gateway channel is quiet metadata beside the title. */}
+            <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
+              {renderSessionTitle(session, {
+                hug: isGateway,
+                parent: Boolean(node.children?.length),
+              })}
+              {isGateway && (
+                <Typography.Text
+                  type="secondary"
+                  title={gatewaySource?.channel_name ?? 'Gateway'}
+                  style={{
+                    fontSize: token.fontSizeSM,
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    maxWidth: '45%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {gatewaySource ? (
+                    <>
+                      {getChannelIcon(gatewaySource.channel_type)} {gatewaySource.channel_name}
+                    </>
                   ) : (
-                    <Typography.Text type="secondary" style={{ fontSize: 11, fontStyle: 'italic' }}>
-                      (Gateway - metadata unavailable)
-                    </Typography.Text>
-                  ))}
-              </Flex>
-            )}
+                    'Gateway'
+                  )}
+                </Typography.Text>
+              )}
+            </Flex>
             {hiddenChildCount > 0 && (
               <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {hiddenChildCount}
               </Typography.Text>
             )}
-            {renderPanelStatusDot(session)}
+            <SessionStatusMark session={session} />
           </Flex>
         </button>
       </SessionItemWithActions>
@@ -1396,8 +1199,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const sessionRowContext = useMemo(
     () => [
       token,
-      isPanel,
-      panelRowHeight,
+      rowHeight,
       sessions,
       handleArchiveSession,
       handleTogglePeekSession,
@@ -1413,8 +1215,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     ],
     [
       token,
-      isPanel,
-      panelRowHeight,
+      rowHeight,
       sessions,
       handleArchiveSession,
       handleTogglePeekSession,
@@ -1442,6 +1243,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         enterIndex={isPanel ? (enteringRows.get(sessionId) ?? null) : undefined}
         enterMotion={rowEnterMotion}
         rowInputs={[
+          rowActionsReady,
           enteringRows.get(sessionId),
           sessionRowContext,
           sessionId === selectedSessionId,
@@ -1459,67 +1261,65 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     expandableKeys: React.Key[],
     onContentSizeChange: (contentHeight: number, viewportHeight: number) => void
   ) => (
-    <BranchSessionTree
-      className={`agor-flat-tree nodrag nowheel${isPanel ? ' agor-panel-session-tree' : ''}`}
-      fillAvailableHeight={fillPanel}
-      onContentSizeChange={onContentSizeChange}
-      treeData={treeData}
-      expandedKeys={expandedKeys}
-      onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
-      showLine={!isPanel}
-      // Toggle instantly; Tree's height motion re-lays out the virtual list every frame.
-      motion={isPanel ? false : undefined}
-      switcherIcon={renderTreeSwitcherIcon}
-      showIcon={false}
-      blockNode
-      selectable={false}
-      titleRender={renderMemoSessionNode}
-      // Rows carry their own hover/selection fill, so Tree's 4px node gap is just air.
-      styles={isPanel ? { item: { marginBottom: 0 } } : undefined}
-    />
+    <ConfigProvider theme={compactTreeTheme}>
+      <BranchSessionTree
+        className="agor-flat-tree agor-session-tree nodrag nowheel"
+        fillAvailableHeight={fillPanel}
+        onContentSizeChange={onContentSizeChange}
+        treeData={treeData}
+        expandedKeys={expandedKeys}
+        onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[], expandableKeys)}
+        showLine={false}
+        // Toggle instantly; Tree's height motion re-lays out the virtual list every frame.
+        motion={false}
+        switcherIcon={renderTreeSwitcherIcon}
+        showIcon={false}
+        blockNode
+        selectable={false}
+        titleRender={renderMemoSessionNode}
+        // Rows carry their own hover/selection fill, so Tree's 4px node gap is just air.
+        styles={TREE_ROW_STYLES}
+      />
+    </ConfigProvider>
   );
 
   const panelFlexStyle: React.CSSProperties | undefined = fillPanel
     ? { display: 'flex', flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0 }
     : undefined;
+  // Compact tree metrics: the chevron column and each nesting step use AntD's smallest
+  // control size, so sessions don't sit behind wide gutters.
+  const treeColumn = token.controlHeightXS;
   // Section chevrons share the top-level tree chevron column.
-  const panelSectionHeaderStyle: React.CSSProperties | undefined = isPanel
-    ? { paddingInline: 0 }
-    : undefined;
-  // Section bodies nest one level under their header, with a guide under its chevron.
-  const panelSectionBodyGuide: React.CSSProperties | undefined = isPanel
-    ? {
-        marginInlineStart: token.controlHeightSM / 2,
-        paddingInlineStart: token.controlHeightSM / 2 - token.lineWidth,
-        borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
-      }
-    : undefined;
+  const sectionHeaderStyle: React.CSSProperties = { paddingInline: 0 };
+  // Section bodies hang off a guide under the header's chevron; rows' own chevron
+  // column starts right at the guide, so the indent doesn't stack with it.
+  const sectionBodyGuide: React.CSSProperties = {
+    marginInlineStart: treeColumn / 2,
+    paddingInlineStart: 0,
+    borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
+  };
   // The chevron slot supplies the one standard step before the title.
-  const panelSectionIconStyle: React.CSSProperties | undefined = isPanel
-    ? { marginInlineEnd: 0 }
-    : undefined;
-  const panelExpandIcon = isPanel
-    ? ({ isActive }: { isActive?: boolean }) => (
-        // The inset matches row padding, so section titles share the row title column.
-        <Flex
-          align="center"
-          justify="center"
-          style={{ width: token.controlHeightSM, marginInlineEnd: token.paddingXXS }}
-        >
-          {renderPanelChevron(Boolean(isActive))}
-        </Flex>
-      )
-    : undefined;
+  const sectionIconStyle: React.CSSProperties = { marginInlineEnd: 0 };
+  const sectionExpandIcon = ({ isActive }: { isActive?: boolean }) => (
+    // The inset matches row padding, so section titles share the row title column.
+    <Flex
+      align="center"
+      justify="center"
+      style={{ width: treeColumn, marginInlineEnd: token.paddingXXS }}
+    >
+      {renderChevron(Boolean(isActive))}
+    </Flex>
+  );
   const treeBodyStyles = {
-    header: { flexShrink: 0, ...panelSectionHeaderStyle },
-    icon: panelSectionIconStyle,
+    header: { flexShrink: 0, ...sectionHeaderStyle },
+    icon: sectionIconStyle,
     body: {
       ...panelFlexStyle,
       background: 'transparent',
-      paddingInline: isPanel ? 0 : undefined,
-      // Panel headers already separate the list; Collapse's body inset leaves a gap.
-      paddingTop: isPanel ? 0 : undefined,
-      ...panelSectionBodyGuide,
+      paddingInline: 0,
+      // Headers already separate the list; Collapse's body inset leaves a gap.
+      paddingTop: 0,
+      ...sectionBodyGuide,
     },
   };
   // Leave a few rows reachable when headers/other sections exceed a short
@@ -1540,50 +1340,34 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const sessionListHeader = (
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
-      <Space size={isPanel ? token.marginXS : 4} align="center">
+      <Space size={token.marginXS} align="center">
         {renderSectionLabel('Sessions')}
-        {renderSectionCount(manualSessions.length, token.colorPrimaryBgHover)}
+        {renderSectionCount(manualSessions.length)}
         {!isPanel && (
           <SessionSortButton sort={sort} onSortChange={setSort} compact stopPropagation />
         )}
       </Space>
       {onCreateSession && (
         <div className="nodrag">
-          {isPanel ? (
-            <Tooltip title={isCreating ? undefined : 'New session'}>
-              <Button
-                type="text"
-                size={isMobileViewport ? 'middle' : 'small'}
-                icon={<PlusOutlined />}
-                aria-label="New Session"
-                disabled={connectionDisabled || isCreating}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateSession(branch.branch_id);
-                }}
-                title={isCreating ? 'Branch is being created...' : undefined}
-                style={
-                  isMobileViewport
-                    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
-                    : undefined
-                }
-              />
-            </Tooltip>
-          ) : (
+          <Tooltip title={isCreating ? undefined : 'New session'}>
             <Button
-              type="default"
-              size="small"
+              type="text"
+              size={isMobileViewport ? 'middle' : 'small'}
               icon={<PlusOutlined />}
+              aria-label="New Session"
               disabled={connectionDisabled || isCreating}
               onClick={(e) => {
                 e.stopPropagation();
                 onCreateSession(branch.branch_id);
               }}
               title={isCreating ? 'Branch is being created...' : undefined}
-            >
-              New Session
-            </Button>
-          )}
+              style={
+                isMobileViewport
+                  ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+                  : undefined
+              }
+            />
+          </Tooltip>
         </div>
       )}
     </Flex>
@@ -1591,23 +1375,24 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const scheduledRunsHeader = (
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
-      <Space size={isPanel ? token.marginXS : 4} align="center">
-        {!isPanel && <ClockCircleOutlined style={{ color: token.colorInfo }} />}
+      <Space size={token.marginXS} align="center">
         {renderSectionLabel('Scheduled Runs')}
-        {renderSectionCount(scheduledSessions.length, token.colorInfoBgHover)}
+        {renderSectionCount(scheduledSessions.length)}
         {hasRunningScheduledSession && <Spin size="small" />}
       </Space>
     </Flex>
   );
 
-  // Panel scheduled rows keep their paging but sit in the tree's title column,
-  // after the chevron column (Tree's switcher, whose margin/padding the panel drops).
-  const panelFlatRowInset = token.controlHeightSM;
+  // Scheduled rows keep their paging but sit in the tree's title column,
+  // after the chevron column (Tree's switcher, whose margin/padding are dropped).
+  const flatRowInset = treeColumn;
   const scheduledRunsContent = isScheduledRunsOpen ? (
     <PagedSessions
       key={branch.branch_id}
       sessions={scheduledSessions}
-      rowGap={isPanel ? 0 : undefined}
+      rowGap={0}
+      fillAvailableHeight={fillPanel}
+      onContentSizeChange={scheduledSection.onContentSizeChange}
     >
       {(session) => {
         const callbackToggle = getCallbackToggle(session);
@@ -1618,8 +1403,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             sessionId={session.session_id}
             isArchiving={archivingSessionIds.has(session.session_id)}
             isPeeked={peekedIds.has(session.session_id)}
-            hoverFill={isPanel}
-            deferActions={isPanel}
+            hoverFill
+            actionsReady={rowActionsReady}
             onArchive={handleArchiveSession}
             onTogglePeek={onTogglePeekSession ? handleTogglePeekSession : undefined}
             callbackToggle={callbackToggle ?? undefined}
@@ -1642,30 +1427,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <button
               type="button"
               style={sessionRowStyle(session)}
-              aria-label={getSessionRowAccessibleLabel(session, isPanel ? {} : undefined)}
+              aria-label={getSessionRowAccessibleLabel(session)}
               onClick={() => onSessionClick?.(session.session_id)}
             >
-              {isPanel ? (
-                <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
-                  {renderAgentIcon(session)}
-                  {renderSessionTitleWithFailure(session, { secondary: true })}
-                  {renderPanelStatusDot(session)}
-                </Flex>
-              ) : (
-                <Space size={4} align="center" style={{ flex: 1, minWidth: 0 }}>
-                  {renderAgentIcon(session)}
-                  {renderSessionTitleWithFailure(session, { secondary: true })}
-                </Space>
-              )}
+              <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
+                <SessionRowLogo tool={session.agentic_tool} />
+                {renderSessionTitle(session)}
+                <SessionStatusMark session={session} />
+              </Flex>
             </button>
           </SessionItemWithActions>
         );
-        return isPanel ? (
-          <div key={session.session_id} style={{ paddingInlineStart: panelFlatRowInset }}>
+        return (
+          <div key={session.session_id} style={{ paddingInlineStart: flatRowInset }}>
             {item}
           </div>
-        ) : (
-          item
         );
       }}
     </PagedSessions>
@@ -1673,10 +1449,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
   const gatewaySessionsHeader = (
     <Flex justify="space-between" align="center" style={{ width: '100%' }}>
-      <Space size={isPanel ? token.marginXS : 4} align="center">
-        {!isPanel && <MessageOutlined style={{ color: token.colorSuccess }} />}
+      <Space size={token.marginXS} align="center">
         {renderSectionLabel('Gateway Sessions')}
-        {renderSectionCount(gatewayRootSessions.length, token.colorSuccessBgHover)}
+        {renderSectionCount(gatewayRootSessions.length)}
         {hasRunningGatewaySession && <Spin size="small" />}
       </Space>
     </Flex>
@@ -1740,7 +1515,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <PagedSessions
             key={`${branch.branch_id}:${trimmedSearchQuery}`}
             sessions={searchResults}
-            rowGap={isPanel ? 0 : undefined}
+            rowGap={0}
           >
             {(session) => renderFlatSessionRow(session, trimmedSearchQuery)}
           </PagedSessions>
@@ -1839,7 +1614,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 },
               ]}
               ghost
-              expandIcon={panelExpandIcon}
+              expandIcon={sectionExpandIcon}
               style={{
                 marginTop: 8,
                 flexShrink: 0,
@@ -1854,6 +1629,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
           {scheduledSessions.length > 0 && (
             <Collapse
+              ref={scheduledSection.ref}
+              className={
+                fillPanel && isScheduledRunsOpen ? 'agor-panel-session-tree-section' : undefined
+              }
               activeKey={openSectionKeys}
               onChange={handleScheduledRunsChange}
               items={[
@@ -1861,21 +1640,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                   key: 'scheduled-runs',
                   label: scheduledRunsHeader,
                   children: scheduledRunsContent,
-                  styles: {
-                    header: panelSectionHeaderStyle,
-                    icon: panelSectionIconStyle,
-                    body: {
-                      background: 'transparent',
-                      paddingInline: isPanel ? 0 : undefined,
-                      paddingTop: isPanel ? 0 : undefined,
-                      ...panelSectionBodyGuide,
-                    },
-                  },
+                  style: panelFlexStyle,
+                  styles: treeBodyStyles,
                 },
               ]}
               ghost
-              expandIcon={panelExpandIcon}
-              style={{ marginTop: manualSessions.length > 0 ? 0 : 8, flexShrink: 0 }}
+              expandIcon={sectionExpandIcon}
+              style={{
+                marginTop: manualSessions.length > 0 ? 0 : 8,
+                flexShrink: 0,
+                ...(isScheduledRunsOpen
+                  ? expandedPanelStyle(scheduledSection.maxHeight)
+                  : undefined),
+              }}
             />
           )}
 
@@ -1897,7 +1674,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 },
               ]}
               ghost
-              expandIcon={panelExpandIcon}
+              expandIcon={sectionExpandIcon}
               style={{
                 marginTop: manualSessions.length > 0 || scheduledSessions.length > 0 ? 0 : 8,
                 flexShrink: 0,

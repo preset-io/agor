@@ -18,17 +18,25 @@ import {
   MCPOAuthPendingFlowRepository,
   MCPServerRepository,
   mcpOauthPendingFlows,
+  openBoundSecret,
   type RawDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  sealBoundSecret,
   shortId,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
+import type {
+  MCPOAuthAttemptID,
+  MCPOAuthClientRegistrationID,
+  MCPOAuthPendingFlowSealedMaterial,
+  MCPServerID,
+  UserID,
+} from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
@@ -245,6 +253,195 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauth_refresh_token: 'peer-callback-refresh-token',
         grant_generation: claimed.flow.grantGeneration,
       });
+    });
+
+    /**
+     * Rewrite a live attempt's sealed material, resealed under the SAME
+     * envelope binding.
+     *
+     * This is what makes the version check meaningful: an attacker (or an
+     * older daemon) who can produce a correctly-bound envelope must still be
+     * refused when its contract version is not one this daemon accepts. A test
+     * that only tampered with the ciphertext would prove the AEAD works, not
+     * the version gate.
+     */
+    async function resealMaterial(
+      bound: TenantSeed,
+      attemptId: MCPOAuthAttemptID,
+      mutate: (material: MCPOAuthPendingFlowSealedMaterial) => Record<string, unknown>
+    ): Promise<void> {
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        const row = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT sealed_material, grant_generation, config_fingerprint
+                FROM ${mcpOauthPendingFlows} WHERE attempt_id = ${attemptId}`
+          )
+        )[0];
+        const binding = [
+          bound.tenantId,
+          bound.userId,
+          bound.serverId,
+          attemptId,
+          String(row.grant_generation),
+          String(row.config_fingerprint),
+        ].join('\0');
+        const material = JSON.parse(
+          openBoundSecret(String(row.sealed_material), masterSecret, 'pending-exchange', binding)
+        ) as MCPOAuthPendingFlowSealedMaterial;
+        const resealed = sealBoundSecret(
+          JSON.stringify(mutate(material)),
+          masterSecret,
+          'pending-exchange',
+          binding
+        );
+        await executeRaw(
+          scoped,
+          sql`UPDATE ${mcpOauthPendingFlows} SET sealed_material = ${resealed}
+              WHERE attempt_id = ${attemptId}`
+        );
+      });
+    }
+
+    async function startFlow(
+      bound: TenantSeed,
+      context: DurableMCPOAuthFlowContext,
+      slackConnect?: DurableMCPOAuthFlowCreate['slackConnect']
+    ): Promise<MCPOAuthAttemptID> {
+      return authorityA.create({
+        context,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        oauthMode: 'per_user',
+        configFingerprint: 'c'.repeat(64),
+        ...(slackConnect ? { slackConnect } : {}),
+      } satisfies DurableMCPOAuthFlowCreate);
+    }
+
+    it('seals a Slack connect binding at version 3 and returns it to the callback claimant', async () => {
+      const bound = await seed('connect-binding');
+      const context = flowContext(crypto.randomUUID());
+      const slackConnect = {
+        delivery_id: 'delivery-connect-binding',
+        delivery_generation: 4,
+        widget_id: 'widget-connect-binding' as never,
+        session_id: 'session-connect-binding' as never,
+        mcp_server_id: bound.serverId,
+        gateway_channel_id: 'gateway-connect-binding',
+        gateway_config_generation: 7,
+        mcp_server_config_version: 3,
+      };
+      const attemptId = await startFlow(bound, context, slackConnect);
+
+      const stored = await runWithTenantDatabaseScope(
+        dbB,
+        bound.tenantId,
+        async (scoped) =>
+          rowsOf(
+            await executeRaw(
+              scoped,
+              sql`SELECT sealed_material FROM ${mcpOauthPendingFlows}
+                WHERE attempt_id = ${attemptId}`
+            )
+          )[0]
+      );
+      // The routing is sealed, not stored in the clear beside the row.
+      expect(JSON.stringify(stored)).not.toContain('widget-connect-binding');
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      const opened = authorityB.openClaim(claimed.flow, context.state);
+      expect(opened.slackConnect).toEqual(slackConnect);
+      expect(opened.slackRecovery).toBeUndefined();
+    });
+
+    it('still opens an in-flight version 2 envelope written by an older daemon', async () => {
+      const bound = await seed('v2-inflight');
+      const context = flowContext(crypto.randomUUID());
+      const attemptId = await startFlow(bound, context);
+      // Exactly what a pre-upgrade daemon would have sealed: v2, and by
+      // construction no connect binding to lose.
+      await resealMaterial(bound, attemptId, (material) => {
+        const { slackConnect: _slackConnect, ...rest } = material;
+        return { ...rest, version: 2 };
+      });
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      const opened = authorityB.openClaim(claimed.flow, context.state);
+      expect(opened.context.pkceVerifier).toBe(context.pkceVerifier);
+      expect(opened.slackConnect).toBeUndefined();
+    });
+
+    it.each([
+      [
+        'a version 2 envelope that claims a connect binding',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          version: 2,
+          slackConnect: {
+            delivery_id: 'delivery-smuggled',
+            delivery_generation: 1,
+            widget_id: 'widget-smuggled',
+            session_id: 'session-smuggled',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-smuggled',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
+          },
+        }),
+      ],
+      [
+        'an unknown future envelope version',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({ ...material, version: 4 }),
+      ],
+      [
+        'a connect binding missing its delivery generation',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          slackConnect: {
+            delivery_id: 'delivery-partial',
+            widget_id: 'widget-partial',
+            session_id: 'session-partial',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-partial',
+            gateway_config_generation: 1,
+            mcp_server_config_version: 1,
+          },
+        }),
+      ],
+      [
+        // Without these the callback has nothing to compare the workspace
+        // against, and the authority re-read would fall back to comparing the
+        // stored generation to itself — which is what shipped and could never
+        // refuse a revoked flow.
+        'a connect binding that cannot say what authorized it',
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({
+          ...material,
+          slackConnect: {
+            delivery_id: 'delivery-unversioned',
+            delivery_generation: 2,
+            widget_id: 'widget-unversioned',
+            session_id: 'session-unversioned',
+            mcp_server_id: material.mcpServerId,
+            gateway_channel_id: 'gateway-unversioned',
+          },
+        }),
+      ],
+    ])('refuses %s', async (name, mutate) => {
+      const bound = await seed(`reject-${name.replace(/[^a-z]+/gi, '-').slice(0, 24)}`);
+      const context = flowContext(crypto.randomUUID());
+      const attemptId = await startFlow(bound, context);
+      await resealMaterial(bound, attemptId, mutate);
+
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      // Fail closed: an envelope this daemon does not fully understand is never
+      // opened, so no provider exchange can proceed on an unverified binding.
+      expect(() => authorityB.openClaim(claimed.flow, context.state)).toThrow(
+        /material is invalid/i
+      );
     });
 
     it('rejects cross-tenant/user reads and database-level cross-tenant bindings', async () => {

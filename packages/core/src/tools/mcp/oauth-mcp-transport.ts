@@ -183,12 +183,13 @@ export class OAuthConfigurationError extends Error {
       | 'endpoint_override_mismatch'
       | 'issuer_mismatch'
       | 'pkce_required'
-      | 'client_registration_required',
+      | 'client_registration_required'
+      | 'redirect_uri_mismatch',
     message = `OAuth configuration failed (${failureCode})`,
     /** Specific local predicate, without changing the broad external-error category. */
     readonly failureReason?: Extract<
       MCPOAuthFailureReason,
-      'dcr_disabled' | 'protected_resource_mismatch'
+      'dcr_disabled' | 'protected_resource_mismatch' | 'redirect_uri_mismatch'
     >
   ) {
     super(message);
@@ -691,6 +692,26 @@ export function __seedDynamicClientCacheForTests(
   dynamicClientCache.set(registrationEndpoint, entry);
 }
 
+/**
+ * RFC 7591 `client_name` for every Dynamic Client Registration Agor performs.
+ *
+ * Do not change this casually. It is an input to `bindingFingerprint` in
+ * `apps/agor-daemon/src/services/mcp-oauth-client-registration-authority.ts`,
+ * so a new value silently changes the fingerprint of every stored DCR
+ * registration in every deployment: on its next OAuth start each one stops
+ * matching, is superseded, and the server registers again with its provider —
+ * under a request that provider has never seen, with no evidence it will be
+ * honoured. Changing it is a fleet-wide re-registration and has to be decided
+ * as one. `mcp-oauth-client-registration-authority.postgres.test.ts` pins that
+ * a registration sealed from this request is still reused.
+ *
+ * A per-deployment name was tried once, for a Datadog `Mismatching redirect
+ * URI`, and reverted: the failure reproduced under both names while the same
+ * integration kept working on deployments that sent this one. See §7.1.16 of
+ * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ */
+export const MCP_OAUTH_DCR_CLIENT_NAME = 'Agor MCP Client';
+
 /** Classify the already-validated callback, never the provider's endpoint. */
 function dcrApplicationType(redirectUri: string): 'native' | 'web' {
   const callback = new URL(redirectUri);
@@ -709,7 +730,7 @@ function dcrApplicationType(redirectUri: string): 'native' | 'web' {
 async function registerDynamicClient(
   registrationEndpoint: string,
   redirectUri: string,
-  clientName: string = 'Agor MCP Client',
+  clientName: string = MCP_OAUTH_DCR_CLIENT_NAME,
   scope?: string,
   reuseLocalCache = true,
   allowLocalhostHttp = false,
@@ -1335,7 +1356,7 @@ export async function performMCPOAuthFlow(
         const registration = await registerDynamicClient(
           authServerMetadata.registration_endpoint,
           callback.url,
-          'Agor MCP Client',
+          MCP_OAUTH_DCR_CLIENT_NAME,
           scopeString,
           true,
           true
@@ -1526,6 +1547,17 @@ export interface OAuthFlowContext {
   clientSecret?: string;
   /** Exact durable DCR epoch used by this attempt; absent for configured/local clients. */
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Non-secret evidence about where this flow's client came from, for the one
+   * operational line the daemon emits when the authorization URL is built.
+   * `registeredRedirectUri` is absent for a configured client, and the whole
+   * group is absent from a context reconstituted at callback time, which is
+   * rebuilt from sealed grant material rather than from a live resolution.
+   */
+  clientSource?: 'configured' | 'dcr';
+  clientName?: string;
+  registeredRedirectUri?: string;
+  registrationEndpoint?: string;
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1572,6 +1604,140 @@ export interface MCPOAuthResolvedClient {
   clientSecret?: string;
   method: 'configured' | 'dynamic_registration';
   clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * The redirect URI this client was registered under, as Agor sent it.
+   *
+   * Absent for a configured client, whose provider-side binding Agor never
+   * saw. Present for every DCR path so the authorize URL can be checked
+   * against it rather than assumed equal to it.
+   */
+  registeredRedirectUri?: string;
+  /** RFC 7591 `client_name` sent for this registration. Never a secret. */
+  clientName?: string;
+  /** Registration endpoint used, for origin-only operational evidence. */
+  registrationEndpoint?: string;
+}
+
+/**
+ * Origin of a URL, or a fixed marker. Never a path, query or fragment.
+ *
+ * The whole point of the authorize-built line is that it can be read in a log
+ * aggregator by someone debugging a redirect mismatch, which means it must
+ * carry no `state`, no `code_challenge`, no `client_id` and no provider text.
+ * Origins answer "which deployment, which provider" and nothing else.
+ */
+function oauthLogOrigin(value: string | undefined): string {
+  if (!value) return 'absent';
+  try {
+    return new URL(value).origin;
+  } catch {
+    return 'unparseable';
+  }
+}
+
+/** Bounded, control-character-free rendering for one log field. */
+function oauthLogField(value: string | undefined): string {
+  if (!value) return 'absent';
+  const flattened = Array.from(value, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? ' ' : character;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flattened ? flattened.slice(0, 120) : 'absent';
+}
+
+/**
+ * One line, at the moment the authorization URL is built.
+ *
+ * A provider that rejects the authorization request front-channel
+ * (`invalid_request — Mismatching redirect URI`) tells Agor nothing: the
+ * browser is redirected to the provider's own error page and no callback
+ * arrives. So the only evidence that can ever exist about what Agor SENT has
+ * to be written before the URL leaves — and until this line existed, a
+ * production retry taught us nothing at all, because there was nothing on
+ * either side of the failure to compare.
+ *
+ * Deliberately origins and Agor-owned non-secret fields only. Never the
+ * authorization URL, never its query string, never `client_id`, never
+ * anything a provider said. `client_name` is Agor's own constant
+ * (`MCP_OAUTH_DCR_CLIENT_NAME`), and
+ * `registered_redirect_matches` is the comparison a reader actually wants,
+ * reported rather than the two URLs it was drawn from.
+ */
+function logOAuthAuthorizeBuilt(
+  client: Pick<
+    MCPOAuthResolvedClient,
+    'method' | 'clientName' | 'registeredRedirectUri' | 'registrationEndpoint'
+  >,
+  authorizeRedirectUri: string,
+  authorizationEndpoint: string
+): void {
+  const clientSource = client.method === 'configured' ? 'configured' : 'dcr';
+  // Three-valued on purpose: a configured client has no observed registration
+  // to compare against, which is not the same answer as "they differ".
+  const registeredRedirectMatches =
+    client.registeredRedirectUri === undefined
+      ? 'absent'
+      : String(client.registeredRedirectUri === authorizeRedirectUri);
+  console.log(
+    `[MCP OAuth] event=oauth_authorize_built ` +
+      `redirect_origin=${oauthLogOrigin(authorizeRedirectUri)} ` +
+      `authorize_origin=${oauthLogOrigin(authorizationEndpoint)} ` +
+      `client_source=${clientSource} ` +
+      `client_name=${oauthLogField(client.clientName)} ` +
+      `registration_origin=${oauthLogOrigin(client.registrationEndpoint)} ` +
+      `registered_redirect_matches=${registeredRedirectMatches}`
+  );
+}
+
+/**
+ * Refuse to authorize with a redirect URI the client is not registered under.
+ *
+ * **This assertion cannot fire, and it is not the fence.** `resolveOAuthClient`
+ * returns `registeredRedirectUri: options.actualRedirectUri` — the same value
+ * this compares it against — so the comparison is a tautology over one
+ * binding. It is kept as a structural guard against a future resolution path
+ * that sources the two separately, not because it currently checks anything.
+ *
+ * **The invariant actually lives in
+ * `apps/agor-daemon/src/services/mcp-oauth-client-registration-authority.ts`.**
+ * Its `bindingFingerprint` covers `redirectUri` (and `clientName`), so a
+ * durable registration is only reusable for the exact redirect URI it was
+ * registered under; a changed callback produces a different fingerprint and
+ * therefore a fresh registration rather than a reused mismatched one. On the
+ * way back out, `open()` reconstitutes `redirect_uris: [parsed.redirectUri]`
+ * and feeds `validateDynamicClientRegistration`, which throws unless the
+ * provider echoed that exact URI. Do not read the tautology below as the
+ * thing keeping those two in step.
+ *
+ * The provider's version of this disagreement is rejected front-channel
+ * (`invalid_request — Mismatching redirect URI`) and never reaches Agor, so a
+ * URL known here to be wrong has no second chance to be classified; see the
+ * `authorization_never_returned` proxy, and `oauth_authorize_built` above for
+ * the evidence that does survive.
+ *
+ * A configured client carries no observed binding and is deliberately not
+ * checked: its provider-side redirect URI is not something Agor has ever seen.
+ */
+export function assertAuthorizeRedirectUriMatchesClient(
+  client: Pick<MCPOAuthResolvedClient, 'registeredRedirectUri'>,
+  authorizeRedirectUri: string
+): void {
+  if (
+    client.registeredRedirectUri === undefined ||
+    client.registeredRedirectUri === authorizeRedirectUri
+  ) {
+    return;
+  }
+  throw new OAuthConfigurationError(
+    'redirect_uri_mismatch',
+    'The OAuth client is registered under a different Agor callback URL than the one this ' +
+      'authorization request would use. Reconnect this MCP server so a client is registered ' +
+      'for the current callback URL.',
+    'redirect_uri_mismatch'
+  );
 }
 
 /**
@@ -1639,7 +1805,7 @@ async function resolveOAuthClient(options: {
       registerDynamicClient(
         registrationEndpoint,
         options.actualRedirectUri,
-        'Agor MCP Client',
+        MCP_OAUTH_DCR_CLIENT_NAME,
         options.scope,
         options.reuseDynamicClientRegistration !== false,
         options.allowLocalhostHttp,
@@ -1657,7 +1823,7 @@ async function resolveOAuthClient(options: {
             authorizationEndpoint: options.authorizationEndpoint,
             tokenEndpoint: options.tokenEndpoint,
             redirectUri: options.actualRedirectUri,
-            clientName: 'Agor MCP Client',
+            clientName: MCP_OAUTH_DCR_CLIENT_NAME,
             applicationType: dcrApplicationType(options.actualRedirectUri),
             scope: options.scope,
             compatibilityMode: options.compatibilityMode,
@@ -1678,6 +1844,9 @@ async function resolveOAuthClient(options: {
       ...(registration.client_secret ? { clientSecret: registration.client_secret } : {}),
       method: 'dynamic_registration',
       ...(resolved.registrationId ? { clientRegistrationId: resolved.registrationId } : {}),
+      registeredRedirectUri: options.actualRedirectUri,
+      clientName: MCP_OAUTH_DCR_CLIENT_NAME,
+      registrationEndpoint,
     };
   } catch (error) {
     options.assertCurrent?.();
@@ -2090,6 +2259,13 @@ async function startMCPOAuthFlowWithAS(opts: {
   // CSRF state
   const state = crypto.randomUUID();
 
+  // Before the URL exists, not after: a mismatch here is one Agor already
+  // knows about, and the provider's rejection of it is front-channel.
+  assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
+
+  // The only record of what Agor sent that survives a front-channel refusal.
+  logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
+
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('client_id', resolvedClient.clientId);
@@ -2119,6 +2295,14 @@ async function startMCPOAuthFlowWithAS(opts: {
     clientId: resolvedClient.clientId,
     clientSecret: resolvedClient.clientSecret,
     clientRegistrationId: resolvedClient.clientRegistrationId,
+    clientSource: resolvedClient.method === 'configured' ? 'configured' : 'dcr',
+    ...(resolvedClient.clientName ? { clientName: resolvedClient.clientName } : {}),
+    ...(resolvedClient.registeredRedirectUri
+      ? { registeredRedirectUri: resolvedClient.registeredRedirectUri }
+      : {}),
+    ...(resolvedClient.registrationEndpoint
+      ? { registrationEndpoint: resolvedClient.registrationEndpoint }
+      : {}),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,

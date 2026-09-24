@@ -161,8 +161,9 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
   ).toBeCloseTo(expectedHeight, 0);
 
   expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
+  // Running is a spinner, distinct from the pulsing dots that wait on the user.
   expect(within(row('Availability fixes')).getByRole('img', { name: 'Running' })).toHaveClass(
-    'status-dot-run'
+    'anticon-spin'
   );
   expect(
     within(row('Execution security — implementation')).getByRole('img', {
@@ -212,7 +213,7 @@ it('shows the agent logo on every row and hides only the implied spawn marker', 
 
 it('nests rows one level inside their section with one chevron style', () => {
   mount();
-  const step = theme.getDesignToken(config).controlHeightSM;
+  const step = theme.getDesignToken(config).controlHeightXS;
 
   const headerChevron = document.querySelector('.ant-collapse-expand-icon svg')!;
   const treeChevron = screen
@@ -222,15 +223,31 @@ it('nests rows one level inside their section with one chevron style', () => {
   const tree = treeChevron.getBoundingClientRect();
   expect(header.width).toBeCloseTo(tree.width, 1);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
-  // Sections are containers: top-level rows sit exactly one indent step inside the header.
-  expect(tree.left + tree.width / 2 - (header.left + header.width / 2)).toBeCloseTo(step, 0);
-  expect(
-    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left -
-      screen.getByText('Sessions').getBoundingClientRect().left
-  ).toBeCloseTo(step, 0);
-
-  // A guide runs under the section chevron, and every nested level draws its own guide.
+  // Sections are containers: a guide runs under the section chevron and top-level rows'
+  // chevron column starts right at it, so the section indent doesn't stack with it.
   const body = treeChevron.closest('.ant-collapse-body')!;
+  const guideX = body.getBoundingClientRect().left;
+  expect(guideX).toBeCloseTo(header.left + header.width / 2, 0);
+  const rootSwitcher = treeChevron.closest('.ant-tree-switcher')!.getBoundingClientRect();
+  expect(rootSwitcher.left - guideX).toBeLessThanOrEqual(1);
+  expect(tree.left + tree.width / 2 - rootSwitcher.left).toBeCloseTo(step / 2, 0);
+  // The chevron target spans the compact column plus the row's empty lead-in, and its
+  // whole area toggles: the overhang sits above the row and inside the tree viewport.
+  const chevronButton = screen.getByRole('button', { name: 'Collapse Security agor' });
+  const target = chevronButton.getBoundingClientRect();
+  const tokens = theme.getDesignToken(config);
+  expect(target.width).toBeCloseTo(tokens.controlHeightXS + tokens.paddingXXS, 0);
+  expect(target.height).toBeCloseTo(tokens.controlHeightSM, 0);
+  const midY = target.top + target.height / 2;
+  for (const x of [target.left + 1, target.right - 1]) {
+    expect(chevronButton.contains(document.elementFromPoint(x, midY))).toBe(true);
+  }
+  // Rows stay visibly nested inside the section label.
+  expect(
+    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left
+  ).toBeGreaterThan(screen.getByText('Sessions').getBoundingClientRect().left);
+
+  // Every nested level draws its own guide.
   expect(getComputedStyle(body).borderInlineStartWidth).not.toBe('0px');
   const childUnit = row('Astra recheck — Abuse')
     .closest('.ant-tree-treenode')!
@@ -466,7 +483,7 @@ it('re-renders memoized rows when a context-only input changes', async () => {
   expect(onOpenSessionSettings).not.toHaveBeenCalled();
 });
 
-it('tints failed rows, drops the logo outline, and gives the status mark trailing room', () => {
+it('tints failed rows, drops the logo outline, and mirrors row insets', () => {
   mount();
   const token = theme.getDesignToken(config);
   const probe = document.createElement('span');
@@ -487,7 +504,8 @@ it('tints failed rows, drops the logo outline, and gives the status mark trailin
   );
 
   const style = getComputedStyle(row('Security agor'));
-  expect(parseFloat(style.paddingRight)).toBe(token.paddingSM);
+  // Equal insets on both sides keep the status mark mirrored with the logo.
+  expect(parseFloat(style.paddingRight)).toBe(token.paddingXXS);
   expect(parseFloat(style.paddingLeft)).toBe(token.paddingXXS);
   probe.remove();
 });
@@ -525,4 +543,51 @@ it.each([
   const channels = (value: string) => value.match(/\d+/g)!.slice(0, 3).map(Number);
   const [a, b] = [channels(unselected), channels(selected)];
   expect(Math.max(...a.map((v, i) => Math.abs(v - b[i]!)))).toBeGreaterThan(10);
+});
+
+it('shares the fill-mode panel between sessions, scheduled runs, and gateway sessions', async () => {
+  const gatewaySource = {
+    channel_id: 'channel-1',
+    channel_type: 'slack',
+    channel_name: '#eng-deploys',
+    thread_id: 'thread-1',
+  };
+  const mixed = (scheduledCount: number) => [
+    ...Array.from({ length: 30 }, (_, i) => makeSession(`manual-${i}`, `Manual ${i}`)),
+    ...Array.from({ length: scheduledCount }, (_, i) =>
+      makeSession(`run-${i}`, `Scheduled ${i}`, {
+        scheduled_from_branch: true,
+        scheduled_run_at: 1_780_527_200_000 - i * 60_000,
+      })
+    ),
+    ...Array.from({ length: 20 }, (_, i) =>
+      makeSession(`gateway-${i}`, `Gateway ${i}`, {
+        custom_context: { gateway_source: { ...gatewaySource, thread_id: `thread-${i}` } },
+      } as Partial<Session>)
+    ),
+  ];
+  const section = (label: string) =>
+    screen.getByText(label).closest<HTMLElement>('.ant-collapse')!.getBoundingClientRect();
+  const labels = ['Sessions', 'Scheduled Runs', 'Gateway Sessions'];
+  const scheduledList = () =>
+    row('Scheduled 0').closest<HTMLElement>('.nowheel')!.firstElementChild as HTMLElement;
+
+  // Every section overflows: each gets an equal share, all fit, and each scrolls within.
+  mount(mixed(30), { fillAvailableHeight: true });
+  const panel = screen.getByTestId('panel').getBoundingClientRect();
+  await waitFor(() => {
+    const heights = labels.map((label) => section(label).height);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(2);
+    expect(section('Gateway Sessions').bottom).toBeLessThanOrEqual(panel.bottom);
+  });
+  expect(scheduledList().scrollHeight).toBeGreaterThan(scheduledList().clientHeight);
+  cleanup();
+
+  // A short scheduled list caps at its rows and hands the rest to its siblings.
+  mount(mixed(2), { fillAvailableHeight: true });
+  await waitFor(() => {
+    expect(scheduledList().scrollHeight).toBe(scheduledList().clientHeight);
+    expect(section('Scheduled Runs').height).toBeLessThan(section('Sessions').height - 32);
+    expect(section('Sessions').height).toBeCloseTo(section('Gateway Sessions').height, 0);
+  });
 });

@@ -106,16 +106,48 @@ describe('multipart ingress with tenant-owned staging', () => {
   });
 
   it.each([
+    ['YAML', 'agor-claw-experiment.agor-board.yaml', 'application/x-yaml', 'a: 1\n'],
+    ['arbitrary binary', 'firmware.bin', 'application/octet-stream', '\u0000\u0001\u00ff\u007f'],
+    ['HTML', 'page.html', 'text/html', '<script>'],
+    ['SVG', 'chart.svg', 'image/svg+xml', '<svg/>'],
+  ])('accepts a %s upload regardless of type', async (_label, name, mime, content) => {
+    const { error, files } = await parse(
+      `${filePart(content, name, 'files', mime)}--boundary--\r\n`
+    );
+    expect(error).toBeUndefined();
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ name, mimeType: mime });
+    const chunks: Buffer[] = [];
+    for await (const chunk of await store.read({ ...owner, ref: files[0].ref })) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(content));
+  });
+
+  it.each([
+    ['../../../etc/passwd', 'passwd'],
+    ['..\\..\\windows\\win.ini', 'win.ini'],
+    ['/abs/path/x.yml', 'x.yml'],
+    // Not percent-decoded by the parser; the store still neutralizes `..`.
+    ['..%2F..%2Fpasswd', '__2F__2Fpasswd'],
+  ])(
+    'sanitizes path-traversal filename %j and stores bytes under a server ref',
+    async (raw, safe) => {
+      const { error, files } = await parse(`${filePart('x', raw)}--boundary--\r\n`);
+      expect(error).toBeUndefined();
+      expect(files[0].name).toBe(safe);
+      expect(files[0].ref).toMatch(/^upl_[0-9a-f-]{36}$/);
+      const stored = await readdir(root, { recursive: true });
+      expect(stored.every((entry) => !entry.includes(safe))).toBe(true);
+      expect(stored.every((entry) => entry.startsWith(owner.tenantId))).toBe(true);
+    }
+  );
+
+  it.each([
     ['file size', filePart('123456789'), 'LIMIT_FILE_SIZE', 413],
     ['aggregate size', filePart('12345678').repeat(3), 'LIMIT_TOTAL_FILE_SIZE', 413],
     ['file count', filePart('x').repeat(11), 'LIMIT_FILE_COUNT', 400],
     ['unexpected field', filePart('x', 'a.txt', 'foreign'), 'LIMIT_UNEXPECTED_FILE', 400],
-    [
-      'MIME rejection',
-      filePart('x', 'a.html', 'files', 'text/html'),
-      'UNSUPPORTED_MEDIA_TYPE',
-      415,
-    ],
   ])('rejects %s and cleans staged files', async (_label, body, code, status) => {
     const { error } = await parse(`${body}--boundary--\r\n`);
     expect(error).toMatchObject({ code });

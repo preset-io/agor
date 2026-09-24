@@ -5,7 +5,7 @@
  * immutable document version and advances `current_version_id`.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import { KNOWLEDGE_DOCUMENT_PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
   isPostgresDatabaseHandle,
@@ -31,6 +31,7 @@ import type {
   KnowledgeNamespaceID,
   KnowledgeWriteAttribution,
   NullableId,
+  Paginated,
   QueryParams,
   User,
   UserID,
@@ -170,8 +171,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
       id: 'document_id',
       resourceType: 'KnowledgeDocument',
       paginate: {
-        default: PAGINATION.DEFAULT_LIMIT,
-        max: PAGINATION.MAX_LIMIT,
+        default: KNOWLEDGE_DOCUMENT_PAGINATION.DEFAULT_LIMIT,
+        max: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT,
       },
     });
     this.repo = repo;
@@ -533,11 +534,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     }
   }
 
-  async find(params?: KnowledgeDocumentParams): Promise<KnowledgeDocument[]> {
+  async find(params?: KnowledgeDocumentParams): Promise<Paginated<KnowledgeDocument>> {
     const query = normalizeDocumentQuery(params?.query);
+    const { limit, skip } = this.pageWindow(query);
     const user = params?.user as User | undefined;
     const isAdmin = this.isAdmin(user);
-    const filters: KnowledgeDocumentFilters | undefined = query
+    const filters: KnowledgeDocumentFilters = query
       ? {
           namespace_id: query.namespace_id,
           namespace_slug: query.namespace_slug,
@@ -556,19 +558,43 @@ export class KnowledgeDocumentsService extends DrizzleService<
           include_other_user_drafts: false,
           draft_filter_user_id: user?.user_id as UserID | undefined,
         };
-    const rows = await this.repo.findAll(filters);
-    const readable: KnowledgeDocument[] = [];
-    for (const doc of rows) {
-      if (await this.canRead(doc, user)) readable.push(doc);
-    }
+    // Read access, sort, LIMIT/OFFSET and the total are all evaluated in SQL,
+    // so the database only ever returns one page of readable rows. Attribution
+    // and hydration (bodies, links) then run on that page alone.
+    const { total, data } = await this.repo.findPage(filters, {
+      limit,
+      offset: skip,
+      sort: query.$sort,
+      read: isAdmin
+        ? { as_admin: true }
+        : {
+            as_admin: false,
+            user_id: user?.user_id as UserID | undefined,
+            namespace_ids: await this.namespaces.findReadableNamespaceIds(
+              String(user?.user_id ?? '')
+            ),
+          },
+    });
+    return {
+      total,
+      limit,
+      skip,
+      data: await this.decorateDocuments(data, query),
+    };
+  }
+
+  private async decorateDocuments(
+    documents: KnowledgeDocument[],
+    query: ReturnType<typeof normalizeDocumentQuery>
+  ): Promise<KnowledgeDocument[]> {
     if (query.include_content !== true && query.include_links !== true) {
-      const attributed = await this.attribution.attachToDocuments(readable);
+      const attributed = await this.attribution.attachToDocuments(documents);
       if (query.include_indexing === true || query.includeIndexing === true) {
         return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
       return attributed;
     }
-    return this.hydrateDocuments(readable, {
+    return this.hydrateDocuments(documents, {
       include_content: query.include_content,
       include_links: query.include_links,
       include_indexing: query.include_indexing,

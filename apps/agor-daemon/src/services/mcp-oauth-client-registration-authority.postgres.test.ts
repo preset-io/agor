@@ -19,7 +19,11 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  type MCPOAuthDynamicClientRegistrationRequest,
+  OAuthDCRFailure,
+  startMCPOAuthFlow,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -178,6 +182,109 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         throw new Error('must reuse the exact application binding');
       });
       expect(reused.registration.client_id).toBe('native-client');
+    });
+
+    it('reuses a registration sealed from the deployed DCR request, through the live flow', async () => {
+      // Every deployed DCR registration was sealed under a fingerprint of the
+      // request the flow hands the resolver. That request is written out here
+      // literally, as deployed daemons send it — not derived from the code under
+      // test — so a change to any fingerprint input (the client name above all:
+      // see MCP_OAUTH_DCR_CLIENT_NAME) fails here instead of silently
+      // re-registering every deployment's clients with providers that have
+      // never seen the new request.
+      const seedRow = await seed('main-sealed');
+      const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+      const issuer = 'https://provider.example.test/main-sealed';
+      const deployedRequest = {
+        registrationEndpoint: `${issuer}/register`,
+        registrationEndpointSource: 'metadata' as const,
+        metadataUrl: 'https://provider.example.test/mcp',
+        resourceUri: 'https://provider.example.test/mcp',
+        issuer,
+        authorizationEndpoint: `${issuer}/authorize`,
+        tokenEndpoint: `${issuer}/token`,
+        redirectUri,
+        clientName: 'Agor MCP Client',
+        applicationType: 'web' as const,
+        scope: 'mcp:read mcp:write',
+        // The catalog OAuth profile (Datadog is a catalog install); a prefetched
+        // authorization-server flow refuses `strict`.
+        compatibilityMode: 'marketplace' as const,
+        dcrMode: 'advertised' as const,
+      };
+      const durable = (request: MCPOAuthDynamicClientRegistrationRequest) => ({
+        ...request,
+        tenantId: seedRow.tenantId,
+        mcpServerId: seedRow.serverId,
+        serverConfigVersion: 1,
+      });
+      const sealed = await authorityA.resolve(durable(deployedRequest), async () => ({
+        client_id: 'prod-client',
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: 'none',
+      }));
+      expect(sealed.registration.client_id).toBe('prod-client');
+
+      // Now the flow as it runs today, on another replica. The provider must
+      // not be asked again: a registration here means the stored one was not
+      // recognised.
+      const requests: MCPOAuthDynamicClientRegistrationRequest[] = [];
+      let registrations = 0;
+      let flowError: unknown;
+      let context: Awaited<ReturnType<typeof startMCPOAuthFlow>> | undefined;
+      try {
+        context = await startMCPOAuthFlow('', undefined, redirectUri, {
+          prefetchedAuthServerMetadata: {
+            issuer,
+            authorization_endpoint: `${issuer}/authorize`,
+            token_endpoint: `${issuer}/token`,
+            registration_endpoint: `${issuer}/register`,
+            code_challenge_methods_supported: ['S256'],
+            authorization_response_iss_parameter_supported: true,
+          },
+          cacheKey: 'https://provider.example.test/mcp',
+          resourceUri: 'https://provider.example.test/mcp',
+          scope: 'mcp:read mcp:write',
+          compatibilityMode: 'marketplace',
+          dcrMode: 'advertised',
+          reuseDynamicClientRegistration: false,
+          resolveDynamicClientRegistration: (request) => {
+            requests.push(request);
+            return authorityB.resolve(durable(request), async () => {
+              registrations += 1;
+              throw new Error('re-registered: the sealed registration was not reused');
+            });
+          },
+        });
+      } catch (error) {
+        flowError = error;
+      }
+
+      // The request the flow builds is the deployed one, field for field.
+      expect(requests).toEqual([deployedRequest]);
+      expect(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, durable(requests[0]))
+      ).toBe(
+        __fingerprintMCPOAuthClientRegistrationForTests(masterSecret, durable(deployedRequest))
+      );
+      expect(registrations).toBe(0);
+      expect(flowError).toBeUndefined();
+      expect(new URL(context!.authorizationUrl).searchParams.get('client_id')).toBe('prod-client');
+      expect(context!.clientRegistrationId).toBe(sealed.registrationId);
+
+      const rows = await runWithTenantDatabaseScope(dbA, seedRow.tenantId, async (scoped) =>
+        rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT registration_id, status, is_current
+                FROM mcp_oauth_client_registrations
+                WHERE mcp_server_id = ${seedRow.serverId}`
+          )
+        )
+      );
+      expect(rows).toEqual([
+        { registration_id: sealed.registrationId, status: 'registered', is_current: true },
+      ]);
     });
 
     it('does not invalidate a reusable fleet credential when caller authority is lost', async () => {

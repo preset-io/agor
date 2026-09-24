@@ -1939,11 +1939,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         Array.isArray((branchFilter as { $in?: unknown }).$in)
           ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
           : undefined;
-      const limit = Math.min(
-        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
-        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
-      );
-      const skip = (query?.$skip as number | undefined) ?? 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const { data, total } = await this.sessionRepo.findPage({
         includeTotal: query?.$count !== false,
         status: query?.status as SessionStatus | undefined,

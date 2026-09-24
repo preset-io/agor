@@ -511,6 +511,20 @@ describe('configured executor spawning', () => {
     expect(onExit).toHaveBeenCalledWith(17, { mode: 'templated' });
   });
 
+  it('reports the terminating signal to onExit', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onExit = vi.fn();
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor({ executor_command_template: 'echo {command}' }, LOCAL_RESPONSE_OPTIONS);
+    spawnExecutor({ command: 'git.clone' }, { onExit });
+
+    proc.emit('exit', null, 'SIGTERM');
+
+    expect(onExit).toHaveBeenCalledWith(null, { mode: 'templated', signal: 'SIGTERM' });
+  });
+
   it('observes async onExit rejection without logging sensitive error details', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

@@ -10,6 +10,12 @@ import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
 import { MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
+import {
+  KNOWLEDGE_DOCUMENT_KINDS,
+  KNOWLEDGE_DOCUMENT_SORT_FIELDS,
+  KNOWLEDGE_DOCUMENT_STATUSES,
+  KNOWLEDGE_VISIBILITIES,
+} from '../types/knowledge';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 
 /**
@@ -84,19 +90,37 @@ export const CommonSchemas = {
   boolean: Type.Boolean(),
 };
 
+const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
+
 /**
- * Helper to create query schemas with common Feathers operators
+ * Helper to create query schemas with common Feathers operators.
+ *
+ * `sortFields` narrows `$sort` to the columns a service can order by in SQL;
+ * without it any field name is accepted (in-memory adapter sorting).
+ * `maxSkip` lifts the default offset ceiling for services that page in SQL
+ * and whose complete listings are walked page by page with `findAll()`.
  */
-export function createQuerySchema<T extends TProperties>(properties: TObject<T>) {
+export function createQuerySchema<T extends TProperties>(
+  properties: TObject<T>,
+  options: { sortFields?: readonly string[]; maxSkip?: number } = {}
+) {
+  const sort = options.sortFields
+    ? Type.Object(
+        Object.fromEntries(
+          options.sortFields.map((field) => [field, Type.Optional(sortDirectionSchema)])
+        ),
+        { additionalProperties: false }
+      )
+    : Type.Record(Type.String(), sortDirectionSchema);
   return Type.Intersect(
     [
       properties,
       Type.Object({
         $limit: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_LIMIT })),
-        $skip: Type.Optional(Type.Integer({ minimum: 0, maximum: PAGINATION.MAX_SKIP })),
-        $sort: Type.Optional(
-          Type.Record(Type.String(), Type.Union([Type.Literal(1), Type.Literal(-1)]))
+        $skip: Type.Optional(
+          Type.Integer({ minimum: 0, maximum: options.maxSkip ?? PAGINATION.MAX_SKIP })
         ),
+        $sort: Type.Optional(sort),
         $select: Type.Optional(Type.Array(Type.String())),
       }),
     ],
@@ -213,7 +237,6 @@ const messageRoleSchema = Type.Union([
   Type.Literal('assistant'),
   Type.Literal('system'),
 ]);
-const sortDirectionSchema = Type.Union([Type.Literal(1), Type.Literal(-1)]);
 const messageSelectableFieldSchema = Type.Union(
   [
     'message_id',
@@ -440,6 +463,41 @@ export const mcpServerQuerySchema = createQuerySchema(
 );
 
 /**
+ * Knowledge document query schema: list filters for `find`, hydration options
+ * shared by `find`/`get`. Page size is further clamped by the service's
+ * KNOWLEDGE_DOCUMENT_PAGINATION.
+ */
+export const knowledgeDocumentQuerySchema = createQuerySchema(
+  Type.Object({
+    namespace_id: Type.Optional(CommonSchemas.uuid),
+    namespace_slug: Type.Optional(Type.String({ maxLength: 255 })),
+    path: Type.Optional(Type.String({ maxLength: 1024 })),
+    kind: Type.Optional(Type.Union(KNOWLEDGE_DOCUMENT_KINDS.map((kind) => Type.Literal(kind)))),
+    visibility: Type.Optional(
+      Type.Union(KNOWLEDGE_VISIBILITIES.map((visibility) => Type.Literal(visibility)))
+    ),
+    status: Type.Optional(
+      Type.Union(KNOWLEDGE_DOCUMENT_STATUSES.map((status) => Type.Literal(status)))
+    ),
+    archived: Type.Optional(CommonSchemas.boolean),
+    include_my_drafts: Type.Optional(CommonSchemas.boolean),
+    includeMyDrafts: Type.Optional(CommonSchemas.boolean),
+    include_other_user_drafts: Type.Optional(CommonSchemas.boolean),
+    includeOtherUserDrafts: Type.Optional(CommonSchemas.boolean),
+    include_content: Type.Optional(CommonSchemas.boolean),
+    include_links: Type.Optional(CommonSchemas.boolean),
+    include_indexing: Type.Optional(CommonSchemas.boolean),
+    includeIndexing: Type.Optional(CommonSchemas.boolean),
+    version: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 1 }), Type.String({ minLength: 1, maxLength: 64 })])
+    ),
+  }),
+  // Page size stays bounded; the offset does not, so a findAll() walk over a
+  // large Knowledge base can continue past PAGINATION.MAX_SKIP.
+  { sortFields: KNOWLEDGE_DOCUMENT_SORT_FIELDS, maxSkip: Number.MAX_SAFE_INTEGER }
+);
+
+/**
  * MCP catalog query schema: deliberately empty.
  *
  * `find` takes no parameters — it returns the whole catalog and the browser
@@ -469,6 +527,10 @@ export const boardCommentQueryValidator = getValidator(boardCommentQuerySchema, 
 export const repoQueryValidator = getValidator(repoQuerySchema, queryValidator);
 export const mcpServerQueryValidator = getValidator(mcpServerQuerySchema, queryValidator);
 export const mcpCatalogQueryValidator = getValidator(mcpCatalogQuerySchema, queryValidator);
+export const knowledgeDocumentQueryValidator = getValidator(
+  knowledgeDocumentQuerySchema,
+  queryValidator
+);
 
 /**
  * Wrap validateQuery to produce a FeathersJS-compatible hook function.

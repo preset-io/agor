@@ -105,6 +105,11 @@ export function mcpSlackRecoveryPath(): string {
   return '/recover/mcp';
 }
 
+/** Lightweight authenticated browser surface for a Slack MCP connect action. */
+export function mcpOAuthConnectPath(): string {
+  return '/connect/mcp';
+}
+
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -190,6 +195,11 @@ export function getArtifactFullscreenUrl(artifactId: ArtifactID, baseUrl: string
 /** Preserve any operator-configured base path while adding the UI mount. */
 export function getMcpSlackRecoveryUrl(baseUrl: string): string {
   return fullUrl(mcpSlackRecoveryPath(), baseUrl);
+}
+
+/** Preserve any operator-configured base path while adding the UI mount. */
+export function getMcpOAuthConnectUrl(baseUrl: string): string {
+  return fullUrl(mcpOAuthConnectPath(), baseUrl);
 }
 
 /** Generate a Knowledge URL from namespace + optional document path. */

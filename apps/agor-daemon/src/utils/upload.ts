@@ -15,40 +15,16 @@ import type {
   UploadRef,
   UploadStagingStore,
 } from '@agor/core/types';
-import { UPLOAD_POLICY_ERROR_CONTRACT } from '@agor/core/types';
+import { resolveUploadServeType, UPLOAD_POLICY_ERROR_CONTRACT } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
 /**
- * MIME types accepted by the upload endpoint.
- *
- * Kept narrow on purpose: anything HTML-like, executable, or shell-like is
- * rejected so that an uploaded file cannot be coerced into XSS / drive-by
- * download territory if it is ever served back out of the branch.
- *
- * If you need to add a new type, prefer the most specific MIME possible.
+ * General session uploads accept any file type. A type allowlist is not a
+ * security boundary (archives can carry anything); the controls that matter
+ * are the size/count limits below, server-chosen storage keys with sanitized
+ * display names, and safe serving (see {@link uploadContentHeaders}).
  */
-export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
-  // Images
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  // NOTE: image/svg+xml is intentionally NOT allowed — SVGs can carry script.
-  // Text / docs
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'application/pdf',
-  // Office-style
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  // Archives commonly used to ship logs/artifacts
-  'application/zip',
-  'application/gzip',
-  'application/x-tar',
-]);
 
 /** Max size of a single uploaded file (bytes). */
 export const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -222,22 +198,6 @@ export function createUploadMiddleware(store: UploadStagingStore) {
   return multer({
     storage,
     limits: multipartLimits,
-    fileFilter: (_req, file, cb) => {
-      // Match on the bare MIME (drop any `; charset=...` parameters).
-      const mime = (file.mimetype || '').split(';')[0].trim().toLowerCase();
-      if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) {
-        // Pass an Error so the route's error handler returns 4xx with a
-        // clear message instead of silently dropping the file.
-        const err = new Error(`Unsupported file type: ${mime || 'unknown'}`) as Error & {
-          status?: number;
-          code?: string;
-        };
-        err.status = UPLOAD_POLICY_ERROR_CONTRACT.unsupportedMediaType.status;
-        err.code = UPLOAD_POLICY_ERROR_CONTRACT.unsupportedMediaType.code;
-        return cb(err);
-      }
-      cb(null, true);
-    },
   });
 }
 
@@ -267,5 +227,29 @@ export function enforceTotalUploadSize() {
       return;
     }
     next();
+  };
+}
+
+/**
+ * Response headers for serving staged upload bytes to a browser. Only
+ * {@link resolveUploadServeType}'s inline-safe media types keep their declared
+ * type and render inline; everything else is an opaque attachment, so an
+ * uploaded HTML/SVG/JS file can never execute under the Agor origin. The
+ * sandbox CSP is defense in depth for direct navigation; PDF is exempt because
+ * browser PDF viewers refuse to run inside a sandboxed document.
+ */
+export function uploadContentHeaders(upload: {
+  mimeType: string;
+  displayName: string;
+}): Record<string, string> {
+  const { contentType, inline } = resolveUploadServeType(upload.mimeType);
+  return {
+    'Content-Type': contentType,
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, no-store',
+    ...(contentType === 'application/pdf'
+      ? {}
+      : { 'Content-Security-Policy': "default-src 'none'; sandbox" }),
   };
 }

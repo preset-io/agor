@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { KNOWLEDGE_DOCUMENT_PAGINATION, PAGINATION } from '../config/constants';
 import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   messageQueryValidator,
@@ -339,4 +341,63 @@ it('preserves transcript queue exclusion and opt-in session accounting', async (
   const session = { params: { query: { include_usage: 'true' } } };
   await typedValidateQuery(sessionQueryValidator)(session);
   expect(session.params.query.include_usage).toBe(true);
+});
+
+describe('knowledgeDocumentQueryValidator', () => {
+  it('coerces REST list and hydration params', async () => {
+    expect(
+      await knowledgeDocumentQueryValidator({
+        namespace_slug: 'team',
+        kind: 'memory',
+        archived: 'false',
+        include_content: 'true',
+        version: '3',
+        $limit: '50',
+        $skip: '100',
+        $sort: { updated_at: '-1', path: '1' },
+      })
+    ).toMatchObject({
+      namespace_slug: 'team',
+      kind: 'memory',
+      archived: false,
+      include_content: true,
+      $limit: 50,
+      $skip: 100,
+      $sort: { updated_at: -1, path: 1 },
+    });
+  });
+
+  it('strips unknown filters and unsupported sort columns instead of widening them', async () => {
+    expect(
+      await knowledgeDocumentQueryValidator({
+        uri: 'agor://kb/team/a.md',
+        $sort: { content_text: 1, title: 1 },
+      })
+    ).toEqual({ $sort: { title: 1 } });
+  });
+
+  it('accepts findAll() continuation offsets past the shared skip ceiling', async () => {
+    const continuation = PAGINATION.MAX_SKIP + KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT;
+    await expect(
+      knowledgeDocumentQueryValidator({
+        $limit: String(KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT),
+        $skip: String(continuation),
+      })
+    ).resolves.toEqual({ $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT, $skip: continuation });
+    // Schemas without an override keep the shared ceiling.
+    await expect(boardQueryValidator({ $skip: continuation })).rejects.toThrow();
+  });
+
+  it.each([
+    { $limit: -1 },
+    { $limit: 'all' },
+    { $limit: 10001 },
+    { $skip: 1.5 },
+    { $skip: -1 },
+    { $sort: { path: 0 } },
+    { kind: 'unknown' },
+    { include_content: 'maybe' },
+  ])('rejects malformed document queries: %j', async (query) => {
+    await expect(knowledgeDocumentQueryValidator(query)).rejects.toThrow();
+  });
 });

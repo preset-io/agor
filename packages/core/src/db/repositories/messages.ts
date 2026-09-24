@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
 import { LEAN_TRANSCRIPT_METADATA_FIELDS } from '../../types/message';
@@ -28,6 +28,12 @@ import { invalidateRecordedToolCount } from './recorded-tool-count';
 
 export const MESSAGE_CONTENT_OMITTED =
   '[Message content omitted: payload could not be safely persisted]';
+
+/** Keyset position in the MCP Slack connect due-work ordering. */
+export interface MCPSlackConnectDueCursor {
+  dueAt: Date;
+  messageId: string;
+}
 
 export type MessageFindPageOptions = {
   messageId?: MessageID;
@@ -66,6 +72,31 @@ export class MessageIdentifierIntegrityError extends Error {
     super(`${field} must be a canonical full UUID`);
     this.name = 'MessageIdentifierIntegrityError';
   }
+}
+
+/**
+ * The indexed due-work projection of a message's widget delivery record.
+ *
+ * Only a Slack-delivered `oauth` widget ever sets one. Kept beside the writes
+ * that use it — `create` and `mutateMetadataLocked` — so there is exactly one
+ * place the column's meaning is decided.
+ *
+ * Two sources, in strict precedence. A delivery record owns the column
+ * outright once it exists, because it is the thing that knows when the card
+ * is next due (and `undefined` there means "nothing to do", which must clear
+ * the column rather than fall back). Before it exists there is no record to
+ * ask, so a Slack-sourced mint stamps `slack_connect_due_at` and the sweep
+ * owns the first card from instant zero instead of depending on one
+ * in-process callback surviving.
+ */
+function mcpSlackConnectDueAt(metadata: Message['metadata']): Date | null {
+  const widget = metadata?.widget;
+  const dueAt = widget?.slack_connect
+    ? widget.slack_connect.next_repair_at
+    : widget?.slack_connect_due_at;
+  if (!dueAt) return null;
+  const parsed = new Date(dueAt);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
 function omittedMessageData(reason: JsonSanitizationError['category']): MessageInsert['data'] {
@@ -212,6 +243,13 @@ export class MessagesRepository {
       content_preview: contentPreview,
       parent_tool_use_id: message.parent_tool_use_id || null,
       data,
+      // Projected from the SANITIZED payload rather than from `message`, for
+      // the same reason the locked mutation projects from what it writes: the
+      // catch above can substitute an omission placeholder, and the column
+      // must never name a repair time the stored JSON does not carry.
+      mcp_slack_connect_due_at: mcpSlackConnectDueAt(
+        (data as { metadata?: Message['metadata'] }).metadata
+      ),
     };
   }
 
@@ -352,7 +390,14 @@ export class MessagesRepository {
           }
           if (parent?.task_id) await invalidateRecordedToolCount(txDb, parent.task_id);
           const updatedRow = await update(txDb, messages)
-            .set({ data: sanitizedData })
+            .set({
+              data: sanitizedData,
+              // Projected from the JSON in the same statement that writes it,
+              // so the indexed due-work column can never name a repair time
+              // the metadata does not. Null for every message that is not a
+              // Slack-delivered `oauth` widget awaiting repair.
+              mcp_slack_connect_due_at: mcpSlackConnectDueAt(metadata),
+            })
             .where(eq(messages.message_id, messageId))
             .returning()
             .one();
@@ -361,6 +406,64 @@ export class MessagesRepository {
         { sqliteImmediate: true }
       )
     );
+  }
+
+  /**
+   * Page Slack-delivered `oauth` widgets whose card projection is due for
+   * bounded repair.
+   *
+   * The same shape as `TaskRepository.findMcpSlackRecoveryNoticePage`, for the
+   * same reason: a restart, a lost realtime event, or a daemon that died
+   * mid-delivery leaves a card that nothing else will ever revisit. `horizon`
+   * bounds how far back a sweep reaches so an abandoned row from last month
+   * cannot crowd out today's work, and the query rides the partial index
+   * rather than reading a table that holds every message ever sent.
+   *
+   * `after` continues the same ordering, so a caller with a page budget can
+   * reach work behind a full page of cards it could not advance. Without it
+   * one page is all a tenant ever sees, and anything that reliably occupies
+   * the oldest `limit` rows hides every card behind it indefinitely.
+   */
+  async findMcpSlackConnectDuePage(
+    options: { now?: Date; horizon?: Date; limit?: number; after?: MCPSlackConnectDueCursor } = {}
+  ): Promise<{ messages: Message[]; cursor?: MCPSlackConnectDueCursor }> {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('MCP Slack connect repair limit must be between 1 and 100');
+    }
+    const now = options.now ?? new Date();
+    const horizon = options.horizon ?? new Date(now.getTime() - 24 * 60 * 60_000);
+    const after = options.after;
+    const rows = await select(this.db)
+      .from(messages)
+      .where(
+        and(
+          gte(messages.mcp_slack_connect_due_at, horizon),
+          lte(messages.mcp_slack_connect_due_at, now),
+          ...(after
+            ? [
+                or(
+                  gt(messages.mcp_slack_connect_due_at, after.dueAt),
+                  and(
+                    eq(messages.mcp_slack_connect_due_at, after.dueAt),
+                    gt(messages.message_id, after.messageId)
+                  )
+                ),
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(messages.mcp_slack_connect_due_at), asc(messages.message_id))
+      .limit(limit)
+      .all();
+    const last = rows.at(-1) as MessageRow | undefined;
+    const lastDueAt = last?.mcp_slack_connect_due_at;
+    return {
+      messages: rows.map((row: MessageRow) => this.rowToMessage(row)),
+      ...(last && lastDueAt
+        ? { cursor: { dueAt: new Date(lastDueAt), messageId: last.message_id } }
+        : {}),
+    };
   }
 
   /**
@@ -557,12 +660,24 @@ export class MessagesRepository {
   /**
    * Get all messages for a session filtered by type (ordered by index)
    */
-  async findBySessionIdAndType(sessionId: SessionID, type: Message['type']): Promise<Message[]> {
-    const rows = await select(this.db)
+  /**
+   * All messages of one type in a session, oldest first.
+   *
+   * `options.newestFirst` with `options.limit` is for callers that only care
+   * about recent rows — a widget sweep, say — so the read stays bounded in a
+   * long-running session instead of growing with its whole history.
+   */
+  async findBySessionIdAndType(
+    sessionId: SessionID,
+    type: Message['type'],
+    options?: { limit?: number; newestFirst?: boolean }
+  ): Promise<Message[]> {
+    const ordering = options?.newestFirst ? desc(messages.index) : messages.index;
+    const query = select(this.db)
       .from(messages)
       .where(and(eq(messages.session_id, sessionId), eq(messages.type, type)))
-      .orderBy(messages.index)
-      .all();
+      .orderBy(ordering);
+    const rows = await (options?.limit ? query.limit(options.limit) : query).all();
 
     return rows.map((r: MessageRow) => this.rowToMessage(r));
   }

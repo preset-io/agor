@@ -1,4 +1,5 @@
 import { NotFound } from '@agor/core/feathers';
+import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import {
@@ -8,19 +9,29 @@ import {
   MCP_HEADER_REDACTED_SENTINEL,
   redactMCPCustomHeaders,
 } from '@agor/core/tools/mcp/http-headers';
-import { oauthGrantCanAuthenticate } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   CreateMCPServerInput,
   MCPAuth,
   MCPAuthPatch,
   MCPAuthRecovery,
+  MCPCatalogEntry,
   MCPServer,
+  Paginated,
   UpdateMCPServerInput,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import {
+  catalogDisplayName,
+  hasMinimumRole,
+  MCP_CATALOG_AUTH_TYPES,
+  MCP_CATALOG_CATEGORIES,
+  ROLES,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { isMCPOAuthGrantAuthorizedForServer } from '../../services/mcp-oauth-grant-authority.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from '../../services/mcp-oauth-grant-liveness.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
@@ -76,32 +87,31 @@ async function getOAuthStatus(
     return { authenticated: true };
   }
 
-  // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
-  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres). MCP
-  // service responses have already passed through token injection + secret
-  // redaction hooks, so binding authority must come from the raw stored row.
-  const { MCPServerRepository, UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const tokenData = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
-    const authoritativeServer = await new MCPServerRepository(db).findById(mcpServer.mcp_server_id);
-    if (!authoritativeServer?.enabled || authoritativeServer.auth?.type !== 'oauth') return null;
-    const lookupUserId =
-      (authoritativeServer.auth.oauth_mode ?? 'per_user') === 'shared' ? null : ctx.userId;
-    const grant = await new UserMCPOAuthTokenRepository(db).getToken(
-      lookupUserId,
-      mcpServer.mcp_server_id
-    );
-    if (!grant) return null;
-    return (await isMCPOAuthGrantAuthorizedForServer(db, authoritativeServer, grant))
-      ? grant
-      : null;
-  });
-  if (tokenData && oauthGrantCanAuthenticate(tokenData)) {
-    return {
-      authenticated: true,
-      tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
-    };
-  }
-  return { authenticated: false };
+  // The shared read, not a hand-rolled copy of it. This surface used to carry
+  // its own inline server re-read, lookup-key derivation, binding check,
+  // `refresh_status` rule, and expiry comparison — five rules that had to stay
+  // identical to the other grant reads by hand, and did not.
+  //
+  // `resolveMCPOAuthGrantLiveness` re-reads the row from the database on
+  // purpose: MCP service responses have already passed through token injection
+  // and secret redaction, so binding authority must come from stored state.
+  //
+  // `mcpOAuthGrantIsConnected` — `live || refreshable`, not `live`. This
+  // boolean is what tells an agent whether to offer a Connect button (see the
+  // recovery copy further down), so a bound grant that the inject hook's next
+  // JIT refresh will make usable has to read as authenticated — otherwise the
+  // agent offers to reconnect a server that already works. That disjunction is
+  // exactly `oauthGrantCanAuthenticate`, which is what `mcp-oauth-status.ts`
+  // answers the UI's auth badge with, and since D4.1 it is also what the
+  // `oauth` widget's mint short-circuit asks: one grant, one verdict, so this
+  // tool cannot tell an agent a server is connected and then hand it a Connect
+  // button for the same server.
+  const liveness = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+    resolveMCPOAuthGrantLiveness(db, mcpServer.mcp_server_id, ctx.userId)
+  );
+  return mcpOAuthGrantIsConnected(liveness)
+    ? { authenticated: true, tokenExpiresAt: liveness.expiresAt?.getTime() }
+    : { authenticated: false };
 }
 
 /** Build the standard MCP-server summary, resolving OAuth status inline. */
@@ -725,6 +735,28 @@ function assertUpdateCompatibleWithCurrent(
   }
 }
 
+/**
+ * One catalog entry, as much as an agent needs to pick between them.
+ *
+ * Deliberately not the whole entry: `permission_disclosure` and
+ * `starter_prompt` are written for a human reading a drawer, and repeating
+ * paragraphs of them across 25 results crowds out the thing the agent is here
+ * for, which is the `name`. `benefit` is the one-line "why you'd want this",
+ * which is exactly the right altitude for a shortlist.
+ */
+function summarizeCatalogEntry(entry: MCPCatalogEntry) {
+  return {
+    name: entry.name,
+    display_name: catalogDisplayName(entry),
+    benefit: entry.benefit,
+    category: entry.category,
+    capabilities: entry.capabilities,
+    auth_type: entry.auth_type,
+    has_remote: entry.has_remote,
+    website_url: entry.website_url,
+  };
+}
+
 function createOrUpdateNextSteps(
   server: MCPServer,
   attach?: { sessionId: string; ok: boolean; error?: string }
@@ -733,7 +765,7 @@ function createOrUpdateNextSteps(
   const steps: string[] = [];
   if (authType === 'oauth') {
     steps.push(
-      `OAuth configured. If oauth_authenticated is false, sign in to ${server.display_name || server.name} from an available MCP authentication surface, then retry.`
+      `OAuth configured. If oauth_authenticated is false, call agor_widgets_request_oauth({ mcpServerId: '${server.mcp_server_id}' }) to render an inline Connect button for ${server.display_name || server.name}; it attaches the server and resumes you once the grant lands. Do not ask the user to paste a token.`
     );
   }
   if (attach?.ok) {
@@ -819,12 +851,87 @@ async function resolveTargetSessionId(ctx: McpContext, sessionId?: string) {
 }
 
 export function registerMcpServerTools(server: McpServer, ctx: McpContext): void {
+  // Tool 0: agor_mcp_catalog_list — resolve a product name to a catalog entry.
+  server.registerTool(
+    'agor_mcp_catalog_list',
+    {
+      description:
+        "Search Agor's reviewed MCP Catalog — the checked-in list of MCP servers a user can connect. " +
+        'Use this FIRST when the user names a product ("connect me to Notion", "I need Linear"): it turns that name into the exact `name` (a reverse-DNS identity like "com.notion/mcp") that `agor_widgets_request_oauth` and the Catalog UI connect by. ' +
+        'This is a catalog of what CAN be connected — it is not what the user has installed. For that, use `agor_mcp_servers_list`, or read `attached_mcp_servers` from `agor_sessions_get_current` for what this session can actually call. ' +
+        'Read-only: listing an entry connects nothing. `auth_type` is the catalog’s claim about someone else’s endpoint and the connect flow probes it again, so treat it as a hint. ' +
+        '`search` matches the entry identity/title/benefit/description, so both a product name ("linear", "sentry") and a phrase describing the job ("track issues", "read logs") can resolve — though the benefit line is one sentence, so browse with `category` and `capability`, or call with no arguments and read the list, when a phrase finds nothing. ' +
+        'If nothing matches, say so and stop — do NOT invent a server or a URL.',
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      inputSchema: z.strictObject({
+        search: mcpOptionalNonEmptyString(
+          'search',
+          'Case-insensitive substring matched against name, title, benefit, and description.'
+        ),
+        category: z
+          .enum(MCP_CATALOG_CATEGORIES)
+          .optional()
+          .describe('Narrow to one curation category.'),
+        capability: mcpOptionalNonEmptyString(
+          'capability',
+          'Capability tag, e.g. "issues", "databases", "web-search".'
+        ),
+        authTypes: z
+          .array(z.enum(MCP_CATALOG_AUTH_TYPES))
+          .min(1)
+          .optional()
+          .describe(
+            'Keep only entries stating one of these auth types. "unknown" means the catalog does not state one.'
+          ),
+        sort: z
+          .enum(['popularity', 'name'])
+          .optional()
+          .describe('Ordering; defaults to popularity.'),
+        limit: mcpLimit(25, 100),
+        offset: mcpOffset(0),
+      }),
+    },
+    async (args) => {
+      const limit = args.limit ?? 25;
+      const offset = args.offset ?? 0;
+
+      // The service hands over the whole catalog — it is a bounded, frozen,
+      // process-cached file — and `filterCatalog` is the SAME narrowing the
+      // Catalog UI runs, so "what search matches" cannot mean two things.
+      const catalog = (await ctx.app
+        .service('mcp-catalog')
+        .find(ctx.baseServiceParams)) as Paginated<MCPCatalogEntry>;
+      const matched = filterCatalog(catalog.data, {
+        ...(args.search ? { search: args.search } : {}),
+        ...(args.category ? { category: args.category } : {}),
+        ...(args.capability ? { capability: args.capability } : {}),
+        ...(args.authTypes ? { auth_types: args.authTypes } : {}),
+        ...(args.sort ? { sort: args.sort } : {}),
+      });
+      const page = matched.slice(offset, offset + limit);
+
+      return textResult({
+        catalog_entries: page.map(summarizeCatalogEntry),
+        pagination: {
+          total: matched.length,
+          limit,
+          offset,
+          hasMore: offset + page.length < matched.length,
+          nextOffset: offset + page.length < matched.length ? offset + page.length : null,
+        },
+        next_steps: [
+          'Pass an entry’s `name` as `catalogEntryName` to `agor_widgets_request_oauth` to have the user connect it.',
+          'Entries with `auth_type: "credentials"` need a key the user pastes; those are connected from the MCP Catalog in Agor, not by this agent.',
+        ],
+      });
+    }
+  );
   // Tool 1: agor_mcp_servers_list
   server.registerTool(
     'agor_mcp_servers_list',
     {
       description:
-        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`. If the catalog is empty, do not invent an unvetted third-party server or request a broad Slack token; configure an official server in Agor User Settings > MCP Servers instead. The official Slack MCP endpoint is https://mcp.slack.com/mcp, and this is separate from Slack gateway-channel setup or Claude connector settings.',
+        'List the MCP-server catalog the current user can access (i.e. servers eligible to attach to a session). Each entry includes name, transport, auth type, custom-header presence, and OAuth status. Use this to discover IDs to pass to `agor_sessions_create({ mcpServerIds })`. To see which servers are currently ATTACHED to a session, read `attached_mcp_servers` from `agor_sessions_get_current` or `agor_sessions_get`. If what you need is not here, do not invent an unvetted third-party server or request a broad Slack token: use `agor_mcp_catalog_list` to find a reviewed entry, then `agor_widgets_request_oauth` to have the user connect it. The official Slack MCP endpoint is https://mcp.slack.com/mcp, and this is separate from Slack gateway-channel setup or Claude connector settings.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         includeDisabled: z
@@ -872,7 +979,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_auth_status',
     {
       description:
-        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated and a structured, surface-neutral recovery action when sign-in is required. Use agor_mcp_servers_list to get server IDs.',
+        'Check the OAuth authentication status for an MCP server. Returns whether the current user is authenticated, and — when sign-in is required — a structured recovery action naming `agor_widgets_request_oauth`, which renders an inline Connect button and resumes you once the grant lands. Use agor_mcp_servers_list to get server IDs, or agor_mcp_catalog_list to find a server the user has not installed yet.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId(
@@ -891,6 +998,14 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const authType = mcpServer.auth?.type || 'none';
       const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
       const { authenticated, tokenExpiresAt } = await getOAuthStatus(ctx, mcpServer);
+      // Name the tool that actually fixes this. The old copy ("an available
+      // authentication surface") was a dead end: there was no way for an agent
+      // to start a sign-in, so an agent relaying it into Slack left the user
+      // with nothing to do. `agor_widgets_request_oauth` is that way.
+      const oauthSignInInstruction =
+        `Call agor_widgets_request_oauth({ mcpServerId: '${mcpServer.mcp_server_id}' }) to render ` +
+        'an inline Connect button. The user signs in in their browser; Agor attaches the server ' +
+        'and resumes you automatically. Do not ask the user to paste a token.';
 
       return textResult({
         mcp_server_id: mcpServer.mcp_server_id,
@@ -900,17 +1015,13 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         oauth_mode: oauthMode,
         oauth_authenticated: authenticated,
         token_expires_at: tokenExpiresAt ? new Date(tokenExpiresAt).toISOString() : undefined,
-        instructions:
-          !authenticated && authType === 'oauth'
-            ? 'Sign in to this MCP server from an available authentication surface, then retry the task.'
-            : undefined,
+        instructions: !authenticated && authType === 'oauth' ? oauthSignInInstruction : undefined,
         recovery:
           !authenticated && authType === 'oauth'
             ? {
                 category: 'authentication_required',
                 action: 'reauthenticate',
-                message:
-                  'Sign in to this MCP server from an available authentication surface, then retry the task.',
+                message: oauthSignInInstruction,
                 mcp_server_id: mcpServer.mcp_server_id,
               }
             : undefined,

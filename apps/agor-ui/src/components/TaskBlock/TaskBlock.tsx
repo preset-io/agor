@@ -129,6 +129,24 @@ export function shouldRenderLiveTaskProgress(task: Task): boolean {
   return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
 }
 
+/**
+ * Cause-specific explanation for a verified interruption. `heartbeat_lost` also
+ * covers an executor process that exited mid-turn (crash or daemon restart);
+ * the Task's `error_message`, rendered beneath this copy, carries the detail.
+ */
+export function runtimeInterruptionDescription(task: Task): string {
+  const cause = task.termination_request?.cause ?? task.sdk_failure?.reason;
+  const reason =
+    cause === 'startup_timeout'
+      ? 'The executor did not start in time.'
+      : cause === 'heartbeat_lost'
+        ? 'The executor stopped unexpectedly or stopped responding. This can happen when Agor restarts during a task.'
+        : cause === 'sdk_health_failure'
+          ? 'The agent stopped making progress, so Agor ended the task.'
+          : 'Agor interrupted this task.';
+  return `${reason} Agor verified containment before making this session promptable.`;
+}
+
 function RuntimeInterruptionNotice({
   task,
   sessionId,
@@ -166,9 +184,7 @@ function RuntimeInterruptionNotice({
       message="Task interrupted"
       description={
         <>
-          {task.sdk_failure?.reason === 'startup_timeout'
-            ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
-            : 'Agor lost contact with the executor and verified containment before making this session promptable.'}
+          {runtimeInterruptionDescription(task)}
           {task.error_message && <div>{task.error_message}</div>}
         </>
       }

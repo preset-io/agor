@@ -124,6 +124,7 @@ import {
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import {
   gatewaySlackUploadExecutorCommandId,
@@ -195,6 +196,8 @@ import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
+import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
+import { createMCPSlackConnectCardControl } from './services/mcp-slack-connect-control.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -297,10 +300,17 @@ import {
   enforceTotalUploadSize,
   getUploadLimits,
   type StagedMulterFile,
+  uploadContentHeaders,
 } from './utils/upload.js';
-import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
+import {
+  classifyUploadAuthFailure,
+  toUploadErrorResponse,
+  type UploadAuthFailureDiagnostics,
+  type UploadFailureStage,
+  uuidOrUndefined,
+} from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
-import { WidgetResolutionStore } from './widgets/resolution-store.js';
+import { WIDGET_RESOLUTION_STORE_KEY, WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
 
 export function appendResponseHeaderValue(
@@ -806,6 +816,14 @@ export async function authenticateBearerHttpRequest(input: {
   };
 }
 
+/** Expose a bounded auth-failure reason to the upload route's failure log. */
+// biome-ignore lint/suspicious/noExplicitAny: Express 5 response locals
+function recordUploadAuthFailure(res: any, diagnostics: UploadAuthFailureDiagnostics): void {
+  res.locals ??= {};
+  res.locals.uploadFailureCode = `AUTH_${diagnostics.reason.toUpperCase()}`;
+  res.locals.uploadAuthFailure = diagnostics;
+}
+
 export function createUploadAuthMiddleware(input: {
   authentication: {
     create(
@@ -821,17 +839,27 @@ export function createUploadAuthMiddleware(input: {
       const authHeader = req.headers.authorization;
       const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
       if (!token) {
+        recordUploadAuthFailure(res, { reason: 'missing_bearer' });
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      req.feathers = await authenticateBearerHttpRequest({
-        authentication: input.authentication,
-        multiTenancy: input.multiTenancy,
-        headers: req.headers,
-        token,
-      });
+      try {
+        req.feathers = await authenticateBearerHttpRequest({
+          authentication: input.authentication,
+          multiTenancy: input.multiTenancy,
+          headers: req.headers,
+          token,
+        });
+      } catch (error) {
+        // Decoded without verification purely so the failure log can report
+        // the token's claimed subject and expiry; it grants nothing.
+        const unverified = jwt.decode(token, { json: true });
+        recordUploadAuthFailure(res, classifyUploadAuthFailure(error, unverified));
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       next();
-    } catch {
+    } catch (error) {
+      recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -2943,6 +2971,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           code: res.locals.uploadFailureCode ?? `HTTP_${res.statusCode}`,
           status: res.statusCode,
           type: res.locals.uploadFailureType ?? 'request',
+          route: '/sessions/:sessionId/upload',
+          session_id: uuidOrUndefined(req.params?.sessionId),
+          // Verified identity once authentication succeeded; otherwise the
+          // rejected token's claimed (unverified) subject and expiry.
+          user_id: (req as { feathers?: AuthenticatedParams }).feathers?.user?.user_id,
+          auth_reason: res.locals.uploadAuthFailure?.reason,
+          token_sub_unverified: res.locals.uploadAuthFailure?.claimedSubject,
+          token_expires_at_unverified: res.locals.uploadAuthFailure?.claimedExpiresAt,
         })
       );
     });
@@ -3087,22 +3123,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           res.setHeader('Content-Range', `bytes ${offset}-${offset + length - 1}/${upload.size}`);
         }
         const stream = await store.read({ ...readOwner, offset, ...(length ? { length } : {}) });
-        res.setHeader('Content-Type', upload.mimeType || 'application/octet-stream');
+        // Never echo an arbitrary client-declared MIME: see uploadContentHeaders.
+        for (const [name, value] of Object.entries(uploadContentHeaders(upload))) {
+          res.setHeader(name, value);
+        }
         res.setHeader('Content-Length', String(length ?? upload.size));
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        const safeInline = new Set([
-          'image/png',
-          'image/jpeg',
-          'image/gif',
-          'image/webp',
-          'application/pdf',
-        ]);
-        res.setHeader(
-          'Content-Disposition',
-          `${safeInline.has(upload.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`
-        );
         stream.once('error', (error) => res.destroy(error as Error));
         res.once('close', () =>
           (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
@@ -3677,18 +3703,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const widgetResolutionMessages = bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
   const widgetResolutionBranches = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+  const widgetResolutionStore = new WidgetResolutionStore(widgetResolutionMessages, (message) => {
+    emitServiceEvent(app, {
+      path: 'messages',
+      event: 'patched',
+      data: message,
+      id: message.message_id,
+    });
+    // A widget that also has a Slack card must retire, redraw, or complete it
+    // in the same breath. This is the one writer of widget lifecycle state, so
+    // hooking it here means no transition — resolve, fail, supersede — can
+    // leave a live Connect button in a thread behind a settled row.
+    notifyMcpSlackConnectCard(app, message);
+  });
+  // Every writer of widget lifecycle state goes through this one store, so it
+  // is published where an in-process caller that is not a route can reach it —
+  // notably the MCP tool that supersedes a replaced Connect button. The
+  // repository is bound to the tenant unit of work, so it resolves its tenant
+  // from the caller's ambient scope rather than from whoever constructed it.
+  app.set(WIDGET_RESOLUTION_STORE_KEY, widgetResolutionStore);
   const widgetResolverDeps = {
     // biome-ignore lint/suspicious/noExplicitAny: Feathers Application shape
     app: app as any,
     runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
-    resolutionStore: new WidgetResolutionStore(widgetResolutionMessages, (message) =>
-      emitServiceEvent(app, {
-        path: 'messages',
-        event: 'patched',
-        data: message,
-        id: message.message_id,
-      })
-    ),
+    resolutionStore: widgetResolutionStore,
     publishResolved: (payload: Record<string, unknown>) =>
       emitServiceEvent(app, {
         path: 'messages',
@@ -3731,6 +3769,36 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.MEMBER, action: 'submit widgets' },
+    },
+    requireAuth
+  );
+
+  // The OAuth lane. The browser has finished the provider flow and is asking
+  // the daemon to check; it supplies no server id and no payload worth
+  // trusting, so everything that decides the outcome is read server-side from
+  // the pinned widget params and the persisted grant. See
+  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  registerLongAuthenticatedRoute(
+    app,
+    '/widgets/:id/oauth-resolve',
+    {
+      async create(data: { attempt_id?: unknown } | undefined, params: RouteParams) {
+        const widgetId = params.route?.id;
+        if (!widgetId) throw new Error('Widget ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to resolve a widget');
+        }
+        const attemptId = typeof data?.attempt_id === 'string' ? data.attempt_id : undefined;
+        return resolveWidget(
+          widgetId,
+          { kind: 'oauth_callback', evidence: { attempt_id: attemptId } },
+          { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
+          widgetResolverDeps
+        );
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'resolve OAuth widgets' },
     },
     requireAuth
   );
@@ -6197,6 +6265,44 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       find: { role: ROLES.MEMBER, action: 'view MCP gateway status' },
       patch: { role: ROLES.ADMIN, action: 'configure MCP gateway rollout' },
+    },
+    requireAuth
+  );
+
+  /**
+   * The Slack MCP connect card's kill switch, as something an operator can
+   * actually reach.
+   *
+   * It was a setting with a setter and no caller: `setMCPSlackConnectCardEnabled`
+   * is plumbing, and "write an app variable by hand" is not an incident
+   * procedure. This is the narrow control surface that makes the switch
+   * operable — read it, change it, and read back what took effect, for the
+   * caller's tenant and no other.
+   *
+   * Narrow on purpose:
+   *
+   *  - Admin for BOTH methods. Unlike `/mcp-egress/status`, nothing here is a
+   *    statement about the caller's own capabilities, so there is no answer a
+   *    non-admin needs. A member who cannot see the switch is not shown a
+   *    control that fails.
+   *  - One tenant per call, because the setting is one app variable per tenant
+   *    and a deployment-wide incident is one write per tenant — exactly as
+   *    `mcp_egress_gateway.mode` is. The response names the tenant it acted on
+   *    so an operator working through several can prove which.
+   *  - No third state. `enabled` is a boolean; an unreadable or mistyped value
+   *    leaves the card ON (`isMCPSlackConnectCardEnabled`), deliberately, and
+   *    this route never writes one.
+   *
+   * The runbook — including what happens to work stranded while it is off — is
+   * §7.1.4 of `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+   */
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-slack-connect/card',
+    createMCPSlackConnectCardControl(db),
+    {
+      find: { role: ROLES.ADMIN, action: 'read the Slack MCP connect card switch' },
+      patch: { role: ROLES.ADMIN, action: 'change the Slack MCP connect card switch' },
     },
     requireAuth
   );

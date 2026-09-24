@@ -1034,6 +1034,10 @@ const discordSetupSchema = z
     outbound: z.boolean().default(false),
     alignUsers: z.boolean().default(false),
     userMap: z.record(z.string(), z.string().min(1)).optional(),
+    files: z
+      .boolean()
+      .default(false)
+      .describe('Enable bounded inbound PNG/JPEG image attachments for live Discord messages.'),
     catchUp: z
       .strictObject({
         maxPages: z
@@ -1637,7 +1641,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_channels_create',
     {
       description:
-        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false, agent_tools:[], and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
+        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live PNG/JPEG images, agent_tools:[], and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: gatewayChannelCreateSchema,
     },
@@ -1726,6 +1730,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         agorUserId: args.agorUserId,
         alignUsers: args.alignUsers,
         userMap: args.userMap,
+        files: args.files,
         outboundEnabled: args.outbound,
         defaultOutboundTarget:
           args.outbound && args.allowedChannelIds[0]
@@ -1752,7 +1757,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           artifact.messageContent.instruction,
           'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
           'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
-          'Keep the channel and author allowlists explicit. Discord ignores DMs, attachments/rich messages, webhooks, bot/self messages, wrong guild/channel, and unmentioned messages.',
+          'Keep the channel and author allowlists explicit. Discord ignores DMs, webhooks, bot/self messages, wrong guild/channel, and unmentioned messages; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
         ],
         validation: artifact.validation,
         caveats: [

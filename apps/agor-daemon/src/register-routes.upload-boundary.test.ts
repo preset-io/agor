@@ -146,6 +146,70 @@ describe('browser upload route boundary ordering', () => {
     expect(req.feathers).toBeUndefined();
   });
 
+  it('records why a rejected bearer failed without changing the public 401', async () => {
+    const expiredAtSeconds = 1_790_000_000;
+    const unverifiedToken = [
+      Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'access' })).toString('base64url'),
+      Buffer.from(
+        JSON.stringify({ sub: '4ba459df-7de6-454f-b5b0-1aed95bc5084', exp: expiredAtSeconds })
+      ).toString('base64url'),
+      'signature',
+    ].join('.');
+    const expired = Object.assign(new Error('jwt expired'), {
+      className: 'not-authenticated',
+      data: { name: 'TokenExpiredError' },
+    });
+    const middleware = createUploadAuthMiddleware({
+      authentication: { create: vi.fn(async () => Promise.reject(expired)) },
+      multiTenancy: undefined as never,
+    });
+    const json = vi.fn();
+    const res = { locals: {} as Record<string, unknown>, status: vi.fn(() => ({ json })) };
+    const next = vi.fn();
+
+    await middleware({ headers: { authorization: `Bearer ${unverifiedToken}` } }, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(res.locals.uploadFailureCode).toBe('AUTH_TOKEN_EXPIRED');
+    expect(res.locals.uploadAuthFailure).toEqual({
+      reason: 'token_expired',
+      claimedSubject: '4ba459df-7de6-454f-b5b0-1aed95bc5084',
+      claimedExpiresAt: new Date(expiredAtSeconds * 1000).toISOString(),
+    });
+  });
+
+  it('records a missing bearer as its own upload auth failure reason', async () => {
+    const middleware = createUploadAuthMiddleware({
+      authentication: { create: vi.fn() },
+      multiTenancy: undefined as never,
+    });
+    const res = { locals: {} as Record<string, unknown>, status: vi.fn(() => ({ json: vi.fn() })) };
+
+    await middleware({ headers: {} }, res, vi.fn());
+
+    expect(res.locals.uploadFailureCode).toBe('AUTH_MISSING_BEARER');
+  });
+
+  it('logs the auth failure reason, route, and session alongside the reference', () => {
+    const logger = source.slice(
+      source.indexOf('const uploadLogger'),
+      source.indexOf('const setUploadFailureStage')
+    );
+    for (const field of [
+      'route:',
+      'session_id:',
+      'user_id:',
+      'auth_reason:',
+      'token_sub_unverified:',
+      'token_expires_at_unverified:',
+      'uuidOrUndefined(req.params?.sessionId)',
+    ]) {
+      expect(logger).toContain(field);
+    }
+  });
+
   it('centralizes tenant-aware bearer authentication for upload and executor data planes', () => {
     const helperStart = source.indexOf('export async function authenticateBearerHttpRequest');
     const middlewareStart = source.indexOf('export function createUploadAuthMiddleware');

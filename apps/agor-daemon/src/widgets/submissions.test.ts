@@ -9,12 +9,15 @@
  *   - `auto_resume: false` skips the task creation
  *   - Dismissal path uses `buildDismissedPrompt`
  *   - WebSocket broadcast: `widget:resolved` fires
+ *   - OAuth lane: `/oauth-resolve` dispatches to `resolveFromDaemonVerification`,
+ *     reuses the SAME claim / auto-resume / broadcast machinery, and the two
+ *     resolution kinds cannot be reached through each other's endpoint
  *
  * No FeathersJS bootstrap — the resolver is pure-ish over a `deps.app`
  * mock, so we exercise the full state machine with a hand-rolled stub.
  */
 
-import { BadRequest, NotFound } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type { Branch, Message, MessageID, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -155,11 +158,18 @@ function makeApp(
 
 function makeFixtures(
   opts: {
-    widgetStatus?: 'pending' | 'submitted' | 'dismissed';
+    widgetStatus?: 'pending' | 'submitted' | 'dismissed' | 'resolving';
     widgetType?: string;
     autoResume?: boolean;
     sessionCreator?: UserID;
     branchOthersCan?: Branch['others_can'];
+    /** A claim someone else took and never finished. */
+    resolutionClaim?: {
+      token: string;
+      action: 'submit' | 'dismiss' | 'oauth_callback';
+      claimed_at: string;
+      claimed_by: UserID;
+    };
   } = {}
 ) {
   const sessionCreator = (opts.sessionCreator ?? 'creator-user-id') as UserID;
@@ -181,6 +191,7 @@ function makeFixtures(
         status: opts.widgetStatus ?? 'pending',
         requested_at: '2026-05-19T00:00:00.000Z',
         ...(opts.autoResume !== undefined ? { auto_resume: opts.autoResume } : {}),
+        ...(opts.resolutionClaim ? { resolution_claim: opts.resolutionClaim } : {}),
       },
     },
   };
@@ -231,6 +242,54 @@ function registerTestWidget(
   };
   registerWidget(entry);
   return { entry, applySubmit };
+}
+
+/**
+ * A body-taking widget whose outcome is NOT derivable from the body.
+ *
+ * Stands in for `gateway_token`, whose enable decision comes from a credential
+ * probe inside `applySubmit`. Its `buildResultMeta` deliberately answers
+ * something different, so a test can tell which source the resolver used
+ * rather than having both agree by construction.
+ */
+type ProbeWidgetResultMeta = { names_submitted: string[]; scope: string; verified?: boolean };
+
+function registerProbeWidget(options: { handlerReturnsMeta: boolean }) {
+  const applySubmit = vi.fn(
+    async (
+      _ctx: unknown,
+      submit: { value: string; scope: 'global' | 'session' },
+      params: { names: string[] }
+    ) =>
+      options.handlerReturnsMeta
+        ? { names_submitted: params.names, scope: submit.scope, verified: true }
+        : undefined
+  );
+  const buildResultMeta = vi.fn((submit: { scope: 'global' | 'session' }) => ({
+    names_submitted: ['FROM_THE_BODY'],
+    scope: submit.scope,
+  }));
+  const buildAutoResumePrompt = vi.fn(
+    (rm: ProbeWidgetResultMeta) =>
+      `[Agor] User submitted ${rm.names_submitted.join(', ')} ` +
+      `(scope: ${rm.scope}, verified: ${String(rm.verified ?? false)}).`
+  );
+  const entry: WidgetRegistryEntry<
+    { names: string[]; reason: string },
+    { value: string; scope: 'global' | 'session' },
+    ProbeWidgetResultMeta
+  > = {
+    type: 'env_vars',
+    schemaVersion: 1,
+    paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
+    submitSchema: z.object({ value: z.string(), scope: z.enum(['global', 'session']) }),
+    buildResultMeta,
+    applySubmit,
+    buildAutoResumePrompt,
+    buildDismissedPrompt: () => '[Agor] User dismissed.',
+  };
+  registerWidget(entry);
+  return { applySubmit, buildResultMeta, buildAutoResumePrompt };
 }
 
 describe('canResolveWidget', () => {
@@ -388,6 +447,109 @@ describe('resolveWidget', () => {
     const event = events.find((e) => e.event === 'widget:resolved');
     expect(event).toBeDefined();
     expect((event!.payload as { status: string }).status).toBe('submitted');
+  });
+
+  it('carries a handler-returned result_meta into the prompt, the row, and the broadcast', async () => {
+    // The axis this variant exists for: `gateway_token`'s outcome is decided
+    // by a probe inside the handler, not by the body. Before `applySubmit`
+    // could return one, that outcome reached `buildResultMeta` through a
+    // module-level WeakMap keyed on submit-object identity.
+    const { buildResultMeta, buildAutoResumePrompt } = registerProbeWidget({
+      handlerReturnsMeta: true,
+    });
+    const fixtures = makeFixtures();
+    const { app, calls, events, resolutionStore } = makeApp(fixtures);
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+      { user_id: 'creator-user-id' as UserID },
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        resolveSessionPromptAuthority: allowPrompt,
+      }
+    );
+
+    // The handler's answer won, and the body-only builder was never consulted.
+    expect(buildResultMeta).not.toHaveBeenCalled();
+    expect(buildAutoResumePrompt).toHaveBeenCalledTimes(1);
+    const [promptMeta, promptParams] = buildAutoResumePrompt.mock.calls[0];
+    expect(promptMeta).toEqual({
+      names_submitted: ['HUBSPOT_API_KEY'],
+      scope: 'global',
+      verified: true,
+    });
+    // The prompt builder receives result_meta and params — never the body.
+    // `value` is the only place the secret lives, so its absence from both
+    // arguments is the invariant, not just its absence from the rendered text.
+    expect(JSON.stringify([promptMeta, promptParams])).not.toContain('secret-key');
+    expect(promptMeta).not.toHaveProperty('value');
+
+    const promptCall = calls.find(
+      (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
+    );
+    const promptData = promptCall?.data as { prompt: string };
+    expect(promptData.prompt).toContain('verified: true');
+    expect(promptData.prompt).not.toContain('FROM_THE_BODY');
+    expect(promptData.prompt).not.toContain('secret-key');
+
+    const messagePatch = calls
+      .filter(
+        (c) =>
+          c.service === 'messages' &&
+          c.method === 'patch' &&
+          (c.data as { metadata?: { widget?: { status?: string } } }).metadata?.widget?.status ===
+            'submitted'
+      )
+      .at(-1);
+    const patched = messagePatch?.data as {
+      metadata: { widget: { result_meta: ProbeWidgetResultMeta } };
+    };
+    expect(patched.metadata.widget.result_meta.verified).toBe(true);
+    expect(JSON.stringify(patched)).not.toContain('secret-key');
+
+    const event = events.find((e) => e.event === 'widget:resolved');
+    const payload = event!.payload as { result_meta: ProbeWidgetResultMeta };
+    expect(payload.result_meta.verified).toBe(true);
+    expect(JSON.stringify(payload)).not.toContain('secret-key');
+  });
+
+  it('falls back to buildResultMeta when the handler returns nothing', async () => {
+    // The other half of the contract: a meta that IS a pure projection of the
+    // body (env_vars) still comes from the builder, and the builder is the
+    // only thing the body is handed to.
+    const { buildResultMeta, buildAutoResumePrompt } = registerProbeWidget({
+      handlerReturnsMeta: false,
+    });
+    const fixtures = makeFixtures();
+    const { app, calls, resolutionStore } = makeApp(fixtures);
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'submit', body: { value: 'secret-key', scope: 'session' } },
+      { user_id: 'creator-user-id' as UserID },
+      {
+        app: app as never,
+        resolutionStore,
+        runInTenantDatabaseScope,
+        resolveSessionPromptAuthority: allowPrompt,
+      }
+    );
+
+    expect(buildResultMeta).toHaveBeenCalledTimes(1);
+    expect(buildResultMeta).toHaveBeenCalledWith({ value: 'secret-key', scope: 'session' });
+    const [promptMeta] = buildAutoResumePrompt.mock.calls[0];
+    expect(promptMeta).toEqual({ names_submitted: ['FROM_THE_BODY'], scope: 'session' });
+    expect(JSON.stringify(promptMeta)).not.toContain('secret-key');
+
+    const promptCall = calls.find(
+      (c) => c.service === '/sessions/:id/prompt' && c.method === 'create'
+    );
+    const fallbackPrompt = (promptCall?.data as { prompt: string } | undefined)?.prompt;
+    expect(fallbackPrompt).toContain('FROM_THE_BODY');
+    expect(fallbackPrompt).not.toContain('secret-key');
   });
 
   it('rejects a submission when canonical prompt authority denies it', async () => {
@@ -890,5 +1052,444 @@ describe('widget registry', () => {
         buildDismissedPrompt: () => '',
       })
     ).toThrow(/already registered/);
+  });
+});
+
+/**
+ * A widget type resolved by an OAuth callback rather than a submit body.
+ *
+ * Registered under `env_vars` so it can reuse `makeFixtures()`; the type name
+ * is irrelevant to what these tests check, which is the dispatch.
+ */
+function registerOAuthTestWidget(
+  resolveFromDaemonVerification = vi.fn(
+    async (_ctx: unknown, _evidence: unknown, _params: unknown) => ({
+      mcp_server_id: 'srv-1',
+      name: 'Notion',
+      oauth_mode: 'per_user' as const,
+      attached: true,
+    })
+  ),
+  authorizeResolve?: (ctx: unknown, params: unknown) => void | Promise<void>,
+  recovery: 'none' | 'reclaimable' = 'reclaimable'
+) {
+  const entry: WidgetRegistryEntry<
+    { names: string[]; reason: string },
+    never,
+    { mcp_server_id: string; name: string; oauth_mode: 'per_user'; attached: boolean }
+  > = {
+    type: 'env_vars',
+    resolution: 'daemon_verified',
+    recovery,
+    schemaVersion: 1,
+    paramsSchema: z.object({ names: z.array(z.string()), reason: z.string() }),
+    resolveFromDaemonVerification,
+    buildAutoResumePrompt: (rm) => `[Agor] User connected "${rm.name}" (attached: ${rm.attached}).`,
+    buildDismissedPrompt: () => `[Agor] User declined to connect.`,
+    ...(authorizeResolve ? { authorizeResolve: authorizeResolve as never } : {}),
+  };
+  registerWidget(entry);
+  return { entry, resolveFromDaemonVerification };
+}
+
+describe('resolveWidget — OAuth resolution lane', () => {
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+  });
+
+  const deps = (app: unknown, resolutionStore: unknown) => ({
+    app: app as never,
+    resolutionStore: resolutionStore as never,
+    runInTenantDatabaseScope,
+    resolveSessionPromptAuthority: allowPrompt,
+  });
+
+  it('dispatches to resolveFromDaemonVerification and reuses the shared post-resolution machinery', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, events, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: { attempt_id: 'att-9' } },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    // The advisory attempt id reaches the handler; the widget params do too.
+    expect(resolveFromDaemonVerification).toHaveBeenCalledWith(
+      expect.objectContaining({ submitterUserId: 'creator-user-id' }),
+      { attempt_id: 'att-9' },
+      { names: ['HUBSPOT_API_KEY'], reason: 'call Hubspot' }
+    );
+
+    // Same terminal status, same durable result_meta, same auto-resume task,
+    // same broadcast — none of it duplicated for this lane.
+    expect(result).toMatchObject({ status: 'submitted', auto_resume_queued: true });
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('submitted');
+    expect(harness.currentMessage.metadata?.widget?.result_meta).toMatchObject({ attached: true });
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    const promptData = prompt?.data as { prompt: string; idempotencyTaskId: string } | undefined;
+    expect(promptData?.prompt).toContain('Notion');
+    expect(promptData?.idempotencyTaskId).toBe(widgetAutoResumeTaskId('widget-msg-1' as MessageID));
+    expect(events.map((e) => e.event)).toContain('widget:resolved');
+  });
+
+  it('records the claim as an oauth_callback so a recovery reader knows which lane was in flight', async () => {
+    const fixtures = makeFixtures();
+    const claimed: string[] = [];
+    const { app, resolutionStore } = makeApp(fixtures);
+    const originalClaim = resolutionStore.claim.bind(resolutionStore);
+    resolutionStore.claim = (async (id: never, input: { action: string }) => {
+      claimed.push(input.action);
+      return originalClaim(id, input as never);
+    }) as typeof resolutionStore.claim;
+    registerOAuthTestWidget();
+
+    await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+    expect(claimed).toEqual(['oauth_callback']);
+  });
+
+  it('refuses a submit-resolved widget reached through the OAuth endpoint', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { applySubmit } = registerTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+      // Otherwise the submit payload validation would be skipped entirely.
+    ).rejects.toThrow(/resolved by 'submit'/);
+    expect(applySubmit).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+  });
+
+  it('refuses an OAuth-resolved widget reached through the submit endpoint', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { connected: true } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+      // Otherwise a client could resolve an OAuth widget by asserting success.
+    ).rejects.toThrow(/resolved by 'daemon_verified'/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+  });
+
+  it('reopens the widget for a retry when the grant check refuses', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    registerOAuthTestWidget(
+      vi.fn(async () => {
+        throw new BadRequest('Sign-in has not completed');
+      }) as never
+    );
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/has not completed/);
+
+    // Back to pending with a secret-free diagnosis, and nothing queued.
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+    expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeDefined();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it("runs the widget type's resolve gate BEFORE claiming, and leaves the row pending", async () => {
+    // A pending widget never expires, so a mint-time precondition can be false
+    // by the time the button is pressed. The gate runs ahead of the claim so a
+    // refusal costs nothing to unwind: no claim to release, no handler side
+    // effect to have happened, no `resolution_failure` to explain away.
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const claimSpy = vi.spyOn(resolutionStore, 'claim');
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget(undefined, () => {
+      throw new Forbidden('This channel no longer aligns platform users');
+    });
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/no longer aligns/);
+
+    expect(claimSpy).not.toHaveBeenCalled();
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+    expect(harness.currentMessage.metadata?.widget?.resolution_failure).toBeUndefined();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('runs the resolve gate on the submit lane too', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const gate = vi.fn(() => {
+      throw new Forbidden('no longer permitted');
+    });
+    const entry = registerTestWidget().entry;
+    _resetWidgetRegistryForTests();
+    registerWidget({ ...entry, authorizeResolve: gate as never });
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'x', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/no longer permitted/);
+    expect(gate).toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('pending');
+  });
+
+  it('still dismisses through the shared dismiss path', async () => {
+    const fixtures = makeFixtures();
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'dismiss' },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+    expect(result.status).toBe('dismissed');
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('dismissed');
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    expect((prompt?.data as { prompt?: string } | undefined)?.prompt).toContain(
+      'declined to connect'
+    );
+  });
+});
+
+/**
+ * B1 — finishing a resolution the browser that started it never finished.
+ *
+ * The provider callback completes one milestone (the grant is persisted); the
+ * widget's own resolution and the auto-resume both wait on a browser coming
+ * back to POST. These cases are the durable half of what makes closing that
+ * page recoverable: a `reclaimable` lane may take over an abandoned claim and
+ * may answer an already-finished resolution with success rather than a
+ * refusal, while every other lane keeps exactly the semantics it had.
+ */
+describe('resolveWidget — interrupted OAuth resolutions', () => {
+  beforeEach(() => {
+    _resetWidgetRegistryForTests();
+  });
+
+  const deps = (app: unknown, resolutionStore: unknown) => ({
+    app: app as never,
+    resolutionStore: resolutionStore as never,
+    runInTenantDatabaseScope,
+    resolveSessionPromptAuthority: allowPrompt,
+  });
+
+  const abandonedClaim = (ageMs: number) => ({
+    token: 'claim-from-a-dead-browser',
+    action: 'oauth_callback' as const,
+    claimed_at: new Date(Date.now() - ageMs).toISOString(),
+    claimed_by: 'creator-user-id' as UserID,
+  });
+
+  it('finishes a claim the original browser abandoned', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    expect(resolveFromDaemonVerification).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: 'submitted', auto_resume_queued: true });
+    expect(result.already_resolved).toBeUndefined();
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('submitted');
+    // The auto-resume is keyed by the widget, so a reclaim converges on the
+    // same Task rather than waking the agent twice.
+    const prompt = calls.find((call) => call.service === '/sessions/:id/prompt');
+    expect((prompt?.data as { idempotencyTaskId?: string } | undefined)?.idempotencyTaskId).toBe(
+      widgetAutoResumeTaskId('widget-msg-1' as MessageID)
+    );
+  });
+
+  it('refuses to steal a claim that is still live', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(5_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(harness.currentMessage.metadata?.widget?.resolution_claim?.token).toBe(
+      'claim-from-a-dead-browser'
+    );
+  });
+
+  it('answers an already-finished resolution with success, not a refusal', async () => {
+    const fixtures = makeFixtures({ widgetStatus: 'submitted' });
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget();
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'oauth_callback', evidence: {} },
+      { user_id: 'creator-user-id' as UserID },
+      deps(app, resolutionStore)
+    );
+
+    expect(result).toEqual({
+      widget_id: 'widget-msg-1',
+      status: 'submitted',
+      auto_resume_queued: false,
+      already_resolved: true,
+    });
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+    expect(calls.find((call) => call.service === '/sessions/:id/prompt')).toBeUndefined();
+  });
+
+  it('keeps the conservative policy for a daemon-verified lane that did not opt in', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { resolveFromDaemonVerification } = registerOAuthTestWidget(undefined, undefined, 'none');
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(resolveFromDaemonVerification).not.toHaveBeenCalled();
+  });
+
+  it('keeps the conservative policy for the submit-backed widgets', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: { ...abandonedClaim(10 * 60_000), action: 'submit' },
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    const { applySubmit } = registerTestWidget();
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+    expect(applySubmit).not.toHaveBeenCalled();
+
+    // …and a second submit of an already-submitted widget is still a refusal,
+    // not an idempotent success: a submit body carries an external effect.
+    const submitted = makeApp(makeFixtures({ widgetStatus: 'submitted' }));
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        deps(submitted.app, submitted.resolutionStore)
+      )
+    ).rejects.toThrow(/already submitted/);
+  });
+
+  it('will not finish a widget whose abandoned claim was a dismissal', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: { ...abandonedClaim(10 * 60_000), action: 'dismiss' as const },
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    // The mirror of the case below, and the half the Slack card has to agree
+    // with: "Not now" was tapped, the resolver died holding that claim, and
+    // sixty seconds later the claim is old enough to take over — but only by
+    // another dismissal. An `oauth_callback` is a different decision and is
+    // refused by name, which is why `mcpSlackConnectRenderedState` reads the
+    // claim's action and not only its age.
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'oauth_callback', evidence: {} },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
+  });
+
+  it('will not dismiss a widget whose OAuth resolution is in flight', async () => {
+    const fixtures = makeFixtures({
+      widgetStatus: 'resolving',
+      resolutionClaim: abandonedClaim(10 * 60_000),
+    });
+    const harness = makeApp(fixtures);
+    const { app, resolutionStore } = harness;
+    registerOAuthTestWidget();
+
+    // The reclaim is per-action: a dismissal is a different decision from the
+    // one the abandoned claim was making, and must not inherit its lease.
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        deps(app, resolutionStore)
+      )
+    ).rejects.toThrow(/already resolving/);
   });
 });
