@@ -161,19 +161,36 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function normalizeMessage(
+interface ClassifiedDiscordMessage {
+  id: string;
+  timestamp: string;
+  author: Record<string, unknown> | null;
+  text: string;
+  isBot: boolean;
+  isSystem: boolean;
+  isRich: boolean;
+  isMention: boolean;
+  actorLabel: string;
+}
+
+/**
+ * Validate one raw Discord message for a known channel and classify it. A
+ * plain user text message with empty content and no rich payload means the
+ * Message Content capability was not applied, so the read fails closed rather
+ * than presenting a silently blank message.
+ */
+function classifyMessage(
   raw: Record<string, unknown>,
-  threadId: string,
-  triggerProviderCursor: string
-): GatewayProviderHistoryMessage {
+  channelId: string
+): ClassifiedDiscordMessage {
   const id = nonEmptyString(raw.id);
-  const channelId = nonEmptyString(raw.channel_id);
+  const rawChannelId = nonEmptyString(raw.channel_id);
   const timestamp = nonEmptyString(raw.timestamp);
   const author = asRecord(raw.author);
   if (
     !id ||
     !isDiscordSnowflake(id) ||
-    channelId !== threadId ||
+    rawChannelId !== channelId ||
     !timestamp ||
     Number.isNaN(Date.parse(timestamp))
   ) {
@@ -202,25 +219,41 @@ function normalizeMessage(
       'Discord history content was redacted without a supported rich payload'
     );
   }
-  const rich = !('content' in raw) || typeof raw.content !== 'string' || hasRichPayload;
   const authorId = nonEmptyString(author?.id);
-  const actorLabel =
-    nonEmptyString(author?.global_name) ??
-    nonEmptyString(author?.username) ??
-    authorId ??
-    (isSystem ? 'Discord system' : 'Discord user');
   const mentions = Array.isArray(raw.mentions) ? raw.mentions : [];
-
   return {
-    providerMessageId: id,
+    id,
     timestamp,
-    actorLabel,
+    author,
     text: typeof raw.content === 'string' ? raw.content : '',
     isBot,
     isSystem,
-    isRich: rich,
-    isTrigger: id === triggerProviderCursor,
+    isRich: !('content' in raw) || typeof raw.content !== 'string' || hasRichPayload,
     isMention: mentions.length > 0,
+    actorLabel:
+      nonEmptyString(author?.global_name) ??
+      nonEmptyString(author?.username) ??
+      authorId ??
+      (isSystem ? 'Discord system' : 'Discord user'),
+  };
+}
+
+function normalizeMessage(
+  raw: Record<string, unknown>,
+  threadId: string,
+  triggerProviderCursor: string
+): GatewayProviderHistoryMessage {
+  const message = classifyMessage(raw, threadId);
+  return {
+    providerMessageId: message.id,
+    timestamp: message.timestamp,
+    actorLabel: message.actorLabel,
+    text: message.text,
+    isBot: message.isBot,
+    isSystem: message.isSystem,
+    isRich: message.isRich,
+    isTrigger: message.id === triggerProviderCursor,
+    isMention: message.isMention,
   };
 }
 
@@ -371,4 +404,209 @@ export async function fetchDiscordProviderHistory(
     throw makeError('limit_exceeded', 'Discord history message budget exhausted');
   }
   return { threadId: request.threadId, messages, complete };
+}
+
+/** One agent read of recent messages from an already-authorized channel. */
+export interface DiscordChannelHistoryRequest {
+  channelId: string;
+  /** Exclusive cursor: return the newest matches older than this message. */
+  before?: string;
+  /** Exclusive cursor: return the oldest matches newer than this message. */
+  after?: string;
+  /** Matching messages to return (1–200, default 50). */
+  limit?: number;
+  /** Include bot and system messages. Defaults to false. */
+  includeBotMessages?: boolean;
+}
+
+export interface DiscordChannelHistoryAttachment {
+  filename: string;
+  content_type?: string;
+  size: number;
+}
+
+export interface DiscordChannelHistoryMessage {
+  id: string;
+  iso_time: string;
+  actor_label: string;
+  author_id?: string;
+  text: string;
+  /** Set when the text alone exceeded the byte budget and was cut. */
+  text_truncated?: true;
+  is_bot: boolean;
+  is_system: boolean;
+  is_mention: boolean;
+  attachments?: DiscordChannelHistoryAttachment[];
+  /** Thread started from this message, readable with the same tool. */
+  thread_id?: string;
+}
+
+export interface DiscordChannelHistoryResult {
+  channelId: string;
+  /** Chronological order. */
+  messages: DiscordChannelHistoryMessage[];
+  has_more: boolean;
+  /** Cursor for the next call in the same direction; null when complete. */
+  next_cursor: { before: string } | { after: string } | null;
+}
+
+export const DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT = 50;
+export const DISCORD_CHANNEL_HISTORY_MAX_LIMIT = 200;
+
+const utf8 = new TextEncoder();
+
+function truncateUtf8(text: string, maxBytes: number): string {
+  const bytes = utf8.encode(text);
+  if (bytes.length <= maxBytes) return text;
+  return new TextDecoder().decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
+}
+
+function toChannelHistoryMessage(
+  raw: Record<string, unknown>,
+  message: ClassifiedDiscordMessage
+): DiscordChannelHistoryMessage {
+  const authorId = nonEmptyString(message.author?.id);
+  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : [])
+    .map(asRecord)
+    .filter((item): item is Record<string, unknown> => item !== null)
+    .map((item) => ({
+      filename: nonEmptyString(item.filename) ?? 'attachment',
+      ...(nonEmptyString(item.content_type) ? { content_type: item.content_type as string } : {}),
+      size: typeof item.size === 'number' && Number.isFinite(item.size) ? item.size : 0,
+    }));
+  const threadId = nonEmptyString(asRecord(raw.thread)?.id);
+  return {
+    id: message.id,
+    iso_time: message.timestamp,
+    actor_label: message.actorLabel,
+    ...(authorId ? { author_id: authorId } : {}),
+    text: message.text,
+    is_bot: message.isBot,
+    is_system: message.isSystem,
+    is_mention: message.isMention,
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(threadId && isDiscordSnowflake(threadId) ? { thread_id: threadId } : {}),
+  };
+}
+
+/**
+ * Read recent messages from one channel for an agent tool. Unlike catch-up,
+ * this is a bounded browse: it scans at most `catch_up.max_pages` pages and
+ * returns at most `catch_up.max_prompt_bytes` of text, and when a budget stops
+ * it early it returns what it collected with a cursor to continue. Only a
+ * short provider page proves there is nothing more in the read direction.
+ * Access and allowlist checks belong to the caller.
+ */
+export async function fetchDiscordChannelHistory(
+  rest: DiscordHistoryRestTransport,
+  config: DiscordGatewayConfig,
+  request: DiscordChannelHistoryRequest
+): Promise<DiscordChannelHistoryResult> {
+  const limit = request.limit ?? DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT;
+  if (
+    !isDiscordSnowflake(request.channelId) ||
+    (request.before !== undefined && !isDiscordSnowflake(request.before)) ||
+    (request.after !== undefined && !isDiscordSnowflake(request.after)) ||
+    (request.before !== undefined && request.after !== undefined) ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > DISCORD_CHANNEL_HISTORY_MAX_LIMIT
+  ) {
+    throw makeError('invalid_request', 'Discord channel history request was invalid');
+  }
+
+  const limits = configWithDefaults(config);
+  const deadline = Date.now() + limits.request_timeout_ms;
+  const forward = request.after !== undefined;
+  const direction = forward ? 'after' : 'before';
+  let cursor = forward ? request.after : request.before;
+  const collected: DiscordChannelHistoryMessage[] = [];
+  let bytes = 0;
+  let lastScanned: string | undefined;
+  let exhausted = false;
+  let stopped = false;
+
+  for (let page = 0; page < limits.max_pages && !stopped && !exhausted; page++) {
+    const params = new URLSearchParams({ limit: String(DISCORD_HISTORY_PAGE_SIZE) });
+    if (cursor) params.set(direction, cursor);
+    const rawPage = await getWithBudget(
+      rest,
+      `${Routes.channelMessages(request.channelId)}?${params.toString()}`,
+      limits,
+      deadline
+    );
+    if (!Array.isArray(rawPage) || rawPage.length > DISCORD_HISTORY_PAGE_SIZE) {
+      throw makeError('malformed_response', 'Discord history page was malformed');
+    }
+    const entries = rawPage.map((raw) => {
+      const record = asRecord(raw);
+      if (!record) throw makeError('malformed_response', 'Discord history message was malformed');
+      return { raw: record, message: classifyMessage(record, request.channelId) };
+    });
+    // Order in the read direction rather than trusting provider order.
+    entries.sort((a, b) =>
+      forward
+        ? compareDiscordSnowflakes(a.message.id, b.message.id)
+        : compareDiscordSnowflakes(b.message.id, a.message.id)
+    );
+    for (let i = 0; i < entries.length; i++) {
+      const id = entries[i]!.message.id;
+      if (i > 0 && id === entries[i - 1]!.message.id) {
+        throw makeError('malformed_response', 'Discord history page repeated a message');
+      }
+      if (cursor) {
+        const order = compareDiscordSnowflakes(id, cursor);
+        if (forward ? order <= 0 : order >= 0) {
+          throw makeError(
+            'incomplete_coverage',
+            `Discord history page did not honor its exclusive ${direction} cursor`
+          );
+        }
+      }
+    }
+
+    for (const { raw, message } of entries) {
+      if (!request.includeBotMessages && (message.isBot || message.isSystem)) {
+        lastScanned = message.id;
+        continue;
+      }
+      // Stop only at the next match, so trailing filtered messages on a
+      // short final page do not leave a misleading has_more.
+      if (collected.length >= limit) {
+        stopped = true;
+        break;
+      }
+      const output = toChannelHistoryMessage(raw, message);
+      const size = utf8.encode(output.text).length;
+      if (bytes + size > limits.max_prompt_bytes) {
+        stopped = true;
+        if (collected.length > 0) break;
+        // A single oversized message is cut rather than blocking all progress.
+        output.text = truncateUtf8(output.text, limits.max_prompt_bytes);
+        output.text_truncated = true;
+        collected.push(output);
+        lastScanned = message.id;
+        break;
+      }
+      collected.push(output);
+      bytes += size;
+      lastScanned = message.id;
+    }
+
+    if (!stopped) {
+      if (rawPage.length < DISCORD_HISTORY_PAGE_SIZE) exhausted = true;
+      else cursor = entries[entries.length - 1]!.message.id;
+      if (collected.length >= limit) stopped = true;
+    }
+  }
+
+  if (!forward) collected.reverse();
+  const hasMore = !exhausted;
+  return {
+    channelId: request.channelId,
+    messages: collected,
+    has_more: hasMore,
+    next_cursor:
+      hasMore && lastScanned ? (forward ? { after: lastScanned } : { before: lastScanned }) : null,
+  };
 }

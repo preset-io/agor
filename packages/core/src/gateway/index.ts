@@ -27,10 +27,20 @@ export {
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {
+  DiscordChannelHistoryAttachment,
+  DiscordChannelHistoryMessage,
+  DiscordChannelHistoryRequest,
+  DiscordChannelHistoryResult,
   DiscordHistoryFailureKind,
   DiscordHistoryRestTransport,
 } from './connectors/discord-history';
-export { DiscordHistoryError, fetchDiscordProviderHistory } from './connectors/discord-history';
+export {
+  DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
+  DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
+  DiscordHistoryError,
+  fetchDiscordChannelHistory,
+  fetchDiscordProviderHistory,
+} from './connectors/discord-history';
 export type {
   DiscordConnectionVerification,
   DiscordSetupArtifact,

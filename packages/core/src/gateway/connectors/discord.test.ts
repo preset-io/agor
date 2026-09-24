@@ -1,6 +1,10 @@
 import { GatewayCloseCodes } from 'discord-api-types/v10';
 import { describe, expect, it, vi } from 'vitest';
-import { type DiscordMessageDeliveryID, validateDiscordConfig } from '../../types/gateway';
+import {
+  type DiscordMessageDeliveryID,
+  resolveDiscordAgentTools,
+  validateDiscordConfig,
+} from '../../types/gateway';
 import type { GatewayListenerOptions } from '../connector';
 import { buildDiscordDeliveryMetadata, buildDiscordDeliveryNonce } from '../discord-identifiers';
 import {
@@ -273,6 +277,31 @@ describe('Discord connector beta', () => {
         allowed_role_ids: ['555555555555555555'],
       }).errors
     ).toContain('allowed_user_ids must contain only Discord snowflakes');
+  });
+
+  it('accepts the legacy empty agent_tools and the channel_history toggle only', () => {
+    for (const agentTools of [
+      undefined,
+      [],
+      {},
+      { channel_history: true },
+      { channel_history: false },
+    ]) {
+      expect(validateDiscordConfig({ ...config, agent_tools: agentTools }).errors).toEqual([]);
+    }
+    expect(validateDiscordConfig({ ...config, agent_tools: ['channel_history'] }).errors).toContain(
+      'agent_tools must be [] or an object of capability toggles'
+    );
+    expect(validateDiscordConfig({ ...config, agent_tools: { reactions: true } }).errors).toContain(
+      'agent_tools.reactions is not a supported Discord agent tool'
+    );
+    expect(
+      validateDiscordConfig({ ...config, agent_tools: { channel_history: 'yes' } }).errors
+    ).toContain('agent_tools.channel_history must be a boolean');
+
+    expect(resolveDiscordAgentTools(undefined)).toEqual({ channel_history: false });
+    expect(resolveDiscordAgentTools([])).toEqual({ channel_history: false });
+    expect(resolveDiscordAgentTools({ channel_history: true })).toEqual({ channel_history: true });
   });
 
   it('sends text-only replies, suppresses generated mentions, and returns aliases for every chunk', async () => {
@@ -1002,6 +1031,150 @@ describe('Discord connector beta', () => {
     expect(result.verifiedInstallationId).toBeUndefined();
     expect(result.failures).toEqual(
       expect.arrayContaining([expect.objectContaining({ capability: 'bot_identity' })])
+    );
+  });
+});
+
+describe('Discord agent channel history', () => {
+  const parentId = config.allowed_channel_ids[0]!;
+  const otherParentId = '999999999999999990';
+  const threadId = '999999999999999991';
+  const privateThreadId = '999999999999999992';
+  const foreignThreadId = '999999999999999993';
+  const foreignGuildChannelId = '999999999999999994';
+  const VIEW_AND_HISTORY = String(1024 + 65536);
+
+  function historyTransport(options: { memberPermissions?: string; messages?: unknown[] } = {}) {
+    const channels: Record<string, Record<string, unknown>> = {
+      [parentId]: { id: parentId, guild_id: config.guild_id, type: 0 },
+      [otherParentId]: { id: otherParentId, guild_id: config.guild_id, type: 0 },
+      [threadId]: { id: threadId, guild_id: config.guild_id, type: 11, parent_id: parentId },
+      [privateThreadId]: {
+        id: privateThreadId,
+        guild_id: config.guild_id,
+        type: 12,
+        parent_id: parentId,
+      },
+      [foreignThreadId]: {
+        id: foreignThreadId,
+        guild_id: config.guild_id,
+        type: 11,
+        parent_id: otherParentId,
+      },
+      [foreignGuildChannelId]: {
+        id: foreignGuildChannelId,
+        guild_id: '888888888888888880',
+        type: 0,
+      },
+    };
+    const get = vi.fn<(route: string) => Promise<unknown>>(async (route: string) => {
+      const messages = /^\/channels\/(\d+)\/messages\?/.exec(route);
+      if (messages) {
+        return (options.messages ?? []).map((item) => ({
+          ...(item as Record<string, unknown>),
+          channel_id: messages[1],
+        }));
+      }
+      const channel = /^\/channels\/(\d+)$/.exec(route);
+      if (channel) {
+        const record = channels[channel[1]!];
+        if (!record) throw Object.assign(new Error('Unknown Channel'), { status: 404 });
+        return record;
+      }
+      if (route.includes('/members/')) {
+        return {
+          user: { id: config.application_id },
+          roles: [],
+          permissions: options.memberPermissions ?? VIEW_AND_HISTORY,
+        };
+      }
+      if (route.startsWith('/guilds/')) {
+        return { id: config.guild_id, roles: [{ id: config.guild_id, permissions: '0' }] };
+      }
+      throw new Error(`unexpected route ${route}`);
+    });
+    return { transport: { rest: { get, post: vi.fn() }, createGateway: vi.fn() }, get };
+  }
+
+  const messageCalls = (get: ReturnType<typeof historyTransport>['get']) =>
+    get.mock.calls.filter(([route]) => route.includes('/messages?'));
+
+  it('reads an allowlisted parent channel and a public thread under it', async () => {
+    const humanMessage = {
+      id: '999999999999999999',
+      timestamp: '2026-09-24T12:00:00.000Z',
+      type: 0,
+      author: { id: '444444444444444444', username: 'richard' },
+      content: 'status update',
+    };
+    for (const channelId of [parentId, threadId]) {
+      const { transport } = historyTransport({ messages: [humanMessage] });
+      const connector = new DiscordConnector(config, transport as never);
+      const result = await connector.fetchChannelHistory({ channelId });
+      expect(result.messages.map((item) => item.text)).toEqual(['status update']);
+      expect(result.has_more).toBe(false);
+    }
+  });
+
+  it('refuses channels outside the allowlist without reading messages', async () => {
+    for (const channelId of [
+      otherParentId,
+      privateThreadId,
+      foreignThreadId,
+      foreignGuildChannelId,
+      '999999999999999995', // unknown channel
+    ]) {
+      const { transport, get } = historyTransport();
+      const connector = new DiscordConnector(config, transport as never);
+      await expect(connector.fetchChannelHistory({ channelId })).rejects.toThrow(
+        /not an allowed channel/
+      );
+      expect(messageCalls(get)).toHaveLength(0);
+    }
+  });
+
+  it('reports missing Read Message History instead of an empty channel', async () => {
+    const denied = historyTransport({ memberPermissions: '1024' });
+    await expect(
+      new DiscordConnector(config, denied.transport as never).fetchChannelHistory({
+        channelId: parentId,
+      })
+    ).rejects.toThrow(/lacks View Channel or Read Message History/);
+    expect(messageCalls(denied.get)).toHaveLength(0);
+
+    const empty = historyTransport({ messages: [] });
+    await expect(
+      new DiscordConnector(config, empty.transport as never).fetchChannelHistory({
+        channelId: parentId,
+      })
+    ).resolves.toMatchObject({ messages: [], has_more: false, next_cursor: null });
+  });
+
+  it('keeps provider failures during the access check content-free', async () => {
+    const { transport, get } = historyTransport();
+    get.mockRejectedValueOnce(
+      Object.assign(new Error(`Unauthorized Bot ${config.bot_token}`), { status: 401 })
+    );
+    const failure = await new DiscordConnector(config, transport as never)
+      .fetchChannelHistory({ channelId: parentId })
+      .catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('provider_auth_failed');
+    expect((failure as Error).message).not.toContain(config.bot_token);
+  });
+
+  it('resolves the allowlisted parent channel behind a session thread key', async () => {
+    const { transport } = historyTransport();
+    const connector = new DiscordConnector(config, transport as never);
+    await expect(connector.resolveHistoryParentChannel(threadId)).resolves.toBe(parentId);
+    await expect(
+      connector.resolveHistoryParentChannel(`discord:thread:${parentId}:${threadId}`)
+    ).resolves.toBe(parentId);
+    await expect(
+      connector.resolveHistoryParentChannel(`discord:message:${parentId}:${threadId}`)
+    ).resolves.toBe(parentId);
+    await expect(connector.resolveHistoryParentChannel(foreignThreadId)).rejects.toThrow(
+      /pass discordChannelId/
     );
   });
 });
