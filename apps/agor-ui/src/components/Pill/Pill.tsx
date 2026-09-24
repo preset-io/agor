@@ -26,7 +26,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -236,7 +236,8 @@ const ContextWindowPopoverContent: React.FC<{
   limit: number;
   percentage: number;
   taskMetadata?: ContextWindowPillProps['taskMetadata'];
-}> = ({ used, limit, percentage, taskMetadata }) => {
+  onEscape: () => void;
+}> = ({ used, limit, percentage, taskMetadata, onEscape }) => {
   const { token } = theme.useToken();
 
   // Build collapsible items for advanced sections
@@ -344,7 +345,14 @@ const ContextWindowPopoverContent: React.FC<{
   }
 
   return (
-    <div style={{ width: 400, maxWidth: '90vw' }}>
+    <div
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.stopPropagation();
+        onEscape();
+      }}
+      style={{ width: 400, maxWidth: '90vw' }}
+    >
       {/* Primary info - always visible */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: '1.05em', marginBottom: 8 }}>
@@ -428,6 +436,12 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   style,
 }) => {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Restore focus only for keyboard dismissal, never for hover or outside clicks.
+  const closeWithKeyboard = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
   // authoritative (agent-reported), and its `percentage` matches the agent's
   // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
@@ -463,6 +477,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
           limit={effectiveLimit}
           percentage={percentage}
           taskMetadata={taskMetadata}
+          onEscape={closeWithKeyboard}
         />
       }
       title={null}
@@ -473,13 +488,14 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
       mouseEnterDelay={0.3}
     >
       <button
+        ref={triggerRef}
         type="button"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
-            setOpen(false);
+            closeWithKeyboard();
           }
         }}
         style={{
