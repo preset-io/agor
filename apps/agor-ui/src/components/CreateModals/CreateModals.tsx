@@ -33,6 +33,8 @@ export interface CreateModalsProps {
     progress?: TeammateProgress
   ) => void | Promise<void>;
   branchStorageConfig?: BranchStorageConfig;
+  /** Render the modals edge-to-edge (mobile). */
+  fullScreen?: boolean;
 }
 
 /**
@@ -54,6 +56,7 @@ export const CreateModals: React.FC<CreateModalsProps> = ({
   onCreateLocalRepo,
   onCreateTeammate,
   branchStorageConfig,
+  fullScreen,
 }) => (
   <>
     <CreateTeammateModal
@@ -64,6 +67,7 @@ export const CreateModals: React.FC<CreateModalsProps> = ({
       client={client}
       onCreateRepo={onCreateRepo}
       onCreateTeammate={onCreateTeammate}
+      fullScreen={fullScreen}
     />
     <CreateBranchModal
       open={active === 'branch'}
@@ -72,13 +76,20 @@ export const CreateModals: React.FC<CreateModalsProps> = ({
       defaultPosition={defaultPosition}
       onCreateBranch={onCreateBranch}
       branchStorageConfig={branchStorageConfig}
+      fullScreen={fullScreen}
     />
-    <CreateBoardModal open={active === 'board'} onClose={onClose} onCreateBoard={onCreateBoard} />
+    <CreateBoardModal
+      open={active === 'board'}
+      onClose={onClose}
+      onCreateBoard={onCreateBoard}
+      fullScreen={fullScreen}
+    />
     <CreateRepoModal
       open={active === 'repository'}
       onClose={onClose}
       onCreateRepo={onCreateRepo}
       onCreateLocalRepo={onCreateLocalRepo}
+      fullScreen={fullScreen}
     />
   </>
 );

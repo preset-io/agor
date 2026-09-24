@@ -10,6 +10,8 @@ const PURPOSE =
 export interface CreateRepoModalProps {
   open: boolean;
   onClose: () => void;
+  /** Render edge-to-edge (mobile). */
+  fullScreen?: boolean;
   onCreateRepo: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
 }
@@ -18,6 +20,7 @@ export interface CreateRepoModalProps {
 export const CreateRepoModal: React.FC<CreateRepoModalProps> = ({
   open,
   onClose,
+  fullScreen,
   onCreateRepo,
   onCreateLocalRepo,
 }) => {
@@ -65,6 +68,7 @@ export const CreateRepoModal: React.FC<CreateRepoModalProps> = ({
       submitDisabled={!isValid}
       isSubmitting={isSubmitting}
       submitError={submitError}
+      fullScreen={fullScreen}
     >
       <RepoTab onValidityChange={setIsValid} formRef={formRef} />
     </CreateModalShell>

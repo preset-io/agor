@@ -9,6 +9,8 @@ const PURPOSE =
 export interface CreateBoardModalProps {
   open: boolean;
   onClose: () => void;
+  /** Render edge-to-edge (mobile). */
+  fullScreen?: boolean;
   onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
 }
 
@@ -16,6 +18,7 @@ export interface CreateBoardModalProps {
 export const CreateBoardModal: React.FC<CreateBoardModalProps> = ({
   open,
   onClose,
+  fullScreen,
   onCreateBoard,
 }) => {
   const [isValid, setIsValid] = useState(false);
@@ -58,6 +61,7 @@ export const CreateBoardModal: React.FC<CreateBoardModalProps> = ({
       submitDisabled={!isValid}
       isSubmitting={isSubmitting}
       submitError={submitError}
+      fullScreen={fullScreen}
     >
       <BoardTab onValidityChange={setIsValid} formRef={formRef} />
     </CreateModalShell>

@@ -1,4 +1,12 @@
+import type { ModalProps } from 'antd';
 import { Alert, Button, Modal } from 'antd';
+
+// Full-screen (mobile) surface: edge-to-edge content with a scrollable body
+// that clears the device safe area.
+const FULLSCREEN_STYLES: ModalProps['styles'] = {
+  container: { height: '100dvh', borderRadius: 0, display: 'flex', flexDirection: 'column' },
+  body: { flex: 1, overflow: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' },
+};
 
 export interface CreateModalShellProps {
   open: boolean;
@@ -14,6 +22,8 @@ export interface CreateModalShellProps {
   submitStatus?: string | null;
   submitError?: string | null;
   width?: number;
+  /** Render edge-to-edge (mobile): full viewport width/height, no rounded corners. */
+  fullScreen?: boolean;
   children: React.ReactNode;
 }
 
@@ -35,6 +45,7 @@ export const CreateModalShell: React.FC<CreateModalShellProps> = ({
   submitStatus,
   submitError,
   width = 640,
+  fullScreen = false,
   children,
 }) => (
   <Modal
@@ -44,7 +55,9 @@ export const CreateModalShell: React.FC<CreateModalShellProps> = ({
       if (!isSubmitting) onCancel();
     }}
     destroyOnHidden
-    width={width}
+    width={fullScreen ? '100vw' : width}
+    style={fullScreen ? { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 } : undefined}
+    styles={fullScreen ? FULLSCREEN_STYLES : undefined}
     closable={!isSubmitting}
     maskClosable={false}
     keyboard={!isSubmitting}

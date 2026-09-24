@@ -20,6 +20,8 @@ const PURPOSE = (
 export interface CreateBranchModalProps {
   open: boolean;
   onClose: () => void;
+  /** Render edge-to-edge (mobile). */
+  fullScreen?: boolean;
   currentBoardId?: string;
   defaultPosition?: { x: number; y: number };
   onCreateBranch: (config: BranchTabConfig) => void | Promise<void>;
@@ -30,6 +32,7 @@ export interface CreateBranchModalProps {
 export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({
   open,
   onClose,
+  fullScreen,
   currentBoardId,
   defaultPosition,
   onCreateBranch,
@@ -77,6 +80,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({
       submitDisabled={!isValid}
       isSubmitting={isSubmitting}
       submitError={submitError}
+      fullScreen={fullScreen}
     >
       <BranchTab
         repoById={repoById}

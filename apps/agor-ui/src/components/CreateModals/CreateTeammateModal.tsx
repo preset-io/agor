@@ -17,6 +17,8 @@ export interface TeammateProgress {
 export interface CreateTeammateModalProps {
   open: boolean;
   onClose: () => void;
+  /** Render edge-to-edge (mobile). */
+  fullScreen?: boolean;
   availableAgents: AgenticToolOption[];
   currentUser?: User | null;
   client?: AgorClient | null;
@@ -31,6 +33,7 @@ export interface CreateTeammateModalProps {
 export const CreateTeammateModal: React.FC<CreateTeammateModalProps> = ({
   open,
   onClose,
+  fullScreen,
   availableAgents,
   currentUser,
   client,
@@ -86,6 +89,7 @@ export const CreateTeammateModal: React.FC<CreateTeammateModalProps> = ({
       isSubmitting={isSubmitting}
       submitStatus={submitStatus}
       submitError={submitError}
+      fullScreen={fullScreen}
       width={720}
     >
       <TeammateTab
