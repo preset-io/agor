@@ -310,8 +310,13 @@ replacement while a previous Job is unreachable.
 
 - **Stop**: the admitted holder must drain provider and live-file I/O, close its
   read pin/write state, and only then report holder-qualified quiescence. No
-  generic acknowledgement is valid for unadmitted duplicates or a stuck
-  cleanup child. Emergency exit leaves pins open for exact Cloud observation.
+  generic acknowledgement is valid for a duplicate once any attempt exists or
+  for a stuck cleanup child. A narrow pre-admission exception permits terminal
+  settlement only after the Session→Task lock proves no attempt row exists and
+  no provider or native-state I/O was started; an in-flight `begin` then cannot
+  admit against the terminal/STOPPING Task. This is not holder authority and
+  never releases an existing pin. Emergency exit leaves pins open for exact
+  Cloud observation.
   Templated containment stays "remote executor quiescence"; the OpenCode
   descriptor's `unverifiedTerminationReason` continues to mark substrate
   termination as unverified. Task terminality/force-fail is not process/I/O

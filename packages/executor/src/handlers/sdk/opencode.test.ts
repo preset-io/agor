@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   runTurn: vi.fn(),
   createUserMessage: vi.fn(),
   messagesCreate: vi.fn(),
+  messageFindById: vi.fn(),
   messagesPatch: vi.fn(),
   taskMessagesFind: vi.fn(),
   nextMessageIndex: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock('../../db/feathers-repositories.js', () => ({
     messages: {
       findInitialUserMessagesByTaskId: mocks.taskMessagesFind,
       getNextIndexBySessionId: mocks.nextMessageIndex,
+      findById: mocks.messageFindById,
     },
     messagesService: { create: mocks.messagesCreate, patch: mocks.messagesPatch },
     sessionMCP: {},
@@ -133,7 +135,7 @@ function client(sessionOverrides: Record<string, unknown> = {}) {
     },
     tasks: {
       get: vi.fn(async () => ({ status: 'running', native_state_attempt: null })),
-      patch: vi.fn(async () => ({})),
+      patch: vi.fn(async (_id: string, data: Record<string, unknown>) => data),
     },
     messages: {
       find: vi.fn(async () => ({ total: 0, limit: 1, skip: 0, data: [] })),
@@ -217,7 +219,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.branchFind.mockResolvedValue({ path: '/worktree' });
   mocks.taskMessagesFind.mockResolvedValue([]);
-  mocks.nextMessageIndex.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+  mocks.nextMessageIndex.mockResolvedValueOnce(0).mockResolvedValue(1);
   mocks.runTurn.mockResolvedValue({
     finalMessage: {
       content: 'done',
@@ -539,7 +541,9 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
       nativeStateAttempt: published,
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
-    state.services.tasks.patch.mockRejectedValueOnce({ code: 503 }).mockResolvedValueOnce({});
+    state.services.tasks.patch
+      .mockRejectedValueOnce({ code: 503 })
+      .mockResolvedValueOnce({ status: 'completed', native_state_attempt: published });
     await execute(state.value, new AbortController(), managedContext, managedAdmission);
     expect(state.services.tasks.patch).toHaveBeenCalledTimes(2);
     expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
@@ -558,6 +562,84 @@ describe('OpenCode executor adapter (hosted managed projection)', () => {
     expect(accepted.services.tasks.patch).toHaveBeenCalledOnce();
     expect(accepted.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
   });
+
+  it('retries a message write after sealing without failing or abandoning the checkpoint', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    mocks.messagesCreate.mockRejectedValueOnce({ code: 503 }).mockResolvedValueOnce({});
+
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+
+    expect(mocks.messagesCreate).toHaveBeenCalledTimes(2);
+    expect(state.services.tasks.patch).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch.mock.calls[0]?.[1]).toMatchObject({ status: 'completed' });
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  });
+
+  it('recognizes a response-lost committed message by its fixed ID', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    let committedMessage: Record<string, unknown> | undefined;
+    mocks.messageFindById
+      .mockResolvedValueOnce(null)
+      .mockImplementation(async () => committedMessage);
+    mocks.messagesCreate.mockImplementationOnce(async (message) => {
+      committedMessage = message;
+      throw { code: 503 };
+    });
+
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+
+    expect(mocks.messagesCreate).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).toHaveBeenCalledOnce();
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  });
+
+  it('keeps the turn alive beyond the old seal retry cap until exact replay succeeds', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services['opencode-native-state'].seal
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 });
+
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+
+    expect(state.services['opencode-native-state'].seal).toHaveBeenCalledTimes(5);
+    expect(state.services.tasks.patch).toHaveBeenCalledOnce();
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it('keeps retrying completion beyond the old cap without failing a sealed output', async () => {
+    const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });
+    mocks.runTurn.mockResolvedValueOnce({
+      nativeStateAttempt: { ...acceptedAttempt, attemptTaskId: taskId },
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    state.services.tasks.patch
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 })
+      .mockRejectedValueOnce({ code: 503 });
+
+    await execute(state.value, new AbortController(), managedContext, managedAdmission);
+
+    expect(state.services.tasks.patch).toHaveBeenCalledTimes(5);
+    expect(
+      state.services.tasks.patch.mock.calls.every(([, patch]) => patch.status === 'completed')
+    ).toBe(true);
+    expect(state.services['opencode-native-state'].abandon).not.toHaveBeenCalled();
+  }, 10_000);
 
   it('drains two cleanup reservations before a short healthy managed turn completes', async () => {
     const state = client({ model_config: { mode: 'exact', provider: 'anthropic', model: 'm' } });

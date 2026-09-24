@@ -94,7 +94,7 @@ function managedStateService(client: AgorClient): ManagedOpenCodeStateService {
   ) as unknown as ManagedOpenCodeStateService;
 }
 
-const MANAGED_WRITE_RETRY_DELAYS_MS = [200, 500, 1_000] as const;
+const MANAGED_WRITE_RETRY_DELAYS_MS = [200, 500, 1_000, 2_000, 5_000] as const;
 
 function samePublishedAttempt(left: unknown, right: ManagedNativeManifest): boolean {
   if (!left || typeof left !== 'object') return false;
@@ -111,8 +111,22 @@ function samePublishedAttempt(left: unknown, right: ManagedNativeManifest): bool
   );
 }
 
-async function waitForManagedWriteRetry(attempt: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, MANAGED_WRITE_RETRY_DELAYS_MS[attempt]));
+async function waitForManagedWriteRetry(attempt: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(
+      () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      MANAGED_WRITE_RETRY_DELAYS_MS[Math.min(attempt, MANAGED_WRITE_RETRY_DELAYS_MS.length - 1)]
+    );
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export async function executeOpenCodeTask(params: {
@@ -147,7 +161,7 @@ export async function executeOpenCodeTask(params: {
   let inputReadClosed = !committedGrant?.input;
   let managedIoSettled = false;
   let sealAmbiguous = false;
-  let completionAmbiguous = false;
+  let publicationSealed = false;
   let cleanupOperation: OpenCodeCleanupOperation | undefined;
   const stopCleanupOnAbort = () => cleanupOperation?.stopScheduling();
 
@@ -431,6 +445,7 @@ export async function executeOpenCodeTask(params: {
     }
     if (managed && committedGrant && publishedManifest) {
       for (let attempt = 0; ; attempt += 1) {
+        if (params.abortController.signal.aborted) return;
         try {
           await managedStateService(client).seal({
             task_id: taskId,
@@ -438,35 +453,39 @@ export async function executeOpenCodeTask(params: {
             manifest: publishedManifest,
           });
           break;
-        } catch (error) {
-          if (!isRetryableTransportFailure(error)) throw error;
+        } catch (_error) {
+          // Any lost response may conceal a committed seal, including a 500
+          // after the DB write. Keep the heartbeat alive until exact replay
+          // confirms it or Stop takes over; never fail/retire this output.
           sealAmbiguous = true;
-          if (attempt >= MANAGED_WRITE_RETRY_DELAYS_MS.length) throw error;
-          await waitForManagedWriteRetry(attempt);
+          if (attempt === 0 || attempt % 12 === 0)
+            console.warn('[opencode] event=managed_seal_retry_pending');
+          await waitForManagedWriteRetry(attempt, params.abortController.signal);
         }
       }
       managedIoSettled = true;
       sealAmbiguous = false;
+      publicationSealed = true;
       // A short healthy turn still gives cleanup its bounded per-launch budget.
       // Do not leave a committed delete worker behind task completion.
-      await cleanupOperation?.finishWithin(2_000);
+      await cleanupOperation?.finishWithin(2_000).catch(() => {
+        console.warn('[opencode] event=managed_cleanup_deferred_after_seal');
+      });
       if (params.abortController.signal.aborted) return;
     }
 
-    const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
-    await repos.messagesService.create({
+    const finalMessage = {
       message_id: assistantMessageId,
       session_id: sessionId,
       task_id: taskId,
       type: 'assistant' as const,
       role: MessageRole.ASSISTANT,
-      index: finalIndex,
       timestamp: new Date().toISOString(),
       content_preview: result.finalMessage.content.substring(0, 200),
       content: result.finalMessage.contentBlocks,
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
-    });
+    };
     const completionPatch = {
       status: 'completed',
       completed_at: new Date().toISOString(),
@@ -478,8 +497,28 @@ export async function executeOpenCodeTask(params: {
         ? { native_state_holder_instance_id: committedGrant.attempt.holder_instance_id }
         : {}),
     } as Partial<import('@agor/core/types').Task>;
+    let messageCommitted = false;
     for (let attempt = 0; ; attempt += 1) {
+      if (params.abortController.signal.aborted) return;
       try {
+        if (!messageCommitted) {
+          const existing = managed ? await repos.messages.findById(assistantMessageId) : null;
+          if (existing) {
+            if (
+              existing.session_id !== sessionId ||
+              existing.task_id !== taskId ||
+              existing.type !== 'assistant' ||
+              existing.role !== MessageRole.ASSISTANT ||
+              JSON.stringify(existing.content) !== JSON.stringify(finalMessage.content)
+            )
+              throw new Error('Managed OpenCode message ID does not match this turn');
+            messageCommitted = true;
+          } else {
+            const finalIndex = await repos.messages.getNextIndexBySessionId(sessionId);
+            await repos.messagesService.create({ ...finalMessage, index: finalIndex });
+            messageCommitted = true;
+          }
+        }
         const committed = await client.service('tasks').patch(taskId, completionPatch);
         if (
           managed &&
@@ -489,21 +528,34 @@ export async function executeOpenCodeTask(params: {
         ) {
           throw new Error('Managed OpenCode completion pointer does not match the sealed output');
         }
+        if (managed && publishedManifest && committed.status === 'stopping') {
+          params.abortController.abort();
+          return;
+        }
+        if (managed && publishedManifest && committed.status !== 'completed') {
+          throw new Error('Managed OpenCode completion has not committed');
+        }
         break;
       } catch (error) {
-        if (!managed || !publishedManifest || !isRetryableTransportFailure(error)) throw error;
-        completionAmbiguous = true;
-        const current = await client
-          .service('tasks')
-          .get(taskId)
-          .catch(() => null);
-        if (
-          current?.status === 'completed' &&
-          samePublishedAttempt(current.native_state_attempt, publishedManifest)
-        )
-          break;
-        if (attempt >= MANAGED_WRITE_RETRY_DELAYS_MS.length) throw error;
-        await waitForManagedWriteRetry(attempt);
+        if (!publicationSealed || !managed || !publishedManifest) throw error;
+        // A message or completion may have committed before its response was
+        // lost. Re-read by the fixed message ID and retry the holder-qualified
+        // completion while this executor's heartbeat remains alive. A revoked
+        // token after committed completion is harmless; never mark FAILED.
+        if (isRetryableTransportFailure(error)) {
+          const current = await client
+            .service('tasks')
+            .get(taskId)
+            .catch(() => null);
+          if (
+            current?.status === 'completed' &&
+            samePublishedAttempt(current.native_state_attempt, publishedManifest)
+          )
+            break;
+        }
+        if (attempt === 0 || attempt % 12 === 0)
+          console.warn('[opencode] event=managed_publication_retry_pending');
+        await waitForManagedWriteRetry(attempt, params.abortController.signal);
       }
     }
   } catch (error) {
@@ -540,7 +592,7 @@ export async function executeOpenCodeTask(params: {
       if (params.abortController.signal.aborted) await cleanupOperation?.stopAndDrain();
       return;
     }
-    if (sealAmbiguous || completionAmbiguous) {
+    if (sealAmbiguous || publicationSealed) {
       // An accepted write can have lost only its response. Never abandon or
       // terminalize a possibly sealed object from an ambiguous transport fact.
       console.warn('[opencode] event=managed_publication_unverified');

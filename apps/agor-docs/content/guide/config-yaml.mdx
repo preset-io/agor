@@ -149,7 +149,11 @@ native conversation state is checkpointed to the user's persistent executor home
 after every completed turn. It is admitted only when `multi_tenancy.mode` is
 `required_from_auth`, `execution.unix_user_mode` is `delegated`, an
 `executor_command_template` is set, and `executor_storage.user_home` is
-`persistent-per-user`; otherwise OpenCode stays unsupported with a specific reason.
+`persistent-per-user`, and a trusted
+`execution.opencode_native_state_observer.command_template` is configured;
+otherwise OpenCode stays unsupported with a specific reason. The observer
+command must resolve the exact Cloud Job/Pod/container identity and must not
+be supplied by an executor payload.
 The execution substrate must also pin `AGOR_OPENCODE_SCRATCH_ROOT` to an absolute
 Job-local storage path; without it, executor startup fails closed even when the
 daemon-side prerequisites pass.

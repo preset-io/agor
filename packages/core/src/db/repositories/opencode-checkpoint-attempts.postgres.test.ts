@@ -7,6 +7,7 @@ import { createDatabase, type Database } from '../client';
 import { isPostgresDatabase, select, update } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { opencodeCheckpointAttempts, sessions, tasks as taskRows } from '../schema';
+import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchRepository } from './branches';
 import { OpenCodeCheckpointAttemptRepository } from './opencode-checkpoint-attempts';
 import { RepoRepository } from './repos';
@@ -41,14 +42,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ]);
     });
 
-    async function createManagedSession() {
+    async function createManagedSession(db: Database = dbA) {
       const ownerId = generateId() as UUID;
-      await new UsersRepository(dbA).create({
+      await new UsersRepository(db).create({
         user_id: ownerId,
         email: `opencode-attempt-${ownerId}@example.invalid`,
         role: 'member',
       });
-      const repo = await new RepoRepository(dbA).create({
+      const repo = await new RepoRepository(db).create({
         repo_id: generateId(),
         slug: `opencode-attempt-${generateId()}`,
         name: 'OpenCode race',
@@ -57,7 +58,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         local_path: '/tmp/opencode-race',
         default_branch: 'main',
       });
-      const branch = await new BranchRepository(dbA).create({
+      const branch = await new BranchRepository(db).create({
         branch_id: generateId(),
         repo_id: repo.repo_id,
         name: 'opencode-race',
@@ -66,7 +67,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         path: `/tmp/opencode-race/${generateId()}`,
         created_by: ownerId,
       });
-      const session = await new SessionRepository(dbA).create({
+      const session = await new SessionRepository(db).create({
         session_id: generateId(),
         branch_id: branch.branch_id,
         agentic_tool: 'opencode',
@@ -97,11 +98,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       taskId: string,
       ownerId: string,
       storeId: string,
-      holderId: string
+      holderId: string,
+      tenant = 'default'
     ) {
       return {
         protocol: 3 as const,
-        tenantId: 'default',
+        tenantId: tenant,
         ownerUserId: ownerId,
         sessionId,
         taskId,
@@ -110,7 +112,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         locator: {
           runId: generateId(),
           cellId: generateId(),
-          tenantId: 'default',
+          tenantId: tenant,
           ownerRuntimeUserId: ownerId,
           sessionId,
           taskId,
@@ -218,6 +220,77 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           holder_instance_id: holderId,
         })
       ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
+    });
+
+    it('keeps a tenant-owned ledger invisible and unmodifiable from another PostgreSQL tenant', async () => {
+      const tenantA = `checkpoint-a-${generateId()}`;
+      const tenantB = `checkpoint-b-${generateId()}`;
+      const foreign = await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
+        const { ownerId, sessionId } = await createManagedSession(scoped);
+        const task = await createManagedTask(sessionId, ownerId, scoped);
+        const storeId = generateId();
+        const holderId = generateId();
+        const ledger = new OpenCodeCheckpointAttemptRepository(scoped);
+        const admitted = await ledger.begin({
+          taskId: task.task_id,
+          holderInstanceId: holderId,
+          storeId,
+          binding: binding(sessionId, task.task_id, ownerId, storeId, holderId, tenantA),
+        });
+        expect(admitted.outcome).toBe('admitted');
+        return { ownerId, sessionId, taskId: task.task_id, storeId, holderId };
+      });
+
+      await runWithTenantDatabaseScope(dbB, tenantB, async (scoped) => {
+        const ledger = new OpenCodeCheckpointAttemptRepository(scoped);
+        expect(
+          await select(scoped)
+            .from(opencodeCheckpointAttempts)
+            .where(eq(opencodeCheckpointAttempts.task_id, foreign.taskId))
+            .all()
+        ).toEqual([]);
+        expect(await new TaskRepository(scoped).findById(foreign.taskId)).toBeNull();
+        await expect(
+          ledger.begin({
+            taskId: foreign.taskId,
+            holderInstanceId: foreign.holderId,
+            storeId: foreign.storeId,
+            binding: binding(
+              foreign.sessionId,
+              foreign.taskId,
+              foreign.ownerId,
+              foreign.storeId,
+              foreign.holderId,
+              tenantB
+            ),
+          })
+        ).rejects.toThrow();
+        await expect(
+          ledger.closeRead(foreign.taskId, foreign.holderId, {
+            storeId: foreign.storeId,
+            taskId: foreign.taskId,
+          })
+        ).rejects.toThrow();
+        await expect(ledger.abandon(foreign.taskId, foreign.holderId)).rejects.toThrow();
+        await expect(ledger.prepareCleanup(foreign.taskId, foreign.holderId)).rejects.toThrow();
+        await expect(
+          ledger.acknowledgeDelete(
+            foreign.taskId,
+            foreign.holderId,
+            { storeId: foreign.storeId, taskId: foreign.taskId },
+            { outcome: 'deleted' }
+          )
+        ).rejects.toThrow();
+      });
+
+      await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
+        expect(
+          await select(scoped)
+            .from(opencodeCheckpointAttempts)
+            .where(eq(opencodeCheckpointAttempts.task_id, foreign.taskId))
+            .all()
+        ).toHaveLength(1);
+      });
     });
 
     it('rejects a completed checkpoint whose Session pointer was removed by an older writer', async () => {
