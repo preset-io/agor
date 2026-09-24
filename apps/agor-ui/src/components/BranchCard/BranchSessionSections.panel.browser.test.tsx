@@ -230,12 +230,16 @@ it('nests rows one level inside their section with one chevron style', () => {
   expect(header.width).toBeCloseTo(tree.width, 1);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
   // Sections are containers: a guide runs under the section chevron and top-level rows'
-  // chevron column starts right at it, so the section indent doesn't stack with it.
+  // chevron column starts one size unit past it, so the section indent doesn't stack with it.
   const body = treeChevron.closest('.ant-collapse-body')!;
   const guideX = body.getBoundingClientRect().left;
   expect(guideX).toBeCloseTo(header.left + header.width / 2, 0);
   const rootSwitcher = treeChevron.closest('.ant-tree-switcher')!.getBoundingClientRect();
-  expect(rootSwitcher.left - guideX).toBeLessThanOrEqual(1);
+  // One size unit (plus the guide's own line) keeps the section guide and the
+  // first level guide from crowding each other.
+  const offset = rootSwitcher.left - guideX - theme.getDesignToken(config).sizeUnit;
+  expect(offset).toBeGreaterThanOrEqual(0);
+  expect(offset).toBeLessThanOrEqual(1);
   expect(tree.left + tree.width / 2 - rootSwitcher.left).toBeCloseTo(step / 2, 0);
   // The chevron target spans the compact column plus the row's empty lead-in, and its
   // whole area toggles: the overhang sits above the row and inside the tree viewport.
