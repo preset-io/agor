@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  decodeEnvironmentLifecycleResult,
   isAllowedDynamicEnvironmentHealthUrl,
   validateEnvironmentLifecycleResult,
 } from './lifecycle-result';
@@ -29,6 +30,26 @@ describe('validateEnvironmentLifecycleResult', () => {
     { app: 'https://example.test', token: 'secret' },
   ])('rejects an invalid or over-broad result: %o', (value) => {
     expect(() => validateEnvironmentLifecycleResult(value)).toThrow();
+  });
+});
+
+describe('decodeEnvironmentLifecycleResult', () => {
+  it('normalizes the exact legacy access_urls result-file shape', () => {
+    expect(
+      decodeEnvironmentLifecycleResult({
+        access_urls: [
+          { name: 'Metrics', url: 'https://metrics.example.test' },
+          { name: 'App', url: 'https://app.example.test' },
+        ],
+      })
+    ).toEqual({ app: 'https://app.example.test/' });
+  });
+
+  it('rejects mixed or extended legacy records', () => {
+    expect(() =>
+      decodeEnvironmentLifecycleResult({ access_urls: [], health: 'https://example.test/health' })
+    ).toThrow();
+    expect(() => decodeEnvironmentLifecycleResult({ access_urls: [], token: 'secret' })).toThrow();
   });
 });
 

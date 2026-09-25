@@ -5,7 +5,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { environmentAccessUrlsSchema } from '@agor/core/environment/access-urls';
+import { decodeEnvironmentLifecycleResult } from '@agor/core/environment/lifecycle-result';
 import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
@@ -47,7 +47,9 @@ const reportSchema = z.discriminatedUnion('kind', [
       output: output.optional(),
       truncated: z.boolean().optional(),
       message: z.string().max(1024),
-      access_urls: environmentAccessUrlsSchema.optional(),
+      lifecycle_result: z.unknown().optional(),
+      /** Upgrade-only shape emitted by executors using the former result file. */
+      access_urls: z.unknown().optional(),
     })
     .strict(),
 ]);
@@ -62,7 +64,30 @@ export class EnvironmentCommandReportsService {
   async create(data: unknown, params?: AuthenticatedParams) {
     const parsed = reportSchema.safeParse(data);
     if (!parsed.success) throw new BadRequest('Invalid or oversized environment command report');
-    const report = parsed.data as EnvironmentCommandReport;
+    const rawReport = parsed.data as EnvironmentCommandReport & { access_urls?: unknown };
+    let report: EnvironmentCommandReport = rawReport;
+    if (
+      rawReport.kind === 'result' &&
+      (rawReport.lifecycle_result !== undefined || rawReport.access_urls !== undefined)
+    ) {
+      if (
+        rawReport.action !== 'start' ||
+        (rawReport.lifecycle_result !== undefined && rawReport.access_urls !== undefined)
+      ) {
+        throw new BadRequest('Invalid or oversized environment command report');
+      }
+      try {
+        const { access_urls: legacyAccessUrls, ...canonical } = rawReport;
+        report = {
+          ...canonical,
+          lifecycle_result: decodeEnvironmentLifecycleResult(
+            rawReport.lifecycle_result ?? { access_urls: legacyAccessUrls }
+          ),
+        };
+      } catch {
+        throw new BadRequest('Invalid or oversized environment command report');
+      }
+    }
     if (
       !params?.provider ||
       !matchesExecutorCommandRuntimeScope(

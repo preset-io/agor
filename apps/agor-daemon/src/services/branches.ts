@@ -132,7 +132,6 @@ import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-ho
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
-import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams, SessionsService } from './sessions';
@@ -213,53 +212,8 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
   return true;
 }
 
-type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
-
-interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
-  command: 'environment.lifecycle';
-  sessionToken: string;
-  daemonUrl: string;
-  env: Record<string, string>;
-  params: {
-    branchId: BranchID;
-    branchPath: string;
-    cwd: string;
-    principalBranchAccess: Exclude<BranchFsAccessLevel, 'none'>;
-    action: EnvironmentLifecycleAction;
-    startCommand?: string;
-    stopCommand?: string;
-    nukeCommand?: string;
-    appUrl?: string;
-    healthCheckUrl?: string;
-    lifecycleAttemptId?: string;
-  };
-}
-
 type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
 const MAX_ENVIRONMENT_RESULT_BYTES = 8 * 1024;
-
-function isCurrentStartAttempt(branch: Branch, attemptId: string): boolean {
-  const status = branch.environment_instance?.status;
-  return (
-    branch.environment_instance?.process?.attempt_id === attemptId &&
-    (status === 'starting' || status === 'running')
-  );
-}
-
-function startCompletionWithoutContinuousHealth(
-  healthCheckUrl: string | undefined,
-  timestamp: string
-): Pick<EnvironmentInstance, 'status' | 'last_health_check'> | Record<string, never> {
-  if (healthCheckUrl) return {};
-  return {
-    status: 'running',
-    last_health_check: {
-      timestamp,
-      status: 'unknown',
-      message: 'Start command completed; health is unavailable',
-    },
-  };
-}
 
 function parseStartWebhookResult(options: {
   body: string;
@@ -396,11 +350,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
   }
 
-  private async runAsyncEnvironmentAction(
+  private async runReportedEnvironmentAction(
     branch: Branch,
     action: EnvironmentCommandAction,
     params?: BranchParams,
-    confirmationOf?: string
+    confirmationOf?: string,
+    options?: { awaitResult?: boolean }
   ): Promise<BranchWithZoneAndSessions> {
     const config = this.app.get('config');
     assertAsyncEnvironmentCommandConfig(config);
@@ -467,13 +422,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             triggeredBy: this.extractTriggeredBy(params),
             maxBytes: ENVIRONMENT_COMMAND_BUDGET.outputBytes,
           });
+          const lifecycleResult = action === 'start' ? parseStartWebhookResult(result) : undefined;
           await this.withTenantDatabase(params, () =>
             new EnvironmentCommandRepository(this.db).report({
               ...scope,
               kind: 'result',
               outcome: 'succeeded',
               message: `${action} webhook succeeded; remote resource cleanup/readiness is not certified`,
-              output: result.body,
+              ...(lifecycleResult ? { lifecycle_result: lifecycleResult } : {}),
+              ...(!lifecycleResult && result.body ? { output: result.body } : {}),
               truncated: result.truncated,
             })
           );
@@ -488,43 +445,57 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
         }
       } else {
-        await dispatchEnvironmentCommand(
-          {
-            command: 'environment.lifecycle',
-            sessionToken,
-            daemonUrl: getDaemonUrl(),
-            env: context!.env,
-            params: {
-              branchId: branch.branch_id,
-              branchPath: branch.path,
-              cwd: branch.path,
-              principalBranchAccess: context!.branchFsAccess,
-              ...context!.sandboxMounts,
-              action,
-              startCommand: action === 'start' ? command : undefined,
-              stopCommand: action === 'stop' ? command : undefined,
-              nukeCommand: action === 'nuke' ? command : undefined,
-              appUrl: branch.app_url,
-              attempt: {
-                id: attemptId,
-                claimDeadline: environment.command_attempt!.claim_deadline,
-                commandDeadline: environment.command_attempt!.command_deadline,
-                resultDeadline: environment.command_attempt!.result_deadline,
-                externalJobDeadlineMs: config.execution!.environment_command_job_deadline_ms,
-              },
+        const payload = {
+          command: 'environment.lifecycle' as const,
+          sessionToken: sessionToken!,
+          daemonUrl: getDaemonUrl(),
+          env: context!.env,
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            cwd: branch.path,
+            principalBranchAccess: context!.branchFsAccess,
+            ...context!.sandboxMounts,
+            action,
+            startCommand: action === 'start' ? command : undefined,
+            stopCommand: action === 'stop' ? command : undefined,
+            nukeCommand: action === 'nuke' ? command : undefined,
+            appUrl: branch.app_url,
+            attempt: {
+              id: attemptId,
+              claimDeadline: environment.command_attempt!.claim_deadline,
+              commandDeadline: environment.command_attempt!.command_deadline,
+              resultDeadline: environment.command_attempt!.result_deadline,
+              externalJobDeadlineMs:
+                config.execution!.environment_command_job_deadline_ms ??
+                ENVIRONMENT_COMMAND_BUDGET.commandMs + ENVIRONMENT_COMMAND_BUDGET.cleanupMs,
             },
           },
-          {
-            delegatedHomeKey: context!.delegatedHomeKey,
-            preparedEnv: context!.env,
-            logPrefix: `[Environment.${action} ${branch.branch_id}]`,
-            templateVariables: {
-              branch_id: branch.branch_id,
-              user_id: userId,
-              branch_fs_access: context!.branchFsAccess,
-            },
-          }
-        );
+        };
+        const executorOptions = {
+          delegatedHomeKey: context!.delegatedHomeKey,
+          preparedEnv: context!.env,
+          logPrefix: `[Environment.${action} ${branch.branch_id}]`,
+          templateVariables: {
+            branch_id: branch.branch_id,
+            user_id: userId,
+            branch_fs_access: context!.branchFsAccess,
+          },
+        };
+        if (usesAsyncEnvironmentCommands(config)) {
+          await dispatchEnvironmentCommand(payload, executorOptions);
+        } else if (options?.awaitResult) {
+          await requestExecutor(payload, {
+            ...executorOptions,
+            timeoutMs:
+              ENVIRONMENT_COMMAND_BUDGET.claimMs +
+              ENVIRONMENT_COMMAND_BUDGET.commandMs +
+              ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
+              ENVIRONMENT_COMMAND_BUDGET.reportMs,
+          });
+        } else {
+          spawnExecutor(payload, executorOptions);
+        }
       }
     } catch {
       await this.withTenantDatabase(params, () =>
@@ -747,144 +718,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const env = await createUserProcessEnvironment(executionUserId, this.db);
       return { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts };
     });
-  }
-
-  private async createEnvironmentExecutorPayload(options: {
-    branch: Branch;
-    action: EnvironmentLifecycleAction;
-    params?: BranchParams;
-    lifecycleAttemptId?: string;
-  }): Promise<{
-    payload: EnvironmentLifecycleExecutorPayload;
-    delegatedHomeKey?: string;
-    env: Record<string, string>;
-    executionUserId: UserID;
-    branchFsAccess: Exclude<BranchFsAccessLevel, 'none'>;
-  }> {
-    const { branch, action, params } = options;
-    const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
-      await this.resolveEnvironmentExecutorContext(branch, options.params);
-    const sessionToken = await this.withTenantDatabase(params, () =>
-      issueExecutorCommandToken(
-        this.app,
-        `environment-${action}`,
-        executionUserId,
-        branch.branch_id
-      )
-    );
-
-    return {
-      delegatedHomeKey,
-      env,
-      payload: {
-        command: 'environment.lifecycle',
-        sessionToken,
-        daemonUrl: getDaemonUrl(),
-        env,
-        params: {
-          branchId: branch.branch_id,
-          branchPath: branch.path,
-          cwd: branch.path,
-          principalBranchAccess: branchFsAccess,
-          // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
-          ...sandboxMounts,
-          action,
-          startCommand: branch.start_command,
-          stopCommand: branch.stop_command,
-          nukeCommand: branch.nuke_command,
-          appUrl: branch.app_url,
-          healthCheckUrl: branch.health_check_url,
-          lifecycleAttemptId: options.lifecycleAttemptId,
-        },
-      },
-      executionUserId,
-      branchFsAccess,
-    };
-  }
-
-  private async dispatchEnvironmentExecutor(options: {
-    branch: Branch;
-    action: EnvironmentLifecycleAction;
-    params?: BranchParams;
-    lifecycleAttemptId?: string;
-  }): Promise<void> {
-    const { branch, action, params } = options;
-    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
-      await this.createEnvironmentExecutorPayload(options);
-    const logPrefix = `[Environment.${action} ${branch.name}]`;
-
-    const spawnLifecycleExecutor = async () => {
-      try {
-        spawnExecutor(payload, {
-          logPrefix,
-          delegatedHomeKey,
-          preparedEnv: env,
-          templateVariables: {
-            branch_id: branch.branch_id,
-            user_id: executionUserId,
-            branch_fs_access: branchFsAccess,
-          },
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Failed to spawn environment executor';
-        await this.updateEnvironment(
-          branch.branch_id,
-          {
-            status: 'error',
-            last_health_check: {
-              timestamp: new Date().toISOString(),
-              status: 'unhealthy',
-              message,
-            },
-            last_error: message,
-          },
-          params
-        );
-        throw error;
-      }
-    };
-
-    deferWithTenantContext(params, spawnLifecycleExecutor, (error) => {
-      console.error(`${logPrefix} Failed to dispatch executor:`, error);
-    });
-  }
-
-  private async runEnvironmentExecutor(options: {
-    branch: Branch;
-    action: EnvironmentLifecycleAction;
-    params?: BranchParams;
-    lifecycleAttemptId?: string;
-  }): Promise<void> {
-    const { branch, action } = options;
-    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
-      await this.createEnvironmentExecutorPayload(options);
-
-    const result = await requestExecutor(payload, {
-      logPrefix: `[Environment.${action} ${branch.name}]`,
-      delegatedHomeKey,
-      preparedEnv: env,
-      // Mixed webhook/shell restart needs the daemon to wait for shell stop
-      // before it invokes the daemon-owned webhook start. Keep this generous
-      // enough for docker compose down while still bounding the request.
-      timeoutMs: 10 * 60_000,
-      templateVariables: {
-        branch_id: branch.branch_id,
-        user_id: executionUserId,
-        branch_fs_access: branchFsAccess,
-      },
-    });
-
-    if (!result.success) {
-      const details = result.error?.details as { output?: string } | undefined;
-      const error = new Error(
-        result.error?.message || 'Executor environment command failed'
-      ) as Error & {
-        commandOutput?: string;
-      };
-      error.commandOutput = details?.output;
-      throw error;
-    }
   }
 
   private async fetchEnvironmentLogsViaExecutor(
@@ -2837,121 +2670,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     confirmationOf?: string
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
-    if (usesAsyncEnvironmentCommands(this.app.get('config')))
-      return this.runAsyncEnvironmentAction(branch, 'start', params, confirmationOf);
-
-    if (!branch.start_command) {
-      throw new Error('No start command configured for this branch');
-    }
-
-    if (branch.environment_instance?.status === 'running') {
-      throw new Error('Environment is already running');
-    }
-
-    const command = branch.start_command;
-    const execution = await this.resolveEnvironmentCommand(command, 'start');
-    const access_urls = branch.app_url ? [{ name: 'App', url: branch.app_url }] : undefined;
-    const lifecycleAttemptId = generateId();
-    const lifecycleStartedAt = new Date().toISOString();
-
-    await this.updateEnvironment(
-      id,
-      {
-        status: 'starting',
-        process: {
-          ...branch.environment_instance?.process,
-          attempt_id: lifecycleAttemptId,
-          started_at: lifecycleStartedAt,
-        },
-        access_urls,
-        health_url: undefined,
-        last_health_check: undefined,
-        last_error: undefined,
-        last_command: undefined,
-      },
-      params,
-      { beginLifecycle: true }
-    );
-
-    try {
-      console.log(
-        `🚀 Starting environment for branch ${branch.name}: ${
-          execution.kind === 'webhook'
-            ? redactManagedEnvWebhookUrlForAudit(execution.url)
-            : execution.command
-        }`
-      );
-
-      if (execution.kind === 'webhook') {
-        const response = await this.executeEnvironmentWebhook({
-          url: execution.url,
-          branch,
-          commandType: 'start',
-          triggeredBy: this.extractTriggeredBy(params),
-          maxBytes: 16 * 1024,
-        });
-        const environmentResult = parseStartWebhookResult(response);
-        const current = await this.withTenantDatabase(params, () => this.get(id, params));
-        if (!isCurrentStartAttempt(current, lifecycleAttemptId)) return current;
-
-        const completedAt = new Date().toISOString();
-        const effectiveHealthUrl = environmentResult?.health ?? branch.health_check_url;
-        await this.updateEnvironment(
-          id,
-          {
-            ...startCompletionWithoutContinuousHealth(effectiveHealthUrl, completedAt),
-            access_urls: environmentResult?.app
-              ? [{ name: 'App', url: environmentResult.app }]
-              : access_urls,
-            health_url: environmentResult?.health,
-            last_command: {
-              action: 'start',
-              status: 'succeeded',
-              timestamp: completedAt,
-              message: 'Start webhook completed',
-            },
-          },
-          params
-        );
-        console.log(`✅ Start webhook completed successfully for ${branch.name}`);
-      } else {
-        await this.dispatchEnvironmentExecutor({
-          branch,
-          action: 'start',
-          params,
-          lifecycleAttemptId,
-        });
-      }
-
-      // A configured/returned health URL stays `starting` until the monitor
-      // observes it. Without one, completion above records running + unknown.
-      return await this.withTenantDatabase(params, () => this.get(id, params));
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const commandOutput =
-        error instanceof Error
-          ? (error as Error & { commandOutput?: string }).commandOutput
-          : undefined;
-
-      const current = await this.withTenantDatabase(params, () => this.get(id, params));
-      if (!isCurrentStartAttempt(current, lifecycleAttemptId)) return current;
-
-      await this.updateEnvironment(
-        id,
-        {
-          status: 'error',
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: errorMessage,
-          },
-          last_error: commandOutput || errorMessage,
-        },
-        params
-      );
-
-      throw error;
-    }
+    return this.runReportedEnvironmentAction(branch, 'start', params, confirmationOf);
   }
 
   /**
@@ -2959,50 +2678,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
-    if (usesAsyncEnvironmentCommands(this.app.get('config')))
-      return this.runAsyncEnvironmentAction(branch, 'stop', params);
+    if (branch.stop_command) {
+      return this.runReportedEnvironmentAction(branch, 'stop', params);
+    }
 
-    await this.updateEnvironment(id, { status: 'stopping' }, params);
+    await this.updateEnvironment(id, { status: 'stopping' }, params, { beginLifecycle: true });
 
     try {
-      if (branch.stop_command) {
-        const execution = await this.resolveEnvironmentCommand(branch.stop_command, 'stop');
-
-        console.log(
-          `🛑 Stopping environment for branch ${branch.name}: ${
-            execution.kind === 'webhook'
-              ? redactManagedEnvWebhookUrlForAudit(execution.url)
-              : execution.command
-          }`
-        );
-
-        if (execution.kind === 'webhook') {
-          await this.executeEnvironmentWebhook({
-            url: execution.url,
-            branch,
-            commandType: 'stop',
-            triggeredBy: this.extractTriggeredBy(params),
-            maxBytes: 16 * 1024,
-          });
-        } else {
-          await this.dispatchEnvironmentExecutor({ branch, action: 'stop', params });
-          return await this.withTenantDatabase(params, () => this.get(id, params));
-        }
-      } else {
-        // No down command - kill the managed process if we have it. This is
-        // only meaningful for daemon-local legacy managed processes.
-        const managedProcess = this.processes.get(id);
-        if (managedProcess) {
-          managedProcess.process.kill('SIGTERM');
-          this.processes.delete(id);
-        } else if (branch.environment_instance?.process?.pid) {
-          try {
-            process.kill(branch.environment_instance.process.pid, 'SIGTERM');
-          } catch (error) {
-            console.warn(
-              `Failed to kill process ${branch.environment_instance.process.pid}: ${error}`
-            );
-          }
+      // No down command - kill the managed process if we have it. This is
+      // only meaningful for daemon-local legacy managed processes.
+      const managedProcess = this.processes.get(id);
+      if (managedProcess) {
+        managedProcess.process.kill('SIGTERM');
+        this.processes.delete(id);
+      } else if (branch.environment_instance?.process?.pid) {
+        try {
+          process.kill(branch.environment_instance.process.pid, 'SIGTERM');
+        } catch (error) {
+          console.warn(
+            `Failed to kill process ${branch.environment_instance.process.pid}: ${error}`
+          );
         }
       }
 
@@ -3060,43 +2755,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return await this.startEnvironment(id, params);
     }
 
-    const startExecution = await this.resolveEnvironmentCommand(branch.start_command, 'start');
-
-    const stopExecution = branch.stop_command
-      ? await this.resolveEnvironmentCommand(branch.stop_command, 'stop')
-      : undefined;
-
-    if (!branch.stop_command || stopExecution?.kind === 'webhook') {
+    if (!branch.stop_command) {
       await this.stopEnvironment(id, params);
       return await this.startEnvironment(id, params);
     }
 
-    if (startExecution.kind === 'webhook') {
-      await this.updateEnvironment(id, { status: 'stopping' }, params);
-      await this.runEnvironmentExecutor({ branch, action: 'stop', params });
-      return await this.startEnvironment(id, params);
+    const stopped = await this.runReportedEnvironmentAction(branch, 'stop', params, undefined, {
+      awaitResult: true,
+    });
+    if (
+      stopped.environment_instance?.status !== 'stopped' ||
+      stopped.environment_instance.last_command?.status !== 'succeeded'
+    ) {
+      throw new Error('Restart stopped because the Stop command did not complete successfully');
     }
-
-    await this.updateEnvironment(id, { status: 'stopping' }, params);
-
-    try {
-      await this.dispatchEnvironmentExecutor({ branch, action: 'restart', params });
-      return await this.withTenantDatabase(params, () => this.get(id, params));
-    } catch (error) {
-      await this.updateEnvironment(
-        id,
-        {
-          status: 'error',
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: error instanceof Error ? error.message : 'Unknown error during restart',
-          },
-        },
-        params
-      );
-      throw error;
-    }
+    return this.startEnvironment(id, params);
   }
 
   /**
@@ -3104,76 +2777,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
-    if (usesAsyncEnvironmentCommands(this.app.get('config')))
-      return this.runAsyncEnvironmentAction(branch, 'nuke', params);
-
-    if (!branch.nuke_command) {
-      throw new Error('No nuke_command configured for this branch');
-    }
-
-    await this.updateEnvironment(id, { status: 'stopping' }, params);
-
-    try {
-      const execution = await this.resolveEnvironmentCommand(branch.nuke_command, 'nuke');
-
-      console.log(
-        `💣 NUKING environment for branch ${branch.name}: ${
-          execution.kind === 'webhook'
-            ? redactManagedEnvWebhookUrlForAudit(execution.url)
-            : execution.command
-        }`
-      );
-      console.warn('⚠️  This is a destructive operation!');
-
-      if (execution.kind === 'webhook') {
-        await this.executeEnvironmentWebhook({
-          url: execution.url,
-          branch,
-          commandType: 'nuke',
-          triggeredBy: this.extractTriggeredBy(params),
-          maxBytes: 16 * 1024,
-        });
-      } else {
-        await this.dispatchEnvironmentExecutor({ branch, action: 'nuke', params });
-        return await this.withTenantDatabase(params, () => this.get(id, params));
-      }
-
-      const managedProcess = this.processes.get(id);
-      if (managedProcess) {
-        this.processes.delete(id);
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          status: 'stopped',
-          process: undefined,
-          health_url: undefined,
-          access_urls: branch.app_url ? [{ name: 'App', url: branch.app_url }] : undefined,
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unknown',
-            message: 'Environment nuked - all data and volumes destroyed',
-          },
-        },
-        params
-      );
-    } catch (error) {
-      await this.updateEnvironment(
-        id,
-        {
-          status: 'error',
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: error instanceof Error ? error.message : 'Unknown error during nuke',
-          },
-        },
-        params
-      );
-
-      throw error;
-    }
+    return this.runReportedEnvironmentAction(branch, 'nuke', params);
   }
 
   /**

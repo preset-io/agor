@@ -70,6 +70,8 @@ class FakeClient {
     this.runtimeLogCalls = [];
     this.portVisibility = 'private';
     this.visibilityCalls = [];
+    this.previewHealthy = true;
+    this.reconcileCalls = [];
   }
 
   async viewer() {
@@ -124,7 +126,12 @@ class FakeClient {
   }
 
   async remoteHealth() {
-    return true;
+    return this.previewHealthy;
+  }
+
+  async reconcilePreview(name, repository, timeoutSeconds) {
+    this.reconcileCalls.push({ name, repository, timeoutSeconds });
+    this.previewHealthy = true;
   }
 
   async creationLogs(name) {
@@ -192,6 +199,23 @@ test('a second start rediscovers instead of creating a duplicate', async (t) => 
   await instance.start();
   await instance.start();
   assert.equal(client.created, 0);
+});
+
+test('Start repairs an unhealthy rediscovered preview before polling again', async (t) => {
+  const { store } = await fixture(t);
+  const existing = resource();
+  const client = new FakeClient([existing]);
+  client.previewHealthy = false;
+
+  const result = await controller(client, store).start();
+
+  assert.equal(result.resource.name, existing.name);
+  assert.equal(client.created, 0);
+  assert.equal(client.reconcileCalls.length, 1);
+  assert.equal(client.reconcileCalls[0].name, existing.name);
+  assert.equal(client.reconcileCalls[0].repository, REPOSITORY);
+  assert.ok(client.reconcileCalls[0].timeoutSeconds > 0);
+  assert.ok(client.reconcileCalls[0].timeoutSeconds <= 30);
 });
 
 test('a stopped Codespace is resumed and revalidated', async (t) => {
@@ -306,15 +330,17 @@ test('destructive actions refetch and freeze on identity drift', async (t) => {
   assert.deepEqual(client.deleted, []);
 });
 
-test('logs never wake a stopped Codespace', async (t) => {
-  const { store } = await fixture(t);
-  const existing = resource({ state: 'Shutdown' });
-  const client = new FakeClient([existing]);
-  const output = await controller(client, store).logs();
-  assert.match(output, /GitHub CLI uses SSH and could resume the stopped Codespace/);
-  assert.deepEqual(client.creationLogCalls, []);
-  assert.deepEqual(client.runtimeLogCalls, []);
-});
+for (const state of ['Shutdown', 'ShuttingDown']) {
+  test(`logs never open SSH while a Codespace is ${state}`, async (t) => {
+    const { store } = await fixture(t);
+    const existing = resource({ state });
+    const client = new FakeClient([existing]);
+    const output = await controller(client, store).logs();
+    assert.match(output, /GitHub CLI uses SSH and could resume a stopped or stopping Codespace/);
+    assert.deepEqual(client.creationLogCalls, []);
+    assert.deepEqual(client.runtimeLogCalls, []);
+  });
+}
 
 test('logs expose creation progress while the Codespace is starting', async (t) => {
   const { store } = await fixture(t);
@@ -451,9 +477,14 @@ test('preview readiness has a bounded timeout', async (t) => {
   const { store } = await fixture(t);
   const client = new FakeClient([resource()]);
   client.listPorts = async () => [];
-  const ticks = [0, 31, 62];
+  let tick = 0;
   await assert.rejects(
-    controller(client, store, { monotonic: () => ticks.shift() }).start(),
+    controller(client, store, {
+      monotonic: () => {
+        tick += 31;
+        return tick;
+      },
+    }).start(),
     /timed out after 30s/
   );
 });
@@ -556,6 +587,30 @@ test('the gh adapter distinguishes an unhealthy app from a broken SSH transport'
   assert.equal(calls[0].options.check, false);
   assert.equal(calls[0].options.timeout, 17);
   assert.match(calls[0].argv.at(-1), /exit 42/);
+});
+
+test('the gh adapter reconciles the preview through one bounded SSH command', async () => {
+  const calls = [];
+  const runner = async (argv, options) => {
+    calls.push({ argv, options });
+    return { returncode: 0, stdout: '', stderr: '' };
+  };
+  const client = new GitHubCodespacesClient({ runner, callTimeout: 17 });
+
+  await client.reconcilePreview('octocat-agor-new123', REPOSITORY, 120);
+
+  assert.deepEqual(calls[0].argv.slice(0, 6), [
+    'gh',
+    'codespace',
+    'ssh',
+    '-c',
+    'octocat-agor-new123',
+    '--',
+  ]);
+  assert.equal(calls[0].options.timeout, 120);
+  assert.equal(calls[0].options.check, true);
+  assert.match(calls[0].argv.at(-1), /\/workspaces\/agor/);
+  assert.match(calls[0].argv.at(-1), /start-agor-sqlite\.sh/);
 });
 
 test('the gh adapter changes only the requested Codespace port visibility', async () => {

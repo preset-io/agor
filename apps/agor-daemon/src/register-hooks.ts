@@ -2432,7 +2432,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace' | 'clean',
+        'ensureTeammateKnowledgeNamespace' | 'clean',
         Array<(context: HookContext) => HookContext>
       >;
     }): void;
@@ -2440,7 +2440,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
       clean: [requireMinimumRole(ROLES.MEMBER, 'clean branches')],
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],

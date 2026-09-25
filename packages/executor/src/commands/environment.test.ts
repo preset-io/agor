@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  parseEnvironmentCommandOutput,
-  startCompletionWithoutContinuousHealth,
-} from './environment.js';
+import { parseEnvironmentCommandOutput } from './environment.js';
 
 describe('parseEnvironmentCommandOutput', () => {
   it('extracts dynamic app/health URLs and removes the protocol line from persisted output', () => {
@@ -49,24 +46,5 @@ describe('parseEnvironmentCommandOutput', () => {
     expect(() => parseEnvironmentCommandOutput(`${line}\n${line}`)).toThrow(
       'more than one result line'
     );
-  });
-});
-
-describe('startCompletionWithoutContinuousHealth', () => {
-  it('marks a completed no-health command running without claiming a successful probe', () => {
-    expect(startCompletionWithoutContinuousHealth(undefined, '2026-08-28T00:00:00Z')).toEqual({
-      status: 'running',
-      last_health_check: {
-        timestamp: '2026-08-28T00:00:00Z',
-        status: 'unknown',
-        message: 'Start command completed; health is unavailable',
-      },
-    });
-  });
-
-  it('leaves a static-health environment starting for the health monitor', () => {
-    expect(
-      startCompletionWithoutContinuousHealth('https://example.test/health', '2026-08-28T00:00:00Z')
-    ).toEqual({});
   });
 });

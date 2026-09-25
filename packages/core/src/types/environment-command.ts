@@ -1,3 +1,4 @@
+import type { EnvironmentLifecycleResult } from '../environment/lifecycle-result';
 import type { BranchEnvironmentInstance } from './branch';
 import type { BranchID, UserID } from './id';
 
@@ -45,6 +46,8 @@ export type EnvironmentCommandReport = {
       output?: string;
       truncated?: boolean;
       message: string;
+      lifecycle_result?: EnvironmentLifecycleResult;
+      /** Upgrade-only field accepted from executors using the former result-file contract. */
       access_urls?: Array<{ name: string; url: string }>;
     }
 );

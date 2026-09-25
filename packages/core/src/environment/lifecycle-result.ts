@@ -1,4 +1,5 @@
 import { isPublicHttpUrl } from '../utils/url';
+import { environmentAccessUrlsSchema } from './access-urls';
 
 /**
  * Deliberately small, non-secret result returned by a managed-environment
@@ -56,6 +57,29 @@ export function validateEnvironmentLifecycleResult(value: unknown): EnvironmentL
       ? { health: normalizeLifecycleUrl(record.health, 'health') }
       : {}),
   };
+}
+
+/**
+ * Decode the canonical tiny result plus the exact result-file shape shipped
+ * before it. Compatibility stays at protocol boundaries; new adapters should
+ * emit only `{ app?, health? }`.
+ */
+export function decodeEnvironmentLifecycleResult(value: unknown): EnvironmentLifecycleResult {
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length === 1 &&
+    Object.hasOwn(value, 'access_urls')
+  ) {
+    const accessUrls = environmentAccessUrlsSchema.parse(
+      (value as { access_urls: unknown }).access_urls
+    );
+    const app =
+      accessUrls.find((candidate) => candidate.name.toLowerCase() === 'app') ?? accessUrls[0];
+    return validateEnvironmentLifecycleResult(app ? { app: app.url } : {});
+  }
+  return validateEnvironmentLifecycleResult(value);
 }
 
 /**

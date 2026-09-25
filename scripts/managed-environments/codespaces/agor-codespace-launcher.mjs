@@ -362,6 +362,17 @@ export class GitHubCodespacesClient {
     );
   }
 
+  async reconcilePreview(name, repository, timeoutSeconds) {
+    const repoName = repository.split('/', 2)[1];
+    const command =
+      `cd ${shellQuote(`/workspaces/${repoName}`)} && ` +
+      'bash .devcontainer/agor-managed/start-agor-sqlite.sh';
+    await this.runner(['gh', 'codespace', 'ssh', '-c', name, '--', command], {
+      timeout: Math.max(this.callTimeout, timeoutSeconds),
+      check: true,
+    });
+  }
+
   async creationLogs(name) {
     const result = await this.runner(['gh', 'codespace', 'logs', '-c', name], {
       timeout: Math.max(this.callTimeout, 60),
@@ -693,9 +704,10 @@ export class CodespaceController {
     }
   }
 
-  async waitForPreview(name) {
+  async waitForPreview(name, { repair = false } = {}) {
     const deadline = this.monotonic() + this.waitSeconds;
     let lastError = 'preview not ready';
+    let repaired = false;
     const expectedPorts = new Set([this.appPort, this.healthPort]);
     while (true) {
       try {
@@ -719,6 +731,11 @@ export class CodespaceController {
           );
         }
         lastError = error.message;
+      }
+      if (repair && !repaired) {
+        repaired = true;
+        const remainingSeconds = Math.max(1, Math.floor(deadline - this.monotonic()));
+        await this.client.reconcilePreview(name, this.repository, remainingSeconds);
       }
       if (this.monotonic() >= deadline) {
         throw new LauncherError(
@@ -768,6 +785,7 @@ export class CodespaceController {
   async start() {
     const discovery = await this.discover();
     let resource = discovery.resource;
+    const rediscovered = Boolean(resource);
     let resolvedSha;
     if (!resource) {
       resolvedSha = await this.client.resolveRef(this.repository, this.ref);
@@ -801,7 +819,10 @@ export class CodespaceController {
     }
 
     resource = await this.waitForState(discovery.owner, discovery.repositoryId, name, 'Available');
-    const readyPorts = await this.waitForPreview(name);
+    // Creation runs the devcontainer postStart hook. A rediscovered resource
+    // may instead contain a failed/stopped preview stack, so Play acts as one
+    // bounded reconciliation attempt before returning to readiness polling.
+    const readyPorts = await this.waitForPreview(name, { repair: rediscovered });
     const ports = await this.reconcilePortVisibility(name, readyPorts);
     await this.saveBinding(discovery.owner, resource, { resolvedSha });
     return { resource, ports };
@@ -878,8 +899,8 @@ export class CodespaceController {
     // `gh codespace logs` uses the same SSH transport as runtime logs for a
     // custom devcontainer. Do not call either command for a stopped resource:
     // establishing that tunnel can resume billable compute.
-    if (resource.state === 'Shutdown') {
-      return `${summary}\nCodespace logs were skipped because GitHub CLI uses SSH and could resume the stopped Codespace. Press Play before requesting Logs.\n`;
+    if (resource.state === 'Shutdown' || resource.state === 'ShuttingDown') {
+      return `${summary}\nCodespace logs were skipped because GitHub CLI uses SSH and could resume a stopped or stopping Codespace. Press Play before requesting Logs.\n`;
     }
 
     let creationSection;

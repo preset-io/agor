@@ -303,10 +303,6 @@ async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
   return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
 }
 
-function waitForDeferredWork(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 const mockedRequestExecutor = vi.mocked(requestExecutor);
 afterEach(() => vi.restoreAllMocks());
@@ -416,151 +412,26 @@ describe('BranchesService environment start async behavior', () => {
       environment_instance: { status: 'stopped' },
     };
 
-    let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
     vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
-    vi.spyOn(service, 'get').mockImplementation(async () => {
-      return { ...branch, environment_instance: currentEnvironment } as never;
-    });
-    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
-      kind: 'shell',
-      command: branch.start_command,
-    } as never);
-    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
-      env: { PATH: '/usr/bin:/bin' },
-      delegatedHomeKey: undefined,
-      executionUserId: 'user-1',
-      branchFsAccess: 'write',
-    } as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
 
-    const environmentUpdates: Array<Record<string, unknown>> = [];
-    const lifecycleOptions: Array<unknown> = [];
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update, _params, internalOptions) => {
-        environmentUpdates.push(update as Record<string, unknown>);
-        lifecycleOptions.push(internalOptions);
-        currentEnvironment = {
-          ...currentEnvironment,
-          ...update,
-        };
-        return {
-          ...branch,
-          environment_instance: currentEnvironment,
-        } as never;
-      }
-    );
-
-    return { service, branch, environmentUpdates, lifecycleOptions };
+    return { service, branch };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
-
-    const result = await Promise.race([
-      runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
-      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
-    ]);
-
-    expect(result).not.toBe('timed-out');
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
-
-    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        sessionToken: 'executor-token',
-        daemonUrl: 'http://daemon.test',
-        env: { PATH: '/usr/bin:/bin' },
-        params: expect.objectContaining({
-          action: 'start',
-          branchId: branch.branch_id,
-          branchPath: branch.path,
-          cwd: branch.path,
-          principalBranchAccess: 'write',
-          startCommand: branch.start_command,
-          appUrl: branch.app_url,
-          lifecycleAttemptId: expect.any(String),
-        }),
-      }),
-      expect.objectContaining({
-        logPrefix: `[Environment.start ${branch.name}]`,
-        preparedEnv: { PATH: '/usr/bin:/bin' },
-        templateVariables: {
-          branch_id: branch.branch_id,
-          user_id: 'user-1',
-          branch_fs_access: 'write',
-        },
-      })
-    );
-    expect(environmentUpdates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: 'starting',
-          last_error: undefined,
-          access_urls: [{ name: 'App', url: 'http://localhost:3000' }],
-        }),
-      ])
-    );
-    expect(
-      (mockedSpawnExecutor.mock.calls[0]![0] as { params: { lifecycleAttemptId: string } }).params
-        .lifecycleAttemptId
-    ).toBe((environmentUpdates[0]?.process as { attempt_id?: string } | undefined)?.attempt_id);
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
-  });
-
-  it('marks a repeated starting request as a fresh lifecycle boundary', async () => {
-    const { service, branch, lifecycleOptions } = createStartHarness();
-    vi.spyOn(service, 'get').mockResolvedValue({
-      ...branch,
-      environment_instance: { status: 'starting' },
-    } as never);
-
-    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
-
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
-  });
-
-  it('accepts the same tiny app/health result from a JSON Start webhook', async () => {
-    const { service, branch, environmentUpdates } = createStartHarness();
-    vi.mocked(
-      (
-        service as unknown as {
-          resolveEnvironmentCommand: () => Promise<{ kind: 'webhook'; url: string }>;
-        }
-      ).resolveEnvironmentCommand
-    ).mockResolvedValue({ kind: 'webhook', url: 'https://controller.example.test/start' });
-    vi.spyOn(
-      service as unknown as {
-        executeEnvironmentWebhook: () => Promise<{
-          body: string;
-          truncated: boolean;
-          status: number;
-          contentType: string;
-        }>;
-      },
-      'executeEnvironmentWebhook'
-    ).mockResolvedValue({
-      body: JSON.stringify({
-        app: 'https://space-5000.app.github.dev',
-        health: 'https://space-3000.app.github.dev/health',
-      }),
-      truncated: false,
-      status: 200,
-      contentType: 'application/json; charset=utf-8',
-    });
+    const { service, branch } = createStartHarness();
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockResolvedValue({
+        ...branch,
+        environment_instance: { status: 'starting' },
+      } as never);
 
     const result = await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
 
-    expect(result.environment_instance).toMatchObject({
-      status: 'starting',
-      access_urls: [{ name: 'App', url: 'https://space-5000.app.github.dev/' }],
-      health_url: 'https://space-3000.app.github.dev/health',
-      last_command: { action: 'start', status: 'succeeded' },
-    });
-    expect(environmentUpdates.at(-1)).toMatchObject({
-      access_urls: [{ name: 'App', url: 'https://space-5000.app.github.dev/' }],
-      health_url: 'https://space-3000.app.github.dev/health',
-    });
+    expect(result.environment_instance?.status).toBe('starting');
+    expect(runReported).toHaveBeenCalledWith(branch, 'start', undefined, undefined);
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -604,30 +475,21 @@ describe('BranchesService environment start async behavior', () => {
     (
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
     ).processes.set(branch.branch_id, { process: { kill } });
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockResolvedValue({
+        ...branch,
+        environment_instance: { status: 'starting' },
+      } as never);
 
     await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
-
-    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        params: expect.objectContaining({
-          action: 'start',
-          branchId: branch.branch_id,
-          startCommand: branch.start_command,
-        }),
-      }),
-      expect.objectContaining({ logPrefix: `[Environment.start ${branch.name}]` })
-    );
-    expect(mockedSpawnExecutor).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ action: 'restart' }),
-      }),
-      expect.anything()
+    expect(runReported).toHaveBeenCalledWith(
+      expect.objectContaining({ branch_id: branch.branch_id }),
+      'start',
+      undefined,
+      undefined
     );
   });
 
@@ -663,13 +525,6 @@ describe('BranchesService environment start async behavior', () => {
       executionUserId: 'user-1',
       branchFsAccess: 'write',
     } as never);
-    const executeWebhookSpy = vi
-      .spyOn(service as never, 'executeEnvironmentWebhook')
-      .mockResolvedValue({
-        body: 'ok',
-        truncated: false,
-        status: 200,
-      } as never);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
       currentEnvironment = {
         ...currentEnvironment,
@@ -677,31 +532,20 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRequestExecutor.mockResolvedValue({
-      success: true,
-      data: { branchId: branch.branch_id, action: 'stop' },
-    });
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockImplementation(async (_branch, action) => {
+        currentEnvironment = {
+          status: action === 'stop' ? 'stopped' : 'starting',
+          last_command: { status: 'succeeded' },
+        };
+        return { ...branch, environment_instance: currentEnvironment } as never;
+      });
 
     await service.restartEnvironment(branch.branch_id);
 
-    expect(mockedRequestExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        params: expect.objectContaining({
-          action: 'stop',
-          branchId: branch.branch_id,
-          stopCommand: branch.stop_command,
-        }),
-      }),
-      expect.objectContaining({ logPrefix: `[Environment.stop ${branch.name}]` })
-    );
-    expect(executeWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: branch.start_command,
-        commandType: 'start',
-      })
-    );
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(runReported.mock.calls.map((call) => call[1])).toEqual(['stop', 'start']);
+    expect(runReported.mock.calls[0]?.[4]).toEqual({ awaitResult: true });
   });
 
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {

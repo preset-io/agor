@@ -110,7 +110,7 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.path}}`                | Branch                        | `/home/you/agor/feat-new-filter` | Absolute path on disk.                                                                                                                                    |
 | `{{branch.base_ref}}`            | Branch                        | `main`                           | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}`            | Branch                        | `branch`                         | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`.                                                           |
-| `{{repo.slug}}`                  | Repo                          | `superset`                       | Agor's local repository slug, used in managed paths and UI. It is not guaranteed to include a provider owner.                                            |
+| `{{repo.slug}}`                  | Repo                          | `superset`                       | Agor's local repository slug, used in managed paths and UI. It is not guaranteed to include a provider owner.                                             |
 | `{{repo.github_slug}}`           | Repo                          | `apache/superset`                | Credential-free GitHub `owner/repository` identity derived from the registered `github.com` remote. Empty for non-GitHub or unknown remotes.              |
 | `{{host.ip_address}}`            | Auto-detected                 | `10.0.1.42`                      | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect.                                    |
 | `{{custom.<key>}}`               | Branch custom context         | `{{custom.compose_profile}}`     | Anything you store in `branch.custom_context`.                                                                                                            |
@@ -585,18 +585,21 @@ environment:
 Each script must finish; do not start a local development server in the executor.
 Remote resource identity and credentials belong to your scripts/provider. Make
 Stop safe to repeat. Agor never automatically retries Start, Stop, or Nuke.
-Commands can optionally return Start access links by writing this small JSON file
-to the supplied `AGOR_ENVIRONMENT_RESULT_FILE` path before exiting:
+Start can optionally return the same tiny runtime result used by ordinary
+managed environments. Emit exactly one stdout line before exiting:
 
-```json
-{ "access_urls": [{ "name": "Preview", "url": "https://preview.example.com" }] }
+```text
+AGOR_ENVIRONMENT_RESULT={"app":"https://preview.example.com","health":"https://preview.example.com/health"}
 ```
 
-The file must be a regular file, at most 16 KiB, with at most eight named absolute
-HTTP(S) URLs and no embedded credentials. Invalid results produce an **unknown**
-outcome, not a claim that nothing happened. Without a result file, the rendered
-`app` URL is used. Reported links appear in the Environment tab; the environment
-pills open the first reported link, falling back to the static `app` URL.
+The JSON is the strict `{app?, health?}` schema described above. Agor parses
+control records from stdout only; stderr remains diagnostic output. Invalid or
+ambiguous results produce an **unknown** outcome, not a claim that nothing
+happened. The former `AGOR_ENVIRONMENT_RESULT_FILE` value containing exactly
+`{"access_urls":[...]}` remains accepted at the executor boundary for upgrades,
+but new bridges should use the stdout contract. Without a result, the rendered
+`app` and `health` values are used. Reported links appear in the Environment tab;
+the environment pill opens the reported App, falling back to the static `app` URL.
 A successful Start waits for configured health checks; without
 one, the command success and **unknown health** are displayed separately.
 An early healthy response never releases a still-running command's admission.

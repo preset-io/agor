@@ -194,16 +194,28 @@ export class EnvironmentCommandRepository {
             report.truncated
           );
           if (report.outcome === 'succeeded' && report.action === 'start') {
-            settled.status = row.health_check_url ? 'starting' : 'running';
+            const effectiveHealthUrl = report.lifecycle_result?.health ?? row.health_check_url;
+            settled.status = effectiveHealthUrl ? 'starting' : 'running';
             settled.last_health_check = {
               timestamp: now.toISOString(),
               status: 'unknown',
-              message: row.health_check_url
+              message: effectiveHealthUrl
                 ? 'Start command succeeded; waiting for health observation'
                 : 'Start command reported success; no health check configured',
             };
-            settled.access_urls =
-              report.access_urls ?? (row.app_url ? [{ name: 'App', url: row.app_url }] : []);
+            if (report.lifecycle_result?.health) {
+              settled.health_url = report.lifecycle_result.health;
+            } else {
+              delete settled.health_url;
+            }
+            settled.access_urls = report.lifecycle_result?.app
+              ? [{ name: 'App', url: report.lifecycle_result.app }]
+              : row.app_url
+                ? [{ name: 'App', url: row.app_url }]
+                : [];
+          } else if (report.outcome === 'succeeded') {
+            delete settled.health_url;
+            if (report.action === 'nuke') settled.access_urls = [];
           }
           return { value: settled, environment: settled };
         }

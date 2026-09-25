@@ -16,13 +16,15 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BranchesService } from './branches';
 import { EnvironmentCommandReportsService } from './environment-command-reports';
 
-const { dispatch, query } = vi.hoisted(() => ({
+const { dispatch, query, spawn } = vi.hoisted(() => ({
   dispatch: vi.fn(async () => undefined),
   query: vi.fn(),
+  spawn: vi.fn(),
 }));
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/spawn-executor.js')>()),
   requestExecutor: query,
+  spawnExecutor: spawn,
 }));
 vi.mock('../utils/environment-command-dispatch.js', () => ({
   dispatchEnvironmentCommand: dispatch,
@@ -40,6 +42,107 @@ const config = {
 };
 
 describe('executor-owned command reports', () => {
+  dbTest('uses the same attempt-scoped report protocol for a local executor', async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const app = {
+      get: () => ({
+        deployment: { mode: 'single' },
+        execution: {
+          unix_user_mode: 'simple',
+          managed_envs_execution_mode: 'hybrid',
+          environment_command_job_deadline_ms: 365000,
+        },
+      }),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'test-credential') },
+      service: () => ({ emit: vi.fn() }),
+    } as unknown as Application;
+    const service = new BranchesService(db, app);
+    vi.spyOn(service, 'get').mockImplementation(
+      async () => (await new BranchRepository(db).findById(branch.branch_id))! as never
+    );
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: {},
+      branchFsAccess: 'write',
+    } as never);
+    const params = {
+      provider: 'rest',
+      tenant: { tenant_id: tenantId, source: 'explicit' },
+      user: { ...user, role: 'member' },
+    } as AuthenticatedParams;
+
+    await runWithTenantContext(tenantId, async () => {
+      const admitted = await service.startEnvironment(branch.branch_id, params);
+      const attempt = admitted.environment_instance!.command_attempt!;
+      expect(spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'environment.lifecycle',
+          sessionToken: 'test-credential',
+          params: expect.objectContaining({
+            action: 'start',
+            attempt: expect.objectContaining({ id: attempt.id }),
+          }),
+        }),
+        expect.objectContaining({
+          templateVariables: expect.objectContaining({ branch_id: branch.branch_id }),
+        })
+      );
+      expect(
+        (
+          app as unknown as {
+            sessionTokenService: { generateCommandToken: ReturnType<typeof vi.fn> };
+          }
+        ).sessionTokenService.generateCommandToken
+      ).toHaveBeenCalledWith(
+        environmentCommandTokenId('start', attempt.id),
+        user.user_id,
+        branch.branch_id
+      );
+    });
+  });
+
+  dbTest('settles a JSON webhook through the same typed lifecycle result', async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const app = {
+      get: () => ({
+        deployment: { mode: 'single' },
+        execution: { managed_envs_execution_mode: 'hybrid' },
+      }),
+      service: () => ({ emit: vi.fn() }),
+    } as unknown as Application;
+    const service = new BranchesService(db, app);
+    vi.spyOn(service, 'get').mockImplementation(
+      async () => (await new BranchRepository(db).findById(branch.branch_id))! as never
+    );
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'webhook',
+      url: 'https://controller.example.test/start',
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+      body: JSON.stringify({
+        app: 'https://space-5000.app.github.dev',
+        health: 'https://space-3000.app.github.dev/health',
+      }),
+      contentType: 'application/json',
+      truncated: false,
+      status: 200,
+    } as never);
+    const params = {
+      provider: 'rest',
+      tenant: { tenant_id: tenantId, source: 'explicit' },
+      user: { ...user, role: 'member' },
+    } as AuthenticatedParams;
+
+    await runWithTenantContext(tenantId, async () => {
+      const result = await service.startEnvironment(branch.branch_id, params);
+      expect(result.environment_instance).toMatchObject({
+        status: 'starting',
+        health_url: 'https://space-3000.app.github.dev/health',
+        access_urls: [{ name: 'App', url: 'https://space-5000.app.github.dev/' }],
+        last_command: { status: 'succeeded' },
+      });
+    });
+  });
+
   dbTest(
     'returns admitted state without a claim/result waiter and settles through another service instance',
     async ({ db }) => {
@@ -133,7 +236,7 @@ describe('executor-owned command reports', () => {
         );
         expect((await service.get(branch.branch_id)).environment_instance).toMatchObject({
           status: 'running',
-          access_urls: [{ name: 'Preview', url: 'https://preview.example.test' }],
+          access_urls: [{ name: 'App', url: 'https://preview.example.test/' }],
         });
         expect(emit).toHaveBeenCalledWith(
           'patched',
