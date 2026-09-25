@@ -9,8 +9,6 @@ import {
   buildSlackManifest,
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
-  type DiscordChannelHistoryRequest,
-  type DiscordChannelHistoryResult,
   getConnector,
   isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
@@ -32,7 +30,9 @@ import {
   type BranchID,
   type ChannelType,
   DEFAULT_DISCORD_CATCH_UP,
+  type DiscordAgentChannelHistoryRequest,
   type DiscordAgentToolCapability,
+  type DiscordChannelHistoryResult,
   GATEWAY_REDACTED_SENTINEL,
   type GatewayChannel,
   type GatewayChannelCreateData,
@@ -647,18 +647,14 @@ const discordChannelHistorySchema = z.strictObject({
 });
 
 interface DiscordChannelHistoryConnector {
-  fetchChannelHistory(req: DiscordChannelHistoryRequest): Promise<DiscordChannelHistoryResult>;
-  resolveHistoryParentChannel(threadKey: string): Promise<string>;
+  fetchChannelHistory(req: DiscordAgentChannelHistoryRequest): Promise<DiscordChannelHistoryResult>;
 }
 
 function assertDiscordChannelHistoryConnector(
   connector: unknown
 ): asserts connector is DiscordChannelHistoryConnector {
   const candidate = connector as Partial<DiscordChannelHistoryConnector> | null | undefined;
-  if (
-    typeof candidate?.fetchChannelHistory !== 'function' ||
-    typeof candidate.resolveHistoryParentChannel !== 'function'
-  ) {
+  if (typeof candidate?.fetchChannelHistory !== 'function') {
     throw new Error('Discord channel history is not available for this gateway connector.');
   }
 }
@@ -673,7 +669,7 @@ function discordChannelHistoryMarkdown(history: DiscordChannelHistoryResult): st
       message.text_truncated ? 'truncated' : undefined,
     ].filter(Boolean);
     lines.push(
-      `## ${message.actor_label} — ${message.iso_time} (${message.id})${flags.length ? ` [${flags.join(', ')}]` : ''}`,
+      `## ${message.actor_label}${message.author_id ? ` <${message.author_id}>` : ''} — ${message.iso_time} (${message.id})${flags.length ? ` [${flags.join(', ')}]` : ''}`,
       '',
       message.text || '_No text_',
       ''
@@ -2210,19 +2206,19 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       const connector = getConnector('discord', channel.config);
       assertDiscordChannelHistoryConnector(connector);
 
-      let discordChannelId = args.discordChannelId;
-      if (!discordChannelId) {
+      let sessionThreadKey: string | undefined;
+      if (!args.discordChannelId) {
         if (gatewaySource?.channel_type !== 'discord' || gatewaySource.channel_id !== channel.id) {
           throw new Error(
             'discordChannelId is required when the calling session was not created from this Discord gateway channel.'
           );
         }
-        discordChannelId = await connector.resolveHistoryParentChannel(gatewaySource.thread_id);
+        sessionThreadKey = gatewaySource.thread_id;
       }
 
       const limit = args.limit ?? DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT;
       const history = await connector.fetchChannelHistory({
-        channelId: discordChannelId,
+        ...(args.discordChannelId ? { channelId: args.discordChannelId } : { sessionThreadKey }),
         ...(args.before ? { before: args.before } : {}),
         ...(args.after ? { after: args.after } : {}),
         limit,

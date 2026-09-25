@@ -3331,10 +3331,7 @@ describe('Discord channel history agent tool (MCP)', () => {
   }
 
   function mockConnector() {
-    const connector = {
-      fetchChannelHistory: vi.fn(async () => historyResult),
-      resolveHistoryParentChannel: vi.fn(async () => '333333333333333333'),
-    };
+    const connector = { fetchChannelHistory: vi.fn(async () => historyResult) };
     vi.mocked(getConnector).mockReturnValue(connector as any);
     return connector;
   }
@@ -3352,9 +3349,8 @@ describe('Discord channel history agent tool (MCP)', () => {
     const payload = JSON.parse(result.content[0].text);
 
     expect(getConnector).toHaveBeenCalledWith('discord', discordChannel.config);
-    expect(connector.resolveHistoryParentChannel).toHaveBeenCalledWith('444444444444444444');
     expect(connector.fetchChannelHistory).toHaveBeenCalledWith({
-      channelId: '333333333333333333',
+      sessionThreadKey: '444444444444444444',
       limit: 10,
       includeBotMessages: false,
     });
@@ -3387,7 +3383,6 @@ describe('Discord channel history agent tool (MCP)', () => {
     });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(connector.resolveHistoryParentChannel).not.toHaveBeenCalled();
     expect(connector.fetchChannelHistory).toHaveBeenCalledWith({
       channelId: '777777777777777777',
       before: '888888888888888888',
@@ -3396,6 +3391,7 @@ describe('Discord channel history agent tool (MCP)', () => {
     });
     expect(payload.markdown).toContain('# Discord channel 333333333333333333 history');
     expect(payload.markdown).toContain('standup: shipped the gateway fix');
+    expect(payload.markdown).toContain('Richard <666666666666666666>');
     expect(payload.markdown).toContain('Attached file: plan.png (image/png, 10 bytes)');
     expect(payload.markdown).toContain('Started thread 777777777777777777');
     expect(payload.messages).toBeUndefined();

@@ -27,19 +27,18 @@ export {
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {
-  DiscordChannelHistoryAttachment,
-  DiscordChannelHistoryMessage,
-  DiscordChannelHistoryRequest,
-  DiscordChannelHistoryResult,
   DiscordHistoryFailureKind,
   DiscordHistoryRestTransport,
+  DiscordReadBudget,
 } from './connectors/discord-history';
 export {
+  createDiscordReadBudget,
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
   DiscordHistoryError,
   fetchDiscordChannelHistory,
   fetchDiscordProviderHistory,
+  getDiscordRecordWithinBudget,
 } from './connectors/discord-history';
 export type {
   DiscordConnectionVerification,

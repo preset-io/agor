@@ -1,11 +1,18 @@
 import { Routes } from 'discord-api-types/v10';
-import type { DiscordCatchUpConfig, DiscordGatewayConfig } from '../../types/gateway';
+import type {
+  DiscordCatchUpConfig,
+  DiscordChannelHistoryMessage,
+  DiscordChannelHistoryRequest,
+  DiscordChannelHistoryResult,
+  DiscordGatewayConfig,
+} from '../../types/gateway';
 import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
 import type {
   GatewayProviderHistoryMessage,
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
 } from '../connector';
+import { gatewayFailureCode } from '../provider-error';
 
 /** The only REST surface needed by the Discord history reader. */
 export interface DiscordHistoryRestTransport {
@@ -120,14 +127,30 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
+/**
+ * One deadline and one cumulative rate-limit budget for every request of an
+ * agent channel-history read, including its access checks.
+ */
+export interface DiscordReadBudget {
+  limits: DiscordCatchUpConfig;
+  deadline: number;
+  retries: number;
+  totalDelay: number;
+}
+
+export function createDiscordReadBudget(config: DiscordGatewayConfig): DiscordReadBudget {
+  const limits = configWithDefaults(config);
+  return { limits, deadline: Date.now() + limits.request_timeout_ms, retries: 0, totalDelay: 0 };
+}
+
 async function getWithBudget(
   rest: DiscordHistoryRestTransport,
   route: string,
   config: DiscordCatchUpConfig,
-  deadline: number
+  deadline: number,
+  counters: { retries: number; totalDelay: number } = { retries: 0, totalDelay: 0 },
+  notFoundAsNull = false
 ): Promise<unknown> {
-  let retries = 0;
-  let totalDelay = 0;
   while (true) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw makeError('request_timeout', 'Discord history request timed out');
@@ -136,12 +159,14 @@ async function getWithBudget(
     } catch (error) {
       if (!rateLimitStatus(error)) {
         if (error instanceof DiscordHistoryError) throw error;
-        throw makeError('provider', 'Discord history provider request failed');
+        const code = gatewayFailureCode(error);
+        if (notFoundAsNull && code === 'provider_not_found') return null;
+        throw makeError('provider', `Discord history provider request failed: ${code}`);
       }
       const delay = retryAfterMs(error);
       if (
-        retries >= config.rate_limit_max_retries ||
-        totalDelay + delay > config.rate_limit_max_total_delay_ms ||
+        counters.retries >= config.rate_limit_max_retries ||
+        counters.totalDelay + delay > config.rate_limit_max_total_delay_ms ||
         Date.now() + delay > deadline
       ) {
         throw new DiscordHistoryError(
@@ -150,11 +175,23 @@ async function getWithBudget(
           delay
         );
       }
-      retries += 1;
-      totalDelay += delay;
+      counters.retries += 1;
+      counters.totalDelay += delay;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
+}
+
+/**
+ * GET one Discord resource inside a read budget. A 404 becomes null so access
+ * checks can refuse an unknown channel without a provider error.
+ */
+export async function getDiscordRecordWithinBudget(
+  rest: DiscordHistoryRestTransport,
+  route: string,
+  budget: DiscordReadBudget
+): Promise<Record<string, unknown> | null> {
+  return asRecord(await getWithBudget(rest, route, budget.limits, budget.deadline, budget, true));
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -406,50 +443,6 @@ export async function fetchDiscordProviderHistory(
   return { threadId: request.threadId, messages, complete };
 }
 
-/** One agent read of recent messages from an already-authorized channel. */
-export interface DiscordChannelHistoryRequest {
-  channelId: string;
-  /** Exclusive cursor: return the newest matches older than this message. */
-  before?: string;
-  /** Exclusive cursor: return the oldest matches newer than this message. */
-  after?: string;
-  /** Matching messages to return (1–200, default 50). */
-  limit?: number;
-  /** Include bot and system messages. Defaults to false. */
-  includeBotMessages?: boolean;
-}
-
-export interface DiscordChannelHistoryAttachment {
-  filename: string;
-  content_type?: string;
-  size: number;
-}
-
-export interface DiscordChannelHistoryMessage {
-  id: string;
-  iso_time: string;
-  actor_label: string;
-  author_id?: string;
-  text: string;
-  /** Set when the text alone exceeded the byte budget and was cut. */
-  text_truncated?: true;
-  is_bot: boolean;
-  is_system: boolean;
-  is_mention: boolean;
-  attachments?: DiscordChannelHistoryAttachment[];
-  /** Thread started from this message, readable with the same tool. */
-  thread_id?: string;
-}
-
-export interface DiscordChannelHistoryResult {
-  channelId: string;
-  /** Chronological order. */
-  messages: DiscordChannelHistoryMessage[];
-  has_more: boolean;
-  /** Cursor for the next call in the same direction; null when complete. */
-  next_cursor: { before: string } | { after: string } | null;
-}
-
 export const DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT = 50;
 export const DISCORD_CHANNEL_HISTORY_MAX_LIMIT = 200;
 
@@ -500,7 +493,8 @@ function toChannelHistoryMessage(
 export async function fetchDiscordChannelHistory(
   rest: DiscordHistoryRestTransport,
   config: DiscordGatewayConfig,
-  request: DiscordChannelHistoryRequest
+  request: DiscordChannelHistoryRequest,
+  budget: DiscordReadBudget = createDiscordReadBudget(config)
 ): Promise<DiscordChannelHistoryResult> {
   const limit = request.limit ?? DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT;
   if (
@@ -515,8 +509,7 @@ export async function fetchDiscordChannelHistory(
     throw makeError('invalid_request', 'Discord channel history request was invalid');
   }
 
-  const limits = configWithDefaults(config);
-  const deadline = Date.now() + limits.request_timeout_ms;
+  const { limits, deadline } = budget;
   const forward = request.after !== undefined;
   const direction = forward ? 'after' : 'before';
   let cursor = forward ? request.after : request.before;
@@ -533,7 +526,8 @@ export async function fetchDiscordChannelHistory(
       rest,
       `${Routes.channelMessages(request.channelId)}?${params.toString()}`,
       limits,
-      deadline
+      deadline,
+      budget
     );
     if (!Array.isArray(rawPage) || rawPage.length > DISCORD_HISTORY_PAGE_SIZE) {
       throw makeError('malformed_response', 'Discord history page was malformed');

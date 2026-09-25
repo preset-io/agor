@@ -361,7 +361,7 @@ function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
     return;
   }
   for (const [key, value] of Object.entries(raw)) {
-    if (!(key in DISCORD_AGENT_TOOL_DEFAULTS)) {
+    if (!Object.hasOwn(DISCORD_AGENT_TOOL_DEFAULTS, key)) {
       errors.push(`agent_tools.${key} is not a supported Discord agent tool`);
     } else if (typeof value !== 'boolean') {
       errors.push(`agent_tools.${key} must be a boolean`);
@@ -382,6 +382,61 @@ export function resolveDiscordAgentTools(
     if (typeof raw[capability] === 'boolean') resolved[capability] = raw[capability] as boolean;
   }
   return resolved;
+}
+
+/** One agent read of recent messages from an already-authorized channel. */
+export interface DiscordChannelHistoryRequest {
+  channelId: string;
+  /** Exclusive cursor: return the newest matches older than this message. */
+  before?: string;
+  /** Exclusive cursor: return the oldest matches newer than this message. */
+  after?: string;
+  /** Matching messages to return (1–200, default 50). */
+  limit?: number;
+  /** Include bot and system messages. Defaults to false. */
+  includeBotMessages?: boolean;
+}
+
+/**
+ * Connector-level agent read: an explicit channel, or the allowlisted parent
+ * channel of a Discord gateway session's thread.
+ */
+export interface DiscordAgentChannelHistoryRequest
+  extends Omit<DiscordChannelHistoryRequest, 'channelId'> {
+  channelId?: string;
+  /** Gateway session thread key whose allowlisted parent channel is read. */
+  sessionThreadKey?: string;
+}
+
+export interface DiscordChannelHistoryAttachment {
+  filename: string;
+  content_type?: string;
+  size: number;
+}
+
+export interface DiscordChannelHistoryMessage {
+  id: string;
+  iso_time: string;
+  actor_label: string;
+  author_id?: string;
+  text: string;
+  /** Set when the text alone exceeded the byte budget and was cut. */
+  text_truncated?: true;
+  is_bot: boolean;
+  is_system: boolean;
+  is_mention: boolean;
+  attachments?: DiscordChannelHistoryAttachment[];
+  /** Thread started from this message, readable with the same tool. */
+  thread_id?: string;
+}
+
+export interface DiscordChannelHistoryResult {
+  channelId: string;
+  /** Chronological order. */
+  messages: DiscordChannelHistoryMessage[];
+  has_more: boolean;
+  /** Cursor for the next call in the same direction; null when complete. */
+  next_cursor: { before: string } | { after: string } | null;
 }
 
 /** Fill only non-authority defaults; Message Content and identity stay explicit. */

@@ -21,6 +21,8 @@ import {
 } from 'discord-api-types/v10';
 import type {
   ChannelType,
+  DiscordAgentChannelHistoryRequest,
+  DiscordChannelHistoryResult,
   DiscordGatewayConfig,
   DiscordThreadCoordinates,
   GatewayConnectionTestResult,
@@ -53,10 +55,11 @@ import {
 import { GatewayListenerError } from '../listener-error';
 import { gatewayFailureCode } from '../provider-error';
 import {
-  type DiscordChannelHistoryRequest,
-  type DiscordChannelHistoryResult,
+  createDiscordReadBudget,
+  type DiscordReadBudget,
   fetchDiscordChannelHistory,
   fetchDiscordProviderHistory,
+  getDiscordRecordWithinBudget,
 } from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -64,6 +67,8 @@ const DISCORD_TEXT_CHANNEL_TYPE = 0;
 const DISCORD_PUBLIC_THREAD_TYPES = new Set([10, 11]);
 const DISCORD_TEXT_MESSAGE_TYPES = new Set([0, 19]);
 const DISCORD_NONCE_RECOVERY_WINDOW_MS = 5 * 60_000;
+const DISCORD_ADMINISTRATOR_PERMISSION = PermissionFlagsBits.Administrator;
+const DISCORD_ALL_PERMISSIONS = (1n << 64n) - 1n;
 const DISCORD_VIEW_CHANNEL_PERMISSION = PermissionFlagsBits.ViewChannel;
 const DISCORD_SEND_MESSAGES_PERMISSION = PermissionFlagsBits.SendMessages;
 const DISCORD_READ_MESSAGE_HISTORY_PERMISSION = PermissionFlagsBits.ReadMessageHistory;
@@ -579,7 +584,9 @@ function effectiveChannelPermissions(
   botUserId: string
 ): bigint {
   const direct = permissionBits(member?.permissions);
-  if (direct !== 0n) return direct;
+  if (direct !== 0n) {
+    return (direct & DISCORD_ADMINISTRATOR_PERMISSION) !== 0n ? DISCORD_ALL_PERMISSIONS : direct;
+  }
   const roles = Array.isArray(guild?.roles) ? guild.roles.map(asRecord).filter(Boolean) : [];
   const memberRoles = Array.isArray(member?.roles)
     ? member.roles.filter((role): role is string => typeof role === 'string')
@@ -591,7 +598,8 @@ function effectiveChannelPermissions(
       permissions |= permissionBits(role.permissions);
     }
   }
-  if ((permissions & (1n << 3n)) !== 0n) return permissions;
+  // Administrator grants every permission and bypasses channel overwrites.
+  if ((permissions & DISCORD_ADMINISTRATOR_PERMISSION) !== 0n) return DISCORD_ALL_PERMISSIONS;
   const overwrites = Array.isArray(channel?.permission_overwrites)
     ? channel.permission_overwrites.map(asRecord).filter(Boolean)
     : [];
@@ -983,25 +991,52 @@ export class DiscordConnector implements GatewayConnector {
    * must be an allowlisted public parent channel or a public thread under one,
    * and the bot must hold View Channel and Read Message History there: Discord
    * answers a missing Read Message History with an empty list, not an error,
-   * so an empty result is only trusted after this check.
+   * so an empty result is only trusted after this check. Resolution, access
+   * checks, and pages share one deadline and rate-limit budget.
    */
   async fetchChannelHistory(
-    req: DiscordChannelHistoryRequest
+    req: DiscordAgentChannelHistoryRequest
   ): Promise<DiscordChannelHistoryResult> {
     this.validate();
-    await this.requireChannelHistoryAccess(req.channelId);
-    return fetchDiscordChannelHistory(this.transport.rest, this.config, req);
+    const budget = createDiscordReadBudget(this.config);
+    const channelId =
+      req.channelId ??
+      (req.sessionThreadKey
+        ? await this.resolveHistoryParentChannel(req.sessionThreadKey, budget)
+        : undefined);
+    if (!channelId) throw new Error('A Discord channel or session thread is required.');
+    await this.requireChannelHistoryAccess(channelId, budget);
+    return fetchDiscordChannelHistory(
+      this.transport.rest,
+      this.config,
+      {
+        channelId,
+        ...(req.before ? { before: req.before } : {}),
+        ...(req.after ? { after: req.after } : {}),
+        ...(req.limit !== undefined ? { limit: req.limit } : {}),
+        ...(req.includeBotMessages !== undefined
+          ? { includeBotMessages: req.includeBotMessages }
+          : {}),
+      },
+      budget
+    );
   }
 
   /** The allowlisted parent channel behind a Discord gateway thread key. */
-  async resolveHistoryParentChannel(threadKey: string): Promise<string> {
-    this.validate();
+  private async resolveHistoryParentChannel(
+    threadKey: string,
+    budget: DiscordReadBudget
+  ): Promise<string> {
     const parsed = parseDiscordThreadKey(threadKey);
     let parentChannelId: string | undefined;
     if (parsed?.kind === 'legacy_thread') parentChannelId = parsed.parentChannelId;
     else if (parsed?.kind === 'message') parentChannelId = parsed.channelId;
     else if (parsed?.kind === 'provider_thread') {
-      const thread = await this.getAccessCheckRecord(Routes.channel(parsed.channelId));
+      const thread = await getDiscordRecordWithinBudget(
+        this.transport.rest,
+        Routes.channel(parsed.channelId),
+        budget
+      );
       parentChannelId = snowflake(thread?.parent_id);
     }
     if (!parentChannelId || !configuredChannelIds(this.config).includes(parentChannelId)) {
@@ -1012,15 +1047,11 @@ export class DiscordConnector implements GatewayConnector {
     return parentChannelId;
   }
 
-  private async getAccessCheckRecord(route: string): Promise<Record<string, unknown> | null> {
-    try {
-      return await this.getProviderRecord(route);
-    } catch (error) {
-      throw new Error(`Discord channel access check failed: ${gatewayFailureCode(error)}`);
-    }
-  }
-
-  private async requireChannelHistoryAccess(channelId: string): Promise<void> {
+  private async requireChannelHistoryAccess(
+    channelId: string,
+    budget: DiscordReadBudget
+  ): Promise<void> {
+    const get = (route: string) => getDiscordRecordWithinBudget(this.transport.rest, route, budget);
     const guildId = configuredString(this.config, 'guild_id');
     const allowedChannelIds = configuredChannelIds(this.config);
     const denied = () =>
@@ -1028,7 +1059,7 @@ export class DiscordConnector implements GatewayConnector {
         `Discord channel ${channelId} is not an allowed channel, or a public thread under one, for this gateway channel.`
       );
     if (!isDiscordSnowflake(channelId)) throw denied();
-    const target = await this.getAccessCheckRecord(Routes.channel(channelId));
+    const target = await get(Routes.channel(channelId));
     if (!target || target.id !== channelId || target.guild_id !== guildId) throw denied();
     let parent: Record<string, unknown> | null = target;
     if (!allowedChannelIds.includes(channelId)) {
@@ -1040,7 +1071,7 @@ export class DiscordConnector implements GatewayConnector {
       ) {
         throw denied();
       }
-      parent = await this.getAccessCheckRecord(Routes.channel(parentChannelId));
+      parent = await get(Routes.channel(parentChannelId));
       if (parent?.id !== parentChannelId || parent.guild_id !== guildId) throw denied();
     }
     if (!isPublicTextChannel(parent, guildId)) throw denied();
@@ -1048,8 +1079,8 @@ export class DiscordConnector implements GatewayConnector {
     // Threads inherit their parent's permission overwrites.
     const botUserId = configuredString(this.config, 'application_id');
     const [guild, member] = await Promise.all([
-      this.getAccessCheckRecord(Routes.guild(guildId)),
-      this.getAccessCheckRecord(Routes.guildMember(guildId, botUserId)),
+      get(Routes.guild(guildId)),
+      get(Routes.guildMember(guildId, botUserId)),
     ]);
     const permissions = effectiveChannelPermissions(guild, member, parent, guildId, botUserId);
     const required = DISCORD_VIEW_CHANNEL_PERMISSION | DISCORD_READ_MESSAGE_HISTORY_PERMISSION;

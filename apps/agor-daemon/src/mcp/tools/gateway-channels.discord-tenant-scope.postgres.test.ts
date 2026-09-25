@@ -153,16 +153,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantB = `discord-b-${generateId()}` as TenantID;
       const a = await seedTenant(tenantA, db);
       const b = await seedTenant(tenantB, db);
-      const fetchChannelHistory = vi.fn(async (req: { channelId: string }) => ({
+      const fetchChannelHistory = vi.fn(async (req: { channelId?: string }) => ({
         channelId: req.channelId,
         messages: [],
         has_more: false,
         next_cursor: null,
       }));
-      vi.mocked(getConnector).mockReturnValue({
-        fetchChannelHistory,
-        resolveHistoryParentChannel: vi.fn(),
-      } as never);
+      vi.mocked(getConnector).mockReturnValue({ fetchChannelHistory } as never);
 
       const own = toolFor(db, tenantA, a.user, a.session.session_id);
       const result = await own({
