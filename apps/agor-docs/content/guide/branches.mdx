@@ -83,6 +83,29 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 ---
 
+## Files and Git changes
+
+The branch's **Files** tab has three views:
+
+- **All files** browses the working directory, with combined Git status badges.
+- **Changes** lists unstaged changes, including untracked files and conflicts.
+  Text comparisons use the index as their base.
+- **Staged changes** lists index changes and compares staged text with HEAD,
+  independently of subsequent working-directory edits.
+
+Use **Refresh** to reload files and statuses. Badges identify added, modified,
+deleted, renamed, copied, untracked, conflicted, and ignored paths without relying
+on color alone. Deleted paths remain available in the change views. Text previews
+offer **File** and **Changes** modes; Markdown is rendered in File mode. Downloads
+are available from All files and contain working-directory bytes, not index bytes.
+
+Git enrichment is best-effort and bounded: if Git is unavailable or exceeds its
+read budget, ordinary browsing remains available without status badges. Binary
+or oversized comparisons are not text previews, and complex diffs show a limit
+notice rather than blocking the browser. Use local Git for complete diffs or
+unresolved conflicts whose working file is absent. Existing branch filesystem
+read permissions apply to all three views.
+
 ## Asynchronous filesystem readiness
 
 Branch creation records the branch and dispatches worktree or clone materialization asynchronously.
@@ -103,6 +126,30 @@ cancel or retry materialization; terminal failures return the refreshed branch a
 error. Client cancellation only stops further polling. No database transaction or connection is
 retained between reads; each individual read remains subject to the daemon's normal database query
 timeout.
+
+### Source ref resolution
+
+Agor resolves a branch creation's source ref before either worktree or clone materialization:
+
+- Remote-qualified branches such as `origin/main` or `upstream/feature`, full `refs/...` names,
+  tags, and commit SHAs are never prefixed or otherwise reinterpreted.
+- A bare branch name may match a local branch and any number of remote-tracking branches. Agor uses
+  local-first, then lexically sorted remote precedence only when every match points to the same commit.
+- If matching refs point to different commits, creation fails with an actionable error listing each
+  candidate and SHA. Qualify the intended ref rather than relying on a remote-name default.
+- A missing ref fails instead of being rewritten as `origin/<name>`.
+
+Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
+explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call
+waits only for this short resolution phase even when `waitForReady` is false; filesystem
+materialization remains asynchronous unless readiness waiting is requested.
+
+Existing remote-branch checkouts stay attached to the local branch at the resolved SHA and track
+the selected remote, including non-origin remotes. Clone creation also records the normalized remote
+source so restore can fall back to it if the destination branch has not been pushed and the cache
+is unavailable. This source record does not authorize managed credentials: those remain bounded to
+trusted repository/template metadata. Older branches without this source record may still need the
+original cache to reconstruct a non-origin source.
 
 ---
 
@@ -247,7 +294,10 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 **Filesystem options:**
 
 - **Leave untouched**: Metadata-only archival. Files stay on disk.
-- **Clean workspace**: Runs `git clean -fdx` (removes `node_modules`, builds, untracked files).
+- **Clean workspace**: Requires an explicitly enabled repository cleanup policy,
+  effective branch protection to be off, and Manager authority with writable
+  workspace access. The configured default is `git clean -fdX` (uppercase X:
+  ignored files only). Disabled policy is never a fallback to the old `-fdx` command.
 - **Delete completely**: Removes the branch directory from disk.
 
 **Metadata options:**
@@ -255,7 +305,63 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
 - **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
 
-**Best practice:** Archive with filesystem cleanup after PR merge. Only delete permanently for experimental branches with no valuable data.
+When cleanup is unavailable, the archive dialog defaults to **Leave untouched**
+and warns that workspace files will remain on disk. It never selects full deletion
+automatically. A repository administrator can open **Repository settings** above
+the archive dialog; saving refreshes the command without submitting archive or
+overriding an explicit Preserve/Delete choice.
+
+### Branch cleanup settings
+
+In **Settings → Repositories → Edit**, configure **Branch cleanup**. Cleanup is
+disabled by default, including for existing repositories. The command can be
+prepared while disabled. Enabling it is executable-configuration approval and
+requires repository administrator access; Branch Manager access is not sufficient.
+
+The branch modal's **General** tab shows the repository policy and a **Protect this
+branch from cleanup** preference. Managers can save protection before
+repository enablement. If the repository disables **Allow branch protection**,
+saved preferences remain stored but are ineffective until allowance is restored.
+Protection does not prevent full filesystem deletion.
+
+`git clean -fdX` preserves tracked modifications, staged files, ordinary untracked
+files, and stashes. Ignored `.env` files, datasets, local databases, and ignored
+source can still be valuable. There is no undo. Only the exact built-in command
+`git clean -fdX` is currently executable. Custom command settings are preserved,
+but execution is blocked until the executor can prove that cleanup-created detached
+descendants have stopped. This is separate from best-effort closure of existing
+terminals. Never put secrets in saved commands.
+
+### Requesting cleanup
+
+Agents can call **agor_branches_clean** with a branch ID. API clients can call
+`branches.clean({ branchId })` or POST an empty object to
+`/branches/:id/clean`. The response is **accepted**, not completed. Read the
+branch's `workspace_operation` or watch branch updates for its result. The card
+and General tab display pending/running/succeeded/failed/unknown state and safe
+errors in a compact, dismissible notification; hover for its timestamp. Dismissal
+hides the current notification in that view, not the durable operation history.
+A new operation or status change shows a fresh notification.
+`last_cleanup_succeeded_at` records command success, not bytes reclaimed.
+
+Stop environments and finish/cancel outstanding tasks before requesting maintenance.
+One durable Branch-row claim excludes competing work; duplicate active requests
+are rejected, not dispatched again. Built-in cleanup is bounded to five minutes;
+stdout/stderr are drained without retaining file listings or secrets. Unknown or
+lost results stay fenced for operator reconciliation and are never automatically
+retried. After six minutes without a final report, reads display an unknown outcome.
+
+Archive Clean uses the same executor cycle and policy. Archive metadata may already
+be saved when a filesystem command fails; filesystem status changes only after
+verified success. Preserve and explicit workspace deletion retain conversation data
+and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
+Permanent deletion remains the separate full-resource workflow.
+
+V1 checks known task, upload and environment activity. Terminal closure is best-effort;
+detached/unmanaged processes are **not proven stopped**. Archive Clean and explicit
+workspace removal reject delegated/external executors when they would change files.
+Branch `updated_at` is metadata activity, not evidence of filesystem inactivity.
+There is no scheduler or age cutoff.
 
 ### Deletion and retained data
 
@@ -296,10 +402,14 @@ executor. Operator reconciliation is required; do not clear private maintenance 
 to force a retry. An interrupted upload reservation likewise needs reconciliation,
 not automatic expiration while its writer could still be active.
 
-Deletion currently requires a local managed executor and available authoritative
-storage roots; delegated or external launchers are rejected. Historical SDK sessions
-using a shared execution home also block deletion until their owned storage is
-reconciled; the shared user home is never recursively removed. Remote Git refs and
+Deletion requires available authoritative storage roots. Delegated launchers are
+rejected by default; operators may set `execution.delegated_branch_deletion: true`
+only when every deletion executor mounts the tenant's worktrees, base repositories,
+and `branch-homes` from the same persistent volume. The executor verifies that
+these roots are mounted separately from its container filesystem before deleting.
+Historical SDK sessions using a shared execution home also block deletion until
+their owned storage is reconciled; the shared user home is never recursively
+removed. Remote Git refs and
 shared base-repository Git history are retained. Missing ownership metadata or an
 unavailable storage root blocks deletion rather than being treated as successful
 erasure. The lazy `branch-homes` directory may be absent before the first SDK

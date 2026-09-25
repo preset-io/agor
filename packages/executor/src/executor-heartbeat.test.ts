@@ -78,7 +78,7 @@ describe('startExecutorHeartbeat', () => {
     try {
       const reportRuntimeTelemetry = vi
         .fn()
-        .mockRejectedValueOnce(new Error('offline'))
+        .mockRejectedValueOnce(Object.assign(new TypeError('offline'), { code: 'ECONNRESET' }))
         .mockRejectedValueOnce(new Error('still offline'))
         .mockResolvedValue({});
       const warn = vi.fn();
@@ -96,8 +96,12 @@ describe('startExecutorHeartbeat', () => {
 
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=write_failed'));
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('error="TypeError" code=ECONNRESET')
+      );
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('offline'));
       expect(log).toHaveBeenCalledTimes(1);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('missed_writes=2'));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('missed_writes=2 outage_ms=2000'));
       handle.stop();
     } finally {
       vi.useRealTimers();

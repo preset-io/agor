@@ -1,7 +1,20 @@
+import { USER_API_KEYS_SERVICE_PATH, type UserApiKeySource } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Input,
+  Popconfirm,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { getDaemonUrl } from '@/config/daemon';
 import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
@@ -17,6 +30,8 @@ interface ApiKeyEntry {
   id: string;
   name: string;
   prefix: string;
+  /** `cli_login` keys are minted per machine by `agor login`. */
+  source?: UserApiKeySource;
   created_at: string;
   last_used_at?: string;
 }
@@ -68,7 +83,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
       if (!client || !request.isCurrent()) return;
       setLoading(true);
       try {
-        const result = await client.service('api/v1/user/api-keys').findAll({});
+        const result = await client.service(USER_API_KEYS_SERVICE_PATH).findAll({});
         if (!request.isCurrent()) return;
         setKeys(result as ApiKeyEntry[]);
       } catch (err) {
@@ -91,7 +106,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     const name = newKeyName.trim();
     setCreating(true);
     try {
-      const result = (await client.service('api/v1/user/api-keys').create({ name })) as {
+      const result = (await client.service(USER_API_KEYS_SERVICE_PATH).create({ name })) as {
         rawKey: string;
         key: ApiKeyEntry;
       };
@@ -112,7 +127,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     if (!client || !operation.isCurrent()) return;
     setDeletingId(id);
     try {
-      await client.service('api/v1/user/api-keys').remove(id);
+      await client.service(USER_API_KEYS_SERVICE_PATH).remove(id);
       if (!operation.isCurrent()) return;
       showSuccess('API key revoked');
       await fetchKeys(operation);
@@ -141,7 +156,16 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
+      render: (name: string, record: ApiKeyEntry) => (
+        <Space size={6} wrap>
+          <HighlightMatch text={name} query={searchTerm} />
+          {record.source === 'cli_login' && (
+            <Tooltip title="Created by agor login for one machine. Delete it to sign that machine's CLI out.">
+              <Tag style={{ marginInlineEnd: 0 }}>CLI</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     {
       title: 'Key',
@@ -306,6 +330,12 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         >
           Copy to Clipboard
         </Button>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0 }}>
+          To use it with the Agor CLI, run this and paste the key when prompted:
+        </Typography.Paragraph>
+        <Typography.Text code copyable style={{ fontSize: 12 }}>
+          {`agor login --url ${getDaemonUrl()} --api-key`}
+        </Typography.Text>
       </AdaptiveSettingsModal>
     </div>
   );

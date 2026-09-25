@@ -79,6 +79,85 @@ describe('FileService executor failures', () => {
     ).rejects.toThrow('Failed to browse files: executor unavailable');
   });
 
+  it.each(['combined', 'staged', 'workingTree'] as const)(
+    'does not dispatch a %s read for a branch outside the caller tenant',
+    async (source) => {
+      const findById = vi.fn(async () =>
+        getCurrentTenantDatabaseScope()?.tenantId === 'tenant-a' ? branch : null
+      );
+      const service = new FileService(
+        createBranchRepo(findById),
+        { run: vi.fn() } as never,
+        createApp()
+      );
+      const params = {
+        query: { branch_id: branch.branch_id, git_status_source: source },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' as const },
+      };
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { file: { path: 'a.txt' } },
+      });
+      await runWithTenantContext('tenant-a', () => service.get('a.txt', params));
+      expect(requestExecutor).toHaveBeenCalledOnce();
+      vi.mocked(requestExecutor).mockClear();
+      await expect(
+        runWithTenantContext('tenant-b', () => service.get('a.txt', params))
+      ).rejects.toThrow('Branch not found');
+      expect(requestExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects invalid Git snapshot selectors before dispatch', async () => {
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
+    await expect(
+      runWithTenantContext('tenant-a', () =>
+        service.get('a.txt', {
+          query: { branch_id: branch.branch_id, git_status_source: 'HEAD~1' },
+          user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+        } as never)
+      )
+    ).rejects.toThrow('git_status_source must be');
+    expect(requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('passes the requested git snapshot to file previews', async () => {
+    vi.mocked(requestExecutor).mockResolvedValue({
+      success: true,
+      data: {
+        file: {
+          path: 'added.txt',
+          title: 'added.txt',
+          size: 6,
+          lastModified: '',
+          isText: true,
+          gitStatus: 'added',
+          content: 'staged',
+          encoding: 'utf-8',
+        },
+      },
+    });
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
+
+    await runWithTenantContext('tenant-a', () =>
+      service.get('added.txt', {
+        query: { branch_id: 'branch-1', git_status_source: 'staged' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.files.read',
+        params: expect.objectContaining({
+          filePath: 'added.txt',
+          gitStatusSource: 'staged',
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
   it.each([
     {
       operation: 'listing',

@@ -201,6 +201,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'General',
       children: (
         <GeneralTab
+          client={client}
+          currentUser={currentUser}
           branch={branch}
           repo={repo}
           sessions={sessions}
@@ -266,6 +268,9 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             label: 'Permissions',
             children: (
               <PermissionsTab
+                branchId={branch.branch_id}
+                onTransferred={onClose}
+                saving={form.saving}
                 loading={form.permissionsLoading}
                 canManageAccess={form.canManagePolicy}
                 allGroups={form.allGroups}

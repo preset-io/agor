@@ -1,4 +1,5 @@
 import type {
+  AgorClient,
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
@@ -8,7 +9,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Popover, Space, Table, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Input, Popover, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveActionButton } from '../ArchiveButton';
@@ -17,9 +18,12 @@ import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface TeammatesTableProps {
+  client?: AgorClient | null;
+  currentUser?: User | null;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
@@ -34,6 +38,8 @@ interface TeammatesTableProps {
 }
 
 export const TeammatesTable: React.FC<TeammatesTableProps> = ({
+  client,
+  currentUser,
   branchById,
   repoById,
   boardById,
@@ -277,7 +283,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       )}
 
       {(teammates.length > 0 || searchTerm) && (
-        <Table
+        <ResponsiveTable
           dataSource={teammates}
           columns={columns}
           scroll={{ x: 720 }}
@@ -294,6 +300,8 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       {/* Archive/Delete Modal */}
       {selectedBranch && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}

@@ -156,6 +156,42 @@ Agor's existing external-launch exchange; Agor then JIT-provisions the tenant-sc
 issues its normal access/refresh JWTs. Use a normal and incognito window (or two browser profiles)
 to keep two personas active simultaneously because the Agor tokens are stored per browser origin.
 
+The development issuer also signs `public_base_url` from trusted fixture configuration,
+snapshotted together with `iat` when the launch code is created. Optional
+`AGOR_HA_ACME_ORIGIN` and `AGOR_HA_GLOBEX_ORIGIN` select each tenant's origin;
+both default to `AGOR_HA_PUBLIC_ORIGIN` in plain Compose. Redirects use the selected
+tenant origin, and both replicas allow exactly these configured origins for CORS.
+No request Host header or submitted URL chooses the signed origin.
+
+The managed `ha` template uses the main ingress port for Acme and a second
+`HA_TENANT_PORT` (branch ID offset 15000) for Globex. Both ports reach the same
+nginx/replica pool. This permits separate browser storage and catches origin
+mixups without requiring DNS. To test different **hostnames**, explicitly configure
+two names that resolve to that ingress (and arrange browser DNS/TLS as needed).
+The deployment/OAuth origin remains `AGOR_HA_PUBLIC_ORIGIN`.
+
+After starting the disposable environment, run the focused, model-free routing smoke:
+
+```bash
+AGOR_HA_INTEGRATION=1 HA_URL=http://127.0.0.1:3030 \
+  HA_DAEMON_A_PORT=13031 HA_DAEMON_B_PORT=13032 \
+  AGOR_HA_ACME_ORIGIN=http://localhost:3030 \
+  AGOR_HA_GLOBEX_ORIGIN=http://localhost:3031 \
+  node scripts/test-ha-tenant-links.mjs
+```
+
+For that example, start Compose with `HA_TENANT_PORT=3031` and those two tenant
+origins; otherwise its second published port is dynamically allocated. Supply
+the same origins used when starting Compose. The test logs in both fixture
+tenants and checks interleaved board URLs on both replicas, tenant isolation, exact
+CORS, and deep-link HTML delivery. It does not run models, restart containers, or
+prove browser rendering or Cloud workspace resolution. Existing environments need
+one new picker login per tenant to initialize routing metadata. Agor stores repo
+environment templates separately: editing `.agor.yml` alone does not refresh a
+previously imported template. For branch-only testing with an older template, the
+non-secret tenant origins and `HA_TENANT_PORT` can be supplied in a gitignored
+Compose `.env` file without changing the shared repo registration.
+
 The sidecar is mounted only by the checked-in Compose file and is not copied into the daemon or UI
 product images. Do not expose this smoke stack to an untrusted network or copy its fixed personas,
 development assertion secret, or passwordless picker into a production deployment.

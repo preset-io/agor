@@ -5,14 +5,16 @@ overrides:
   '@codemirror/state': 6.7.0
   '@codemirror/view': 6.43.0
   '@esbuild-kit/core-utils>esbuild': 0.25.4
-  '@google/genai': ^1.43.0
+  '@google/genai': ^1.52.0
   # Gemini core still uses Zod 3 APIs; keep it out of the workspace-wide Zod 4 override.
   '@google/gemini-cli-core>zod': ^3.25.76
+  # Gemini 0.59 pins vulnerable 3.28.0; mirror the managed npm install override.
+  '@google/gemini-cli-core>simple-git': 3.36.0
   '@github/copilot': '>=1.0.43 <2'
   '@grpc/grpc-js': '>=1.14.4 <2'
   '@hono/node-server': '>=1.19.14 <2'
   '@isaacs/brace-expansion': '>=5.0.1 <6'
-  '@modelcontextprotocol/sdk': '>=1.29.0 <2'
+  '@modelcontextprotocol/sdk': '>=1.30.0 <2'
   '@xmldom/xmldom': '>=0.9.10 <1'
   ajv: '>=8.18.0 <9'
   axios: '>=1.18.0 <2'
@@ -34,7 +36,9 @@ overrides:
   handlebars: '>=4.7.9 <5'
   hono: '>=4.12.34 <5'
   jws: '>=4.0.1 <5'
-  js-yaml: '>=4.3.1 <5'
+  # Keep the v4 schema/options used by config and browser consumers; v5 changes
+  # empty-input and merge-key behavior. Include transitive YAML parsers in the fix.
+  js-yaml: '>=4.3.2 <5'
   lodash: '>=4.18.1 <5'
   lodash-es: '>=4.18.1 <5'
   mdast-util-to-hast: '>=13.2.1 <14'
@@ -52,21 +56,23 @@ overrides:
   protobufjs@<7.6.5: '>=7.6.5 <8'
   protobufjs@>=8.0.0 <8.0.1: '>=8.0.1 <9'
   qs: '>=6.14.2 <7'
-  rollup: 4.62.4
+  rollup: 4.63.3
   shell-quote: '>=1.8.5 <2'
+  # Next 15.5.24 supports this fixed AVIF decoder release.
+  next>sharp: '>=0.35.4 <0.36'
   shiki: 3.23.0
   smol-toml: '>=1.6.1 <2'
   engine.io: '>=6.6.7 <7'
   socket.io-parser: '>=4.2.7 <5'
   systeminformation: '>=5.31.7 <6'
   tar@<7.5.21: '>=7.5.21 <8'
-  # Keep Vite's optional tsx peer on the reviewed release until 4.23.5 clears minimumReleaseAge.
-  tsx: 4.23.1
+  # Keep Vite's optional tsx peer aligned with the workspace's reviewed runner.
+  tsx: 4.23.13
   undici: '>=7.28.0 <8'
-  vite: '>=8.2.0 <9'
+  vite: '>=8.3.0 <9'
   ws: '>=8.21.0 <9'
   yaml: '>=2.8.3 <3'
-  zod: ^4.3.6
+  zod: ^4.6.5
 peerDependencyRules:
   ignoreMissing:
     - '@opentelemetry/core'
@@ -84,8 +90,11 @@ allowBuilds:
   'esbuild@0.25.4 || 0.25.12': true
   'keytar@7.9.0': true
   'node-pty@1.0.0': true
-  'opencode-ai@1.14.33': true
-  'protobufjs@7.5.8 || 7.6.5': false
+  'opencode-ai@1.18.31': true
+  # Prebuilt JS ships in the tarball; postinstall only warns about version schemes.
+  'protobufjs@7.5.8 || 7.6.5 || 7.6.6': false
+  # Registry tarball is already built; preinstall is an echo-only no-op.
+  '@google/genai@1.52.0': false
   'sharp@0.34.5': true
   'sqlite3@5.1.7': true
   'tree-sitter-bash@0.25.0': true
@@ -95,18 +104,48 @@ allowBuilds:
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
 patchedDependencies:
+  # AntD Form's delayed-state hook must cancel timers/frames on unmount.
+  # Remove once upstream useDelayState includes effect cleanup; regression:
+  # apps/agor-ui/src/test/antdDelayState.test.tsx.
+  '@rc-component/util@1.13.0': patches/@rc-component__util@1.13.0.patch
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
 # These reviewed versions must remain installable when CI or an operator's
 # global pnpm config enforces minimumReleaseAge; this repo sets no age itself.
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.259'
-  - '@anthropic-ai/claude-agent-sdk@0.3.259'
-  - '@openai/codex-sdk@0.153.0'
-  - '@openai/codex@0.153.0-darwin-arm64 || 0.153.0-darwin-x64 || 0.153.0-linux-arm64 || 0.153.0-linux-x64 || 0.153.0-win32-arm64 || 0.153.0-win32-x64 || 0.153.0'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.280'
+  - '@anthropic-ai/claude-agent-sdk@0.3.280'
+  - '@openai/codex-sdk@0.156.1'
+  - '@openai/codex@0.156.1-darwin-arm64 || 0.156.1-darwin-x64 || 0.156.1-linux-arm64 || 0.156.1-linux-x64 || 0.156.1-win32-arm64 || 0.156.1-win32-x64 || 0.156.1'
+  - '@opencode-ai/sdk@1.18.31'
+  - opencode-ai@1.18.31
+  - opencode-darwin-arm64@1.18.31
+  - opencode-darwin-x64-baseline@1.18.31
+  - opencode-darwin-x64@1.18.31
+  - opencode-linux-arm64-musl@1.18.31
+  - opencode-linux-arm64@1.18.31
+  - opencode-linux-x64-baseline-musl@1.18.31
+  - opencode-linux-x64-baseline@1.18.31
+  - opencode-linux-x64-musl@1.18.31
+  - opencode-linux-x64@1.18.31
+  - opencode-windows-arm64@1.18.31
+  - opencode-windows-x64-baseline@1.18.31
+  - opencode-windows-x64@1.18.31
+  - '@vitest/browser-playwright@5.0.1'
+  - '@vitest/browser@5.0.1'
+  - '@vitest/coverage-v8@5.0.1'
+  - '@vitest/mocker@5.0.1'
+  - '@vitest/pretty-format@5.0.1'
+  - '@vitest/spy@5.0.1'
+  - '@vitest/ui@5.0.1'
+  - '@vitest/utils@5.0.1'
+  - vitest@5.0.1
+  - '@aws-sdk/client-s3@3.1132.0'
+  - '@aws-sdk/lib-storage@3.1132.0'
+  - open@11.0.4

@@ -61,13 +61,15 @@ it('records only bounded capacity/context tags and restores pending count after 
   vi.stubEnv('UV_THREADPOOL_SIZE', '8');
   configureSecretKeyDerivationTracing(tracer);
   const key = Buffer.alloc(32, 2);
+  const scopeDb = {} as Database;
   const first = runWithTenantContext('tenant-a', () =>
     tenantDatabaseScope.run(
       {
         kind: 'tenant',
         tenantId: 'tenant-a',
         transactionActive: true,
-        db: {} as Database,
+        db: scopeDb,
+        rootDb: scopeDb,
         postCommitCallbacks: [],
         afterCommitCallbacks: [],
       },

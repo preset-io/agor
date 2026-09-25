@@ -12,12 +12,13 @@ import {
   type TenantScopedDatabase,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
-import type { Params, UserID } from '@agor/core/types';
+import { hasMinimumRole, type Params, type UserID } from '@agor/core/types';
 import {
   deleteClaudeAuthViaExecutor,
   fenceClaudeAuthCredential,
 } from '../utils/executor-claude-auth.js';
 import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
@@ -29,6 +30,7 @@ interface ClaudeCredentialPatch {
   agentic_credential_sources?: Record<string, unknown>;
   agentic_tools?: Record<string, Record<string, unknown> | undefined>;
   unix_username?: string;
+  role?: string;
   filesystem_home?: string;
 }
 
@@ -100,7 +102,7 @@ export function createClaudeUserCredentialPatchCoordinator(
     'lockExternalUserMutation' | 'completeExternalUserMutation'
   >,
   codexAuthority?: CodexExternalRouteMutationAuthority,
-  options: { manageClaudeRoute?: boolean } = {}
+  options: { manageClaudeRoute?: boolean; backend?: ClaudeBackendOAuth } = {}
 ): ClaudeUserCredentialPatchCoordinator {
   const manageClaudeRoute = options.manageClaudeRoute !== false;
   const routeSelectors = () => {
@@ -126,6 +128,8 @@ export function createClaudeUserCredentialPatchCoordinator(
     ) {
       return false;
     }
+    if (options.backend && Object.hasOwn(data, 'role') && !hasMinimumRole(data.role, 'member'))
+      return true;
     if (Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code')) return true;
     if (Object.hasOwn(data.agentic_credential_sources ?? {}, 'claude-code')) return true;
     const patch = data.agentic_tools?.['claude-code'];
@@ -137,6 +141,18 @@ export function createClaudeUserCredentialPatchCoordinator(
     reason: 'execution_home_changed' | 'user_removed'
   ): Promise<void> {
     const selectors = routeSelectors();
+    if (options.backend) {
+      await authority.completeExternalUserMutation(
+        tenantId,
+        userId,
+        async (generation) => {
+          if (generation === undefined)
+            throw new Error('Provider OAuth mutation requires durable authority');
+          await options.backend!.retire(tenantId, userId, generation);
+        },
+        reason
+      );
+    }
     if (!selectors.delegatedHomeKey && !selectors.filesystemHome) {
       // Shared-home standalone users still need attempt invalidation and queue
       // serialization on removal, but their account row does not own the
@@ -222,6 +238,8 @@ export function createClaudeUserCredentialPatchCoordinator(
       // Trusted OAuth/logout metadata patches may bypass the recursive source
       // fence, but never a route change. A future internal caller carrying the
       // symbol must not gain a way around execution-home lifecycle authority.
+      // Eligible role changes still synchronize with refresh, without retiring the grant.
+      if (options.backend && Object.hasOwn(data, 'role')) return true;
       if (changesRoute(data)) return true;
       return changesSource(data, params);
     },
@@ -242,6 +260,14 @@ export function createClaudeUserCredentialPatchCoordinator(
     },
 
     async complete(tenantId, userId): Promise<void> {
+      if (options.backend) {
+        await authority.completeExternalUserMutation(tenantId, userId, async (generation) => {
+          if (generation === undefined)
+            throw new Error('Provider OAuth mutation requires durable authority');
+          await options.backend!.retire(tenantId, userId, generation);
+        });
+        if (!manageClaudeRoute) return;
+      }
       if (app.get('config').deployment?.mode !== 'ha') {
         // The process-global queue is retained by UsersService through this
         // callback. Standalone has no detached writer to tombstone and native

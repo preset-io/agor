@@ -291,7 +291,8 @@ describe('resolveDeploymentConfig', () => {
 
     expect(resolveDeploymentConfig(external, secrets)).toMatchObject({
       topology: { execution: 'external', sharedFilesystem: false },
-      capabilities: { claudeAuth: false, claudeOAuth: false },
+      // External backend grants do not require a daemon credential-file mount.
+      capabilities: { claudeAuth: false, claudeOAuth: true },
       executorStorage: {
         userHome: 'persistent-per-user',
         branchWorkspace: 'persistent-per-branch',

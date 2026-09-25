@@ -32,6 +32,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const { onPermissionDecision, onSendPrompt } = useAppActions();
     const connectionDisabled = useConnectionDisabled();
     const containerRef = useRef<HTMLDivElement>(null);
+    const pendingScrollFrameRef = useRef<number | null>(null);
     const userScrolledUpRef = useRef(false);
     const userScrollIntentRef = useRef(false);
     const initialMessagesScrollDoneForTaskRef = useRef<string | null>(null);
@@ -44,7 +45,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       sessionId,
       {
         enabled,
-        reactiveOptions: { taskHydration: 'lazy' },
+        reactiveOptions: { taskHydration: 'lean', cacheScope: 'preview' },
       }
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
@@ -75,9 +76,31 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }, []);
 
+    const cancelAutoScroll = useCallback(() => {
+      if (pendingScrollFrameRef.current === null) return;
+      cancelAnimationFrame(pendingScrollFrameRef.current);
+      pendingScrollFrameRef.current = null;
+    }, []);
+
     const scheduleAutoScroll = useCallback(() => {
-      requestAnimationFrame(scrollToBottom);
-    }, [scrollToBottom]);
+      if (!enabled || document.hidden || pendingScrollFrameRef.current !== null) return;
+      pendingScrollFrameRef.current = requestAnimationFrame(() => {
+        pendingScrollFrameRef.current = null;
+        if (!document.hidden && !userScrolledUpRef.current) scrollToBottom();
+      });
+    }, [enabled, scrollToBottom]);
+
+    useEffect(() => {
+      const onVisibilityChange = () => {
+        if (document.hidden) cancelAutoScroll();
+        else if (!userScrolledUpRef.current) scheduleAutoScroll();
+      };
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      return () => {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        cancelAutoScroll();
+      };
+    }, [cancelAutoScroll, scheduleAutoScroll]);
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: reset the scroll lock when the displayed task changes
     useEffect(() => {
@@ -134,11 +157,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       };
     }, [enabled, isNearBottom]);
 
-    const handleExpandChange = useCallback(() => {
-      // Peek panels intentionally show exactly one expanded latest task.
-      // Keep it open even if the TaskBlock header is clicked.
-    }, []);
-
     const handleLoadTaskMessages = useCallback(
       (taskId: string) => {
         if (!reactiveSession) return;
@@ -152,26 +170,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
       },
       [reactiveSession]
     );
-
-    const safeUnloadTaskMessages = useCallback(
-      (taskId: string) => {
-        if (!reactiveSession) return;
-        try {
-          reactiveSession.unloadTaskMessages(taskId);
-        } catch (error) {
-          if (isDisposedReactiveSessionError(error)) return;
-          throw error;
-        }
-      },
-      [reactiveSession]
-    );
-
-    useEffect(() => {
-      if (!taskId) return;
-      return () => {
-        safeUnloadTaskMessages(taskId);
-      };
-    }, [safeUnloadTaskMessages, taskId]);
 
     const loading = enabled && (!currentReactiveState || (currentReactiveState.loading && !task));
     const error = currentReactiveState?.error || null;
@@ -263,8 +261,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               sessionModel={currentSession.model_config?.model}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={true}
-              onExpandChange={handleExpandChange}
+              latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
               sessionId={currentSession.session_id}
               onPermissionDecision={onPermissionDecision}
               branchName={branchName}
@@ -276,7 +273,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               }
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
-              onUnloadTaskMessages={safeUnloadTaskMessages}
               teammateEmoji={undefined}
               isLatestTask={true}
               client={client}

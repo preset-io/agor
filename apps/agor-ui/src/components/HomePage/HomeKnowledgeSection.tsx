@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor-live/client';
 import { BulbOutlined, FileOutlined, SearchOutlined } from '@ant-design/icons';
-import { Card, Empty, Input, List, Space, Typography, theme } from 'antd';
+import { Button, Card, Empty, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -12,10 +12,13 @@ import type { KnowledgeDocument } from './types';
 
 const { Text } = Typography;
 
-const HOME_KNOWLEDGE_LIMIT = 50;
+/** Home shows the most recently updated docs; the full list lives on /knowledge. */
+export const HOME_KNOWLEDGE_LIMIT = 50;
 
-const normalizeFindResult = <T,>(result: T[] | { data?: T[] }): T[] =>
-  Array.isArray(result) ? result : (result.data ?? []);
+const normalizeFindResult = <T,>(result: T[] | { data?: T[]; total?: number }) =>
+  Array.isArray(result)
+    ? { rows: result, total: result.length }
+    : { rows: result.data ?? [], total: result.total ?? result.data?.length ?? 0 };
 
 const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
   const { token } = theme.useToken();
@@ -65,8 +68,10 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   connected,
 }) => {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const cardGlassStyle = glassCardStyle(token);
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -91,9 +96,11 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
       .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        setDocs(
-          normalizeFindResult(result as KnowledgeDocument[] | { data?: KnowledgeDocument[] })
+        const page = normalizeFindResult(
+          result as KnowledgeDocument[] | { data?: KnowledgeDocument[]; total?: number }
         );
+        setDocs(page.rows);
+        setTotal(page.total);
       })
       .catch(() => {
         if (!cancelled) setError('Failed to load knowledge docs');
@@ -124,6 +131,14 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
           allowClear
           style={{ flex: '0 1 120px', minWidth: 80, fontSize: 12 }}
         />
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12 }}
+          onClick={() => navigate('/knowledge')}
+        >
+          {total > docs.length ? `View all ${total}` : 'View all'}
+        </Button>
       </div>
       <Card
         loading={loading}

@@ -45,14 +45,6 @@ const baseProps = {
   session,
   currentUserId: 'user-1',
   footerTimerTask: null,
-  tokenBreakdown: {
-    total: 0,
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheCreation: 0,
-    cost: 0,
-  },
   latestContextWindow: null,
   sessionMcpServerIds: [] as string[],
   unauthedMcpServers: [],
@@ -163,7 +155,7 @@ describe('SessionFooter model picker persistence boundary', () => {
 
     fireEvent.click(screen.getByTestId('model-chip'));
     const reopenedInput = await screen.findByDisplayValue(savedModel);
-    for (const draft of ['g', 'gp', 'gpt-5.6-sol']) {
+    for (const draft of ['g', 'gp', 'gpt-6-sol']) {
       fireEvent.change(reopenedInput, { target: { value: draft } });
     }
 
@@ -174,7 +166,7 @@ describe('SessionFooter model picker persistence boundary', () => {
     expect(onModelConfigCommit).toHaveBeenCalledTimes(2);
     expect(onModelConfigCommit).toHaveBeenLastCalledWith({
       mode: 'exact',
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-sol',
     });
     await waitFor(() => expect(showSuccess).toHaveBeenCalledTimes(2));
     expect(updateSession).toHaveBeenCalledTimes(2);
@@ -217,4 +209,28 @@ describe('SessionFooter model picker persistence boundary', () => {
     fireEvent.blur(nextInput);
     expect(onModelConfigCommit).not.toHaveBeenCalled();
   });
+});
+
+it('opens the full model editor in the mobile sheet and commits only a completed edit', async () => {
+  const viewport = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+  try {
+    const onModelConfigCommit = vi.fn();
+    render(<SessionFooter {...baseProps} onModelConfigCommit={onModelConfigCommit} />, {
+      wrapper: Wrapper,
+    });
+    const trigger = screen.getByTestId('model-chip');
+    expect(trigger.tagName).toBe('BUTTON');
+    fireEvent.click(trigger);
+    expect(await screen.findByText('Session controls')).toBeInTheDocument();
+    const input = await screen.findByDisplayValue(exactModel);
+    fireEvent.change(input, { target: { value: 'fictional-model' } });
+    expect(onModelConfigCommit).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onModelConfigCommit).toHaveBeenCalledExactlyOnceWith({
+      mode: 'exact',
+      model: 'fictional-model',
+    });
+  } finally {
+    viewport.mockRestore();
+  }
 });

@@ -79,6 +79,12 @@ export const ROOT_COMMANDS = [
   },
   { name: 'board', description: 'Manage boards', group: 'connected', policy: 'connection' },
   {
+    name: 'kb',
+    description: 'Export and import Knowledge namespaces',
+    group: 'connected',
+    policy: 'connection',
+  },
+  {
     name: 'branch',
     description: 'Manage branches and environments',
     group: 'connected',

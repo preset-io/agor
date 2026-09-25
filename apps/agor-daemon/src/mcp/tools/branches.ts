@@ -1,5 +1,10 @@
 import { PAGINATION } from '@agor/core/config';
-import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  CapabilityPolicyRepository,
+  RepoRepository,
+  shortId,
+} from '@agor/core/db';
 import type {
   Board,
   BoardID,
@@ -12,7 +17,13 @@ import type {
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { getTeammateConfig, isTeammate } from '@agor/core/types';
+import {
+  getBranchCleanupBlockReason,
+  getTeammateConfig,
+  isTeammate,
+  OWNERSHIP_TRANSFER_SERVICES,
+  resolveRepoCleanupPolicy,
+} from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
@@ -25,6 +36,7 @@ import type {
 import type { BranchParams } from '../../services/branches.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
+import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
@@ -35,6 +47,7 @@ import {
   MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
   waitForBranchFilesystemReady,
 } from '../branch-filesystem-readiness.js';
+import { waitForBranchRefResolution } from '../branch-ref-resolution.js';
 import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
 import {
   resolveBoardId,
@@ -151,8 +164,8 @@ function readinessResponse(result: BranchFilesystemReadinessResult): {
   return { readiness, isError: true };
 }
 
-function mcpRequestSignal(requestContext: ServerContext): AbortSignal {
-  return requestContext.mcpReq.signal;
+function mcpRequestSignal(requestContext?: ServerContext): AbortSignal | undefined {
+  return requestContext?.mcpReq.signal;
 }
 
 /**
@@ -571,6 +584,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         archived_at: branch.archived_at,
         archived_by: branch.archived_by ?? null,
         last_used: branch.last_used ?? null,
+        cleanup_protected: branch.cleanup_protected ?? false,
+        cleanup_policy: resolveRepoCleanupPolicy(repo?.cleanup_policy),
+        cleanup_policy_block_reason:
+          getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false) ??
+          null,
+        workspace_operation: branch.workspace_operation ?? null,
+        cleanup_last_error: branch.cleanup_last_error ?? null,
+        last_cleanup_succeeded_at: branch.last_cleanup_succeeded_at ?? null,
         filesystem_status: normalizeFilesystemStatus(branch),
         storage_mode: branch.storage_mode ?? 'worktree',
         path: branch.path,
@@ -680,8 +701,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         sourceBranch: mcpOptionalString(
           'sourceBranch',
           'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
-            'The new branch will be created from the tip of this branch. ' +
-            'Must exist on the remote (origin) for clone storage mode; worktree storage mode may also use local refs.'
+            'Accepts local branches, remote-qualified branches (for example origin/main), tags, and commit SHAs. ' +
+            'A bare branch name is rejected when matching local or remote refs disagree; qualify it explicitly. ' +
+            'The response reports _resolution.resolved_ref and resolved_sha. Clone storage requires the resolved object to be cloneable from its selected source.'
         ),
         autoSuffix: z
           .boolean()
@@ -1000,23 +1022,43 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         )
       );
 
+      const readCreatedBranch = (branchId: BranchID | string) =>
+        ctx.app
+          .service('branches')
+          .get(branchId, freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]);
+      const resolutionResult = await waitForBranchRefResolution({
+        branch,
+        signal: mcpRequestSignal(requestContext),
+        readBranch: readCreatedBranch,
+      });
+
       const readinessResult = args.waitForReady
         ? await waitForBranchFilesystemReady({
             branchId: branch.branch_id,
             timeoutMs: args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
             signal: mcpRequestSignal(requestContext),
-            readBranch: (branchId) =>
-              ctx.app
-                .service('branches')
-                .get(
-                  branchId,
-                  freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
-                ),
+            readBranch: readCreatedBranch,
           })
         : undefined;
 
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...(readinessResult?.branch ?? branch) };
+      const response: Record<string, unknown> = {
+        ...(readinessResult?.branch ?? resolutionResult.branch),
+      };
+      response._resolution =
+        resolutionResult.outcome === 'resolved'
+          ? {
+              outcome: 'resolved',
+              requested_ref: sourceBranch ?? ref,
+              resolved_ref: resolutionResult.branch.base_ref,
+              resolved_sha: resolutionResult.branch.base_sha,
+            }
+          : {
+              outcome: resolutionResult.outcome,
+              message:
+                resolutionResult.branch.error_message ??
+                'Timed out before Agor could resolve the requested starting ref.',
+            };
 
       const formattedReadiness = readinessResult ? readinessResponse(readinessResult) : undefined;
       if (formattedReadiness) response._readiness = formattedReadiness.readiness;
@@ -1063,7 +1105,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       return {
         ...textResult(response),
-        ...(formattedReadiness?.isError ? { isError: true } : {}),
+        ...(formattedReadiness?.isError || resolutionResult.outcome !== 'resolved'
+          ? { isError: true }
+          : {}),
       };
     }
   );
@@ -1213,11 +1257,40 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   );
 
   server.registerTool(
+    'agor_branches_transfer_ownership',
+    {
+      description:
+        'Transfer management ownership of one branch to another workspace member. Only the current owner or a workspace administrator may transfer. ' +
+        'Preserves authorship and access entries; does not transfer related resources, sessions, schedules, gateway run-as, memory ownership or credentials. ' +
+        'Existing work keeps its execution identity. This is not offboarding or a pause. Returns the previous owner’s remaining policy access.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.strictObject({
+        branchId: z.uuid().describe('Full branch UUID'),
+        expectedOwnerUserId: z
+          .uuid()
+          .describe('Current primary owner UUID from a fresh branch read'),
+        targetUserId: z.uuid().describe('Successor workspace member UUID'),
+      }),
+    },
+    async (args) =>
+      textResult(
+        await ctx.app.service(OWNERSHIP_TRANSFER_SERVICES.branch).patch(
+          null,
+          {
+            expected_owner_user_id: args.expectedOwnerUserId,
+            target_user_id: args.targetUserId,
+          },
+          { ...ctx.baseServiceParams, route: { id: args.branchId } }
+        )
+      )
+  );
+
+  server.registerTool(
     'agor_branches_permissions_update',
     {
       description:
         'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
-        'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
+        'Read the current revision with agor_branches_get first. Use agor_branches_transfer_ownership to change the primary owner separately.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
@@ -1549,12 +1622,34 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  server.registerTool(
+    'agor_branches_clean',
+    {
+      description:
+        'Request branch cleanup using the enabled repository command (default git clean -fdX, ignored files only). Requires branch Manager/owner and writable workspace access; rejects protected/busy branches. Returns acceptance, not completion. Inspect branch workspace_operation for the result. No command/path/force overrides or dry-run.',
+      annotations: { destructiveHint: true },
+      inputSchema: z
+        .object({
+          branchId: mcpRequiredId('branchId', 'Branch', 'Branch to clean (UUIDv7 or short ID)'),
+        })
+        .strict(),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      return textResult(
+        await ctx.app
+          .service('/branches/:id/clean')
+          .create({}, { ...ctx.baseServiceParams, route: { id: branchId } })
+      );
+    }
+  );
+
   // Tool 6: agor_branches_archive
   server.registerTool(
     'agor_branches_archive',
     {
       description:
-        'Archive a branch (soft delete). Stops the environment if running, optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
+        'Archive a branch (soft delete). Requires idle tasks and a stopped environment; optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),
@@ -1562,13 +1657,36 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .enum(['preserved', 'cleaned', 'deleted'])
           .optional()
           .describe(
-            'What to do with the branch files on disk. "preserved" leaves files untouched, "cleaned" runs git clean -fdx (removes node_modules, builds, untracked files), "deleted" removes the entire branch directory. Default: "cleaned".'
+            'What to do with the branch files on disk. "preserved" leaves files untouched, "cleaned" runs the enabled repository cleanup command (default git clean -fdX, ignored files only), "deleted" removes the entire branch directory. Default: "cleaned" only when policy and execution access permit it; otherwise "preserved".'
           ),
       }),
     },
     async (args) => {
       const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
-      const filesystemAction = (args.filesystemAction as BranchFilesystemAction) || 'cleaned';
+      const filesystemAction =
+        (args.filesystemAction as BranchFilesystemAction | undefined) ??
+        (await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+          const repository = new BranchRepository(db);
+          const branch = await repository.findById(branchId);
+          if (!branch) return 'preserved' as const;
+          const repo = await new RepoRepository(db).findById(branch.repo_id);
+          if (getBranchCleanupBlockReason(repo?.cleanup_policy, branch.cleanup_protected ?? false))
+            return 'preserved' as const;
+          try {
+            await ensureBranchWorkspaceAccess(
+              repository,
+              branch,
+              ctx.baseServiceParams.user?.user_id,
+              ctx.baseServiceParams.user?.role as import('@agor/core/types').UserRole,
+              'all',
+              'write',
+              ctx.app.get('config').execution?.allow_superadmin === true
+            );
+            return 'cleaned' as const;
+          } catch {
+            return 'preserved' as const;
+          }
+        }));
       const result = await ctx.app
         .service('/branches/:id/archive-or-delete')
         .create(
@@ -1578,7 +1696,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         success: true,
         branch: result,
-        message: 'Branch archived successfully.',
+        message: 'Archive accepted. Inspect branch workspace_operation for filesystem completion.',
       });
     }
   );
@@ -1719,5 +1837,42 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     listTeammatesHandler
+  );
+
+  // Tool: agor_branches_retry_provisioning
+  // Explicit, non-destructive repair for a branch whose filesystem provisioning
+  // landed in 'failed'. Wraps the exact same `reposService.retryBranchProvisioning`
+  // implementation used by the REST route and the UI, so all three surfaces share
+  // one code path. Only `failed → creating` is retryable; the transition is an
+  // atomic claim, so concurrent calls can never dispatch two materializers.
+  server.registerTool(
+    'agor_branches_retry_provisioning',
+    {
+      description:
+        'Repair a branch whose git working directory failed to materialize ' +
+        "(filesystem_status 'failed') by re-dispatching provisioning. Also recovers a branch " +
+        "left 'creating' by a daemon restart. Requires branch control ('all' permission, branch " +
+        "owner, or admin). Not retryable otherwise: 'ready' is returned unchanged, a " +
+        "still-in-flight 'creating' attempt is rejected as a conflict, and " +
+        "archived/'preserved'/'cleaned'/'deleted' branches must use the restore/unarchive flow " +
+        'instead. Non-destructive — never deletes refs or directories. ' +
+        'Returns the updated branch with its new filesystem_status.',
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+      }),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, args.branchId);
+      const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.retryBranchProvisioning(branchId, ctx.baseServiceParams)
+      );
+      return textResult({
+        branch_id: branch.branch_id,
+        filesystem_status: branch.filesystem_status,
+        error_message: branch.error_message ?? null,
+        path: branch.path,
+      });
+    }
   );
 }

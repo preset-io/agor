@@ -1,5 +1,13 @@
 import { EventEmitter } from 'node:events';
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
@@ -109,6 +117,43 @@ describe.runIf(process.platform === 'linux')(
       else process.env.AGOR_EXECUTOR_PATH = previousExecutorPath;
       rmSync(root, { recursive: true, force: true });
       vi.restoreAllMocks();
+    });
+
+    it('runs fixed archive removal outside the victim mount with a real child under sandbox configuration', async () => {
+      const actual =
+        await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      spawnMock.mockImplementation(actual.spawn);
+      // A tiny storage-worker fixture exercises the real launcher and kernel
+      // removal boundary. The command handler/shared Git primitive has separate
+      // disposable-storage coverage; no child process is mocked in this test.
+      writeFileSync(
+        executorPath,
+        `#!/usr/bin/env node
+let input = ''; process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const payload = JSON.parse(input);
+  require('node:fs').rmdirSync(payload.params.removal.branchPath);
+});
+`,
+        { mode: 0o700 }
+      );
+      chmodSync(executorPath, 0o700);
+      const { spawnExecutor } = await import('./spawn-executor.js');
+      const code = await new Promise<number | null>((resolve) => {
+        spawnExecutor(
+          {
+            command: 'branch.archive',
+            params: {
+              filesystemAction: 'deleted',
+              removal: { branchPath },
+            },
+          },
+          { onExit: resolve }
+        );
+      });
+      expect(code).toBe(0);
+      expect(() => lstatSync(branchPath)).toThrow();
+      expect(spawnMock.mock.calls[0]?.[0]).not.toBe('bwrap');
     });
 
     it('materializes a fresh authority and supplies viable mount sources before request spawn', async () => {

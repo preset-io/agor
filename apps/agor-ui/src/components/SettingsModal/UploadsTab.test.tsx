@@ -67,6 +67,42 @@ describe('UploadsTab', () => {
     expect(rows[2]).toHaveTextContent('older.txt');
   });
 
+  it('offers Preview only for inline-safe types', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            uploads: [
+              'chart.png:image/png',
+              'config.yaml:application/x-yaml',
+              'page.html:text/html',
+            ].map((entry, index) => {
+              const [displayName, mimeType] = entry.split(':');
+              return {
+                ref: `upl_${index}`,
+                displayName,
+                mimeType,
+                size: 1,
+                provenance: 'browser',
+                createdAt: '2026-01-01T12:00:00.000Z',
+                expiresAt: null,
+              };
+            }),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      )
+    );
+
+    render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
+
+    expect(await screen.findByRole('button', { name: 'Preview chart.png' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview config.yaml' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview page.html' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download page.html' })).toBeInTheDocument();
+  });
+
   it('reports response parsing failures through the themed message component', async () => {
     vi.stubGlobal(
       'fetch',

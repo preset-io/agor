@@ -94,7 +94,6 @@ async function createTask(db: any, sessionId: UUID, overrides: Partial<Task> = {
     full_prompt: 'Do a thing',
     status: TaskStatus.COMPLETED,
     message_range: { start_index: 0, end_index: 2, start_timestamp: new Date().toISOString() },
-    tool_use_count: 1,
     git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
     ...overrides,
   });

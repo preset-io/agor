@@ -577,7 +577,10 @@ describe('agor_mcp_servers_create/update/attach', () => {
       auth_type: 'oauth',
       oauth_authenticated: false,
     });
-    expect(payload.next_steps.join('\n')).toContain('available MCP authentication surface');
+    // Next steps must name the tool that actually starts a sign-in, not a
+    // surface the agent has no way to reach.
+    expect(payload.next_steps.join('\n')).toContain('agor_widgets_request_oauth');
+    expect(payload.next_steps.join('\n')).toContain("mcpServerId: 'srv-new'");
   });
 
   it('does not create a server when attachToCurrentSession is requested without session context', async () => {

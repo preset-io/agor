@@ -5,6 +5,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import {
@@ -16,7 +17,7 @@ import {
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
@@ -29,9 +30,11 @@ import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
+  currentUser?: User | null;
   client: AgorClient | null;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
@@ -65,6 +68,7 @@ interface BranchesTableProps {
 }
 
 export const BranchesTable: React.FC<BranchesTableProps> = ({
+  currentUser,
   client,
   branchById,
   repoById,
@@ -638,7 +642,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       )}
 
       {hasAnyBranches && (
-        <Table
+        <ResponsiveTable
           dataSource={filteredBranches}
           columns={columns}
           rowKey="branch_id"
@@ -681,6 +685,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}

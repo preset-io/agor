@@ -336,7 +336,6 @@ describe.each(RBAC_MODES)('viewer read access ($name)', () => {
     ['branches', 'create'],
     ['branches', 'patch'],
     ['branches', 'remove'],
-    ['branches', 'updateEnvironment'],
     ['branches', 'ensureTeammateKnowledgeNamespace'],
   ])('keeps %s.%s restricted to members', async (path, method) => {
     await expect(runCapturedHooks(captured, path, method, 'viewer')).rejects.toMatchObject({
@@ -381,6 +380,8 @@ const UPDATE_NOT_ROUTED: Record<string, string | readonly string[]> = {
   'artifacts/:id/trust': 'no update method — custom route exposes create only',
   'boards/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
   'branches/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
+  'boards/:id/ownership': 'no update method — ownership command exposes patch only',
+  'branches/:id/ownership': 'no update method — ownership command exposes patch only',
   'gateway-channels': GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
   'group-memberships': GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   groups: GROUPS_SERVICE_TRANSPORT_METHODS,

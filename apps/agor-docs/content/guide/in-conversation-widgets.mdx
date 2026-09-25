@@ -1,6 +1,6 @@
 ---
 title: In-Conversation Widgets
-description: Agents can render small interactive UI inline in the transcript (a form, a button, a picker) that captures user input without that input ever entering the LLM's context. v1 ships the env_vars widget.
+description: Agents can render small interactive UI inline in the transcript (a form, a button, a picker) that captures user input without that input ever entering the LLM's context. Three widget types ship — env_vars, oauth, and gateway_token.
 ---
 
 # In-Conversation Widgets
@@ -9,7 +9,15 @@ description: Agents can render small interactive UI inline in the transcript (a 
 
 **Widgets fix that.** When the agent calls a widget tool, a small form renders inline in the transcript. You fill it out. The values flow **directly browser → daemon**. They never reach the agent. A sanitized "[Agor] User submitted X" prompt is auto-queued into the agent's next turn so it can pick up where it left off.
 
-Widgets are a primitive. v1 ships one widget type (`env_vars`) as the canonical example. Future widget types (confirmations, OAuth connect, MCP-server picker, file picker) use the same plumbing.
+Widgets are a primitive, and three types ship on it:
+
+| Type            | The agent calls                      | You get                                                                   |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `env_vars`      | `agor_widgets_request_env_vars`      | A form for an environment variable, API key, or token the agent needs     |
+| `oauth`         | `agor_widgets_request_oauth`         | A **Connect** button that runs the real browser sign-in for an MCP server |
+| `gateway_token` | `agor_widgets_request_gateway_token` | An admin-only form for a gateway channel's platform credentials           |
+
+They share one lifecycle, one security contract, and one auto-resume path. Further types (confirmations, MCP-server picker, file picker) would use the same plumbing.
 
 ---
 
@@ -84,20 +92,89 @@ If you hit **Dismiss**, the widget marks itself dismissed and queues an explicit
 
 ---
 
+## The oauth widget
+
+This is the widget the agent calls when you say **"connect me to Notion"**, or when a task needs an MCP server you have not authorized yet. Before it existed, the honest answer an agent could give was "sign in from an available authentication surface" — advice nobody could act on from a Slack thread.
+
+> **Agents should prefer the widget over Settings instructions here too.** Agor's system prompt tells agents to call `agor_widgets_request_oauth` rather than writing "open Settings → MCP Servers" or "open the MCP Catalog". Settings remains the manual route; it is not the first answer.
+
+### What you see
+
+A card in the transcript naming the server, why the agent wants it, and — when the server comes from the [MCP Catalog](./mcp-servers.mdx) — the entry's plain-language statement of what connecting grants. You read that **before** anything is granted. Then one button: **Connect**.
+
+Clicking it runs the ordinary browser OAuth flow: a pop-up opens, you sign in with the provider, the provider redirects back to Agor, and Agor exchanges and stores the grant. **No token passes through the page, and none reaches the agent** — the card only ever learns a name, a mode, and whether the attach succeeded.
+
+A workspace-wide (shared) connection says so on the card, and only an admin can mint or complete one: everyone in the Agor workspace would use the account you sign in with.
+
+### What happens after you sign in
+
+Agor re-reads the stored grant before it believes anything. The browser saying "I signed in" is not evidence — if the grant is not there, the card stays clickable and you can try again. Once the grant is real, the MCP server is attached to the session and the agent is resumed:
+
+```
+[Agor] User connected "Notion" and it is now attached to this session. Its tools become available on your next turn — use them to continue.
+```
+
+Its tools appear on the agent's **next** turn, not the current one — the server is attached after the grant lands, never before, so the agent is never handed a server it cannot authenticate to.
+
+If you are allowed to prompt the session but not to change its MCP servers, the sign-in still counts: the grant is yours and it is real. The card says the attach needs the session owner or an admin, and the agent is told what to ask for rather than being sent to repeat a sign-in that already worked.
+
+### If you asked from Slack
+
+Ask in a Slack thread and the card comes to you: Agor posts a **Connect _Notion_** button into the same thread, and edits that one message in place as the request moves on — signing in, connected, expired, cancelled, or replaced by a newer request. One widget, one Slack message, edited rather than replaced. Slack delivery is [at least once](./message-gateway.mdx#recovering-mcp-sign-in-from-slack), so a provider outage or a crash at the send/commit boundary can briefly leave a second copy; Agor reconciles it by editing or deleting the duplicate, and a newer request retires the earlier card. Every copy carries the same expiring, single-use, user-bound link, so a stale one grants nothing.
+
+Tapping it opens an Agor page that checks the link is still live and that **you** are the person it was issued for, then runs the same browser sign-in the canvas card runs. The link is one-use and short-lived; when it lapses, the card in the thread says so rather than leaving a button that fails. Nothing about the tap grants anything on its own — the sign-in still has to complete in a browser, and Agor still re-reads the stored grant before it believes it.
+
+If your browser blocks the sign-in window — Slack's in-app browser on a phone commonly does — the page says so and the button stays live: allow pop-ups and tap again, or open the link in your usual browser.
+
+The agent is also handed a link to the Agor session and told to relay it. That is the fallback you will see if the card could not be posted, if an administrator has turned the Slack card off, or if you asked from a thread Agor is not configured to write into. It is not a guarantee: it needs Agor's configured URL to be reachable from your browser, you to be signed in to Agor with permission to prompt that session, and pop-ups allowed for the sign-in window. When one of those does not hold, connect from the [MCP Catalog](./mcp-servers.mdx) in Agor instead.
+
+### If you asked from Discord or GitHub
+
+The card renders in the Agor transcript, which is not where you are, and Agor does not post a card into these threads. The agent is handed a link to the session and told to relay it — open it, click **Connect**, and come back.
+
+### If you asked from Teams
+
+The agent refuses, in the thread, and there is no setting that changes it. Teams has no way to map its senders to Agor accounts, so a sign-in started there would save the credential under the channel's own account — see below. Connect from the Agor canvas instead.
+
+### If the sign-in worked but the connection did not finish
+
+Signing in is not the last step. Agor stores the grant, then attaches the server to the session and wakes the assistant — and those last two wait on the page you signed in from. Close the tab or lose the connection in between and the sign-in is still saved; the request just is not finished.
+
+You do not have to sign in again. The card in the thread becomes **Finish connecting _Notion_** and the canvas card does the same; either finishes it in one tap. If the link has lapsed by then, ask again in the thread and Agor completes it without a second sign-in. **Nothing you did is lost, and Agor never tells you nothing was connected when the only missing step is its own.**
+
+### What fails closed, on every platform
+
+If the gateway channel does not map platform users to Agor accounts, every message in it runs as one shared account, so a sign-in started there would mint a credential the whole channel could drive: the agent refuses and names the setting to turn on, and the Slack card says the same thing in the thread if alignment is switched off after the card was posted. Slack, Discord, GitHub, and Shortcut each have that setting; Teams has none, so it is refused outright and the refusal says so rather than naming a switch that does not exist. A card retired that way stays retired — re-enabling the setting does not make a weeks-old button clickable; ask again and you get a fresh one.
+
+The connection is always looked up and stored under **the person who is actually prompting** — never the session's owner. In a shared Slack channel (as opposed to a DM) Agor says so once in the thread, because what a connected account returns becomes readable by everyone in it.
+
+### Already connected
+
+If you already hold a usable connection, no button appears. Agor attaches the server and resumes the agent immediately. A second request for the same server retires the earlier card rather than stacking a second button beside it — best effort over the recent transcript rather than a guarantee about every card a long conversation ever produced, and an older card that is missed grants nothing when tapped.
+
+---
+
+## The gateway_token widget
+
+Admin-only, and narrower: when you are wiring up a Slack, Discord, GitHub, or Teams channel, the agent calls `agor_widgets_request_gateway_token` rather than asking you to paste platform credentials into chat. The same contract applies — the values go browser → daemon, the agent learns only which channel and which field names, and it is told to wait for the verified result before reporting the channel as connected. See [Message Gateway](./message-gateway.mdx).
+
+---
+
 ## Security guarantees
 
 The widget primitive has one hard requirement: **submitted values never enter the LLM's context.** Triple-checked:
 
-| Path                              | Carries values?                                                        |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| Agent → MCP tool call             | **No**, input schema only accepts names + reason + variable_metadata   |
-| Widget message row                | **No**, the row stores params (names, reason, ...) and lifecycle state |
-| MCP tool return value             | **No**, returns `{ widget_id, status }` only                           |
-| Browser → daemon submit           | **Yes**, direct HTTP, authenticated, never traverses the agent         |
-| Daemon → users service            | **Yes**, encrypted at the boundary, never logged                       |
-| Auto-resume prompt to agent       | **No**, built from sanitized `result_meta` (just names + scope)        |
-| `widget:resolved` WebSocket event | **No**, same sanitized payload                                         |
-| Transcript reload                 | **No**, the row never held values                                      |
+| Path                              | Carries values?                                                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent → MCP tool call             | **No**, input schema only accepts names + reason + variable_metadata                                                                 |
+| Widget message row                | **No**, the row stores params (names, reason, ...) and lifecycle state                                                               |
+| MCP tool return value             | **No**, returns `{ widget_id, status }` only                                                                                         |
+| Browser → daemon submit           | **Yes**, direct HTTP, authenticated, never traverses the agent                                                                       |
+| Browser → provider (`oauth`)      | **No value ever reaches the browser** — the provider redirects to Agor's own callback, which exchanges the code and stores the grant |
+| Daemon → users service            | **Yes**, encrypted at the boundary, never logged                                                                                     |
+| Auto-resume prompt to agent       | **No**, built from sanitized `result_meta` (just names + scope)                                                                      |
+| `widget:resolved` WebSocket event | **No**, same sanitized payload                                                                                                       |
+| Transcript reload                 | **No**, the row never held values                                                                                                    |
 
 The disclaimer text on the form (_"Type values here, never paste them into chat"_) is there for one specific reason: if the agent goes off-script and asks you to type a value into chat instead of into the widget, **don't**. The widget is the only path that preserves the no-LLM-context guarantee.
 

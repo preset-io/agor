@@ -101,6 +101,12 @@ external_launch:
   provider_id: agor-ha-dev-launcher
   dev_shared_secret_env: AGOR_EXTERNAL_LAUNCH_SHARED_SECRET
   allow_admin_roles: true
+  # Production-shaped like Agor Cloud Cells: the ingress (docker/ha/nginx.conf)
+  # overwrites Host with the exact browser host:port, and the daemon trusts it.
+  # Launch forwards it as request_host, and personal API keys are routed to the
+  # tenant whose launch-observed public URL owns that host.
+  forward_request_host: true
+  trusted_host_header: host
   # Materialized by docker/ha/docker-entrypoint.sh from the branch-specific
   # public ingress origin. The launcher itself remains outside the product UI.
   login_redirect_url: __AGOR_HA_PUBLIC_ORIGIN__/dev-auth/

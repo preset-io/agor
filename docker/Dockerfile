@@ -143,7 +143,7 @@ FROM base AS development
 
 # Source mode resolves OpenCode from PATH; keep its exact development runtime
 # out of the shared production base.
-RUN sudo npm install -g opencode-ai@1.14.33
+RUN sudo npm install -g opencode-ai@1.18.31
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -156,7 +156,9 @@ COPY packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencod
 COPY packages/agentic-tools/package.json ./packages/agentic-tools/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
-COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
+# pnpm validates every patchedDependencies file before a frozen install.
+# Copy the complete set so new patches also reach managed development builds.
+COPY patches/ ./patches/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container

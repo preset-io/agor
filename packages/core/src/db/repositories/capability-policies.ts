@@ -13,6 +13,7 @@ import type {
   CapabilityPolicyWorkspacePreferences,
   EffectiveCapabilityPolicyAccess,
   GroupID,
+  OwnershipTransferRequest,
   SessionPromptAuthority,
   SessionSdkHomeScope,
   UserID,
@@ -28,6 +29,7 @@ import {
   resolveCapabilityPolicyAccess,
   validateCapabilityPolicyDraft,
 } from '../../types/capability-policy';
+import { hasMinimumRole, ROLES } from '../../types/user';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -465,6 +467,83 @@ export class CapabilityPolicyRepository {
       },
       branch_template: await this.loadBranchConfig(template.config_id),
     };
+  }
+
+  /**
+   * Narrow persistence seam for the authorized ownership service. Never rewrite
+   * authorship, access entries, inherited templates, or runtime identities here.
+   * The expected owner protects the service's authorization decision while the
+   * resource row lock serializes with policy changes and resource deletion.
+   */
+  async transferPrimaryOwner(
+    kind: 'board' | 'branch',
+    id: BoardID | BranchID,
+    request: OwnershipTransferRequest
+  ): Promise<void> {
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        // Validate and lock the recipient before the resource, matching authority
+        // writers' user -> resource lock order. There is no persisted inactive-user
+        // state today; eligibility is existing same-tenant Member or above.
+        await lockRowForUpdate(tx, this.db, users, eq(users.user_id, request.target_user_id));
+        const target = await select(tx, { role: users.role })
+          .from(users)
+          .where(eq(users.user_id, request.target_user_id))
+          .one();
+        if (!target || !hasMinimumRole(target.role, ROLES.MEMBER)) {
+          throw new RepositoryError('The successor must be an existing member of this workspace');
+        }
+        if (request.target_user_id === request.expected_owner_user_id) {
+          throw new RepositoryError('Choose a different primary owner');
+        }
+        if (kind === 'board') {
+          await lockRowForUpdate(tx, this.db, boards, eq(boards.board_id, id));
+          const changed = await update(tx, boards)
+            .set({ primary_owner_user_id: request.target_user_id, updated_at: new Date() })
+            .where(
+              and(
+                eq(boards.board_id, id),
+                eq(boards.primary_owner_user_id, request.expected_owner_user_id)
+              )
+            )
+            .run();
+          if (changed.rowsAffected !== 1)
+            throw new RepositoryError('Primary owner changed; reload before saving');
+        } else {
+          await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
+          const branch = await select(tx, {
+            deletion_status: branches.deletion_status,
+            data: branches.data,
+          })
+            .from(branches)
+            .where(eq(branches.branch_id, id))
+            .one();
+          if (branch?.deletion_status) {
+            throw new RepositoryError(
+              'Cannot transfer a branch while permanent deletion is pending'
+            );
+          }
+          if (branch?.data.maintenance) {
+            throw new RepositoryError(
+              'Branch maintenance is in progress; ownership transfer is disabled'
+            );
+          }
+          const changed = await update(tx, branches)
+            .set({ primary_owner_user_id: request.target_user_id, updated_at: new Date() })
+            .where(
+              and(
+                eq(branches.branch_id, id),
+                eq(branches.primary_owner_user_id, request.expected_owner_user_id)
+              )
+            )
+            .run();
+          if (changed.rowsAffected !== 1)
+            throw new RepositoryError('Primary owner changed; reload before saving');
+        }
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   async getBranchPolicy(branchId: BranchID): Promise<BranchCapabilityPolicy> {

@@ -885,6 +885,46 @@ describe('Knowledge MCP input schemas', () => {
     );
   });
 
+  it('bounds teammate context memory with a server-honored page limit', async () => {
+    const memoryDoc = { document_id: 'doc-1', path: 'memory/today.md', content: 'body' };
+    const find = vi.fn().mockResolvedValue({ total: 40, limit: 3, skip: 0, data: [memoryDoc] });
+    const tools = await captureKnowledgeTools(
+      {
+        sessions: { get: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) },
+        branches: {
+          get: vi.fn().mockResolvedValue({
+            branch_id: 'branch-1',
+            teammate: { kb: { primary_namespace_id: 'ns-1', primary_namespace_slug: 'teammate' } },
+          }),
+        },
+        'kb/namespaces': {
+          get: vi
+            .fn()
+            .mockResolvedValue({ namespace_id: 'ns-1', slug: 'teammate', archived: false }),
+        },
+        'kb/documents': { find },
+      },
+      { sessionId: 'session-1' }
+    );
+
+    const result = textResultJson(
+      await tools.agor_teammate_context.handler?.({ limit: 3 })
+    ) as Record<string, any>;
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          namespace_id: 'ns-1',
+          kind: 'memory',
+          $limit: 3,
+          $sort: { updated_at: -1 },
+        }),
+      })
+    );
+    expect(find.mock.calls[0][0].query).not.toHaveProperty('limit');
+    expect(result.memory).toEqual([memoryDoc]);
+  });
+
   it('applies Knowledge search content shaping to teammate memory search', async () => {
     const find = vi.fn().mockResolvedValue([
       {

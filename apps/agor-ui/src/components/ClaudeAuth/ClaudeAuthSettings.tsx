@@ -10,7 +10,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { type AgenticToolFieldConfig, ApiKeyFields, type FieldStatus } from '../ApiKeyFields';
 import { FieldRow } from '../SettingsModal/panelPrimitives';
-import { CLAUDE_OAUTH_STORAGE_DESCRIPTION, ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
+import {
+  CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION,
+  CLAUDE_OAUTH_STORAGE_DESCRIPTION,
+  ClaudeOAuthSignIn,
+} from './ClaudeOAuthSignIn';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -33,7 +37,7 @@ function viewForCredentialSource(
   method: AgenticAuthMethod,
   prev: ClaudeMethodView
 ): ClaudeMethodView {
-  if (source === 'managed_file') return 'oauth';
+  if (source === 'managed_file' || source === 'managed_oauth') return 'oauth';
   if (source === 'subscription_token') return 'token';
   if (source === 'api_key') return 'api_key';
   return viewForMethod(method, prev);
@@ -67,6 +71,7 @@ export interface ClaudeAuthSettingsProps {
   allowSubscriptionLogin?: boolean;
   /** Deployment capability for daemon-driven Claude OAuth. Fail-closed by default. */
   allowOAuthSignIn?: boolean;
+  oauthCapability?: import('@agor/core/types').ClaudeOAuthCapability;
   /** Caller-private draft lifecycle key, forwarded to credential inputs. */
   identityKey?: string | null;
   /** Cancels async continuations when caller/connection authority changes. */
@@ -91,10 +96,13 @@ export function ClaudeAuthSettings({
   publicValues,
   allowSubscriptionLogin = true,
   allowOAuthSignIn = false,
+  oauthCapability,
   identityKey,
   operationScope,
 }: ClaudeAuthSettingsProps) {
   const { token } = useToken();
+  const backendStorage =
+    oauthCapability?.storage === 'backend' || credentialSource === 'managed_oauth';
   const [view, setView] = useState<ClaudeMethodView>(() =>
     viewForCredentialSource(credentialSource, authMethod, 'oauth')
   );
@@ -178,12 +186,14 @@ export function ClaudeAuthSettings({
   const handleAuthenticated = useCallback(() => {
     setProbing(false);
     setProbe({
-      status: 'authenticated',
-      authenticated: true,
+      status: backendStorage ? 'unknown' : 'authenticated',
+      authenticated: !backendStorage,
       method: 'oauth',
-      hint: 'Claude subscription login connected.',
+      hint: backendStorage
+        ? 'Claude login saved securely in the backend; provider validation has not been performed.'
+        : 'Claude subscription login connected.',
     });
-  }, []);
+  }, [backendStorage]);
 
   // Remove the Claude login from this server (delete-only, no token revocation).
   // The daemon deletes credentials.json and clears the stored token + method,
@@ -241,7 +251,13 @@ export function ClaudeAuthSettings({
           />
         );
       }
-      return null;
+      return (
+        <Alert
+          type="info"
+          showIcon
+          message={probe.hint ?? 'Claude login has not been validated.'}
+        />
+      );
     }
     if (authenticated && probe.method === 'api-key') {
       return (
@@ -270,10 +286,22 @@ export function ClaudeAuthSettings({
     <Form component={false} layout="vertical">
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">
-          API keys and pasted tokens are encrypted at rest. Claude sign-in uses a private credential
-          file in the execution home.
+          {backendStorage
+            ? CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION
+            : 'API keys and pasted tokens are encrypted at rest. Claude sign-in uses a private credential file in the execution home.'}
         </Text>
 
+        {oauthCapability?.reason && (
+          <Alert
+            type="info"
+            showIcon
+            message={
+              oauthCapability.reason === 'operator_disabled'
+                ? 'Claude sign-in is disabled by the operator. Existing logins can still be disconnected.'
+                : 'Claude sign-in is unavailable in this execution mode. Use an API key or pasted subscription token; saved logins can still be disconnected.'
+            }
+          />
+        )}
         {allowSubscriptionLogin && (connectionBanner || authMethod === 'subscription') && (
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             {connectionBanner}
@@ -293,11 +321,17 @@ export function ClaudeAuthSettings({
                   title="Disconnect Claude login?"
                   description={
                     <div style={{ maxWidth: 340 }}>
-                      Signs Claude out on this server only — your other devices stay signed in. In
-                      shared-identity setups this is one login for the whole server, so removing it
-                      disconnects Claude for everyone on it. To revoke this login everywhere, use
-                      your Claude account settings or run <Text code>/logout</Text> on a machine
-                      where you're signed in.
+                      {backendStorage ? (
+                        'Removes your saved backend login and prevents new token delivery. Already-running tasks may continue until their token expires. Other devices stay signed in.'
+                      ) : (
+                        <>
+                          Signs Claude out on this server only — your other devices stay signed in.
+                          In shared-identity setups this is one login for the whole server, so
+                          removing it disconnects Claude for everyone on it. To revoke this login
+                          everywhere, use your Claude account settings or run{' '}
+                          <Text code>/logout</Text> on a machine where you're signed in.
+                        </>
+                      )}
                     </div>
                   }
                   okText="Disconnect"
@@ -358,12 +392,17 @@ export function ClaudeAuthSettings({
         {allowSubscriptionLogin && allowOAuthSignIn && view === 'oauth' && (
           <div>
             <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
-              {CLAUDE_OAUTH_STORAGE_DESCRIPTION}
+              {backendStorage
+                ? CLAUDE_BACKEND_OAUTH_STORAGE_DESCRIPTION
+                : CLAUDE_OAUTH_STORAGE_DESCRIPTION}
             </Text>
             <ClaudeOAuthSignIn
               client={client}
               operationScope={effectiveOperationScope}
-              connected={credentialSource === 'managed_file'}
+              storage={backendStorage ? 'backend' : 'local_file'}
+              connected={
+                credentialSource === 'managed_file' || credentialSource === 'managed_oauth'
+              }
               onVerified={handleAuthenticated}
               autoStart={false}
             />

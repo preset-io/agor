@@ -6,13 +6,13 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { select, update } from '../database-wrapper';
-import { messages as messagesTable } from '../schema';
+import { messages as messagesTable, tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
@@ -386,6 +386,12 @@ describe('MessagesRepository.findAll', () => {
     expect(visible.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
 
     const visiblePage = await messages.findPage({ visibleToUserId: viewerId, limit: 1, skip: 0 });
+    const hiddenLean = await messages.findPage({
+      sessionId: hiddenSession.session_id,
+      visibleToUserId: viewerId,
+      lean: true,
+    });
+    expect(hiddenLean).toEqual({ data: [], total: 0 });
     expect(visiblePage.total).toBe(1);
     expect(visiblePage.data.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
   });
@@ -880,5 +886,332 @@ describe('MessagesRepository.mutateMetadataLocked', () => {
     expect(attempts.filter((attempt) => attempt.changed)).toHaveLength(1);
     const stored = await new MessagesRepository(db).findById(message.message_id);
     expect(stored?.metadata?.widget?.status).toBe('resolving');
+    const lean = await new MessagesRepository(db).findPage({ sessionId, lean: true });
+    expect(lean.data[0].metadata?.widget).toEqual(stored?.metadata?.widget);
   });
+});
+
+describe('lean transcript POC', () => {
+  dbTest(
+    'keeps reasoning-only history discoverable without transferring reasoning',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      await createMessages(repository, [
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 0,
+          content: [{ type: 'thinking', text: 'REASONING_PAYLOAD_CANARY' }],
+        }),
+      ]);
+      const lean = await repository.findPage({ sessionId, taskId, lean: true });
+      expect(lean.data[0].has_deferred_reasoning).toBe(true);
+      expect(lean.data[0].content).toEqual([]);
+      expect(JSON.stringify(lean)).not.toContain('REASONING_PAYLOAD_CANARY');
+      const full = await repository.findPage({ taskId });
+      expect(JSON.stringify(full)).toContain('REASONING_PAYLOAD_CANARY');
+    }
+  );
+
+  dbTest(
+    'projects in SQL, preserves text/order and never transfers tool canaries from DB',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      const canary = `TOOL_PAYLOAD_CANARY_${'x'.repeat(100_000)}`;
+      const input = { command: canary };
+      const source = [
+        createMessageData({ session_id: sessionId, task_id: taskId, index: 0, content: 'Prompt' }),
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 1,
+          role: MessageRole.ASSISTANT,
+          type: 'assistant',
+          content_preview: canary,
+          metadata: { is_btw_result: true, btw_prompt: 'Side question', arbitrary: canary },
+          content: [
+            { type: 'text', text: 'Before' },
+            { type: 'tool_use', id: 'call', name: 'Bash', input },
+            { type: 'text', text: 'After' },
+          ],
+          tool_uses: [{ id: 'call', name: 'Bash', input }],
+        }),
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 2,
+          content: [{ type: 'tool_result', tool_use_id: 'call', content: canary }],
+        }),
+      ];
+      await createMessages(repository, source);
+      const client = (
+        db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+      ).$client;
+      const execute = vi.spyOn(client, 'execute');
+      const lean = await repository.findPage({ sessionId, taskId, lean: true });
+      expect(lean.data.map((item) => item.message_id)).toEqual(
+        source.map((item) => item.message_id)
+      );
+      expect(lean.data.map((item) => item.content)).toEqual([
+        'Prompt',
+        [
+          { type: 'text', text: 'Before' },
+          { type: 'text', text: 'After' },
+        ],
+        [],
+      ]);
+      expect(lean.data[1].metadata).toMatchObject({
+        is_btw_result: true,
+        btw_prompt: 'Side question',
+      });
+      expect(JSON.stringify(lean)).not.toContain('TOOL_PAYLOAD_CANARY');
+      for (const result of execute.mock.results) {
+        expect(JSON.stringify(await result.value)).not.toContain('TOOL_PAYLOAD_CANARY');
+      }
+      execute.mockRestore();
+      const full = await repository.findPage({ taskId });
+      expect(JSON.stringify(full)).toContain('TOOL_PAYLOAD_CANARY');
+      expect(full.data.map((item) => item.message_id)).toEqual(
+        lean.data.map((item) => item.message_id)
+      );
+      expect(
+        await repository.findPage({ sessionId: await createTestSession(db), taskId, lean: true })
+      ).toEqual({ data: [], total: 0 });
+      expect(
+        (await repository.findPage({ sessionId, lean: true, select: ['message_id'] })).data
+      ).toEqual(source.map((item) => ({ message_id: item.message_id })));
+    }
+  );
+
+  dbTest(
+    'retains actionable approval inputs but excludes resolved approval inputs',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      for (const [index, status] of [
+        PermissionStatus.APPROVED,
+        PermissionStatus.PENDING,
+      ].entries()) {
+        await repository.create(
+          createMessageData({
+            session_id: sessionId,
+            task_id: taskId,
+            type: 'permission_request',
+            index,
+            content: {
+              request_id: `request-${index}`,
+              tool_name: 'Bash',
+              tool_input: { command: 'APPROVAL_CANARY' },
+              status,
+            },
+          })
+        );
+      }
+      const lean = await repository.findPage({ sessionId, lean: true });
+      expect(lean.data[0].content).toMatchObject({
+        tool_input: {},
+        status: PermissionStatus.APPROVED,
+      });
+      expect(lean.data[1].content).toMatchObject({
+        tool_input: { command: 'APPROVAL_CANARY' },
+        status: PermissionStatus.PENDING,
+      });
+    }
+  );
+
+  dbTest(
+    'measures synthetic same-page, latest-task and expansion response bytes',
+    async ({ db }) => {
+      const repository = new MessagesRepository(db);
+      for (const dataset of ['tool-heavy', 'message-heavy']) {
+        const sessionId = await createTestSession(db);
+        const textBytes = dataset === 'tool-heavy' ? 256 : 16_384;
+        const toolBytes = dataset === 'tool-heavy' ? 100_000 : 128;
+        let latestTaskId: TaskID | undefined;
+        for (let taskIndex = 0; taskIndex < 100; taskIndex++) {
+          const taskId = await createTestTask(db, sessionId);
+          latestTaskId = taskId;
+          const input = { value: `CANARY${'x'.repeat(toolBytes)}` };
+          await createMessages(repository, [
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3,
+              content: 'u'.repeat(textBytes),
+            }),
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3 + 1,
+              role: MessageRole.ASSISTANT,
+              type: 'assistant',
+              content: [
+                { type: 'text', text: 'a'.repeat(textBytes) },
+                { type: 'tool_use', id: 'call', name: 'Bash', input },
+              ],
+              tool_uses: [{ id: 'call', name: 'Bash', input }],
+            }),
+            createMessageData({
+              session_id: sessionId,
+              task_id: taskId,
+              index: taskIndex * 3 + 2,
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'call',
+                  content: `CANARY${'y'.repeat(toolBytes)}`,
+                },
+                { type: 'text', text: 'b'.repeat(textBytes) },
+              ],
+            }),
+          ]);
+        }
+        const full = await repository.findPage({ sessionId, skip: 270, limit: 30 });
+        const lean = await repository.findPage({ sessionId, skip: 270, limit: 30, lean: true });
+        const expanded = await repository.findPage({ taskId: latestTaskId });
+        const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+        expect(JSON.stringify(lean)).not.toContain('CANARY');
+        expect(bytes(lean)).toBeLessThan(bytes(full));
+        console.info(
+          'LEAN_POC_BYTES',
+          JSON.stringify({
+            dataset,
+            tasks: 100,
+            messages: 300,
+            pageTasks: 10,
+            textBytes,
+            toolBytes,
+            samePageFull: bytes(full),
+            initialLean: bytes(lean),
+            latestTaskBaselineAndExpansion: bytes(expanded),
+          })
+        );
+      }
+    },
+    60_000
+  );
+});
+
+describe('recorded tool count snapshots', () => {
+  dbTest(
+    'counts distinct persisted IDs at completion, not results, mirrors, or retries; late writes invalidate',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const taskId = await createTestTask(db, sessionId);
+      const repository = new MessagesRepository(db);
+      const tasks = new TaskRepository(db);
+      const call = { id: 'call-1', name: 'Read', input: { canary: 'TOOL_INPUT_CANARY' } };
+      const first = await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          content: [{ type: 'tool_use', ...call }],
+          tool_uses: [call],
+        })
+      );
+      await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 1,
+          content: [
+            { type: 'tool_use', ...call },
+            { type: 'tool_result', tool_use_id: call.id, content: 'RESULT_CANARY' },
+          ],
+        })
+      );
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+      const completed = await tasks.update(taskId, { status: TaskStatus.COMPLETED });
+      expect(completed.recorded_tool_count).toBe(1);
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBe(1);
+      expect((await tasks.update(taskId, { recorded_tool_count: 0 })).recorded_tool_count).toBe(1);
+      await repository.update(first.message_id, { content: 'replaced' });
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+      await update(db, tasksTable)
+        .set({
+          data: {
+            ...(await select(db).from(tasksTable).where(eq(tasksTable.task_id, taskId)).one())!
+              .data,
+            recorded_tool_count: 1,
+          },
+        })
+        .where(eq(tasksTable.task_id, taskId))
+        .run();
+      await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: taskId,
+          index: 2,
+          content: 'late message',
+        })
+      );
+      expect((await tasks.findById(taskId))?.recorded_tool_count).toBeNull();
+    }
+  );
+
+  dbTest(
+    'leaves legacy zero unknown; verifies empty, failed, and result-only turns independently',
+    async ({ db }) => {
+      const sessionId = await createTestSession(db);
+      const tasks = new TaskRepository(db);
+      const legacyId = await createTestTask(db, sessionId);
+      const row = await select(db).from(tasksTable).where(eq(tasksTable.task_id, legacyId)).one();
+      const { recorded_tool_count: _count, ...legacyData } = row!.data;
+      Object.assign(legacyData, { tool_use_count: 99 });
+      await update(db, tasksTable)
+        .set({ status: TaskStatus.COMPLETED, data: legacyData })
+        .where(eq(tasksTable.task_id, legacyId))
+        .run();
+      expect((await tasks.findById(legacyId))?.recorded_tool_count).toBeUndefined();
+      expect(await tasks.findById(legacyId)).not.toHaveProperty('tool_use_count');
+      expect((await tasks.findPage({ taskId: legacyId })).data[0]).not.toHaveProperty(
+        'tool_use_count'
+      );
+      expect(
+        (await tasks.update(legacyId, { duration_ms: 1 })).recorded_tool_count
+      ).toBeUndefined();
+      const emptyId = await createTestTask(db, sessionId);
+      expect((await tasks.update(emptyId, { status: TaskStatus.FAILED })).recorded_tool_count).toBe(
+        0
+      );
+      const resultId = await createTestTask(db, sessionId);
+      const repository = new MessagesRepository(db);
+      const result = await repository.create(
+        createMessageData({
+          session_id: sessionId,
+          task_id: resultId,
+          content: [{ type: 'tool_result', tool_use_id: 'orphan', content: 'stored result' }],
+        })
+      );
+      expect(
+        (await tasks.update(resultId, { status: TaskStatus.COMPLETED })).recorded_tool_count
+      ).toBe(1);
+      await repository.delete(result.message_id);
+      expect((await tasks.findById(resultId))?.recorded_tool_count).toBeNull();
+      await repository.deleteBySessionId(sessionId);
+      expect((await tasks.findById(emptyId))?.recorded_tool_count).toBeNull();
+    }
+  );
+});
+
+dbTest('does not certify malformed recorded references as empty', async ({ db }) => {
+  const sessionId = await createTestSession(db);
+  const taskId = await createTestTask(db, sessionId);
+  const repository = new MessagesRepository(db);
+  await repository.create(
+    createMessageData({
+      session_id: sessionId,
+      task_id: taskId,
+      content: [{ type: 'tool_use', id: '', name: 'Read', input: {} }],
+    })
+  );
+  expect(
+    (await new TaskRepository(db).update(taskId, { status: TaskStatus.COMPLETED }))
+      .recorded_tool_count
+  ).toBeNull();
 });

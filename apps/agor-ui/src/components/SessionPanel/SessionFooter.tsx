@@ -37,6 +37,7 @@ import {
   Badge,
   Button,
   Divider,
+  Drawer,
   Flex,
   Popover,
   Space,
@@ -47,31 +48,27 @@ import {
 } from 'antd';
 import React from 'react';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { resolveContextWindowPercentage } from '../../utils/contextWindow';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { EffortSelector } from '../EffortSelector';
+import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
 import { PermissionModeSelector } from '../PermissionModeSelector';
-import { TimerPill } from '../Pill';
+import { ContextWindowPill, TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
+import { SessionUsagePopover } from './SessionUsagePopover';
 
 export interface SessionFooterProps {
   // Session data for chips
   session: Session & { agentic_tool: AgenticToolName };
   currentUserId?: string;
   footerTimerTask: Task | null;
-  tokenBreakdown: {
-    total: number;
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheCreation: number;
-    cost: number;
-  };
   latestContextWindow: { used: number; limit: number; taskMetadata: unknown } | null;
   footerGradient?: string;
   // MCP data for Tools chip
@@ -114,6 +111,9 @@ export interface SessionFooterProps {
   promptInputSlot: React.ReactNode;
 }
 
+// Height of the mobile info-bar chips (MCP / effort / model) so they line up.
+const MOBILE_CHIP_HEIGHT = 22;
+
 // Memoized: the panel re-renders once per animation frame while its session
 // streams (reactive-session notifies), and this footer is a large subtree of
 // dropdowns/popovers that doesn't depend on per-chunk state. SessionPanel
@@ -123,7 +123,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   session,
   currentUserId,
   footerTimerTask,
-  tokenBreakdown,
   latestContextWindow,
   footerGradient,
   sessionMcpServerIds,
@@ -163,6 +162,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
+  // Below the shell breakpoint the chip row collapses to a compact model+effort
+  // bar and "More" opens a bottom sheet instead of a popover, so the full
+  // controls stay reachable on a phone without a separate lossy composer.
+  const isMobile = useIsMobileViewport();
+  const reducedMotion = usePrefersReducedMotion();
+  // Leave desktop pin preferences intact; secondary actions remain in More on
+  // phones so they cannot push Stop/Queue outside the viewport.
+  const actionSize = isMobile ? 'middle' : 'small';
+  const touchActionStyle: React.CSSProperties | undefined = isMobile
+    ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
+    : undefined;
   const [moreOpen, setMoreOpen] = React.useState(false);
   const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
   const getMorePopupContainer = React.useCallback(
@@ -172,6 +182,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
   const [prefs, setPref] = useFooterPreferences();
   const pinnedItems = prefs.pinnedItems;
+  // The phone bar keeps only Attach; the other pinned actions stay in the controls sheet.
+  const barPinnedItems = isMobile ? pinnedItems.filter((item) => item === 'upload') : pinnedItems;
   const togglePin = (id: string) => {
     setPref({
       pinnedItems: pinnedItems.includes(id)
@@ -202,33 +214,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           : effectiveModel
       )
     : null;
-  const tokenDisplay =
-    tokenBreakdown.total >= 1000
-      ? `${Math.round(tokenBreakdown.total / 1000)}k`
-      : tokenBreakdown.total > 0
-        ? String(tokenBreakdown.total)
-        : null;
-
-  // Context window usage percentage (for warning styling).
-  // Prefers the executor-supplied snapshot.percentage (0-100) when available
-  // so Codex baseline-adjusted display matches the agent's own indicator.
-  const contextPct = React.useMemo(() => {
-    if (!latestContextWindow) return 0;
-    const meta = latestContextWindow.taskMetadata as {
-      normalized_sdk_response?: {
-        contextUsageSnapshot?: { percentage: number; totalTokens: number; maxTokens: number };
-      };
-    } | null;
-    const snapshot = meta?.normalized_sdk_response?.contextUsageSnapshot;
-    return (
-      resolveContextWindowPercentage(
-        latestContextWindow.used,
-        latestContextWindow.limit,
-        snapshot
-      ) / 100
-    );
-  }, [latestContextWindow]);
-  const contextWarning = contextPct > 0.8;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -281,15 +266,47 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     alignItems: 'center',
     gap: 8,
     padding: '0 6px 0 12px',
-    height: 32,
+    height: isMobile ? MOBILE_TOUCH_TARGET : 32,
   };
+
+  // One effort control, shown in the controls panel and again in the phone chip bar.
+  const effortSelector = toolCaps?.reasoningEffortLevels ? (
+    <EffortSelector
+      value={effortLevel}
+      onChange={onEffortChange}
+      levels={toolCaps.reasoningEffortLevels}
+      fallbackValue={toolCaps.defaultReasoningEffort}
+      allowInherited={!toolCaps.defaultReasoningEffort}
+      size="small"
+      compact
+      plain
+    />
+  ) : null;
+  const moreButton = (
+    <Tooltip title="More options">
+      <Button
+        size={actionSize}
+        style={touchActionStyle}
+        type="text"
+        icon={<EllipsisOutlined />}
+        aria-label="More options"
+        onClick={isMobile ? () => setMoreOpen(true) : undefined}
+      />
+    </Tooltip>
+  );
 
   const moreContent = (
     <fieldset
       ref={moreContentRef}
       aria-label="More options"
       onMouseDown={(event) => event.stopPropagation()}
-      style={{ width: 260, padding: '6px 0', margin: 0, border: 0 }}
+      style={{
+        width: isMobile ? '100%' : 260,
+        minWidth: 0,
+        padding: '6px 0',
+        margin: 0,
+        border: 0,
+      }}
     >
       {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
@@ -302,6 +319,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           paddingTop: 6,
           paddingBottom: 6,
           alignItems: 'flex-start',
+          flexWrap: isMobile ? 'wrap' : undefined,
           cursor: 'default',
         }}
       >
@@ -324,7 +342,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </Typography.Text>
         <div
           style={{
-            maxWidth: 160,
+            maxWidth: isMobile ? '100%' : 160,
+            width: isMobile ? '100%' : undefined,
             flexShrink: 0,
             pointerEvents: managedByPreset ? 'none' : undefined,
             opacity: managedByPreset ? 0.65 : undefined,
@@ -341,7 +360,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             client={client}
             branchId={session.branch_id}
             catalogEnabled={session.created_by === currentUserId}
-            compact
+            compact={!isMobile}
             getPopupContainer={getMorePopupContainer}
           />
         </div>
@@ -371,16 +390,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               opacity: managedByPreset ? 0.65 : undefined,
             }}
           >
-            <EffortSelector
-              value={effortLevel}
-              onChange={onEffortChange}
-              levels={toolCaps.reasoningEffortLevels}
-              fallbackValue={toolCaps.defaultReasoningEffort}
-              allowInherited={!toolCaps.defaultReasoningEffort}
-              size="small"
-              compact
-              plain
-            />
+            {effortSelector}
           </div>
         </div>
       )}
@@ -1090,7 +1100,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </div>
       )}
 
-      {tokenDisplay !== null && (
+      {
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
           <NumberOutlined
             style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -1105,7 +1115,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               minWidth: 0,
             }}
           >
-            Tokens
+            Usage
           </Typography.Text>
           <Tooltip
             title={pinnedChips.includes('tokens') ? 'Hide from info bar' : 'Show in info bar'}
@@ -1113,7 +1123,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           >
             <button
               type="button"
-              aria-label={pinnedChips.includes('tokens') ? 'Hide tokens' : 'Show tokens'}
+              aria-label={pinnedChips.includes('tokens') ? 'Hide usage' : 'Show usage'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -1139,7 +1149,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             </button>
           </Tooltip>
         </div>
-      )}
+      }
 
       {latestContextWindow && latestContextWindow.limit > 0 && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
@@ -1328,7 +1338,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         flexShrink: 0,
         background: token.colorBgContainer,
         borderTop: `1px solid ${token.colorBorder}`,
-        padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
+        padding: `${token.sizeUnit * 2}px ${isMobile ? token.padding : token.sizeUnit * 6}px ${token.sizeUnit * 3}px`,
+        paddingBottom: isMobile
+          ? `max(${token.sizeUnit * 3}px, env(safe-area-inset-bottom))`
+          : undefined,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}
@@ -1350,11 +1363,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1 — Info bar */}
-        {(showMcpControl ||
+        {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
+        {(isMobile ||
+          showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
           (modelName && pinnedChips.includes('model')) ||
-          (tokenDisplay !== null && pinnedChips.includes('tokens')) ||
+          pinnedChips.includes('tokens') ||
           (latestContextWindow &&
             latestContextWindow.limit > 0 &&
             pinnedChips.includes('context')) ||
@@ -1399,113 +1413,112 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               />
             )}
 
-            {/* Model chip */}
-            {modelName && pinnedChips.includes('model') && (
-              <Popover
-                trigger={managedByPreset ? [] : 'click'}
-                placement="topLeft"
-                title="Model"
-                overlayStyle={{ maxWidth: 'none' }}
-                overlayInnerStyle={{ padding: 8 }}
-                content={
-                  <div style={{ width: 420 }}>
-                    {managedByPreset ? (
-                      <Typography.Text>
-                        Managed by preset. Switch presets in Session Settings.
-                      </Typography.Text>
-                    ) : (
-                      <ModelSelector
-                        key={session.session_id}
-                        value={modelConfig}
-                        onCommit={onModelConfigCommit}
-                        agentic_tool={session.agentic_tool}
-                        client={client}
-                        branchId={session.branch_id}
-                        catalogEnabled={session.created_by === currentUserId}
-                      />
-                    )}
-                  </div>
-                }
+            {/* Compact effort control (mobile chip bar only) */}
+            {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  height: MOBILE_CHIP_HEIGHT,
+                  pointerEvents: managedByPreset ? 'none' : undefined,
+                  opacity: managedByPreset ? 0.65 : undefined,
+                }}
               >
-                <Tag
+                {effortSelector}
+              </div>
+            )}
+
+            {/* Model chip. On mobile it just opens the controls sheet, so there
+                is no popover to render; desktop keeps the click-to-change popover. */}
+            {modelName &&
+              (isMobile ? (
+                <Button
+                  size="small"
                   icon={<RobotOutlined />}
-                  color="default"
-                  truncate
+                  onClick={() => setMoreOpen(true)}
+                  aria-label={`Model and session controls: ${modelName}`}
                   title={modelName}
                   style={{
-                    cursor: managedByPreset ? 'default' : 'pointer',
-                    height: 22,
+                    height: MOBILE_CHIP_HEIGHT,
                     display: 'inline-flex',
                     alignItems: 'center',
+                    maxWidth: '100%',
                   }}
                   data-testid="model-chip"
                 >
-                  {modelName}
-                </Tag>
-              </Popover>
-            )}
+                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                    {modelName}
+                  </Typography.Text>
+                </Button>
+              ) : (
+                pinnedChips.includes('model') && (
+                  <Popover
+                    trigger={managedByPreset ? [] : 'click'}
+                    placement="topLeft"
+                    title="Model"
+                    overlayStyle={{ maxWidth: 'none' }}
+                    overlayInnerStyle={{ padding: 8 }}
+                    content={
+                      <div style={{ width: 420 }}>
+                        {managedByPreset ? (
+                          <Typography.Text>
+                            Managed by preset. Switch presets in Session Settings.
+                          </Typography.Text>
+                        ) : (
+                          <ModelSelector
+                            key={session.session_id}
+                            value={modelConfig}
+                            onCommit={onModelConfigCommit}
+                            agentic_tool={session.agentic_tool}
+                            client={client}
+                            branchId={session.branch_id}
+                            catalogEnabled={session.created_by === currentUserId}
+                          />
+                        )}
+                      </div>
+                    }
+                  >
+                    <Tag
+                      icon={<RobotOutlined />}
+                      color="default"
+                      truncate
+                      title={modelName}
+                      style={{
+                        cursor: managedByPreset ? 'default' : 'pointer',
+                        height: 22,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      data-testid="model-chip"
+                    >
+                      {modelName}
+                    </Tag>
+                  </Popover>
+                )
+              ))}
 
-            {/* Tokens chip */}
-            {tokenDisplay !== null && pinnedChips.includes('tokens') && (
-              <Tooltip
-                title={
-                  tokenBreakdown.total > 0 ? (
-                    <div style={{ fontSize: 12 }}>
-                      <div>Total: {tokenBreakdown.total.toLocaleString()}</div>
-                      {tokenBreakdown.input > 0 && (
-                        <div>Input: {tokenBreakdown.input.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.output > 0 && (
-                        <div>Output: {tokenBreakdown.output.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.cacheRead > 0 && (
-                        <div>Cache read: {tokenBreakdown.cacheRead.toLocaleString()}</div>
-                      )}
-                      {tokenBreakdown.cost > 0 && (
-                        <div>Est. cost: ${tokenBreakdown.cost.toFixed(4)}</div>
-                      )}
-                    </div>
-                  ) : undefined
-                }
-                placement="top"
-              >
-                <Tag
-                  color="default"
-                  style={{
-                    cursor: 'default',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="tokens-chip"
-                >
-                  {tokenDisplay} tokens
-                </Tag>
-              </Tooltip>
+            {pinnedChips.includes('tokens') && (
+              <SessionUsagePopover
+                key={`${session.session_id}:${currentUserId}`}
+                client={client ?? null}
+                sessionId={session.session_id}
+                userId={currentUserId}
+              />
             )}
 
             {/* Context % chip */}
             {latestContextWindow &&
               latestContextWindow.limit > 0 &&
               pinnedChips.includes('context') && (
-                <Tag
-                  icon={
-                    <PercentageOutlined
-                      style={{ color: contextWarning ? token.colorWarning : undefined }}
-                    />
+                <ContextWindowPill
+                  used={latestContextWindow.used}
+                  limit={latestContextWindow.limit}
+                  taskMetadata={
+                    latestContextWindow.taskMetadata as React.ComponentProps<
+                      typeof ContextWindowPill
+                    >['taskMetadata']
                   }
-                  color={contextWarning ? 'warning' : 'default'}
-                  style={{
-                    cursor: 'default',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="context-chip"
-                  data-warning={contextWarning ? 'true' : undefined}
-                >
-                  {Math.round(contextPct * 100)}%
-                </Tag>
+                />
               )}
 
             {/* Session IDs chip */}
@@ -1604,7 +1617,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         >
           {/* Left group */}
           <Space size={4}>
-            {pinnedItems.includes('upload') && (
+            {barPinnedItems.includes('upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1615,7 +1628,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 }
               >
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Attach files"
                   title="Attach files"
@@ -1626,7 +1640,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('advanced-upload') && (
+            {barPinnedItems.includes('advanced-upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1637,7 +1651,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 }
               >
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Advanced upload"
                   title="Advanced upload"
@@ -1647,10 +1662,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
+            {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
               <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Fork session"
                   icon={<ForkOutlined />}
@@ -1661,10 +1677,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {/* Dynamically pinned items */}
-            {pinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
+            {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
               <Tooltip title="BTW fork">
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Ask side question via BTW fork"
                   icon={<QuestionCircleOutlined />}
@@ -1674,10 +1691,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+            {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
               <Tooltip title="Spawn subsession">
                 <Button
-                  size="small"
+                  size={actionSize}
+                  style={touchActionStyle}
                   type="text"
                   aria-label="Spawn subsession"
                   icon={<BranchesOutlined />}
@@ -1686,23 +1704,20 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            <Popover
-              open={moreOpen}
-              onOpenChange={setMoreOpen}
-              trigger="click"
-              placement="topLeft"
-              content={moreContent}
-              title={null}
-            >
-              <Tooltip title="More options">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<EllipsisOutlined />}
-                  aria-label="More options"
-                />
-              </Tooltip>
-            </Popover>
+            {isMobile ? (
+              moreButton
+            ) : (
+              <Popover
+                open={moreOpen}
+                onOpenChange={setMoreOpen}
+                trigger="click"
+                placement="topLeft"
+                content={moreContent}
+                title={null}
+              >
+                {moreButton}
+              </Popover>
+            )}
           </Space>
 
           {/* Spacer */}
@@ -1714,7 +1729,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               <Tooltip title={stopTooltip}>
                 <Button
                   danger
-                  size="small"
+                  aria-label="Stop"
+                  aria-busy={stopRequestInFlight || isStopping}
+                  size={actionSize}
+                  style={touchActionStyle}
                   icon={
                     stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
@@ -1738,7 +1756,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               >
                 <Button
                   type="primary"
-                  size="small"
+                  aria-label={sendLabel}
+                  size={actionSize}
+                  style={touchActionStyle}
                   icon={<SendOutlined />}
                   onClick={onSendPrompt}
                   disabled={sendDisabled}
@@ -1750,6 +1770,26 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Space>
         </div>
       </div>
+
+      {/* Mobile: the "More" popover becomes a bottom sheet so the full control
+          set (model / effort / permissions / attach / fork / spawn / btw /
+          info-bar toggles / session settings) stays reachable on a phone. */}
+      {isMobile && (
+        <Drawer
+          open={moreOpen}
+          onClose={() => setMoreOpen(false)}
+          placement="bottom"
+          height="85%"
+          title="Session controls"
+          {...reducedMotionSurface(reducedMotion)}
+          styles={{
+            content: glassSurfaceStyle(token, 0.85),
+            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', overflowY: 'auto' },
+          }}
+        >
+          {moreContent}
+        </Drawer>
+      )}
     </div>
   );
 };

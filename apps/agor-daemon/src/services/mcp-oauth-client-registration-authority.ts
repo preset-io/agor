@@ -13,6 +13,7 @@ import {
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sealBoundSecret,
+  shortId,
   sql,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -31,6 +32,15 @@ import type {
 const REGISTRATION_LEASE_MS = 30_000;
 const REGISTRATION_WAIT_MS = 250;
 const REGISTRATION_WAIT_LIMIT_MS = 70_000;
+/**
+ * How often the lease wait says it is still waiting.
+ *
+ * The poll itself is every 250ms; saying so at that rate would bury the
+ * signal it exists to provide. Ten seconds is often enough that a stuck start
+ * is visible well before the 70s limit, and rare enough that a busy fleet
+ * does not drown in it.
+ */
+const REGISTRATION_WAIT_LOG_MS = 10_000;
 
 export interface DurableMCPOAuthClientRegistrationInput
   extends MCPOAuthDynamicClientRegistrationRequest {
@@ -214,7 +224,23 @@ export class MCPOAuthClientRegistrationAuthority {
     } = {}
   ): Promise<MCPOAuthResolvedDynamicClientRegistration> {
     const fingerprint = bindingFingerprint(this.masterSecret!, input);
-    const deadline = Date.now() + REGISTRATION_WAIT_LIMIT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + REGISTRATION_WAIT_LIMIT_MS;
+    // The lease wait polls at 250ms for up to 70 seconds and used to write
+    // nothing at all while it did. That is HA-only, and exactly the magnitude
+    // a user reported as "stuck" — so it says so, once when it starts waiting
+    // and then on the same cadence, rather than every quarter second.
+    let waitAnnouncedAt: number | undefined;
+    const announceWait = (): void => {
+      const now = Date.now();
+      if (waitAnnouncedAt !== undefined && now - waitAnnouncedAt < REGISTRATION_WAIT_LOG_MS) return;
+      waitAnnouncedAt = now;
+      console.log(
+        `[OAuth Start] event=phase phase=lease_wait outcome=waiting ` +
+          `ms=${now - startedAt} limit_ms=${REGISTRATION_WAIT_LIMIT_MS} ` +
+          `server=${shortId(input.mcpServerId)}`
+      );
+    };
 
     while (Date.now() < deadline) {
       options.assertCurrent?.();
@@ -231,6 +257,16 @@ export class MCPOAuthClientRegistrationAuthority {
           leaseMs: REGISTRATION_LEASE_MS,
         })
       );
+
+      // One "the wait is over" line, wherever the wait ended: the cached
+      // registration below, or the lease this pass just took.
+      if (claim.outcome !== 'waiting' && waitAnnouncedAt !== undefined) {
+        console.log(
+          `[OAuth Start] event=phase phase=lease_wait outcome=${claim.outcome} ` +
+            `ms=${Date.now() - startedAt} server=${shortId(input.mcpServerId)}`
+        );
+        waitAnnouncedAt = undefined;
+      }
 
       if (claim.outcome === 'ready') {
         options.assertCurrent?.();
@@ -252,10 +288,10 @@ export class MCPOAuthClientRegistrationAuthority {
       }
 
       if (claim.outcome === 'waiting') {
+        announceWait();
         await new Promise((resolve) => setTimeout(resolve, REGISTRATION_WAIT_MS));
         continue;
       }
-
       const owned = claim.registration;
       let dispatched = false;
       try {
@@ -268,7 +304,24 @@ export class MCPOAuthClientRegistrationAuthority {
 
         options.assertCurrent?.();
         await options.assertServerCurrent?.();
-        const registered = await register();
+        // The Dynamic Client Registration round-trip itself, bounded by the
+        // transport's own request deadline. Logged on both sides so a start
+        // stuck HERE reads differently from one stuck behind the lease above.
+        const registrationStartedAt = Date.now();
+        let registered: DynamicClientRegistrationResponse;
+        try {
+          registered = await register();
+        } catch (error) {
+          console.log(
+            `[OAuth Start] event=phase phase=registration outcome=failed ` +
+              `ms=${Date.now() - registrationStartedAt} server=${shortId(input.mcpServerId)}`
+          );
+          throw error;
+        }
+        console.log(
+          `[OAuth Start] event=phase phase=registration outcome=ok ` +
+            `ms=${Date.now() - registrationStartedAt} server=${shortId(input.mcpServerId)}`
+        );
         options.assertCurrent?.();
         await options.assertServerCurrent?.();
 

@@ -23,6 +23,7 @@ vi.mock('../resolve-ids.js', () => ({
   resolveSessionId: async (_ctx: unknown, id: string) => id,
   resolveBranchId: async (_ctx: unknown, id: string) => id,
   resolveMcpServerId: async (_ctx: unknown, id: string) => `full-${id}`,
+  resolveTaskId: async (_ctx: unknown, id: string) => `full-${id}`,
 }));
 
 vi.mock('../../utils/branch-authorization.js', () => ({
@@ -147,6 +148,106 @@ async function registerAndCaptureHandlers(
   const tools = await registerAndCaptureTools(ctx, toolNames);
   return Object.fromEntries(Object.entries(tools).map(([name, { cb }]) => [name, cb]));
 }
+
+describe('conditional MCP Stop', () => {
+  it('preserves the successful already_idle outcome', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: true,
+      outcome: 'already_idle',
+      status: 'idle',
+    });
+    const { agor_sessions_stop } = await registerAndCaptureHandlers(
+      { app: makeFakeApp({ '/sessions/:id/stop': { create } }), userId: 'user-1' },
+      ['agor_sessions_stop']
+    );
+
+    const response = await agor_sessions_stop({ sessionId: 'session-1' });
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      success: true,
+      sessionId: 'session-1',
+      outcome: 'already_idle',
+      status: 'idle',
+      note: 'Session stopped successfully.',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves ordinary success compatibility when the backend omits outcome', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: true,
+      status: 'idle',
+      reason: 'Executor termination verified.',
+    });
+    const { agor_sessions_stop } = await registerAndCaptureHandlers(
+      { app: makeFakeApp({ '/sessions/:id/stop': { create } }), userId: 'user-1' },
+      ['agor_sessions_stop']
+    );
+
+    const response = await agor_sessions_stop({
+      sessionId: 'session-1',
+      reason: 'User requested',
+    });
+
+    expect(JSON.parse(response.content[0].text)).toEqual({
+      success: true,
+      sessionId: 'session-1',
+      status: 'idle',
+      reason: 'User requested',
+      note: 'Executor termination verified.',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates the optional guard, forwards it with delegated params, and never retries a mismatch', async () => {
+    const create = vi.fn().mockResolvedValue({
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Execution changed before Stop could be claimed.',
+    });
+    const baseServiceParams = {
+      provider: 'mcp',
+      user: { user_id: 'acting-user', role: 'member' },
+      tenant: { source: 'explicit', tenant_id: 'acting-tenant' },
+    };
+    const tools = await registerAndCaptureTools(
+      {
+        app: makeFakeApp({ '/sessions/:id/stop': { create } }),
+        userId: 'acting-user',
+        baseServiceParams,
+      },
+      ['agor_sessions_stop']
+    );
+    const { cfg, cb } = tools.agor_sessions_stop;
+    for (const expectedTaskId of ['', 42, null]) {
+      expect(cfg.inputSchema!.safeParse({ sessionId: 'session-1', expectedTaskId }).success).toBe(
+        false
+      );
+    }
+    const args = {
+      sessionId: 'session-1',
+      expectedTaskId: 'original-task',
+      reason: 'Update queued',
+    };
+    expect(cfg.inputSchema!.safeParse(args).success).toBe(true);
+    const response = await cb(args);
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      success: false,
+      outcome: 'condition_changed',
+    });
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      { expected_task_id: 'full-original-task', reason: 'Update queued' },
+      { ...baseServiceParams, route: { id: 'session-1' } }
+    );
+    // Omitting the guard retains the existing emergency-stop contract.
+    expect(cfg.inputSchema!.safeParse({ sessionId: 'session-1' }).success).toBe(true);
+    await cb({ sessionId: 'session-1' });
+    expect(create).toHaveBeenLastCalledWith(
+      {},
+      { ...baseServiceParams, route: { id: 'session-1' } }
+    );
+  });
+});
 
 describe('sessionless MCP context', () => {
   afterEach(() => {
@@ -1979,9 +2080,9 @@ describe('agor_models_list', () => {
     expect(parsed.codex.default).toBe('gpt-6-astra');
     expect(codexIds.slice(0, 4)).toEqual([
       'gpt-6-astra',
-      'gpt-5.6-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
       'gpt-5.6-terra',
-      'gpt-5.6-luna',
     ]);
     expect(codexIds).toContain('gpt-5.5');
     expect(codexIds).toContain('gpt-5.4-mini');

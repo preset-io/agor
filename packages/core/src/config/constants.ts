@@ -128,11 +128,25 @@ export const PAGINATION = {
 } as const;
 
 /**
+ * Knowledge document list pages. Access, sort and paging are evaluated in SQL,
+ * and only the returned page is attributed or hydrated, so a list never pulls
+ * the whole corpus. Callers that genuinely need every readable document (the
+ * Knowledge sidebar tree, CLI listings) walk pages with the client's
+ * `findAll()`; the query schema therefore leaves `$skip` unbounded.
+ */
+export const KNOWLEDGE_DOCUMENT_PAGINATION = {
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
+} as const;
+
+/**
  * Messages carry transcript/tool payloads and are materially heavier than most
  * list resources. Keep each transport page small; callers that intentionally
  * need a complete Task transcript use the client's paginated `findAll()` loop.
  */
 export const MESSAGE_PAGINATION = {
+  /** Maximum task IDs in one session-scoped transcript query. */
+  MAX_TASK_IDS: 100,
   DEFAULT_LIMIT: 100,
   MAX_LIMIT: 1_000,
 } as const;

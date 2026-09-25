@@ -5,7 +5,7 @@
  * immutable document version and advances `current_version_id`.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import { KNOWLEDGE_DOCUMENT_PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
   isPostgresDatabaseHandle,
@@ -16,6 +16,7 @@ import {
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
   KnowledgeSemanticSettingsRepository,
+  runDatabaseTransaction,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   type UpdateKnowledgeDocumentInput,
@@ -23,12 +24,14 @@ import {
 import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
+  HydratedKnowledgeDocument,
   Id,
   KnowledgeDocument,
   KnowledgeDocumentVersion,
   KnowledgeNamespaceID,
   KnowledgeWriteAttribution,
   NullableId,
+  Paginated,
   QueryParams,
   User,
   UserID,
@@ -113,13 +116,29 @@ type KnowledgeDocumentRef = {
   version?: string | number;
 };
 
-type HydratedKnowledgeDocument = KnowledgeDocument & {
-  document: KnowledgeDocument;
-  current_version: KnowledgeDocumentVersion | null;
-  content: string | null;
-  first_line_is_title: boolean;
-  links?: unknown[];
-};
+// REST transports deliver query booleans as strings; normalize before filtering
+// drafts or hydrating content. Permissions are still checked for every result.
+function normalizeDocumentQuery(query: KnowledgeDocumentParams['query']) {
+  const normalized = { ...query };
+  for (const key of [
+    'archived',
+    'include_my_drafts',
+    'includeMyDrafts',
+    'include_other_user_drafts',
+    'includeOtherUserDrafts',
+    'include_content',
+    'include_links',
+    'include_indexing',
+    'includeIndexing',
+  ] as const) {
+    const value: unknown = normalized[key];
+    if (value === undefined) continue;
+    if (value === true || value === 'true') normalized[key] = true;
+    else if (value === false || value === 'false') normalized[key] = false;
+    else throw new BadRequest(`Invalid boolean query parameter: ${key}`);
+  }
+  return normalized;
+}
 
 type HydrateOptions = Pick<
   KnowledgeDocumentRef,
@@ -152,8 +171,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
       id: 'document_id',
       resourceType: 'KnowledgeDocument',
       paginate: {
-        default: PAGINATION.DEFAULT_LIMIT,
-        max: PAGINATION.MAX_LIMIT,
+        default: KNOWLEDGE_DOCUMENT_PAGINATION.DEFAULT_LIMIT,
+        max: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT,
       },
     });
     this.repo = repo;
@@ -289,13 +308,6 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return this.repo.findByNamespaceAndPath(namespace.namespace_id, String(path));
   }
 
-  /**
-   * Keep the knowledge graph's outgoing `references` edges for a document in
-   * sync with the doc-to-doc links in its markdown. Only runs when content was
-   * (re)written; metadata-only saves leave existing edges untouched. Failures
-   * are swallowed so graph upkeep never blocks a save.
-   */
-
   private async isEmbeddingConfigured(): Promise<boolean> {
     if (!isPostgresDatabaseHandle(this.db)) return false;
     const settings = await this.semanticSettings.find();
@@ -328,48 +340,83 @@ export class KnowledgeDocumentsService extends DrizzleService<
     indexer?.wake?.();
   }
 
+  /** Best-effort graph upkeep must roll back its own SQL before a save continues. */
   private async syncGraphReferences(
     doc: KnowledgeDocument,
     content: string | null | undefined,
-    userId: UserID | null
+    userId: UserID | null,
+    strict = false
   ): Promise<void> {
     if (typeof content !== 'string') return;
     try {
-      const links = extractKnowledgeLinks(content);
-      // Key graph nodes by the rename-proof `agor://kb/document/<id>` URI rather
-      // than the path-based `doc.uri`, so renaming a document doesn't orphan its
-      // graph node (and its edges) behind a stale path.
-      const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
-      const seen = new Set<string>();
-      for (const link of links) {
-        const target = await this.resolveDocumentRef(
-          link.document_id
-            ? { document_id: link.document_id }
-            : { namespace_slug: link.namespace_slug, path: link.path }
-        );
-        if (!target || target.archived) continue;
-        if (target.document_id === doc.document_id) continue;
-        if (seen.has(target.document_id)) continue;
-        seen.add(target.document_id);
-        targets.push({
-          uri: buildKnowledgeDocumentUri(target.document_id),
-          document_id: target.document_id,
-          namespace_id: target.namespace_id,
-        });
-      }
-      await this.graph.syncOutgoingEdges({
-        source: {
-          uri: buildKnowledgeDocumentUri(doc.document_id),
-          document_id: doc.document_id,
-          namespace_id: doc.namespace_id,
-        },
-        edge_type: 'references',
-        targets,
-        created_by: userId,
+      await runDatabaseTransaction(this.db, async (tx) => {
+        const service = new KnowledgeDocumentsService(tx as TenantScopeAwareDatabase, this.app);
+        await service.writeGraphReferences(doc, content, userId);
       });
-    } catch (err) {
-      console.error('Failed to sync knowledge graph references:', err);
+    } catch (error) {
+      if (strict) throw error;
+      // Drizzle wraps the driver error. Never log SQL, parameters, or raw error
+      // messages; preserve the original SQLSTATE, not a later aborted SELECT.
+      const cause = error as { cause?: { code?: unknown }; code?: unknown };
+      const code = cause?.cause?.code ?? cause?.code;
+      const sqlstate = typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : 'unknown';
+      console.error(`Knowledge graph sync rolled back: sqlstate=${sqlstate}`);
     }
+  }
+
+  private async writeGraphReferences(
+    doc: KnowledgeDocument,
+    content: string,
+    userId: UserID | null
+  ): Promise<void> {
+    const links = extractKnowledgeLinks(content);
+    // Key graph nodes by the rename-proof `agor://kb/document/<id>` URI rather
+    // than the path-based `doc.uri`, so renaming a document doesn't orphan its
+    // graph node (and its edges) behind a stale path.
+    const targets: { uri: string; document_id: string; namespace_id: string }[] = [];
+    const seen = new Set<string>();
+    for (const link of links) {
+      const target = await this.resolveDocumentRef(
+        link.document_id
+          ? { document_id: link.document_id }
+          : { namespace_slug: link.namespace_slug, path: link.path }
+      );
+      if (!target || target.archived) continue;
+      if (target.document_id === doc.document_id) continue;
+      if (seen.has(target.document_id)) continue;
+      seen.add(target.document_id);
+      targets.push({
+        uri: buildKnowledgeDocumentUri(target.document_id),
+        document_id: target.document_id,
+        namespace_id: target.namespace_id,
+      });
+    }
+    await this.graph.syncOutgoingEdges({
+      source: {
+        uri: buildKnowledgeDocumentUri(doc.document_id),
+        document_id: doc.document_id,
+        namespace_id: doc.namespace_id,
+      },
+      edge_type: 'references',
+      targets,
+      created_by: userId,
+    });
+  }
+
+  /** Internal transfer finalization, deliberately not registered as a public method. */
+  async reconcileReferences(id: string, params?: KnowledgeDocumentParams): Promise<void> {
+    const doc = await this.repo.findById(id);
+    if (!doc) throw new NotFound('Knowledge document not found');
+    await this.assertActiveDocument(doc);
+    if (!(await this.canEdit(doc, params?.user as User | undefined)))
+      throw new Forbidden('Cannot reconcile this document');
+    const version = await this.versionFor(doc);
+    await this.syncGraphReferences(
+      doc,
+      version?.content_text,
+      (params?.user as User | undefined)?.user_id ?? null,
+      true
+    );
   }
 
   private async versionFor(
@@ -487,11 +534,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     }
   }
 
-  async find(params?: KnowledgeDocumentParams): Promise<KnowledgeDocument[]> {
-    const query = params?.query;
+  async find(params?: KnowledgeDocumentParams): Promise<Paginated<KnowledgeDocument>> {
+    const query = normalizeDocumentQuery(params?.query);
+    const { limit, skip } = this.pageWindow(query);
     const user = params?.user as User | undefined;
     const isAdmin = this.isAdmin(user);
-    const filters: KnowledgeDocumentFilters | undefined = query
+    const filters: KnowledgeDocumentFilters = query
       ? {
           namespace_id: query.namespace_id,
           namespace_slug: query.namespace_slug,
@@ -510,24 +558,48 @@ export class KnowledgeDocumentsService extends DrizzleService<
           include_other_user_drafts: false,
           draft_filter_user_id: user?.user_id as UserID | undefined,
         };
-    const rows = await this.repo.findAll(filters);
-    const readable: KnowledgeDocument[] = [];
-    for (const doc of rows) {
-      if (await this.canRead(doc, user)) readable.push(doc);
-    }
-    if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
-      const attributed = await this.attribution.attachToDocuments(readable);
-      if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
+    // Read access, sort, LIMIT/OFFSET and the total are all evaluated in SQL,
+    // so the database only ever returns one page of readable rows. Attribution
+    // and hydration (bodies, links) then run on that page alone.
+    const { total, data } = await this.repo.findPage(filters, {
+      limit,
+      offset: skip,
+      sort: query.$sort,
+      read: isAdmin
+        ? { as_admin: true }
+        : {
+            as_admin: false,
+            user_id: user?.user_id as UserID | undefined,
+            namespace_ids: await this.namespaces.findReadableNamespaceIds(
+              String(user?.user_id ?? '')
+            ),
+          },
+    });
+    return {
+      total,
+      limit,
+      skip,
+      data: await this.decorateDocuments(data, query),
+    };
+  }
+
+  private async decorateDocuments(
+    documents: KnowledgeDocument[],
+    query: ReturnType<typeof normalizeDocumentQuery>
+  ): Promise<KnowledgeDocument[]> {
+    if (query.include_content !== true && query.include_links !== true) {
+      const attributed = await this.attribution.attachToDocuments(documents);
+      if (query.include_indexing === true || query.includeIndexing === true) {
         return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
       return attributed;
     }
-    return this.hydrateDocuments(readable, {
-      include_content: params?.query?.include_content,
-      include_links: params?.query?.include_links,
-      include_indexing: params?.query?.include_indexing,
-      includeIndexing: params?.query?.includeIndexing,
-      version: params?.query?.version,
+    return this.hydrateDocuments(documents, {
+      include_content: query.include_content,
+      include_links: query.include_links,
+      include_indexing: query.include_indexing,
+      includeIndexing: query.includeIndexing,
+      version: query.version,
     });
   }
 
@@ -538,7 +610,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
-    return this.hydrateDocument(doc, params?.query);
+    return this.hydrateDocument(doc, normalizeDocumentQuery(params?.query));
   }
 
   async getDocument(

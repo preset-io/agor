@@ -118,7 +118,6 @@ async function seedRuntime(
       start_timestamp: '2026-08-28T00:00:00.000Z',
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'authority' },
-    tool_use_count: 0,
   });
   const launch = await tasks.bindExecutorLaunchAuthority(task.task_id);
   expect(launch.fs_access).toBe(floor);
@@ -162,6 +161,37 @@ async function expectDeniedWithoutHeartbeatRefresh(
 }
 
 describe('Task runtime heartbeat authority (SQLite)', () => {
+  dbTest(
+    'credential authorization is read-only and refuses revoked, stopping and wrong-actor tasks',
+    async ({ db }) => {
+      const seed = await seedRuntime(db);
+      const before = await seed.tasks.findById(seed.task.task_id);
+      await seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, seed.authority);
+      const after = await seed.tasks.findById(seed.task.task_id);
+      expect(after?.last_executor_heartbeat_at).toEqual(before?.last_executor_heartbeat_at);
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, {
+          ...seed.authority,
+          principal_user_id: seed.ownerId,
+        })
+      ).rejects.toThrow();
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, {
+          ...seed.authority,
+          standalone_token_current: false,
+        })
+      ).rejects.toThrow();
+      await seed.tasks.claimTermination({
+        taskId: seed.task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Synthetic expired heartbeat',
+      });
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, seed.authority)
+      ).rejects.toThrow();
+    }
+  );
+
   dbTest(
     'continues with the exact current principal, capability, and launch floor',
     async ({ db }) => {

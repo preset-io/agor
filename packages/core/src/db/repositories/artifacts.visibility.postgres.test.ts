@@ -127,6 +127,67 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
     });
 
+    it('board import keeps same-tenant artifact references and drops a foreign public one', async () => {
+      const foreignId = generateId();
+      await runWithTenantDatabaseScope(db, `import-b-${generateId()}`, async (scoped) => {
+        const owner = await new UsersRepository(scoped).create({
+          user_id: generateId(),
+          email: `${generateId()}@example.invalid`,
+          role: 'member',
+        });
+        const board = await new BoardRepository(scoped).create({
+          name: 'foreign',
+          created_by: owner.user_id,
+        });
+        await new ArtifactRepository(scoped).create({
+          artifact_id: foreignId,
+          board_id: board.board_id,
+          public: true,
+          created_by: owner.user_id,
+        });
+      });
+
+      await runWithTenantDatabaseScope(db, `import-a-${generateId()}`, async (scoped) => {
+        const owner = await new UsersRepository(scoped).create({
+          user_id: generateId(),
+          email: `${generateId()}@example.invalid`,
+          role: 'member',
+        });
+        const boards = new BoardRepository(scoped);
+        const home = await boards.create({ name: 'home', created_by: owner.user_id });
+        const localId = generateId();
+        await new ArtifactRepository(scoped).create({
+          artifact_id: localId,
+          board_id: home.board_id,
+          public: true,
+          created_by: owner.user_id,
+        });
+        const placement = { x: 0, y: 0, width: 600, height: 400 };
+
+        const imported = await boards.fromBlob(
+          {
+            name: 'imported',
+            objects: {
+              [`artifact-${localId}`]: { type: 'artifact', ...placement, artifact_id: localId },
+              [`artifact-${foreignId}`]: { type: 'artifact', ...placement, artifact_id: foreignId },
+            },
+          },
+          owner.user_id
+        );
+
+        const expectedKeys = [`artifact-${localId}`];
+        expect(Object.keys(imported.objects ?? {})).toEqual(expectedKeys);
+        expect(imported.import_skipped).toEqual([
+          expect.objectContaining({
+            object_id: `artifact-${foreignId}`,
+            reason: 'unresolved_reference',
+          }),
+        ]);
+        const stored = await boards.findById(imported.board_id);
+        expect(Object.keys(stored?.objects ?? {})).toEqual(expectedKeys);
+      });
+    });
+
     it('retains successful chunks around a recoverable client-side read failure', async () => {
       await runWithTenantDatabaseScope(db, `artifact-chunks-${generateId()}`, async (scoped) => {
         const owner = await new UsersRepository(scoped).create({

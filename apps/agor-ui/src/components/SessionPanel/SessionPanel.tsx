@@ -54,7 +54,8 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
-import { useSessionActions } from '../../hooks/useSessionActions';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -64,6 +65,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import {
@@ -86,7 +88,6 @@ import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
   getComposerAttachmentFailureMessage,
-  getComposerUploadAccept,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
@@ -173,6 +174,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     },
     ref
   ) => {
+    const isMobile = useIsMobileViewport();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -317,6 +319,9 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
+        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
+        // textarea also applies these metrics to its mention highlight overlay.
+        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
       />
     );
   }
@@ -332,7 +337,6 @@ PromptInput.displayName = 'PromptInput';
 // a fresh array — the memos deriving footer props from `tasks` (and through
 // them the memoized SessionFooter) key on its identity.
 const EMPTY_TASKS: Task[] = [];
-
 export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
@@ -355,8 +359,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
+  const isMobileShell = useIsMobileViewport();
+  // 44px touch targets for the header controls on the mobile full-screen shell.
+  const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
+    ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
+    : undefined;
   const { modal } = App.useApp();
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showSuccess, showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -513,7 +522,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
   const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
-  const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -531,13 +539,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    // ConversationView retains the same lazy handle. Keeping the cache key
+    // ConversationView retains the same lean handle. Keeping the cache key
     // identical collapses duplicate Session bootstrap/reconnect reads while
-    // preserving the transcript's latest-task hydration contract.
-    reactiveOptions: { taskHydration: 'lazy' },
+    // preserving paged history without eager historical tool hydration.
+    reactiveOptions: { taskHydration: 'lean' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
+  const queuedTasks = reactiveSessionState?.queuedTasks ?? EMPTY_TASKS;
   React.useEffect(() => {
     if (
       forceFailTarget &&
@@ -621,87 +630,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
     null
   );
-
-  // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
-  React.useEffect(() => {
-    if (!client || !session) return;
-
-    const fetchQueue = async () => {
-      try {
-        const response = await client.service(`/sessions/${session.session_id}/tasks/queue`).find();
-        const data = (response as { data: Task[] }).data || [];
-        setQueuedTasks(data);
-      } catch (error) {
-        console.error('[SessionPanel] Failed to fetch queue:', error);
-      }
-    };
-
-    fetchQueue();
-
-    const tasksService = client.service('tasks');
-
-    const handleQueued = (task: Task) => {
-      if (task.session_id === session.session_id) {
-        setQueuedTasks((prev) => {
-          // Deduplicate: optimistic update from enqueue may have already added this task
-          if (prev.some((t) => t.task_id === task.task_id)) return prev;
-          return [...prev, task].sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0));
-        });
-      }
-    };
-
-    // A queued task drops out of the drawer when its status flips off 'queued'
-    // (drained by spawnTaskExecutor → RUNNING, or admin-cancelled to STOPPED).
-    const handleTaskPatched = (task: Task) => {
-      if (task.session_id !== session.session_id) return;
-      if (task.status !== TaskStatus.QUEUED) {
-        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
-      }
-    };
-
-    const handleTaskRemoved = (task: Task) => {
-      if (task.session_id === session.session_id) {
-        setQueuedTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
-      }
-    };
-
-    tasksService.on('queued', handleQueued);
-    tasksService.on('patched', handleTaskPatched);
-    tasksService.on('updated', handleTaskPatched);
-    tasksService.on('removed', handleTaskRemoved);
-
-    return () => {
-      tasksService.off('queued', handleQueued);
-      tasksService.off('patched', handleTaskPatched);
-      tasksService.off('updated', handleTaskPatched);
-      tasksService.off('removed', handleTaskRemoved);
-    };
-  }, [client, session]);
-
-  // Token breakdown calculation
-  const tokenBreakdown = React.useMemo(() => {
-    if (!session?.agentic_tool) {
-      return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 };
-    }
-
-    return tasks.reduce(
-      (acc, task) => {
-        if (!task.normalized_sdk_response) return acc;
-
-        const { tokenUsage, costUsd } = task.normalized_sdk_response;
-
-        return {
-          total: acc.total + tokenUsage.totalTokens,
-          input: acc.input + tokenUsage.inputTokens,
-          output: acc.output + tokenUsage.outputTokens,
-          cacheRead: acc.cacheRead + (tokenUsage.cacheReadTokens || 0),
-          cacheCreation: acc.cacheCreation + (tokenUsage.cacheCreationTokens || 0),
-          cost: acc.cost + (costUsd || 0),
-        };
-      },
-      { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 }
-    );
-  }, [tasks, session?.agentic_tool]);
 
   // Get latest context window
   const latestContextWindow = React.useMemo(() => {
@@ -939,7 +867,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               ? 'Queue here… @ for mentions, : for emoji'
               : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -958,7 +886,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         <input
           ref={attachmentInputRef}
           type="file"
-          accept={getComposerUploadAccept()}
           multiple
           disabled={composerAttachmentUploading}
           style={{ display: 'none' }}
@@ -978,6 +905,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
+    isMobileShell,
     isRunning,
     client,
     userById,
@@ -1017,7 +945,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       cancelText: 'Cancel',
       onOk: async () => {
         const archived = await archiveSession(session.session_id);
-        if (archived) {
+        if (archived?.reconciliation === 'refresh-required') {
+          showWarning(ARCHIVE_REFRESH_WARNING);
+        } else if (archived) {
           showSuccess('Session and same-branch children archived');
           onClose();
         } else {
@@ -1480,7 +1410,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       session={activeSession}
       currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
-      tokenBreakdown={tokenBreakdown}
       latestContextWindow={latestContextWindow}
       footerGradient={footerGradient}
       sessionMcpServerIds={sessionMcpServerIds}
@@ -1527,7 +1456,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
-        borderLeft: `1px solid ${token.colorBorder}`,
+        // No adjacent canvas on the mobile full-screen shell, so drop the left seam.
+        borderLeft: isMobileShell ? undefined : `1px solid ${token.colorBorder}`,
       }}
     >
       {/* Header */}
@@ -1542,6 +1472,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {/* Row 1: icon + title + badge + actions, center-aligned */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+            {/* Mobile: a full-screen session reads as a dismissible overlay, so a
+                leading Close (X) is the right metaphor. Desktop keeps its
+                trailing Close on the right (below). */}
+            {isMobileShell && (
+              <Tooltip title="Close">
+                <Button
+                  type="text"
+                  aria-label="Close"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ ...mobileHeaderButtonStyle, marginLeft: -token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
             <div style={{ flexShrink: 0 }}>
               <ToolIcon tool={session.agentic_tool} size={40} />
             </div>
@@ -1589,7 +1533,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       textAlign: 'left',
                     }}
                   >
-                    <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
+                    <Typography.Text
+                      strong
+                      style={{ fontSize: 18, ...getSessionTitleStyles(isMobileShell ? 1 : 2) }}
+                    >
                       {session.title || session.description
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
@@ -1623,7 +1570,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
+                <Button
+                  type="text"
+                  aria-label="More actions"
+                  icon={<EllipsisOutlined />}
+                  style={mobileHeaderButtonStyle}
+                />
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">
@@ -1632,16 +1584,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 aria-label="Search session"
                 icon={<SearchOutlined />}
                 onClick={openSearch}
+                style={mobileHeaderButtonStyle}
               />
             </Tooltip>
-            <Tooltip title="Close Panel">
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
-              />
-            </Tooltip>
+            {/* Desktop closes from the right; mobile closes from the leading X above. */}
+            {!isMobileShell && (
+              <Tooltip title="Close Panel">
+                <Button
+                  type="text"
+                  aria-label="Close panel"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            )}
           </Space>
         </div>
         {/* Row 2: search bar — always in DOM, animates in/out */}
@@ -1687,7 +1644,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
               </Typography.Text>
             )}
-            {!query && (
+            {!query && !isMobileShell && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 Esc to close
               </Typography.Text>
@@ -1714,7 +1671,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ref={bodyRef}
         style={{
           flex: 1,
-          overflow: 'hidden',
+          overflowX: 'hidden',
+          overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
@@ -1773,7 +1731,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           ref={conversationRef}
           style={{
             flex: 1,
-            minHeight: 0,
+            // If chrome + composer cannot fit on a short viewport, scroll the
+            // body rather than crushing the transcript and queue to slivers.
+            minHeight: queuedTasks.length > 0 ? 360 : 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
@@ -1799,13 +1759,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setScrollToBottom={setScrollToBottom}
             setScrollToTop={setScrollToTop}
             queuedTasks={queuedTasks}
-            setQueuedTasks={setQueuedTasks}
             spawnModalOpen={spawnModalOpen}
             setSpawnModalOpen={setSpawnModalOpen}
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
-            forceExpandAll={searchOpen && query.trim().length > 0}
           />
         </div>
 

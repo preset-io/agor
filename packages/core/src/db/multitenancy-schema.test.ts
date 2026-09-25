@@ -59,11 +59,15 @@ function migrationTenantTables(): string[] {
   const codexDeviceAuthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
   );
-  const claudeOauthMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'
-  );
+  const claudeOauthMigration =
+    readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql') +
+    '\n' +
+    readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql');
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
+  );
+  const transferMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -83,6 +87,7 @@ function migrationTenantTables(): string[] {
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
@@ -105,7 +110,9 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -152,6 +159,19 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("IN ('starting', 'running')");
     expect(migration).toContain("= 'environment_health_discovery'");
     expect(migration).not.toContain('WITH CHECK');
+  });
+
+  it('limits API-key host tenant discovery to routing rows and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0115_api_key_host_tenant_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'api_key_host_tenant_discovery'");
+    expect(migration).toContain(`"namespace" = 'tenant.routing'`);
+    expect(migration).toContain(`"key" = 'public_url'`);
+    expect(migration).not.toContain('WITH CHECK');
+    expect(migration).not.toContain('user_api_keys');
   });
 
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {

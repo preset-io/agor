@@ -1,3 +1,10 @@
+import type {
+  KNOWLEDGE_TRANSFER,
+  KnowledgeTransferBody,
+  KnowledgeTransferPage,
+  KnowledgeTransferWrite,
+  KnowledgeTransferWriteResult,
+} from '../types/knowledge-transfer';
 /**
  * Feathers Client for Agor
  *
@@ -15,9 +22,10 @@ import type {
   BoardCommentPatch,
   BoardCommentReposition,
   BoardExportBlob,
+  BoardImportResult,
   Branch,
   BranchCapabilityPolicy,
-  BranchEnvironmentUpdate,
+  CancelQueuedTasksInput,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -60,8 +68,11 @@ import type {
   OpenCodeOAuthAttemptPatch,
   OpenCodeOAuthConnectRequest,
   OpenCodeProviderSettings,
+  OwnershipTransferRequest,
+  OwnershipTransferResult,
   PatchAgenticToolPreset,
   PermissionMode,
+  ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
   Schedule,
@@ -72,6 +83,7 @@ import type {
   SessionID,
   SessionUpdate,
   Task,
+  TaskQueueMutationResult,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
@@ -230,6 +242,14 @@ export interface MCPMarketplaceToolPermissionService {
   ): Promise<MCPMarketplaceToolPermissionResult>;
 }
 
+export interface OwnershipTransferService {
+  patch(
+    id: null,
+    data: ClientInput<OwnershipTransferRequest>,
+    params?: Params
+  ): Promise<OwnershipTransferResult>;
+}
+
 export interface BoardPermissionsService {
   find(params?: Params): Promise<BoardCapabilityPolicies>;
   patch(
@@ -274,6 +294,8 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
+  'boards/:id/ownership': OwnershipTransferResult;
+  'branches/:id/ownership': OwnershipTransferResult;
   'boards/:id/permissions': BoardCapabilityPolicies;
   'branches/:id/permissions': BranchCapabilityPolicy;
   'workspace-preferences': CapabilityPolicyWorkspacePreferences;
@@ -529,6 +551,8 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  cancelQueued(data: CancelQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
+  reorderQueued(data: ReorderQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   /**
    * Mark a task as completed
    */
@@ -645,7 +669,7 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from a JSON blob
    */
-  fromBlob(blob: BoardExportBlob, params?: Params): Promise<Board>;
+  fromBlob(blob: BoardExportBlob, params?: Params): Promise<BoardImportResult>;
 
   /**
    * Export board to YAML string
@@ -655,7 +679,10 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from YAML string
    */
-  fromYaml(data: { yaml?: string; content?: string } | string, params?: Params): Promise<Board>;
+  fromYaml(
+    data: { yaml?: string; content?: string } | string,
+    params?: Params
+  ): Promise<BoardImportResult>;
 
   /**
    * Clone an existing board with a new name
@@ -755,22 +782,6 @@ export interface BranchesService extends AgorService<Branch> {
   removeFromBoard(id: string, params?: Params): Promise<Branch>;
 
   /**
-   * Update environment status
-   */
-  updateEnvironment(
-    data:
-      | {
-          branch_id?: string;
-          branchId?: string;
-          environment_update?: BranchEnvironmentUpdate;
-          environmentUpdate?: BranchEnvironmentUpdate;
-        }
-      | string,
-    environmentUpdate?: BranchEnvironmentUpdate,
-    params?: Params
-  ): Promise<Branch>;
-
-  /**
    * Start branch environment
    */
   startEnvironment(id: string, params?: Params): Promise<Branch>;
@@ -795,16 +806,18 @@ export interface BranchesService extends AgorService<Branch> {
    */
   archiveOrDelete(
     id: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: import('../types').BranchArchiveOrDeleteOptions,
     params?: Params
   ): Promise<Branch | { deleted: true; branch_id: string }>;
 
   /**
    * Unarchive a branch
    */
+  clean(
+    input: { branchId: import('../types').BranchID },
+    params?: Params
+  ): Promise<import('../types').BranchCleanAccepted>;
+
   unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Branch>;
 }
 
@@ -842,6 +855,7 @@ export interface AgorClient
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'boards/:id/ownership' | 'branches/:id/ownership'): OwnershipTransferService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
   service(path: 'branches/:id/permissions'): BranchPermissionsService;
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
@@ -857,6 +871,11 @@ export interface AgorClient
   service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 
   // Standard services (CRUD only)
+  service(path: typeof KNOWLEDGE_TRANSFER.path): {
+    find(params?: Params): Promise<KnowledgeTransferPage>;
+    get(id: string, params?: Params): Promise<KnowledgeTransferBody>;
+    create(data: KnowledgeTransferWrite, params?: Params): Promise<KnowledgeTransferWriteResult>;
+  };
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
@@ -934,7 +953,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromBlob = (
     boardsService as unknown as {
-      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<Board>;
+      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromBlob?.bind(boardsService);
 
@@ -959,7 +978,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromYaml = (
     boardsService as unknown as {
-      fromYaml?: (data: unknown, params?: Params) => Promise<Board>;
+      fromYaml?: (data: unknown, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromYaml?.bind(boardsService);
 
@@ -1342,7 +1361,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
+    branchesService.methods('ensureTeammateKnowledgeNamespace', 'clean');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }
@@ -1358,7 +1377,9 @@ function extendTasksService(client: AgorClient): void {
       'connectExecutor',
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
-      'reportSdkHealthFailure'
+      'reportSdkHealthFailure',
+      'cancelQueued',
+      'reorderQueued'
     );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;

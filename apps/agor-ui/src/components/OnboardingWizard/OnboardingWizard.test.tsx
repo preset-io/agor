@@ -144,6 +144,42 @@ async function findAndClickButton(text: string | RegExp) {
 }
 
 describe('OnboardingWizard', () => {
+  it.each(['API key', 'Subscription token'] as const)(
+    'replaces an unavailable backend grant through explicit %s input',
+    async (method) => {
+      const onUpdateUser = vi.fn(async () => undefined);
+      renderWizard({
+        initialStep: 'llm',
+        user: makeUser({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_oauth' },
+        }),
+        allowClaudeOAuthSignIn: false,
+        claudeOAuthCapability: { available: false, storage: null, reason: 'operator_disabled' },
+        onUpdateUser,
+      });
+      await findAndClickButton('Claude');
+      clickButton(method);
+      const key =
+        method === 'API key' ? `sk-ant-api03-${'x'.repeat(40)}` : 'synthetic-pasted-subscription';
+      const input = screen.getByLabelText(
+        method === 'API key' ? 'Anthropic API key' : 'Claude subscription token'
+      );
+      expect(screen.getByText(/^connect →/i).closest('button')).toBeDisabled();
+      fireEvent.change(input, { target: { value: key } });
+      clickButton(/^connect →/i);
+      await waitFor(() =>
+        expect(onUpdateUser).toHaveBeenCalledWith('user-1', {
+          agentic_tools: {
+            'claude-code': {
+              [method === 'API key' ? 'ANTHROPIC_API_KEY' : 'CLAUDE_CODE_OAUTH_TOKEN']: key,
+            },
+          },
+        })
+      );
+    }
+  );
+
   it('uses the shared animated glass highlights behind its content', () => {
     const { baseElement } = renderWizard();
 
@@ -362,7 +398,7 @@ describe('OnboardingWizard', () => {
     );
   });
 
-  it('LLM step lists all providers with Claude recommended, and lets the user switch selection', async () => {
+  it('LLM step recommends only Claude and Codex (GPT), and lets the user switch selection', async () => {
     renderWizard({ initialStep: 'llm' });
 
     expect(screen.getByText('Connect your AI')).toBeInTheDocument();
@@ -370,7 +406,13 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('GPT')).toBeInTheDocument();
     expect(screen.getByText('Gemini')).toBeInTheDocument();
     expect(screen.getByText('Custom')).toBeInTheDocument();
-    expect(screen.getByText('Recommended')).toBeInTheDocument();
+    expect(screen.getAllByText('Recommended')).toHaveLength(2);
+    for (const title of ['Claude', 'GPT']) {
+      expect(screen.getByText(title).closest('button')).toHaveTextContent('Recommended');
+    }
+    for (const title of ['Gemini', 'Custom']) {
+      expect(screen.getByText(title).closest('button')).not.toHaveTextContent('Recommended');
+    }
 
     // No key input until a provider is selected.
     expect(screen.queryByLabelText(/API key/i)).not.toBeInTheDocument();
@@ -1319,7 +1361,9 @@ describe('OnboardingWizard', () => {
     });
 
     clickButton(/open my board/i);
-    expect(await screen.findByText(/setup is taking longer than expected/i)).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByText(/setup is taking longer than expected/i)).toBeVisible()
+    );
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][1].isCurrent()).toBe(true);
     expect(screen.queryByText(/^try again →$/i)).not.toBeInTheDocument();

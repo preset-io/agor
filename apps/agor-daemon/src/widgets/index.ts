@@ -12,8 +12,13 @@
 
 import { registerEnvVarsWidget } from './env-vars/index.js';
 import { registerGatewayTokenWidget } from './gateway-token/index.js';
+import { registerOAuthWidget } from './oauth/index.js';
 
-export type { WidgetRegistryEntry, WidgetSubmitCtx } from './registry.js';
+export type {
+  WidgetDaemonVerifiedEvidence,
+  WidgetRegistryEntry,
+  WidgetSubmitCtx,
+} from './registry.js';
 export { getWidget, listWidgetTypes, registerWidget } from './registry.js';
 export type {
   AuthenticatedCaller,
@@ -31,4 +36,5 @@ export { canResolveWidget, resolveWidget } from './submissions.js';
 export function registerAllWidgets(): void {
   registerEnvVarsWidget();
   registerGatewayTokenWidget();
+  registerOAuthWidget();
 }

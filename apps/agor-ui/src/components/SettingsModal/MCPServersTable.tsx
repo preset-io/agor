@@ -773,6 +773,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         )}
       />
 
+      {/* Plain Table: this one already collapses to a phone-width Server/Actions layout (see the layout browser test). */}
       <Table
         dataSource={servers}
         columns={columns}

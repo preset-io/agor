@@ -14,6 +14,7 @@ import type {
   KnowledgeDocumentID,
   KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
+  KnowledgeDocumentSortField,
   KnowledgeDocumentStatus,
   KnowledgeDocumentUnitID,
   KnowledgeDocumentVersion,
@@ -52,7 +53,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, asc, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -61,7 +62,9 @@ import { lockBranchReferenceMutation } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
+  executeRaw,
   insert,
+  isPostgresDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -128,6 +131,23 @@ export interface KnowledgeDocumentFilters {
   include_other_user_drafts?: boolean;
   draft_filter_user_id?: UserID;
 }
+
+export interface KnowledgeDocumentPageOptions {
+  limit: number;
+  offset: number;
+  /** Feathers `$sort`; keys outside KNOWLEDGE_DOCUMENT_SORT_FIELDS are ignored. */
+  sort?: Record<string, 1 | -1>;
+  read: KnowledgeDocumentReadScope;
+}
+
+/**
+ * Who a document list is read for. Admins read every document; everyone else
+ * must name the namespaces they can read, so omitting them cannot silently
+ * drop the namespace restriction.
+ */
+export type KnowledgeDocumentReadScope =
+  | { as_admin: true }
+  | { as_admin: false; user_id?: UserID; namespace_ids: KnowledgeNamespaceID[] };
 
 export interface CreateKnowledgeDocumentInput extends Partial<KnowledgeDocument> {
   namespace_slug?: string;
@@ -301,6 +321,34 @@ function makeSnippet(content: string | null | undefined, q: string): string | nu
   const start = Math.max(0, index - 80);
   const end = Math.min(content.length, index + needle.length + 160);
   return `${start > 0 ? '…' : ''}${content.slice(start, end)}${end < content.length ? '…' : ''}`;
+}
+
+/**
+ * SQL form of `canReadKnowledgeDocument`: readable namespaces plus the
+ * visibility overlay (public, own, or admin). Returns null when nothing can be
+ * read. `namespaceIds` undefined means no namespace restriction.
+ * `KnowledgeDocumentReadScope` (document lists) only allows that for admins;
+ * the older `KnowledgeSearchQuery` contract still treats the IDs as optional,
+ * and its service always supplies them for non-admins.
+ */
+function knowledgeDocumentReadConditions(options: {
+  asAdmin: boolean;
+  userId?: UserID;
+  namespaceIds?: readonly KnowledgeNamespaceID[];
+}): SQL[] | null {
+  const conditions: SQL[] = [];
+  if (options.namespaceIds) {
+    if (options.namespaceIds.length === 0) return null;
+    conditions.push(inArray(kbDocuments.namespace_id, [...options.namespaceIds]));
+  }
+  if (!options.asAdmin) {
+    conditions.push(
+      options.userId
+        ? or(eq(kbDocuments.visibility, 'public'), eq(kbDocuments.created_by, options.userId))!
+        : eq(kbDocuments.visibility, 'public')
+    );
+  }
+  return conditions;
 }
 
 function knowledgeDraftVisibilityCondition(options: {
@@ -977,7 +1025,7 @@ export class KnowledgeDocumentRepository
 
   private async rowToDocumentWithUrl(row: KBDocumentRow): Promise<KnowledgeDocument> {
     const [baseUrl, namespace] = await Promise.all([
-      getBaseUrl(),
+      getBaseUrl(this.db),
       new KnowledgeNamespaceRepository(this.db).findById(row.namespace_id as KnowledgeNamespaceID),
     ]);
     return this.rowToDocument(row, { baseUrl, namespaceSlug: namespace?.slug });
@@ -1086,7 +1134,7 @@ export class KnowledgeDocumentRepository
     const versionId = generateId() as KnowledgeDocumentVersionID;
     const content = data.content_text;
     const hashes = hashContent(content);
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -1302,7 +1350,8 @@ export class KnowledgeDocumentRepository
     return Array.isArray(documents) ? withStatus : withStatus[0];
   }
 
-  async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {
+  /** SQL predicates for a document filter, or null when nothing can match. */
+  private async documentConditions(filters?: KnowledgeDocumentFilters) {
     const conditions = [];
     let namespaceId = filters?.namespace_id;
     if (!namespaceId && filters?.namespace_slug) {
@@ -1310,7 +1359,7 @@ export class KnowledgeDocumentRepository
         filters.namespace_slug
       );
       namespaceId = namespace?.namespace_id;
-      if (!namespaceId) return [];
+      if (!namespaceId) return null;
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (filters?.path) conditions.push(eq(kbDocuments.path, normalizeKnowledgePath(filters.path)));
@@ -1331,18 +1380,24 @@ export class KnowledgeDocumentRepository
           and ${kbNamespaces.archived} = false
       )`);
     }
+    return conditions;
+  }
 
-    const rows = await select(this.db)
-      .from(kbDocuments)
-      .where(and(...conditions))
-      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
-      .all();
+  private async rowsToDocuments(rows: KBDocumentRow[]): Promise<KnowledgeDocument[]> {
+    if (rows.length === 0) return [];
+    const namespaceIds = [...new Set(rows.map((row) => row.namespace_id))];
     const [baseUrl, namespaceRows] = await Promise.all([
-      getBaseUrl(),
-      select(this.db).from(kbNamespaces).all(),
+      getBaseUrl(this.db),
+      select(this.db, { namespace_id: kbNamespaces.namespace_id, slug: kbNamespaces.slug })
+        .from(kbNamespaces)
+        .where(inArray(kbNamespaces.namespace_id, namespaceIds))
+        .all(),
     ]);
     const namespaceSlugById = new Map<string, string>(
-      namespaceRows.map((row: KBNamespaceRow) => [row.namespace_id, row.slug])
+      namespaceRows.map((row: { namespace_id: string; slug: string }) => [
+        row.namespace_id,
+        row.slug,
+      ])
     );
     return rows.map((row: KBDocumentRow) =>
       this.rowToDocument(row, {
@@ -1352,12 +1407,72 @@ export class KnowledgeDocumentRepository
     );
   }
 
+  async findAll(filters?: KnowledgeDocumentFilters): Promise<KnowledgeDocument[]> {
+    const conditions = await this.documentConditions(filters);
+    if (!conditions) return [];
+    const rows = await select(this.db)
+      .from(kbDocuments)
+      .where(and(...conditions))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
+      .all();
+    return this.rowsToDocuments(rows);
+  }
+
+  /**
+   * One page of documents the caller can read. Read access, sort,
+   * LIMIT/OFFSET and the total (a separate COUNT) are all evaluated in SQL, so
+   * the database never returns rows the caller could not read.
+   */
+  async findPage(
+    filters: KnowledgeDocumentFilters,
+    page: KnowledgeDocumentPageOptions
+  ): Promise<{ total: number; data: KnowledgeDocument[] }> {
+    const conditions = await this.documentConditions(filters);
+    const readConditions = knowledgeDocumentReadConditions(
+      page.read.as_admin
+        ? { asAdmin: true }
+        : { asAdmin: false, userId: page.read.user_id, namespaceIds: page.read.namespace_ids }
+    );
+    if (!conditions || !readConditions) return { total: 0, data: [] };
+    const where = and(...conditions, ...readConditions);
+
+    const countRow = await select(this.db, { count: sql<number>`count(*)` })
+      .from(kbDocuments)
+      .where(where)
+      .one();
+    const total = Number(countRow?.count ?? 0);
+    if (page.limit === 0 || page.offset >= total) return { total, data: [] };
+
+    const sortColumns = {
+      updated_at: kbDocuments.updated_at,
+      created_at: kbDocuments.created_at,
+      path: kbDocuments.path,
+      title: kbDocuments.title,
+    } as const satisfies Record<KnowledgeDocumentSortField, unknown>;
+    const orderBy: SQL[] = [];
+    for (const [field, direction] of Object.entries(page.sort ?? {})) {
+      const column = sortColumns[field as keyof typeof sortColumns];
+      if (!column) continue;
+      orderBy.push(direction === -1 ? desc(column) : asc(column));
+    }
+    // Default order and tie-break: most recently updated first, then by id.
+    orderBy.push(desc(kbDocuments.updated_at), asc(kbDocuments.document_id));
+    const rows = await select(this.db)
+      .from(kbDocuments)
+      .where(where)
+      .orderBy(...orderBy)
+      .limit(page.limit)
+      .offset(page.offset)
+      .all();
+    return { total, data: await this.rowsToDocuments(rows) };
+  }
+
   async update(id: string, updates: KnowledgeDocumentWriteInput): Promise<KnowledgeDocument> {
     const fullId = await this.resolveId(id);
     if (updates.mime_type && updates.mime_type !== MARKDOWN_MIME_TYPE) {
       throw new RepositoryError('Knowledge V1 only supports text/markdown documents');
     }
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return await this.db.transaction(async (tx) => {
       const txDb = txAsDb(tx);
@@ -1588,14 +1703,16 @@ export class KnowledgeSearchRepository {
       if (!namespaceId) return [];
     }
 
-    const conditions = [];
+    const readConditions = knowledgeDocumentReadConditions({
+      asAdmin: query.readable_as_admin === true,
+      userId: query.readable_by_user_id,
+      namespaceIds: query.readable_namespace_ids,
+    });
+    if (!readConditions) return [];
+    const conditions = [...readConditions];
     if (!query.include_archived) {
       conditions.push(eq(kbDocuments.archived, false));
       conditions.push(eq(kbNamespaces.archived, false));
-    }
-    if (query.readable_namespace_ids) {
-      if (query.readable_namespace_ids.length === 0) return [];
-      conditions.push(inArray(kbDocuments.namespace_id, query.readable_namespace_ids));
     }
     if (namespaceId) conditions.push(eq(kbDocuments.namespace_id, namespaceId));
     if (query.path_prefix) {
@@ -1613,16 +1730,6 @@ export class KnowledgeSearchRepository {
       includeOtherUserDrafts: query.include_other_user_drafts ?? query.includeOtherUserDrafts,
     });
     if (draftCondition) conditions.push(draftCondition);
-    if (!query.readable_as_admin) {
-      conditions.push(
-        query.readable_by_user_id
-          ? or(
-              eq(kbDocuments.visibility, 'public'),
-              eq(kbDocuments.created_by, query.readable_by_user_id)
-            )!
-          : eq(kbDocuments.visibility, 'public')
-      );
-    }
 
     const needle = q.toLowerCase();
     const terms = needle
@@ -1658,7 +1765,7 @@ export class KnowledgeSearchRepository {
       .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .limit(q ? Math.max(offset + limit, 100) : offset + limit)
       .all()) as Array<Record<string, unknown>>;
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     return rows
       .map((row: Record<string, unknown>): KnowledgeSearchResult => {
@@ -1892,6 +1999,15 @@ export class KnowledgeGraphRepository {
     throw new RepositoryError('Unable to derive knowledge graph node URI');
   }
 
+  private async restoreNode(node: KnowledgeGraphNode): Promise<KnowledgeGraphNode> {
+    if (!node.archived) return node;
+    await update(this.db, kbGraphNodes)
+      .set({ archived: false, archived_at: null })
+      .where(eq(kbGraphNodes.node_id, node.node_id))
+      .run();
+    return { ...node, archived: false, archived_at: null };
+  }
+
   async getOrCreateNode(
     refInput: KnowledgeNodeRef,
     createdBy?: UserID | null
@@ -1900,21 +2016,42 @@ export class KnowledgeGraphRepository {
     const nodeId = firstPresent(ref, ['node_id']);
     if (nodeId) {
       const byId = await this.resolveNodeById(nodeId);
-      if (byId) return byId;
+      if (byId) return this.restoreNode(byId);
     }
 
     const uri = this.deriveNodeUri(ref);
+    // PostgreSQL's tenant uniqueness includes archived identities (migration
+    // 0054). Reuse them rather than inserting a second incarnation.
     const existing = await select(this.db)
+      .from(kbGraphNodes)
+      .where(eq(kbGraphNodes.uri, uri))
+      .orderBy(asc(kbGraphNodes.archived), desc(kbGraphNodes.created_at))
+      .one();
+    if (existing) return this.restoreNode(this.rowToNode(existing));
+
+    const query = insert(this.db, kbGraphNodes).values(
+      this.deriveNodeInsert({ ...ref, uri }, createdBy)
+    );
+    // SQLite graph mutations hold a write transaction. PostgreSQL additionally
+    // arbitrates a concurrent first creation on the tenant/URI identity.
+    const row = await (isPostgresDatabase(this.db) && 'tenant_id' in kbGraphNodes
+      ? query.onConflictDoNothing({
+          target: [kbGraphNodes.tenant_id, kbGraphNodes.uri],
+          where: sql`${kbGraphNodes.archived} = false`,
+        })
+      : query
+    )
+      .returning()
+      .one();
+    if (row) return this.rowToNode(row);
+    // Another writer created this exact tenant/URI identity. Do not ignore
+    // unrelated constraints; the conflict target above is deliberately narrow.
+    const winner = await select(this.db)
       .from(kbGraphNodes)
       .where(and(eq(kbGraphNodes.uri, uri), eq(kbGraphNodes.archived, false)))
       .one();
-    if (existing) return this.rowToNode(existing);
-
-    const row = await insert(this.db, kbGraphNodes)
-      .values(this.deriveNodeInsert({ ...ref, uri }, createdBy))
-      .returning()
-      .one();
-    return this.rowToNode(row);
+    if (!winner) throw new RepositoryError('Knowledge graph node conflict could not be resolved');
+    return this.rowToNode(winner);
   }
 
   async findNode(
@@ -1945,21 +2082,53 @@ export class KnowledgeGraphRepository {
     return row ? this.rowToNode(row) : null;
   }
 
+  private async lockOutgoingEdges(sourceId: KnowledgeGraphNodeID): Promise<void> {
+    if (isPostgresDatabase(this.db)) {
+      // NO KEY UPDATE serializes writers without conflicting with the foreign
+      // key's KEY SHARE lock when another source links back to this node.
+      await executeRaw(
+        this.db,
+        sql`SELECT 1 FROM ${kbGraphNodes}
+        WHERE ${kbGraphNodes.node_id} = ${sourceId} FOR NO KEY UPDATE`
+      );
+    }
+    // SQLite already owns the surrounding write transaction. This lock covers
+    // outgoing edges, not earlier node creation/restoration: opposite-order
+    // acquisition of missing or archived nodes can still deadlock in PostgreSQL.
+  }
+
   async link(input: KnowledgeGraphLinkInput): Promise<KnowledgeGraphEdge> {
+    return runDatabaseTransaction(this.db, (tx) =>
+      new KnowledgeGraphRepository(tx).linkInTransaction(input)
+    );
+  }
+
+  private async linkInTransaction(input: KnowledgeGraphLinkInput): Promise<KnowledgeGraphEdge> {
     const source = await this.getOrCreateNode(input.source, input.created_by);
     const target = await this.getOrCreateNode(input.target, input.created_by);
+    // Share the source lock with replacement sync: manual links cannot race
+    // its read/archive/restore sequence.
+    await this.lockOutgoingEdges(source.node_id);
     const existing = await select(this.db)
       .from(kbGraphEdges)
       .where(
         and(
           eq(kbGraphEdges.source_node_id, source.node_id),
           eq(kbGraphEdges.target_node_id, target.node_id),
-          eq(kbGraphEdges.edge_type, input.edge_type),
-          eq(kbGraphEdges.archived, false)
+          eq(kbGraphEdges.edge_type, input.edge_type)
         )
       )
+      .orderBy(asc(kbGraphEdges.archived), desc(kbGraphEdges.created_at))
       .one();
-    if (existing) return this.rowToEdge(existing);
+    if (existing) {
+      if (existing.archived) {
+        await update(this.db, kbGraphEdges)
+          .set({ archived: false, archived_at: null })
+          .where(eq(kbGraphEdges.edge_id, existing.edge_id))
+          .run();
+      }
+      return this.rowToEdge({ ...existing, archived: false, archived_at: null });
+    }
 
     const row = await insert(this.db, kbGraphEdges)
       .values({
@@ -1983,7 +2152,9 @@ export class KnowledgeGraphRepository {
    * Idempotently replace the set of outgoing edges of a single type from one
    * source node. Edges to targets no longer present are archived; new targets
    * are linked. Used to keep derived edges (e.g. doc-to-doc `references`) in
-   * sync with a document's content on every save.
+   * sync with a document's content on every save. There is no independent manual
+   * provenance: explicit edges of this type participate in the same set. Restore
+   * archived identities without replacing their metadata; other types are untouched.
    */
   async syncOutgoingEdges(input: {
     source: KnowledgeNodeRef;
@@ -1991,6 +2162,14 @@ export class KnowledgeGraphRepository {
     targets: KnowledgeNodeRef[];
     created_by?: UserID | null;
   }): Promise<void> {
+    return runDatabaseTransaction(this.db, (tx) =>
+      new KnowledgeGraphRepository(tx).syncOutgoingEdgesInTransaction(input)
+    );
+  }
+
+  private async syncOutgoingEdgesInTransaction(
+    input: Parameters<KnowledgeGraphRepository['syncOutgoingEdges']>[0]
+  ): Promise<void> {
     const source = await this.getOrCreateNode(input.source, input.created_by);
 
     const desiredTargetIds = new Set<string>();
@@ -1999,6 +2178,8 @@ export class KnowledgeGraphRepository {
       if (target.node_id === source.node_id) continue;
       desiredTargetIds.add(target.node_id);
     }
+
+    await this.lockOutgoingEdges(source.node_id);
 
     const existingEdges = await select(this.db)
       .from(kbGraphEdges)
@@ -2022,20 +2203,12 @@ export class KnowledgeGraphRepository {
 
     for (const targetNodeId of desiredTargetIds) {
       if (existingTargetIds.has(targetNodeId)) continue;
-      await insert(this.db, kbGraphEdges)
-        .values({
-          edge_id: generateId(),
-          source_node_id: source.node_id,
-          target_node_id: targetNodeId,
-          edge_type: input.edge_type,
-          confidence: null,
-          properties: null,
-          created_by: input.created_by ?? null,
-          created_at: new Date(),
-          archived: false,
-          archived_at: null,
-        } satisfies KBGraphEdgeInsert)
-        .run();
+      await this.linkInTransaction({
+        source: { node_id: source.node_id },
+        target: { node_id: targetNodeId },
+        edge_type: input.edge_type,
+        created_by: input.created_by,
+      });
     }
   }
 

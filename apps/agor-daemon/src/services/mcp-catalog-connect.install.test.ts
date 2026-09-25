@@ -16,9 +16,11 @@
 
 import {
   createDatabaseAsync,
+  createTenantScopedDatabaseProxy,
   MCPCatalogCandidateRepository,
   MCPServerRepository,
   runMigrations,
+  runWithTenantDatabaseScope,
   setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -79,21 +81,62 @@ const CONNECT_REQUEST = {
  * puts it there. That second claim is asserted separately at the bottom of
  * this file, against the production registration itself.
  */
+/**
+ * The Catalog connect lane's database handle — always with the daemon's tenant
+ * scope guard armed.
+ *
+ * Mandatory rather than opt-in, for the same reason `createSlackLaneHarness`
+ * is in `register-services.oauth-sqlite.integration.test.ts`: `mcp-catalog/
+ * connect` is classified `identity-only`
+ * (`utils/tenant-service-classification.ts`), which means nothing upstream
+ * arms a scope for it and every database access has to open its own. A fixture
+ * that lets an unscoped read succeed cannot see the difference, which is
+ * exactly how five of these shipped.
+ */
+const CONNECT_LANE_TENANT = 'default';
+
+async function guardedConnectLaneDatabase() {
+  const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
+  await runMigrations(rawDb);
+  const db = createTenantScopedDatabaseProxy(rawDb, {
+    requireScope: true,
+    label: 'catalog connect install harness',
+  }) as unknown as TenantScopeAwareDatabase;
+  /** The production dep: one short tenant unit per access, not a pass-through. */
+  const runInTenantDatabaseScope = <T>(_params: unknown, work: () => Promise<T>): Promise<T> =>
+    runWithTenantDatabaseScope(db, CONNECT_LANE_TENANT, work);
+  return { rawDb, db, runInTenantDatabaseScope };
+}
+
 async function buildDaemon(
   policy: MCPMemberPolicy,
   role: UserRole = 'member',
   catalogEntry: MCPCatalogEntry = CURATED
 ) {
-  const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
-  const db = rawDb as unknown as TenantScopeAwareDatabase;
-  await runMigrations(rawDb);
-  await setMcpMemberPolicy(db, policy, undefined, null);
+  const { rawDb, db, runInTenantDatabaseScope } = await guardedConnectLaneDatabase();
+  await runInTenantDatabaseScope(undefined, () => setMcpMemberPolicy(db, policy, undefined, null));
 
   const users = new UsersRepository(rawDb);
   const user = (await users.create({ email: 'bob@agor.live', name: 'Bob', role })) as User;
 
   const app = feathers();
   app.use('mcp-servers', createMCPServersService(db));
+  /**
+   * `mcp-servers` is `scoped`: in production `registerTenantHooks` installs the
+   * tenant database scope around every one of its methods. The fixture has to
+   * install the same thing, or the guard reports the fixture's own omission
+   * instead of the lane's.
+   */
+  const armTenantScope = (service: { hooks: (h: unknown) => unknown }) =>
+    service.hooks({
+      around: {
+        all: [
+          (_context: unknown, next: () => Promise<void>) =>
+            runWithTenantDatabaseScope(db, CONNECT_LANE_TENANT, next),
+        ],
+      },
+    } as never);
+  armTenantScope(app.service('mcp-servers') as never);
   app.service('mcp-servers').hooks({
     before: {
       create: [createMcpServerWriteAuthorizationHook(db) as never],
@@ -126,10 +169,7 @@ async function buildDaemon(
 
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
-    runInTenantDatabaseScope: <T>(
-      _params: AuthenticatedParams,
-      work: () => Promise<T>
-    ): Promise<T> => work(),
+    runInTenantDatabaseScope,
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
       candidateRepo.getForUser(userId, serverId),
@@ -442,10 +482,10 @@ describe('the write hook this seam depends on', () => {
    * checked to be reachable.
    */
   const standUpDaemonHooks = async (policy: MCPMemberPolicy = 'allow_crud') => {
-    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
-    const db = rawDb as unknown as TenantScopeAwareDatabase;
-    await runMigrations(rawDb);
-    await setMcpMemberPolicy(db, policy, undefined, null);
+    const { rawDb, db, runInTenantDatabaseScope } = await guardedConnectLaneDatabase();
+    await runInTenantDatabaseScope(undefined, () =>
+      setMcpMemberPolicy(db, policy, undefined, null)
+    );
 
     const users = new UsersRepository(rawDb);
     const bob = (await users.create({
@@ -484,7 +524,12 @@ describe('the write hook this seam depends on', () => {
           user: { user_id: caller.user_id, role: 'member' },
         } as unknown as AuthenticatedParams,
       } satisfies McpServerWriteHookContext;
-      for (const hook of registeredHooks.create) await hook(context);
+      // In production these hooks run inside `mcp-servers`, which is `scoped`,
+      // so its around hook has already armed the scope by the time a before
+      // hook reads the row. Driving the hooks directly has to arm the same one.
+      await runInTenantDatabaseScope(undefined, async () => {
+        for (const hook of registeredHooks.create) await hook(context);
+      });
       return context;
     };
 
@@ -498,7 +543,9 @@ describe('the write hook this seam depends on', () => {
           user: { user_id: caller.user_id, role: 'member' },
         } as unknown as AuthenticatedParams,
       } satisfies McpServerWriteHookContext;
-      for (const hook of registeredHooks.patch) await hook(context);
+      await runInTenantDatabaseScope(undefined, async () => {
+        for (const hook of registeredHooks.patch) await hook(context);
+      });
       return context;
     };
 
@@ -629,10 +676,10 @@ describe('credential reuse, against real grants', () => {
    * *credential* on it can be borrowed by the other.
    */
   async function buildTwoUserDaemon(grantResourceUri: string | undefined = RESOURCE) {
-    const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
-    const db = rawDb as unknown as TenantScopeAwareDatabase;
-    await runMigrations(rawDb);
-    await setMcpMemberPolicy(db, 'allow_private_only', undefined, null);
+    const { rawDb, db, runInTenantDatabaseScope } = await guardedConnectLaneDatabase();
+    await runInTenantDatabaseScope(undefined, () =>
+      setMcpMemberPolicy(db, 'allow_private_only', undefined, null)
+    );
 
     const users = new UsersRepository(rawDb);
     const alice = (await users.create({
@@ -672,6 +719,15 @@ describe('credential reuse, against real grants', () => {
     const hooks = captureRegisteredMcpServerHooks(db);
     const app = feathers();
     app.use('mcp-servers', createMCPServersService(db));
+    // Same reason as buildDaemon: `mcp-servers` is `scoped` in production.
+    app.service('mcp-servers').hooks({
+      around: {
+        all: [
+          (_context: unknown, next: () => Promise<void>) =>
+            runWithTenantDatabaseScope(db, CONNECT_LANE_TENANT, next),
+        ],
+      },
+    } as never);
     app.service('mcp-servers').hooks({
       before: {
         all: hooks.beforeAll,
@@ -705,10 +761,7 @@ describe('credential reuse, against real grants', () => {
     // grant" is decided by the same key the production wiring uses.
     const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
-      runInTenantDatabaseScope: <T>(
-        _params: AuthenticatedParams,
-        work: () => Promise<T>
-      ): Promise<T> => work(),
+      runInTenantDatabaseScope,
       listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
       getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
         candidateRepo.getForUser(userId, serverId),

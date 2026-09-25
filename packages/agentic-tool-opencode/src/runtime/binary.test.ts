@@ -1,9 +1,19 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { resolveManagedAgenticToolPackageDirectory } from '@agor/core/agentic-integrations';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
-import { assertOpenCodeBinaryCompatibility, readOpenCodeBinaryVersion } from './binary.js';
+import {
+  assertOpenCodeBinaryCompatibility,
+  getOpenCodeNativePackageName,
+  readOpenCodeBinaryVersion,
+  resolvePackagedOpenCodeBinary,
+} from './binary.js';
+
+vi.mock('@agor/core/agentic-integrations', () => ({
+  resolveManagedAgenticToolPackageDirectory: vi.fn(),
+}));
 
 const temporaryDirectories: string[] = [];
 
@@ -17,6 +27,8 @@ async function versionBinary(output: string) {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
+  vi.resetAllMocks();
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -25,6 +37,37 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', () => {
+  it('executes the managed native optional package without a postinstall launcher or Node', async () => {
+    vi.stubEnv('AGOR_MANAGED_AGENTIC_TOOLS', '1');
+    vi.stubEnv('AGOR_VERSION', '1.2.3');
+    const fixture = await versionBinary(OPENCODE_VERSION);
+    const directory = dirname(fixture);
+    await mkdir(join(directory, 'bin'));
+    const binary = join(directory, 'bin', 'opencode');
+    await copyFile(fixture, binary);
+    vi.mocked(resolveManagedAgenticToolPackageDirectory).mockResolvedValue(directory);
+
+    await expect(resolvePackagedOpenCodeBinary()).resolves.toEqual({
+      executable: binary,
+      argsPrefix: [],
+    });
+    expect(resolveManagedAgenticToolPackageDirectory).toHaveBeenCalledWith(
+      'opencode',
+      '1.2.3',
+      expect.stringMatching(/^opencode-(linux|darwin)-/)
+    );
+  });
+
+  it('does not fall back to a host binary when the managed package fails containment', async () => {
+    vi.stubEnv('AGOR_MANAGED_AGENTIC_TOOLS', '1');
+    vi.stubEnv('AGOR_VERSION', '1.2.3');
+    vi.stubEnv('AGOR_OPENCODE_PATH', await versionBinary(OPENCODE_VERSION));
+    vi.mocked(resolveManagedAgenticToolPackageDirectory).mockRejectedValue(
+      new Error('native package resolved outside the managed directory')
+    );
+    await expect(resolvePackagedOpenCodeBinary()).rejects.toThrow('outside the managed directory');
+  });
+
   it('accepts the CLI version pinned to the SDK', async () => {
     const binary = await versionBinary(`opencode version ${OPENCODE_VERSION}`);
 
@@ -46,5 +89,25 @@ describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', (
     await expect(readOpenCodeBinaryVersion(binary)).rejects.toThrow(
       'Could not parse OpenCode version'
     );
+  });
+});
+
+describe('OpenCode native optional package selection', () => {
+  it.each([
+    ['linux', 'x64', false, 'opencode-linux-x64-baseline'],
+    ['linux', 'x64', true, 'opencode-linux-x64-baseline-musl'],
+    ['linux', 'arm64', false, 'opencode-linux-arm64'],
+    ['linux', 'arm64', true, 'opencode-linux-arm64-musl'],
+    ['darwin', 'x64', false, 'opencode-darwin-x64-baseline'],
+    ['darwin', 'arm64', false, 'opencode-darwin-arm64'],
+    ['win32', 'x64', false, 'opencode-windows-x64-baseline'],
+    ['win32', 'arm64', false, 'opencode-windows-arm64'],
+  ] as const)('selects %s/%s (musl=%s)', (platform, arch, musl, expected) => {
+    expect(getOpenCodeNativePackageName(platform, arch, musl)).toBe(expected);
+  });
+
+  it('fails closed for unsupported platforms and architectures', () => {
+    expect(() => getOpenCodeNativePackageName('freebsd', 'x64', false)).toThrow('does not support');
+    expect(() => getOpenCodeNativePackageName('linux', 'ia32', false)).toThrow('does not support');
   });
 });

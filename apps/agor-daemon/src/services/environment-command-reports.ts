@@ -5,7 +5,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { environmentAccessUrlsSchema } from '@agor/core/environment/access-urls';
+import { decodeEnvironmentLifecycleResult } from '@agor/core/environment/lifecycle-result';
 import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
@@ -13,6 +13,7 @@ import {
   ENVIRONMENT_COMMAND_BUDGET,
   type EnvironmentCommandReport,
   environmentCommandTokenId,
+  type UserID,
 } from '@agor/core/types';
 import { z } from 'zod';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
@@ -47,7 +48,9 @@ const reportSchema = z.discriminatedUnion('kind', [
       output: output.optional(),
       truncated: z.boolean().optional(),
       message: z.string().max(1024),
-      access_urls: environmentAccessUrlsSchema.optional(),
+      lifecycle_result: z.unknown().optional(),
+      /** Upgrade-only shape emitted by executors using the former result file. */
+      access_urls: z.unknown().optional(),
     })
     .strict(),
 ]);
@@ -62,9 +65,33 @@ export class EnvironmentCommandReportsService {
   async create(data: unknown, params?: AuthenticatedParams) {
     const parsed = reportSchema.safeParse(data);
     if (!parsed.success) throw new BadRequest('Invalid or oversized environment command report');
-    const report = parsed.data as EnvironmentCommandReport;
+    const rawReport = parsed.data;
+    let report = rawReport as EnvironmentCommandReport;
+    if (
+      rawReport.kind === 'result' &&
+      (rawReport.lifecycle_result !== undefined || rawReport.access_urls !== undefined)
+    ) {
+      if (
+        rawReport.action !== 'start' ||
+        (rawReport.lifecycle_result !== undefined && rawReport.access_urls !== undefined)
+      ) {
+        throw new BadRequest('Invalid or oversized environment command report');
+      }
+      try {
+        const { access_urls: legacyAccessUrls, ...canonical } = rawReport;
+        report = {
+          ...canonical,
+          lifecycle_result: decodeEnvironmentLifecycleResult(
+            rawReport.lifecycle_result ?? { access_urls: legacyAccessUrls }
+          ),
+        } as EnvironmentCommandReport;
+      } catch {
+        throw new BadRequest('Invalid or oversized environment command report');
+      }
+    }
     if (
       !params?.provider ||
+      !params.user ||
       !matchesExecutorCommandRuntimeScope(
         params,
         environmentCommandTokenId(report.action, report.attempt_id),
@@ -84,15 +111,23 @@ export class EnvironmentCommandReportsService {
         'Environment command credential and request must match the current tenant'
       );
     }
+    const expectedRequester = params.user.user_id as UserID;
     return runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
       const branches = new BranchRepository(scoped);
-      await ensureCanControlBranchEnvironment(
-        branches,
-        report.branch_id,
-        params,
-        'report an environment command'
-      );
-      const environment = await new EnvironmentCommandRepository(scoped).report(report);
+      if (report.kind === 'claim') {
+        await ensureCanControlBranchEnvironment(
+          branches,
+          report.branch_id,
+          params,
+          'claim an environment command'
+        );
+      }
+      // Claim checks current permission. Later progress/result reports carry no
+      // new authority: the exact token and persisted initiating actor may only
+      // settle the already-authorized attempt, even after permission revocation.
+      const environment = await new EnvironmentCommandRepository(scoped).report(report, {
+        expectedRequester,
+      });
       const branch = await branches.findById(report.branch_id);
       if (branch)
         emitServiceEvent(this.app, {

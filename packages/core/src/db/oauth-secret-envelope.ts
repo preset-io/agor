@@ -12,6 +12,7 @@ const IV_LENGTH = 12;
 export type BoundSecretPurpose =
   | 'pending-exchange'
   | 'slack-mcp-recovery'
+  | 'slack-mcp-connect'
   | 'dcr-client'
   | 'codex-device-attempt'
   | 'claude-signin-attempt'

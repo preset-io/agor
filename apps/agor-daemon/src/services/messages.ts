@@ -53,7 +53,9 @@ export type MessageParams = QueryParams<{
         $lte: MessageID;
       };
   session_id?: SessionID;
-  task_id?: TaskID;
+  task_id?: TaskID | { $in: TaskID[] };
+  /** Experimental historical projection. Full details remain the default. */
+  transcript?: 'lean';
   type?: Message['type'];
   role?: Message['role'];
 }> & {
@@ -103,6 +105,20 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
       throw new BadRequest(`Unsupported messages query field: ${field}`);
     }
   }
+  if (rawQuery.transcript !== undefined) {
+    if (
+      rawQuery.transcript !== 'lean' ||
+      (Array.isArray(rawQuery.$select) &&
+        rawQuery.$select.some(
+          (field) => !['message_id', 'session_id', 'task_id', 'index'].includes(String(field))
+        )) ||
+      (typeof rawQuery.session_id !== 'string' && typeof rawQuery.task_id !== 'string')
+    ) {
+      throw new BadRequest(
+        'Lean transcript requires an exact session_id or task_id and only identity $select fields'
+      );
+    }
+  }
   const query = { ...rawQuery } as Query;
   if ('$limit' in rawQuery && rawQuery.$limit !== undefined) {
     query.$limit = parseNonNegativeInteger(rawQuery.$limit, '$limit');
@@ -138,8 +154,21 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
   ) {
     throw new BadRequest('session_id must be an ID or a bounded $in array of IDs');
   }
-  if (rawQuery.task_id !== undefined && typeof rawQuery.task_id !== 'string') {
-    throw new BadRequest('task_id must be an ID');
+  const taskId = rawQuery.task_id;
+  if (taskId !== undefined && typeof taskId !== 'string') {
+    if (
+      !taskId ||
+      typeof taskId !== 'object' ||
+      Array.isArray(taskId) ||
+      Object.keys(taskId).length !== 1 ||
+      !('$in' in taskId) ||
+      !Array.isArray(taskId.$in) ||
+      taskId.$in.length > MESSAGE_PAGINATION.MAX_TASK_IDS ||
+      !taskId.$in.every((id) => typeof id === 'string') ||
+      typeof sessionId !== 'string'
+    ) {
+      throw new BadRequest('task_id must be an ID or bounded $in with an exact session_id');
+    }
   }
   const messageId = rawQuery.message_id;
   if (
@@ -167,6 +196,7 @@ function normalizeQuery(rawQuery: Record<string, unknown>): Query {
 }
 
 const MESSAGE_QUERY_FIELDS = new Set([
+  'transcript',
   'message_id',
   'session_id',
   'task_id',
@@ -283,9 +313,7 @@ export class MessagesService extends DrizzleService<
    */
   async find(params?: MessageParams): Promise<Message[] | Paginated<Message>> {
     const query = normalizeQuery((params?.query ?? {}) as Record<string, unknown>);
-    const limit = query.$limit ?? this.paginate?.default ?? 100;
-    const actualLimit = Math.min(limit, this.paginate?.max ?? 1000);
-    const skip = query.$skip ?? 0;
+    const { limit: actualLimit, skip } = this.pageWindow(query);
     const sessionId = query.session_id;
     const exactTranscript = typeof query.task_id === 'string' || typeof sessionId === 'string';
     if (skip > PAGINATION.MAX_LIMIT && !exactTranscript) {
@@ -294,6 +322,7 @@ export class MessagesService extends DrizzleService<
       );
     }
     const pageOptions: Parameters<MessagesRepository['findPage']>[0] = {
+      lean: query.transcript === 'lean',
       limit: actualLimit,
       skip,
       sort: query.$sort,
@@ -326,6 +355,8 @@ export class MessagesService extends DrizzleService<
       pageOptions.sessionIds = sessionId.$in as SessionID[];
     }
     if (typeof query.task_id === 'string') pageOptions.taskId = query.task_id as TaskID;
+    else if (query.task_id && typeof query.task_id === 'object' && '$in' in query.task_id)
+      pageOptions.taskIds = query.task_id.$in as TaskID[];
     if (typeof query.type === 'string') pageOptions.type = query.type as Message['type'];
     if (typeof query.role === 'string') pageOptions.role = query.role as Message['role'];
     if (params?._agorSqlSessionAccessUserId) {

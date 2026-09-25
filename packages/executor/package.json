@@ -24,24 +24,24 @@
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
-    "diff": "^8.0.3",
-    "zod": "^4.4.3"
+    "diff": "^9.0.0",
+    "zod": "^4.6.5"
   },
   "optionalDependencies": {
     "@lydell/node-pty": "1.2.0-beta.15"
   },
   "devDependencies": {
-    "@cursor/sdk": "^1.0.26",
-    "@google/gemini-cli-core": "^0.40.0",
-    "@google/genai": "^1.43.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@cursor/sdk": "1.0.31",
+    "@google/gemini-cli-core": "0.59.0",
+    "@google/genai": "^1.52.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/diff": "^6.0.0",
     "@types/node": "^24.6.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10",
+    "vitest": "^5.0.1",
     "@github/copilot-sdk": "^0.2.2",
-    "@anthropic-ai/claude-agent-sdk": "0.3.259",
-    "@openai/codex-sdk": "0.153.0"
+    "@anthropic-ai/claude-agent-sdk": "0.3.280",
+    "@openai/codex-sdk": "0.156.1"
   },
   "files": [
     "dist",

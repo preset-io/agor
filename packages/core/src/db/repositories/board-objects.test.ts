@@ -454,6 +454,13 @@ describe('BoardObjectRepository.findAll', () => {
     expect(visibleObjects.map((object) => object.object_id)).toContain(layoutObjectId);
     expect(visibleObjects.map((object) => object.branch_id)).toContain(visibleBranch.branch_id);
     expect(visibleObjects.map((object) => object.branch_id)).not.toContain(hiddenBranch.branch_id);
+    // Unscoped inventories use the bulk predicate; selective board probes keep
+    // their point predicate. Both must preserve layout rows and hide branches.
+    const inventory = await boRepo.findVisibleToUser(userId);
+    expect(inventory.map((object) => object.object_id)).toEqual(
+      visibleObjects.map((object) => object.object_id)
+    );
+    await expect(boRepo.countVisibleToUser(userId)).resolves.toBe(2);
   });
 
   dbTest('should include all fields in returned objects', async ({ db }) => {

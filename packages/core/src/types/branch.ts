@@ -2,13 +2,29 @@
 import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
-import type { BranchName } from './repo';
+import type { BranchName, Repo } from './repo';
 
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
 export type BranchMetadataAction = (typeof BRANCH_METADATA_ACTIONS)[number];
 
 export const BRANCH_FILESYSTEM_ACTIONS = ['preserved', 'cleaned', 'deleted'] as const;
 export type BranchFilesystemAction = (typeof BRANCH_FILESYSTEM_ACTIONS)[number];
+
+/** Only terminal filesystem outcome belongs in the fenced provisioning CAS. */
+export interface BranchProvisioningOutcome {
+  filesystem_status: 'ready' | 'failed';
+  error_message?: string;
+}
+
+export function isBranchProvisioningOutcome(value: unknown): value is BranchProvisioningOutcome {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const outcome = value as Record<string, unknown>;
+  return (
+    (outcome.filesystem_status === 'ready' || outcome.filesystem_status === 'failed') &&
+    (outcome.error_message === undefined || typeof outcome.error_message === 'string') &&
+    Object.keys(outcome).every((key) => key === 'filesystem_status' || key === 'error_message')
+  );
+}
 
 /** Canonical request contract for the hooked branch archive/delete boundary. */
 export type BranchArchiveOrDeleteOptions =
@@ -59,6 +75,13 @@ export const BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS = [
  * - Multiple sessions can work on the same branch over time
  */
 export interface Branch {
+  /** Stored preference; effective only when the repo allows branch protection. */
+  cleanup_protected?: boolean;
+  workspace_operation?: import('./branch-cleanup').BranchWorkspaceOperation;
+  cleanup_last_error?: import('./branch-cleanup').BranchWorkspaceError;
+  last_cleanup_succeeded_at?: string;
+  last_cleanup_operation_id?: UUID;
+
   // ===== Identity =====
 
   /** Unique branch identifier (UUIDv7) */
@@ -171,11 +194,18 @@ export interface Branch {
   // ===== Git State (Current) =====
 
   /**
-   * Branch this branch diverged from
+   * Concrete ref this branch diverged from after source-ref resolution.
    *
-   * Example: "main" (if this is a feature branch)
+   * Examples: "main", "origin/main", "refs/tags/v1.0.0"
    */
   base_ref?: string;
+
+  /**
+   * Normalized remote source for clone restore when the repository cache is
+   * unavailable. Provenance only: this URL NEVER grants managed credentials;
+   * transport authority must still come from trusted repository/template metadata.
+   */
+  base_source?: { name: string; remote_url: string };
 
   /**
    * Remote that owns {@link base_ref} when the branch was seeded from a
@@ -371,9 +401,28 @@ export interface Branch {
    */
   error_message?: string;
 
+  /**
+   * Fence identifying which provisioning attempt currently owns `creating`.
+   *
+   * `filesystem_status` alone is a claim lock, not an attempt fence: it says a
+   * materialization is in flight but not *which* one. Without this, a slow
+   * attempt that is superseded by a retry can still land its acknowledgement on
+   * the newer attempt — an old `onExit` marking the new attempt `failed`, or a
+   * late success patching `ready` over a newer attempt or lifecycle transition.
+   *
+   * Set whenever an attempt is dispatched (branch create, or a retry claim), and
+   * echoed back by the executor. Acknowledgements — the daemon's `onExit` safety
+   * net and the executor's own terminal patch — are only applied when the id
+   * still matches, so a stale attempt can never write over a newer one.
+   */
+  provisioning_attempt_id?: string;
+
+  /** Materialization operation that the current/last attempt must replay. */
+  provisioning_operation?: 'create' | 'retry' | 'restore';
+
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
-  /** Immutable primary owner. This is intentionally independent of attribution. */
+  /** Primary owner, changed only by explicit ownership transfer; independent of attribution. */
   primary_owner_user_id?: UUID;
 
   /** Whether the complete branch permission package is inherited or overridden. */
@@ -540,6 +589,8 @@ export interface BranchEnvironmentInstance {
   process?: {
     /** Process ID */
     pid?: number;
+    /** Opaque ID used to reject a late Start result from an older attempt. */
+    attempt_id?: string;
     /** When process started */
     started_at?: string;
     /** Human-readable uptime */
@@ -567,6 +618,14 @@ export interface BranchEnvironmentInstance {
     name: string;
     url: string;
   }>;
+
+  /**
+   * Runtime health URL reported by the most recent successful Start command.
+   * It overrides the rendered static health URL until the next lifecycle
+   * boundary. Unlike operator-authored static URLs, this value is always
+   * treated as untrusted outbound input by the daemon.
+   */
+  health_url?: string;
 
   /**
    * Process logs (last N lines)
@@ -607,6 +666,8 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_error',
   'last_command',
   'logs',
+  'access_urls',
+  'health_url',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];
@@ -828,6 +889,18 @@ export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 export const TEAMMATE_FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
 export const TEAMMATE_FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
 
+/** Exact public template identity, never a name/slug substring match. */
+export function isCanonicalTeammateFrameworkRepo(repo: Pick<Repo, 'remote_url'>): boolean {
+  return [
+    TEAMMATE_FRAMEWORK_REPO_URL,
+    `https://github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+    `git@github.com:${TEAMMATE_FRAMEWORK_REPO_SLUG}.git`,
+    `git@github.com:${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+    `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}.git`,
+    `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
+  ].includes(repo.remote_url ?? '');
+}
+
 export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';
 export interface TeammateKnowledgeGrant {
   namespace_id: KnowledgeNamespaceID;
@@ -869,6 +942,8 @@ export interface TeammateConfig {
   frameworkVersion?: string;
   /** Whether this was created via the onboarding wizard */
   createdViaOnboarding?: boolean;
+  /** Server-derived immutable creation marker; not a current backup-status assertion. */
+  localHome?: true;
   /** Knowledge Base namespace and grant config for teammate memory/context. */
   kb?: TeammateKnowledgeConfig;
 }

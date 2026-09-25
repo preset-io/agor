@@ -44,7 +44,12 @@ import {
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
-import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
+import {
+  getDefaultPermissionMode,
+  isGatewaySession,
+  MCP_CLIENT_HINT_HEADER,
+  MCP_CLIENT_HINTS,
+} from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -811,6 +816,7 @@ export class CodexPromptService {
       result.agor = {
         url: `${daemonUrl}/mcp`,
         bearer_token_env_var: agorBearerEnvVar,
+        http_headers: { [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.codex },
         ...MCP_AUTO_APPROVE,
       };
       applyGatewayMcpStartupGuard(result.agor as CodexConfigObject, requireMcpServers);

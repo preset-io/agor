@@ -139,3 +139,60 @@ describe('Knowledge command realtime suppression', () => {
     expect(context.result).toBe(result);
   });
 });
+
+describe('Knowledge document query validation', () => {
+  it('validates and coerces kb/documents queries before the service pages them', async () => {
+    const registered: Parameters<ReturnType<Application['service']>['hooks']>[0][] = [];
+    const registrationApp = {
+      service(path: string) {
+        return {
+          hooks(hooks: (typeof registered)[number]) {
+            if (path === 'kb/documents') registered.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+    registerHooks({
+      // The tenant-scope hook wraps each call in a transaction; run it inline.
+      db: {
+        transaction: async (callback: (scoped: unknown) => Promise<unknown>) =>
+          callback({ execute: vi.fn().mockResolvedValue([]) }),
+      } as unknown as RegisterHooksContext['db'],
+      app: registrationApp as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+    expect(registered.length).toBeGreaterThan(0);
+
+    const app = feathers() as Application;
+    const find = vi.fn(async (params: { query?: unknown }) => params.query);
+    app.use('kb/documents', { find }, { methods: ['find'] });
+    for (const hooks of registered) app.service('kb/documents').hooks(hooks);
+
+    await expect(
+      app.service('kb/documents').find({
+        provider: 'rest',
+        query: { $limit: '25', $skip: '50', $sort: { updated_at: '-1', content_text: '1' } },
+      })
+    ).resolves.toEqual({ $limit: 25, $skip: 50, $sort: { updated_at: -1 } });
+
+    for (const query of [{ $limit: '-1' }, { $limit: 'all' }, { $skip: '1.5' }]) {
+      await expect(app.service('kb/documents').find({ provider: 'rest', query })).rejects.toThrow();
+    }
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+});

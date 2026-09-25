@@ -15,8 +15,10 @@ import type {
   MCPSlackRecoveryNotice,
   SdkFailure,
   SessionID,
+  SessionUsageSummary,
   Task,
   TaskID,
+  TaskLaunchFields,
   TaskMetadata,
   TaskPendingDispatchStatus,
   TerminationCause,
@@ -58,6 +60,7 @@ import {
   insert,
   isPostgresDatabase,
   isSQLiteDatabase,
+  jsonExtract,
   lockRowForUpdate,
   runDatabaseTransaction,
   select,
@@ -87,6 +90,7 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import { countRecordedTools } from './recorded-tool-count';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -313,9 +317,19 @@ export interface TaskRuntimeDiscoveryOptions {
   after?: TaskRuntimeDiscoveryCursor;
   /** Deterministic test clock. PostgreSQL uses database time when omitted. */
   now?: Date;
+  /**
+   * Stranded-termination discovery only: leave a STOPPING templated row whose
+   * executor has neither connected nor reported quiescence out of the scan
+   * until this long after dispatch (database time). Such a stop is pending,
+   * not stranded, during the remote startup window; local rows and rows with
+   * durable quiescence evidence stay discoverable so crash recovery is not
+   * delayed.
+   */
+  unconnectedGraceMs?: number;
 }
 
 export interface TaskFindPageOptions {
+  excludeQueued?: boolean;
   taskId?: TaskID;
   afterTaskId?: TaskID;
   throughTaskId?: TaskID;
@@ -446,8 +460,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   private rowToTask(row: TaskRow): Task {
     const storedTerminationRequest = row.data.termination_request;
-    const { executor_launch_fs_access_floor: _executorLaunchFsAccessFloor, ...publicData } =
-      row.data;
+    // Strip the retired JSON key without migrating historical blobs.
+    const {
+      executor_launch_fs_access_floor: _executorLaunchFsAccessFloor,
+      tool_use_count: _retiredToolCount,
+      ...publicData
+    } = row.data as TaskRow['data'] & { tool_use_count?: unknown };
     const coordination: TerminationCoordinationClaim | undefined =
       row.termination_coordination_token &&
       row.termination_coordination_claimed_at &&
@@ -555,7 +573,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         git_state,
         // Filled in by the executor after the turn — don't substitute a default.
         ...(task.model ? { model: task.model } : {}),
-        tool_use_count: task.tool_use_count ?? 0,
+        recorded_tool_count: task.recorded_tool_count,
         duration_ms: task.duration_ms, // Task execution duration
         agent_session_id: task.agent_session_id, // SDK session ID
         error_message: task.error_message, // Human-readable failure reason when status='failed'
@@ -593,7 +611,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   async create(data: Partial<Task>): Promise<Task> {
     try {
-      const insertData = this.taskToInsert(data);
+      const insertData = this.taskToInsert({ ...data, recorded_tool_count: null });
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
@@ -692,6 +710,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
     if (opts.sessionIds) conditions.push(inArray(tasks.session_id, opts.sessionIds));
+    if (opts.excludeQueued) conditions.push(ne(tasks.status, TaskStatus.QUEUED));
     if (opts.status) conditions.push(eq(tasks.status, opts.status));
     if (opts.createdAt) conditions.push(eq(tasks.created_at, opts.createdAt));
     if (opts.createdBy) conditions.push(eq(tasks.created_by, opts.createdBy));
@@ -717,6 +736,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: tasks.status,
       created_at: tasks.created_at,
       created_by: tasks.created_by,
+      queue_position: tasks.queue_position,
     } as const;
     const orderBy = Object.entries(opts.sort ?? {})
       .map(([field, direction]) => {
@@ -738,6 +758,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           }))
         : rows.map((row: unknown) => this.rowToTask(row as TaskRow)),
       total: Number(countRow?.count ?? 0),
+    };
+  }
+
+  /** Aggregate in SQL: no prompt, response or tool payload leaves the database. */
+  async getSessionUsage(sessionId: SessionID): Promise<SessionUsageSummary> {
+    const sum = (path: string) =>
+      sql<number>`COALESCE(SUM(CAST(${jsonExtract(this.db, tasks.data, `normalized_sdk_response.${path}`)} AS DOUBLE PRECISION)), 0)`;
+    const row = await select(this.db, {
+      total: sum('tokenUsage.totalTokens'),
+      input: sum('tokenUsage.inputTokens'),
+      output: sum('tokenUsage.outputTokens'),
+      cacheRead: sum('tokenUsage.cacheReadTokens'),
+      cacheCreation: sum('tokenUsage.cacheCreationTokens'),
+      cost: sum('costUsd'),
+    })
+      .from(tasks)
+      .where(eq(tasks.session_id, sessionId))
+      .one();
+    return {
+      total: Number(row?.total ?? 0),
+      input: Number(row?.input ?? 0),
+      output: Number(row?.output ?? 0),
+      cacheRead: Number(row?.cacheRead ?? 0),
+      cacheCreation: Number(row?.cacheCreation ?? 0),
+      cost: Number(row?.cost ?? 0),
     };
   }
 
@@ -991,6 +1036,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** `data.executor_mode` is absent for local executors; only 'templated' waits for a remote pod. */
+  private executorModeIsNotTemplated() {
+    return isSQLiteDatabase(this.db)
+      ? sql`coalesce(json_extract(${tasks.data}, '$.executor_mode'), 'local') <> 'templated'`
+      : sql`coalesce(${tasks.data}->>'executor_mode', 'local') <> 'templated'`;
+  }
+
+  /** A fenced executor quiescence report is durable proof that must not wait for the startup deadline. */
+  private executorQuiescenceRecorded() {
+    return isSQLiteDatabase(this.db)
+      ? sql`json_extract(${tasks.data}, '$.termination_request.executor_quiesced_at') IS NOT NULL`
+      : sql`${tasks.data}->'termination_request'->>'executor_quiesced_at' IS NOT NULL`;
+  }
+
   private runtimeDiscoveryColumns() {
     const tenantColumn = (tasks as unknown as { tenant_id?: unknown }).tenant_id;
     return {
@@ -1166,6 +1225,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             isNull(tasks.termination_coordination_expires_at),
             lte(tasks.termination_coordination_expires_at, this.databaseNow(options.now))
           ),
+          options.unconnectedGraceMs !== undefined
+            ? or(
+                isNotNull(tasks.executor_connected_at),
+                this.executorModeIsNotTemplated(),
+                this.executorQuiescenceRecorded(),
+                isNull(tasks.started_at),
+                lte(tasks.started_at, this.databaseCutoff(options.unconnectedGraceMs, options.now))
+              )
+            : undefined,
           after
         )
       )
@@ -1315,6 +1383,92 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Read-only authorization shared by telemetry and sensitive credential delivery. */
+  private async inspectRuntimeAuthority(
+    txDb: Database,
+    row: TaskRow,
+    fullId: string,
+    authority: TaskRuntimeAuthorityScope
+  ) {
+    const current = this.rowToTask(row);
+    const access = await resolveSessionRuntimeBranchAccess(txDb, {
+      sessionId: row.session_id,
+      principalUserId: row.created_by,
+    });
+    if (
+      authority.principal_user_id !== row.created_by ||
+      authority.session_id !== row.session_id ||
+      !access ||
+      authority.branch_id !== access.branch_id
+    ) {
+      return { outcome: 'scope_mismatch' as const, task: current };
+    }
+
+    const floor = row.data.executor_launch_fs_access_floor;
+    if (!floor) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'launch_authority_missing' as const,
+      };
+    }
+    if (!access.principal_available) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'principal_unavailable' as const,
+      };
+    }
+    if (!access.can_prompt_session) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'branch_capability_revoked' as const,
+      };
+    }
+    if (fsAccessRank(access.fs_access) < fsAccessRank(floor)) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'filesystem_access_revoked' as const,
+      };
+    }
+
+    const tokenCurrent = isPostgresDatabase(txDb)
+      ? await new ExecutorSessionTokenAuthorityRepository(txDb).isCurrent({
+          tenantId: requireRuntimeTenantId(),
+          tokenFingerprint: authority.token_fingerprint,
+          sessionId: authority.session_id,
+          taskId: fullId,
+          branchId: authority.branch_id,
+          userId: authority.principal_user_id,
+        })
+      : authority.standalone_token_current === true;
+    if (!tokenCurrent) {
+      return {
+        outcome: 'authorization_revoked' as const,
+        task: current,
+        reason: 'token_revoked' as const,
+      };
+    }
+
+    return { outcome: 'authorized' as const, observedAt: access.observed_at };
+  }
+
+  /** No heartbeat/lease write can be used to authorize retrieval of a provider bearer. */
+  async assertRuntimeCredentialAuthority(
+    id: TaskID,
+    authority: TaskRuntimeAuthorityScope
+  ): Promise<void> {
+    const row = await select(this.db).from(tasks).where(eq(tasks.task_id, id)).one();
+    if (!row || !executorOwnsTask(row) || row.data.termination_request) {
+      throw new RepositoryError('Task credential authority unavailable');
+    }
+    const result = await this.inspectRuntimeAuthority(this.db, row, id, authority);
+    if (result.outcome !== 'authorized')
+      throw new RepositoryError('Task credential authority unavailable');
+  }
+
   /**
    * Revalidate exact runtime authority, then atomically stamp heartbeat/pulse.
    * Explicit denial returns the unchanged Task so the service can claim the
@@ -1335,68 +1489,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       // eventually recover the request with a late task/request-fenced ack.
       if (!executorMayReportTelemetry(row)) return { outcome: 'control', task: current };
 
-      const access = await resolveSessionRuntimeBranchAccess(txDb, {
-        sessionId: row.session_id,
-        principalUserId: row.created_by,
-      });
-      if (
-        authority.principal_user_id !== row.created_by ||
-        authority.session_id !== row.session_id ||
-        !access ||
-        authority.branch_id !== access.branch_id
-      ) {
-        return { outcome: 'scope_mismatch', task: current };
-      }
+      const authorityResult = await this.inspectRuntimeAuthority(txDb, row, fullId, authority);
+      if (authorityResult.outcome !== 'authorized') return authorityResult;
 
-      const floor = row.data.executor_launch_fs_access_floor;
-      if (!floor) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'launch_authority_missing',
-        };
-      }
-      if (!access.principal_available) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'principal_unavailable',
-        };
-      }
-      if (!access.can_prompt_session) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'branch_capability_revoked',
-        };
-      }
-      if (fsAccessRank(access.fs_access) < fsAccessRank(floor)) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'filesystem_access_revoked',
-        };
-      }
-
-      const tokenCurrent = isPostgresDatabase(this.db)
-        ? await new ExecutorSessionTokenAuthorityRepository(txDb).isCurrent({
-            tenantId: requireRuntimeTenantId(),
-            tokenFingerprint: authority.token_fingerprint,
-            sessionId: authority.session_id,
-            taskId: fullId,
-            branchId: authority.branch_id,
-            userId: authority.principal_user_id,
-          })
-        : authority.standalone_token_current === true;
-      if (!tokenCurrent) {
-        return {
-          outcome: 'authorization_revoked',
-          task: current,
-          reason: 'token_revoked',
-        };
-      }
-
-      const heartbeatAt = observedAt ?? access.observed_at;
+      const heartbeatAt = observedAt ?? authorityResult.observedAt;
       if (!Number.isFinite(heartbeatAt.getTime())) {
         throw new RepositoryError('Runtime authority observation time is invalid');
       }
@@ -1729,6 +1825,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const failure = input.sdkFailure ?? current.sdk_failure;
       const data = {
         ...row.data,
+        recorded_tool_count: await countRecordedTools(txDb, fullId),
         duration_ms: terminal.duration_ms,
         message_range: terminal.message_range ?? current.message_range,
         ...(failure
@@ -1871,6 +1968,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         const merged = {
           ...deepMerge(current, withTerminalTiming(current, updates)),
+          recorded_tool_count:
+            updates.status !== undefined &&
+            isTerminalTaskStatus(updates.status) &&
+            !isTerminalTaskStatus(current.status)
+              ? await countRecordedTools(txDb, fullId)
+              : current.recorded_tool_count,
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,
@@ -2360,32 +2463,106 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * Delete task by ID
    */
   async delete(id: string): Promise<void> {
-    try {
-      const fullId = await this.resolveId(id);
-
-      const result = await deleteFrom(this.db, tasks)
-        .where(and(eq(tasks.task_id, fullId), eq(tasks.status, TaskStatus.QUEUED)))
-        .run();
-
-      if (result.rowsAffected === 0) {
-        const existing = await select(this.db).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!existing) throw new EntityNotFoundError('Task', id);
-        throw new RepositoryError('Only queued tasks can be deleted');
-      }
-    } catch (error) {
-      if (error instanceof RepositoryError) throw error;
-      if (error instanceof EntityNotFoundError) throw error;
-      throw new RepositoryError(
-        `Failed to delete task: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
+    const fullId = await this.resolveId(id);
+    const task = await this.findById(fullId);
+    if (!task) throw new EntityNotFoundError('Task', id);
+    const result = await this.mutateQueued(task.session_id, { cancel: [task.task_id] });
+    if (result.outcome === 'conflict') {
+      throw new RepositoryError('Only queued tasks can be deleted; reread the queue');
     }
   }
 
   /**
-   * Create a pending task — either CREATED (will spawn immediately) or
-   * QUEUED (will drain later) — owning the sentinel defaults that the
-   * caller would otherwise have to assemble by hand.
+   * Session-first fence shared with admission, dispatch and single-row removal.
+   * No lifecycle transition: cancelled prompts have never executed and must not
+   * produce completion callbacks. No Session projection or hold is modified.
+   */
+  async mutateQueued(
+    sessionId: SessionID,
+    command: { cancel: TaskID[] } | { order: TaskID[]; expected: TaskID[] }
+  ): Promise<{
+    outcome: 'changed' | 'conflict';
+    queue: Task[];
+    removed: Task[];
+    wake: boolean;
+  }> {
+    return this.runTaskMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (txDb) => {
+          await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, sessionId));
+          const session = await select(txDb)
+            .from(sessions)
+            .where(eq(sessions.session_id, sessionId))
+            .one();
+          if (!session) throw new EntityNotFoundError('Session', sessionId);
+          const predicate = and(
+            eq(tasks.session_id, sessionId),
+            eq(tasks.status, TaskStatus.QUEUED)
+          );
+          await lockRowForUpdate(txDb, this.db, tasks, predicate!);
+          const rows = await select(txDb)
+            .from(tasks)
+            .where(predicate)
+            .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
+            .all();
+          const queue: Task[] = rows.map((row: TaskRow) => this.rowToTask(row));
+          const byId = new Map(queue.map((task) => [task.task_id, task]));
+          const ids = [...byId.keys()];
+          const requested = 'cancel' in command ? command.cancel : command.order;
+          const unique = new Set(requested);
+          const valid =
+            unique.size === requested.length &&
+            requested.every((id) => byId.has(id)) &&
+            ('cancel' in command
+              ? requested.length > 0
+              : requested.length === ids.length &&
+                command.expected.length === ids.length &&
+                command.expected.every((id, index) => id === ids[index]));
+          if (!valid) return { outcome: 'conflict', queue, removed: [], wake: false };
+          const removed =
+            'cancel' in command ? queue.filter((task) => unique.has(task.task_id)) : [];
+          let resulting: Task[];
+          if ('cancel' in command) {
+            await deleteFrom(txDb, tasks)
+              .where(and(predicate, inArray(tasks.task_id, requested)))
+              .run();
+            resulting = queue.filter((task) => !unique.has(task.task_id));
+          } else {
+            // Clear positions inside this transaction to avoid transient unique-index
+            // collisions on swaps. Compact positions; max+1 admission
+            // remains strictly after the reordered tail, without position inflation.
+            await update(txDb, tasks).set({ queue_position: null }).where(predicate).run();
+            resulting = [];
+            for (const [index, id] of command.order.entries()) {
+              const position = index + 1;
+              await update(txDb, tasks)
+                .set({ queue_position: position })
+                .where(and(predicate, eq(tasks.task_id, id)))
+                .run();
+              resulting.push({
+                ...byId.get(id)!,
+                queue_position: position,
+              });
+            }
+          }
+          return {
+            outcome: 'changed',
+            queue: resulting,
+            removed,
+            wake:
+              resulting.length > 0 && sessionCanStartTask(session.status, session.ready_for_prompt),
+          };
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      )
+    );
+  }
+
+  /**
+   * Admit CREATED/QUEUED work with repository-owned sentinel defaults, or
+   * insert a fresh idle prompt directly as DISPATCHING with prepared launch
+   * fields and its atomic Session projection.
    *
    * For QUEUED tasks, `queue_position = max(queue_position) + 1` is computed
    * while holding the owning Session row lock. A transaction by itself does
@@ -2395,8 +2572,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    *
    * Sentinel contract: while a task carries `message_range.start_index = -1`
    * and `git_state.sha_at_start = ''`, it has not yet been pinned to real
-   * conversation/git state. spawnTaskExecutor is the sole place that
-   * overwrites these on the way to RUNNING.
+   * conversation/git state. Direct admission supplies prepared fields here;
+   * queued work receives them at claimDispatchAndProjectSession.
    */
   async createPending(input: {
     /** Optional stable identity used by idempotent internal producers. */
@@ -2406,7 +2583,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     created_by: string;
     status: TaskPendingDispatchStatus;
     metadata?: TaskMetadata;
+    /**
+     * Prepared launch metadata for a fresh prompt only. Under the same Branch/
+     * Session fence, insert DISPATCHING directly when no unfinished work exists.
+     * Stable-ID producers retain their existing queue/reconciliation protocol.
+     */
+    dispatchIfIdle?: TaskLaunchFields;
   }): Promise<Task> {
+    if (
+      input.dispatchIfIdle &&
+      (input.task_id ||
+        input.status !== TaskStatus.QUEUED ||
+        input.dispatchIfIdle.status !== TaskStatus.DISPATCHING)
+    ) {
+      throw new RepositoryError(
+        'Direct admission requires a fresh queued input and dispatch preparation'
+      );
+    }
     const taskBase: Partial<Task> = {
       task_id: input.task_id,
       session_id: input.session_id,
@@ -2414,9 +2607,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       created_by: input.created_by,
       status: input.status,
       metadata: input.metadata,
-      // Sentinels — overwritten by spawnTaskExecutor at the status → RUNNING
-      // transition. While `start_index === -1` / `sha_at_start === ''`, the
-      // task is intentionally unpinned.
+      // Sentinels — replaced when dispatch is claimed, including direct admission.
+      // While `start_index === -1` / `sha_at_start === ''`, the task is unpinned.
       message_range: {
         start_index: -1,
         end_index: -1,
@@ -2426,7 +2618,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ref_at_start: '',
         sha_at_start: '',
       },
-      tool_use_count: 0,
     };
 
     if (input.status === TaskStatus.CREATED && !input.task_id) {
@@ -2465,12 +2656,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         this.db,
         async (txDb) => {
           await lockSessionBranchForAdmission(txDb, input.session_id);
-          await lockRowForUpdate(
-            txDb,
-            this.db,
-            sessions,
-            eq(sessions.session_id, input.session_id)
-          );
           const sessionRow = await select(txDb)
             .from(sessions)
             .where(eq(sessions.session_id, input.session_id))
@@ -2507,6 +2692,59 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               // that same Task into the durable queue rather than letting it
               // jump an already-admitted prompt or remain undiscoverable.
               existingCreated = existing;
+            }
+          }
+
+          if (
+            input.dispatchIfIdle &&
+            sessionCanStartTask(sessionRow.status, sessionRow.ready_for_prompt)
+          ) {
+            // Include CREATED handoffs as well as executor-owned states.
+            // Queue emptiness alone cannot authorize another executor.
+            const unfinished = await select(txDb, { task_id: tasks.task_id })
+              .from(tasks)
+              .where(
+                and(
+                  eq(tasks.session_id, input.session_id),
+                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+                )
+              )
+              .limit(1)
+              .one();
+            const actor = !unfinished
+              ? await select(txDb, { user_id: users.user_id })
+                  .from(users)
+                  .where(eq(users.user_id, input.created_by))
+                  .one()
+              : undefined;
+            if (actor) {
+              const nowRow = isPostgresDatabase(this.db)
+                ? await select(txDb, { now: sql<Date>`clock_timestamp()` })
+                    .from(sessions)
+                    .where(eq(sessions.session_id, input.session_id))
+                    .one()
+                : undefined;
+              const dispatchAt = nowRow ? new Date(nowRow.now) : new Date();
+              const insertData = this.taskToInsert({
+                ...taskBase,
+                executor_mode: input.dispatchIfIdle.executor_mode,
+                sdk_watchdog_mode: input.dispatchIfIdle.sdk_watchdog_mode,
+                // Preparation supplies launch state, not caller identity or payload.
+                message_range: input.dispatchIfIdle.message_range,
+                git_state: input.dispatchIfIdle.git_state,
+                status: TaskStatus.DISPATCHING,
+                started_at: dispatchAt.toISOString(),
+                queue_position: undefined,
+              });
+              await insert(txDb, tasks).values(insertData).run();
+              const row = await select(txDb)
+                .from(tasks)
+                .where(eq(tasks.task_id, insertData.task_id))
+                .one();
+              if (!row) throw new RepositoryError('Failed to retrieve directly admitted task');
+              const admitted = this.rowToTask(row);
+              await this.projectDispatchedSession(txDb, sessionRow, admitted, dispatchAt);
+              return admitted;
             }
           }
 
@@ -2662,22 +2900,31 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // point where a Task could be DISPATCHING while its Session remained
         // IDLE and omitted the task from data.tasks. The Session row is already
         // locked by mutateLockedSessionTask.
-        const sessionTasks = sessionRow.data.tasks.includes(current.task_id)
-          ? sessionRow.data.tasks
-          : [...sessionRow.data.tasks, current.task_id];
-        await update(txDb, sessions)
-          .set({
-            status: SessionStatus.RUNNING,
-            ready_for_prompt: false,
-            updated_at: dispatchAt,
-            data: { ...sessionRow.data, tasks: sessionTasks },
-          })
-          .where(eq(sessions.session_id, current.session_id))
-          .run();
+        await this.projectDispatchedSession(txDb, sessionRow, merged, dispatchAt);
         return { outcome: 'claimed', task: merged };
       },
       true
     );
+  }
+
+  private async projectDispatchedSession(
+    txDb: Database,
+    sessionRow: SessionRow,
+    task: Task,
+    dispatchAt: Date
+  ): Promise<void> {
+    const sessionTasks = sessionRow.data.tasks.includes(task.task_id)
+      ? sessionRow.data.tasks
+      : [...sessionRow.data.tasks, task.task_id];
+    await update(txDb, sessions)
+      .set({
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        updated_at: dispatchAt,
+        data: { ...sessionRow.data, tasks: sessionTasks },
+      })
+      .where(eq(sessions.session_id, task.session_id))
+      .run();
   }
 
   /**
@@ -2724,6 +2971,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       queue_position: undefined,
       completed_at: completedAt.toISOString(),
       error_message: MISSING_TASK_ACTOR_ERROR,
+      recorded_tool_count: await countRecordedTools(txDb, fullId),
     };
     const insertData = this.taskToInsert(failed);
     await update(txDb, tasks)

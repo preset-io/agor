@@ -22,6 +22,7 @@ import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { useThemedMessage } from '../../utils/message';
 import { isDarkTheme } from '../../utils/theme';
+import { openUploadBlob } from '../../utils/uploadBlob';
 import {
   streamdownRemarkPlugins,
   streamdownRichContentPlugins,
@@ -55,6 +56,8 @@ interface MarkdownRendererProps {
    * Recommended for streaming content from AI agents
    */
   isStreaming?: boolean;
+  /** Repair a deliberately cut preview without treating it as an active response. */
+  isIncomplete?: boolean;
   /**
    * If true, uses compact styling suitable for cards/constrained spaces
    * Reduces heading sizes, margins, and limits max height with scroll
@@ -103,6 +106,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   inline = false,
   style,
   isStreaming = false,
+  isIncomplete = false,
   compact = false,
   boundHeight = true,
   showControls = true,
@@ -170,15 +174,16 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   // Use default dual theme [light, dark] - Streamdown handles CSS-based switching
   // Note: This may render both themes in the DOM, controlled by CSS media queries
   // Always use Streamdown for rich features (Mermaid, math, GFM, copy/download buttons)
-  // Only enable incomplete markdown parsing during active streaming
+  // Deliberate previews need the same syntax repair as streams, but not their
+  // active-generation behavior (animations/disabled controls).
   // Security: Streamdown sanitizes HTML by default to prevent XSS
   return (
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <VegaLiteActivationBudgetContext.Provider value={vegaLiteActivationBudget}>
         <Streamdown
           key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
-          mode={isStreaming ? 'streaming' : 'static'}
-          parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
+          mode={isStreaming || isIncomplete ? 'streaming' : 'static'}
+          parseIncompleteMarkdown={isStreaming || isIncomplete}
           className={inline ? 'inline-markdown' : 'markdown-content'}
           isAnimating={isStreaming} // Disable buttons during streaming
           controls={showControls} // Show/hide controls based on context
@@ -310,14 +315,7 @@ function UploadAttachmentLink({
         { headers: getAuthHeaders() }
       );
       if (!response.ok) throw new Error('Upload is unavailable');
-      const objectUrl = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      if (download) anchor.download = filename;
-      else anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      openUploadBlob(await response.blob(), filename, download);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Upload is unavailable');
     }

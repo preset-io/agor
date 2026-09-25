@@ -69,6 +69,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  classifyBranchFilesystemReadiness,
   isAgenticToolDefaultConfigurationReference,
   isSessionExecuting,
   SessionStatus,
@@ -177,6 +178,7 @@ export type SessionParams = QueryParams<{
   status?: Session['status'];
   agentic_tool?: Session['agentic_tool'];
   board_id?: string;
+  include_usage?: boolean | 'true' | 'false';
   include_last_message?: boolean | 'true' | 'false'; // Opt-in last message enrichment
   last_message_truncation_length?: number; // Default: 500 chars, min: 50, max: 10000
   /** Marks a `remove` as the delete half of a "switch tool" swap (see `remove`). */
@@ -228,6 +230,7 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
     'branch_id',
     '$sort',
     '$limit',
+    '$count',
     '$skip',
   ]);
   for (const key of Object.keys(query)) {
@@ -473,6 +476,15 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
     }
+
+    // A session runs inside its branch's working directory. If that directory
+    // has not been materialized yet (provisioning still running, or it failed),
+    // fail with a clear domain error here instead of letting a downstream
+    // simple-git call throw a raw ENOENT ("Cannot use simple-git on a directory
+    // that does not exist"), which is opaque and unactionable.
+    if (data.branch_id) {
+      await this.assertBranchFilesystemUsable(data.branch_id as string);
+    }
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
@@ -550,6 +562,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const branchRepo = new BranchRepository(scoped);
       const branch = await branchRepo.findById(createData.branch_id as BranchID);
       if (!branch) throw new NotFound(`Branch ${createData.branch_id} not found`);
+      this.assertBranchFilesystemRecordUsable(branch);
 
       // Minimal service harnesses predate application configuration. Treat an
       // absent getter as the product default (`inherit`); production always
@@ -633,6 +646,78 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
     return created;
+  }
+
+  /**
+   * Assert a branch's filesystem is usable before a session is created in it.
+   * Translates recorded provisioning lifecycle state into a clear domain error
+   * instead of letting a downstream simple-git call throw a raw ENOENT:
+   * - `creating`  → 409 "provisioning in progress" (retryable, transient)
+   * - `failed`    → 409 with the stored, sanitized provisioning error
+   * - other terminal states (cleaned/deleted) → 409
+   *
+   * Purely a read of recorded state — it never touches the filesystem. See the
+   * `usableStatus` branch below for why.
+   *
+   * Backward compatibility: rows predating `filesystem_status` (undefined) are
+   * treated as ready. Never throws for a genuinely usable checkout.
+   */
+  private async assertBranchFilesystemUsable(branchId: string): Promise<void> {
+    const branch = await this.branchRepo.findById(branchId);
+    // If the branch can't be loaded, defer to existing downstream handling
+    // (creation will fail later with the normal not-found path).
+    if (!branch) return;
+
+    this.assertBranchFilesystemRecordUsable(branch);
+  }
+
+  private assertBranchFilesystemRecordUsable(branch: Branch): void {
+    const branchId = branch.branch_id;
+
+    const status = branch.filesystem_status;
+    const readiness = classifyBranchFilesystemReadiness(branch);
+
+    if (readiness === 'pending') {
+      throw new Conflict(
+        'Branch provisioning is still in progress. The working directory is not ready yet — wait for provisioning to finish, then start the session again.',
+        { code: 'BRANCH_PROVISIONING_INCOMPLETE', branchId, filesystemStatus: status }
+      );
+    }
+
+    if (readiness === 'failed') {
+      throw new Conflict(
+        `Branch provisioning failed and the working directory was not created${
+          branch.error_message ? `: ${branch.error_message}` : '.'
+        } Repair/retry provisioning for this branch, then start the session again.`,
+        { code: 'BRANCH_PROVISIONING_FAILED', branchId, filesystemStatus: status }
+      );
+    }
+
+    // Only 'ready' (which the canonical classifier also grants to rows
+    // predating `filesystem_status`) is usable. Archived, 'preserved',
+    // 'cleaned' and 'deleted' all classify as 'unavailable' and fall through
+    // to the throw below.
+    //
+    // Deliberately NOT stat'd from here. The daemon does not own the branch
+    // filesystem — in a multi-host deployment it may not share one with the
+    // executor at all — so a daemon-local `existsSync` would be answering a
+    // question about somebody else's disk. It is also the same daemon-side
+    // filesystem guessing this PR removed from the provisioning lifecycle, and
+    // the repo's daemon-filesystem-boundary check enforces it.
+    //
+    // The trade: a directory deleted out-of-band while the row still says
+    // `ready` is not caught here and will surface downstream instead. Recording
+    // that state accurately is the executor's job (it owns the disk), not
+    // something the daemon can infer.
+    if (readiness === 'ready') {
+      return;
+    }
+
+    // cleaned / deleted / any other non-usable terminal state.
+    throw new Conflict(
+      `Branch working directory is not available (filesystem_status="${status}"). Restore or re-provision the branch before starting a session.`,
+      { code: 'BRANCH_FILESYSTEM_UNAVAILABLE', branchId, filesystemStatus: status }
+    );
   }
 
   /** Re-resolve a live preset immediately before a task starts. */
@@ -1790,6 +1875,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const session = await super.get(id, params);
     const [enrichedSession] = await this.enrichRemoteRelationships([session]);
     const sessionWithRelationships = enrichedSession ?? session;
+    if (params?.query?.include_usage === true || params?.query?.include_usage === 'true') {
+      sessionWithRelationships.usage_summary = await this.taskRepo.getSessionUsage(
+        session.session_id
+      );
+    }
 
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {
@@ -1824,7 +1914,27 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // and the bounded slice wouldn't be ordered by recency. findPage does the
     // filter + recency sort + limit/offset in SQL instead.
     const query = params?.query as Record<string, unknown> | undefined;
-    if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
+    if (query?.$count !== undefined && typeof query.$count !== 'boolean') {
+      throw new BadRequest('$count must be a boolean');
+    }
+    const sqlPage = shouldSqlPageSessionQuery(
+      query,
+      !!params?._agorSqlSessionAccessUserId || query?.$count !== undefined
+    );
+    if (query?.$count !== undefined && !sqlPage) {
+      throw new BadRequest('$count is supported only for SQL-paginated session queries');
+    }
+    if (sqlPage) {
+      if (
+        query?.$count === false &&
+        ((query.$limit !== undefined &&
+          (!Number.isInteger(query.$limit) || (query.$limit as number) < 0)) ||
+          (query.$skip !== undefined &&
+            (!Number.isInteger(query.$skip) || (query.$skip as number) < 0)))
+      )
+        throw new BadRequest(
+          'No-count pagination requires non-negative integer limits and offsets'
+        );
       const sortSpec = query?.$sort as { updated_at?: 1 | -1; created_at?: 1 | -1 } | undefined;
       const branchFilter = query?.branch_id;
       const branchIds =
@@ -1833,12 +1943,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         Array.isArray((branchFilter as { $in?: unknown }).$in)
           ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
           : undefined;
-      const limit = Math.min(
-        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
-        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
-      );
-      const skip = (query?.$skip as number | undefined) ?? 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const { data, total } = await this.sessionRepo.findPage({
+        includeTotal: query?.$count !== false,
         status: query?.status as SessionStatus | undefined,
         boardId: query?.board_id as string | undefined,
         branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
@@ -1851,6 +1958,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         visibleToUserId: params?._agorSqlSessionAccessUserId,
       });
       const enriched = await this.enrichRemoteRelationships(data);
+      if (query?.$count === false) return markRemoteRelationshipsEnrichedResult(enriched);
+      if (total === undefined) throw new Error('Counted session page is missing its total');
       return markRemoteRelationshipsEnrichedResult({ total, limit, skip, data: enriched });
     }
 

@@ -5,6 +5,8 @@ export type RouteSurfaceId =
   | 'workspace'
   | 'knowledge'
   | 'mcp-recovery'
+  | 'mcp-connect'
+  | 'cli-login'
   | 'artifact-fullscreen'
   | 'demo';
 
@@ -84,6 +86,31 @@ export const MCP_RECOVERY_SURFACE = defineSurface({
   branding: surfaceTitle('MCP recovery'),
 });
 
+export const MCP_CONNECT_ROUTE_PATHS = ['/connect/mcp'] as const;
+
+export const MCP_CONNECT_SURFACE = defineSurface({
+  id: 'mcp-connect',
+  label: 'MCP connect',
+  routePaths: MCP_CONNECT_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+  branding: surfaceTitle('Connect MCP'),
+});
+
+/** Browser step of `agor login`: mints a per-machine CLI key after an explicit click. */
+export const CLI_LOGIN_ROUTE_PATHS = ['/cli-login'] as const;
+
+export const CLI_LOGIN_SURFACE = defineSurface({
+  id: 'cli-login',
+  label: 'CLI login',
+  routePaths: CLI_LOGIN_ROUTE_PATHS,
+  startsWorkspaceRuntime: false,
+  usesDeviceRouter: false,
+  usesSharedUserSettings: true,
+  branding: surfaceTitle('CLI login'),
+});
+
 export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   id: 'artifact-fullscreen',
   label: 'Artifact fullscreen',
@@ -135,6 +162,8 @@ export const WORKSPACE_SURFACE = defineSurface({
 export const SURFACE_REGISTRY = [
   KNOWLEDGE_SURFACE,
   MCP_RECOVERY_SURFACE,
+  MCP_CONNECT_SURFACE,
+  CLI_LOGIN_SURFACE,
   ARTIFACT_FULLSCREEN_SURFACE,
   DEMO_SURFACE,
   WORKSPACE_SURFACE,

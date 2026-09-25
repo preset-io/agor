@@ -2,15 +2,18 @@ import { constants } from 'node:fs';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { environmentAccessUrlsSchema } from '@agor/core/environment/access-urls';
+import {
+  decodeEnvironmentLifecycleResult,
+  type EnvironmentLifecycleResult,
+} from '@agor/core/environment/lifecycle-result';
 import {
   type BranchID,
-  ENVIRONMENT_COMMAND_BUDGET as BUDGET,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   type EnvironmentCommandReport,
 } from '@agor/core/types';
 import type { EnvironmentLifecyclePayload, ExecutorResult } from '../payload-types.js';
-import { EnvironmentOutput, runBoundedEnvironmentShell } from './environment-shell.js';
+import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
+import { runBoundedEnvironmentShell } from './environment-shell.js';
 
 /** Each HTTP request authenticates independently and may reach any replica. */
 async function report(
@@ -40,9 +43,8 @@ async function report(
 export async function handleEnvironmentAttempt(
   payload: EnvironmentLifecyclePayload
 ): Promise<ExecutorResult> {
-  const attempt = payload.params.attempt!;
+  const attempt = payload.params.attempt;
   const action = payload.params.action;
-  if (action === 'restart') throw new Error('Asynchronous Restart is not supported');
   const scope = { branch_id: payload.params.branchId as BranchID, attempt_id: attempt.id, action };
   // Never run after a failed, duplicate, late, or unacknowledged claim.
   const claimed = await report(
@@ -52,14 +54,15 @@ export async function handleEnvironmentAttempt(
   );
   const deadline = Math.min(
     Date.parse(claimed.command_deadline),
-    Date.parse(attempt.commandDeadline),
-    Date.now() + BUDGET.commandMs
+    Date.parse(attempt.commandDeadline)
   );
   const resultDeadline = Math.min(
     Date.parse(claimed.result_deadline),
     Date.parse(attempt.resultDeadline)
   );
-  const output = new EnvironmentOutput();
+  const output = new EnvironmentCommandOutputCapture({
+    parseEnvironmentResult: action === 'start',
+  });
   let directory: string | undefined;
   let sequence = 0;
   let progress: Promise<unknown> | undefined;
@@ -83,7 +86,7 @@ export async function handleEnvironmentAttempt(
   }, 2000);
   let outcome: 'succeeded' | 'failed' | 'unknown' = 'failed';
   let message = 'Command setup failed';
-  let accessUrls: Array<{ name: string; url: string }> | undefined;
+  let lifecycleResult: EnvironmentLifecycleResult | undefined;
   try {
     directory = await mkdtemp(join(tmpdir(), 'agor-environment-'));
     const resultFile = join(directory, 'result.json');
@@ -97,10 +100,21 @@ export async function handleEnvironmentAttempt(
       cwd: payload.params.branchPath!,
       env: { ...payload.env, AGOR_ENVIRONMENT_RESULT_FILE: resultFile },
       deadline,
-      output,
+      onStdout: (chunk) => output.writeStdout(chunk),
+      onStderr: (chunk) => output.writeStderr(chunk),
     });
     outcome = result.outcome;
     message = result.message;
+    let stdoutResult: EnvironmentLifecycleResult | undefined;
+    try {
+      stdoutResult = output.finish().environmentResult;
+    } catch {
+      if (outcome === 'succeeded') {
+        outcome = 'unknown';
+        message =
+          'Command exited successfully but its stdout result was invalid; remote outcome is unknown';
+      }
+    }
     if (outcome === 'succeeded' && action === 'start') {
       try {
         const file = await open(
@@ -115,17 +129,20 @@ export async function handleEnvironmentAttempt(
           const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
           if (bytesRead > 16384) throw new Error('Environment result file too large');
           const value = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
-          // The exact same strict contract is checked again at daemon admission.
-          accessUrls = environmentAccessUrlsSchema.parse(value.access_urls);
+          if (stdoutResult) throw new Error('Multiple environment command results');
+          // The exact same strict decoder is checked again at daemon admission.
+          lifecycleResult = decodeEnvironmentLifecycleResult(value);
         } finally {
           await file.close();
         }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          lifecycleResult = stdoutResult;
+        } else {
           outcome = 'unknown';
           message =
             'Command exited successfully but its result file was invalid; remote outcome is unknown';
-          accessUrls = undefined;
+          lifecycleResult = undefined;
         }
       }
     }
@@ -144,7 +161,7 @@ export async function handleEnvironmentAttempt(
     message,
     output: output.text(),
     truncated: output.truncated,
-    ...(accessUrls ? { access_urls: accessUrls } : {}),
+    ...(lifecycleResult ? { lifecycle_result: lifecycleResult } : {}),
   };
   // Retry only report delivery, never the command. First durable settlement wins.
   while (Date.now() < resultDeadline) {

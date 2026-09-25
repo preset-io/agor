@@ -15,8 +15,8 @@ export interface AgorAgenticToolsSettings {
   installed?: InstallableAgenticTool[];
 
   /**
-   * Enable daemon-driven Claude subscription OAuth after the operator has an
-   * authorized provider/client contract. Default: false.
+   * Enable daemon-driven Claude subscription OAuth in supported operational modes.
+   * Default: enabled; false is an explicit opt-out. Provider approval remains a release prerequisite.
    */
   claude_subscription_oauth?: boolean;
 }
@@ -741,6 +741,14 @@ export interface AgorExecutionSettings {
    * topology combinations at startup.
    */
   executor_storage?: AgorExecutorStorageSettings;
+
+  /**
+   * Operator assertion that delegated branch.delete Jobs mount the tenant's
+   * worktrees, repos, and branch-homes from one persistent storage volume.
+   * The executor verifies those mounts before beginning destructive work.
+   * Defaults to false for external launchers without this contract.
+   */
+  delegated_branch_deletion?: boolean;
 
   /** A nonzero template launcher may still have submitted remote work. Default: false. */
   executor_command_nonzero_may_have_dispatched?: boolean;

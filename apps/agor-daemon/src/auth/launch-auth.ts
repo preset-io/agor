@@ -20,11 +20,13 @@ import {
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserExternalIdentitiesRepository,
   update,
   users,
+  validateTenantPublicRouting,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
@@ -68,6 +70,7 @@ interface LaunchClaims extends JwtPayload {
   runtime_instance_id?: string;
   jti?: string;
   nonce?: string;
+  public_base_url?: string;
 }
 
 type StoredExternalIdentity = UserExternalIdentity;
@@ -598,6 +601,13 @@ function validateLaunchClaims(
   if (claims.nonce !== undefined && typeof claims.nonce !== 'string') {
     throw new NotAuthenticated('Invalid one-time launch assertion nonce');
   }
+  if (claims.public_base_url !== undefined) {
+    try {
+      validateTenantPublicRouting(claims.public_base_url, claims.iat);
+    } catch {
+      throw new NotAuthenticated('Invalid one-time launch assertion public URL');
+    }
+  }
 }
 
 /**
@@ -643,6 +653,7 @@ const KNOWN_LAUNCH_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
   ['Invalid one-time launch assertion instance', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion id', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion nonce', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
+  ['Invalid one-time launch assertion public URL', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion role', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   ['Invalid one-time launch assertion email', LAUNCH_FAILURE_REASONS.ASSERTION_CLAIMS_INVALID],
   [
@@ -769,6 +780,11 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
             tenant.tenant_id,
             async (scopedDb) => {
               const current = await projectLaunchUser(scopedDb, options, claims);
+              if (claims.public_base_url !== undefined) {
+                await new TenantPublicRoutingRepository(scopedDb).observeVerifiedLaunch(
+                  validateTenantPublicRouting(claims.public_base_url, claims.iat)
+                );
+              }
               // Claim the default Board while the same tenant authority fence
               // still serializes first-user projection. Immutable ownership
               // can therefore never be won by a later concurrent launch.

@@ -24,6 +24,12 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 /** Task states that have not yet crossed the daemon's durable dispatch fence. */
 export type TaskPendingDispatchStatus = typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED;
 
+/** Launch metadata only; does not confer ownership of a dispatch claim. */
+export type TaskLaunchFields = Pick<
+  Task,
+  'message_range' | 'git_state' | 'started_at' | 'executor_mode' | 'sdk_watchdog_mode'
+> & { status: typeof TaskStatus.DISPATCHING };
+
 export type ExecutorMode = 'local' | 'templated';
 
 export const ExecutorPulseKind = {
@@ -90,10 +96,19 @@ export type TerminationCause =
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
   'Authorization to continue this task was revoked.';
 
-/** Why a durable termination request is waiting for another HA coordinator. */
+/**
+ * Why a durable termination request is not settled yet.
+ *
+ * `non_owner_replica` and `coordination_in_progress` wait for another HA
+ * coordinator. `awaiting_remote_executor` waits for a templated/remote
+ * executor that has not connected yet; it can still observe the durable stop
+ * request when it starts, so the daemon must not declare containment
+ * unverified before the remote startup deadline.
+ */
 export const TERMINATION_COORDINATION_PENDING_CODES = [
   'non_owner_replica',
   'coordination_in_progress',
+  'awaiting_remote_executor',
 ] as const;
 
 export type TerminationCoordinationPendingCode =
@@ -201,6 +216,16 @@ export interface TaskMetadata {
     provider_message_id?: string;
     slack_team_id?: string;
     slack_channel_id?: string;
+    /**
+     * Slack conversation kind (`im` | `mpim` | `channel` | `group`) as the
+     * inbound event reported it. Recorded because a surface that projects
+     * something back into the thread later — the MCP connect card — has to
+     * know whether it is speaking into a DM or somewhere other people are
+     * reading, and by then the inbound metadata is long gone. Absent on Tasks
+     * created before this was persisted; readers must fall back rather than
+     * assume a DM.
+     */
+    slack_conversation_type?: string;
   };
   /**
    * Durable identity of the Task's first transcript row. Internal
@@ -299,6 +324,24 @@ export function isTaskPendingDispatch(task: Pick<Task, 'status'>): task is Pick<
  * continue. CREATED and QUEUED are intentionally excluded: CREATED is a
  * pre-executor row and QUEUED is waiting for a future turn.
  */
+/**
+ * A templated/remote executor that has not claimed its dispatch cannot have
+ * received the stop request yet. Its startup path reads the durable request
+ * and reports quiescence, so the request is pending rather than unverified.
+ * A pure predicate over the Task DTO; shared by the termination coordinator
+ * and the runtime reconciler.
+ */
+export function isAwaitingRemoteExecutor(task: Task): boolean {
+  return (
+    task.status === TaskStatus.STOPPING &&
+    task.executor_mode === 'templated' &&
+    !task.executor_connected_at &&
+    !!task.termination_request &&
+    !task.termination_request.executor_quiesced_at &&
+    task.sdk_failure?.termination !== 'unverified'
+  );
+}
+
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
@@ -372,7 +415,10 @@ export interface Task {
   };
 
   // Tool usage
-  tool_use_count: number;
+  /** Server-derived terminal snapshot of distinct recorded tool IDs. Missing/null
+   * means unknown (including legacy turns); never substitute zero.
+   * Transcript mutations invalidate it. Not an executor/client-writable field. */
+  recorded_tool_count?: number | null;
 
   // Git state
   git_state: {
@@ -478,4 +524,25 @@ export interface Task {
   /** Immutable watchdog policy snapshot for this dispatch. */
   sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
+}
+
+/** Explicit Session queue commands; task IDs are full UUIDs, never ambiguous prefixes. */
+export interface CancelQueuedTasksInput {
+  session_id: SessionID;
+  task_ids: TaskID[];
+}
+
+export interface ReorderQueuedTasksInput {
+  session_id: SessionID;
+  /** Exact ordered snapshot observed by the caller. */
+  expected_task_ids: TaskID[];
+  /** Exact permutation of expected_task_ids, in desired dispatch order. */
+  task_ids: TaskID[];
+}
+
+/** Authoritative queue at the mutation's serialization point, not a reservation. */
+export interface TaskQueueMutationResult {
+  session_id: SessionID;
+  queue: Pick<Task, 'task_id' | 'queue_position'>[];
+  cancelled_task_ids: TaskID[];
 }

@@ -1,7 +1,10 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import {
+  CodexAuthCredentialWriteError,
+  writeCodexAuthCredential,
+} from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
@@ -227,7 +230,7 @@ describe('codex-auth-import', () => {
     expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
   });
 
-  it('maps write failures to a friendly error and logs only the error class', async () => {
+  it('maps write failures to a friendly error without logging raw details', async () => {
     writeCodexAuthCredentialMock.mockImplementationOnce(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
@@ -238,9 +241,27 @@ describe('codex-auth-import', () => {
         /Could not write/
       );
       const logged = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
-      expect(logged).toContain('Error');
+      expect(logged).toContain('code=UNEXPECTED');
       expect(logged).not.toContain('refresh-xyz');
       expect(logged).not.toContain('password is required');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('logs the reviewed executor failure code and duration without credential data', async () => {
+    writeCodexAuthCredentialMock.mockRejectedValueOnce(
+      new CodexAuthCredentialWriteError('EXECUTOR_TIMEOUT', 10005)
+    );
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { app } = makeApp();
+      await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
+        /Could not write/
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[CodexAuth] Failed to write auth.json: code=EXECUTOR_TIMEOUT duration_ms=10005'
+      );
     } finally {
       errorSpy.mockRestore();
     }

@@ -7,11 +7,14 @@ import {
   normalizeFeathersService as normalizeService,
   normalizeFeathersTransport as normalizeTransport,
 } from '../utils/feathers-instrumentation.js';
+import { type DaemonOperationalMetrics, NOOP_DAEMON_OPERATIONAL_METRICS } from './operational.js';
 import type { DaemonMetrics } from './types.js';
 
 type AroundNext = () => Promise<void>;
 
-type FeathersMetricsOptions = FeathersInstrumentationOptions;
+type FeathersMetricsOptions = FeathersInstrumentationOptions & {
+  operationalMetrics?: DaemonOperationalMetrics;
+};
 
 function errorStatus(error: unknown): string | number {
   if (!error || typeof error !== 'object') return 'error';
@@ -54,6 +57,12 @@ export function createFeathersMetricsHook(
       }
 
       const startedAt = performance.now();
+      const finishInFlight =
+        transport === 'socketio'
+          ? (options.operationalMetrics ?? NOOP_DAEMON_OPERATIONAL_METRICS).beginExternalRequest(
+              'socketio'
+            )
+          : () => undefined;
       let outcome = 'success';
       let statusCode: string | number = 'ok';
       try {
@@ -63,6 +72,7 @@ export function createFeathersMetricsHook(
         statusCode = errorStatus(error);
         throw error;
       } finally {
+        finishInFlight();
         const tags = {
           service: normalizeService(context.path),
           method: normalizeMethod(context.method),

@@ -72,7 +72,12 @@ import expressStaticGzip from 'express-static-gzip';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
-import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import {
+  createDaemonMetrics,
+  createDaemonOperationalMetrics,
+  NOOP_METRICS,
+  resolveMetricsWorkIdentity,
+} from './metrics/index.js';
 import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
@@ -101,6 +106,7 @@ import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-sourc
 import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
+import { assertTenantServiceClassification } from './utils/tenant-service-classification.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
 
@@ -411,6 +417,7 @@ async function startDaemonWithOwnedMetrics(
       });
   ownMetrics(metrics);
   app.set('metrics', metrics);
+  app.set('daemonOperationalMetrics', createDaemonOperationalMetrics(metrics));
   reconcileTrackedExecutorGauge(app);
   if (unsafeHaMetricsIdentity) {
     console.warn(
@@ -911,6 +918,18 @@ async function startDaemonWithOwnedMetrics(
   // not request data.
   // --------------------------------------------------------------------------
   assertRealtimePublishPolicyCoverage(app);
+
+  // --------------------------------------------------------------------------
+  // Phase 3.6: Every registered service must also have declared WHERE its
+  // tenant database scope is armed — `scoped`, `identity-only`, or a narrowly
+  // reviewed `system`. One defect class (an unclassified route reaching a free
+  // function from identity-only context, the guard error laundered into a
+  // generic refusal) has shipped five times; declaring the policy at
+  // registration is what stops a new service from reintroducing it. Services
+  // that predate the mechanism are baselined, and that baseline may only
+  // shrink. Deterministic for the same reason as the assertion above.
+  // --------------------------------------------------------------------------
+  assertTenantServiceClassification(app);
 
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)

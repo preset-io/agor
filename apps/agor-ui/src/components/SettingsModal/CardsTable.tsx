@@ -16,7 +16,6 @@ import {
   Layout,
   Popconfirm,
   Space,
-  Table,
   Typography,
   theme,
 } from 'antd';
@@ -32,6 +31,7 @@ import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MetaRow } from '../MetaRow';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 const { Sider, Content } = Layout;
@@ -466,7 +466,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                   style={{ width: 'min(100%, 300px)' }}
                 />
               </div>
-              <Table
+              <ResponsiveTable
                 dataSource={cardsForType}
                 columns={cardColumns}
                 scroll={{ x: 720 }}

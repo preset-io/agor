@@ -204,10 +204,48 @@ Optional claims:
 - `provider`: stable provider label used in local identity mapping
 - `jti` or `nonce`: accepted for audit/correlation; one-time replay prevention
   remains the exchange endpoint's responsibility
+- `public_base_url`: the tenant's canonical browser base URL from the issuer's
+  trusted workspace routing record, never from request headers. When present,
+  `iat` must also be a nonnegative integer NumericDate. The URL must be absolute
+  HTTP(S), at most 2048 characters, without credentials, whitespace, backslashes,
+  query or fragment. This claim is origin-only: a trailing `/` is accepted, but
+  path prefixes and entity paths are rejected. Static configured base paths are
+  unaffected.
 
 Required when `external_launch.instance_id` is configured:
 
 - `instance_id` or `runtime_instance_id`: must match configured `instance_id`
+
+### Tenant public links
+
+In `multi_tenancy.mode: required_from_auth`, session, branch, board, Knowledge,
+and artifact links use the tenant's `public_base_url`. Agor validates and stores
+the claim in reserved tenant-scoped `app_variables` routing metadata, in the same
+transaction as verified launch user projection. It is not a user preference.
+One successful **Open Agor** launch initializes links for the whole tenant,
+including other users, background work, and all daemon replicas. Reads use the
+database, not a per-process URL cache or browser headers.
+The stored observation retains its original tenant binding; importing variables
+into a different tenant cannot reuse the source tenant's public URL.
+
+Later launches refresh routing only when their signed `iat` is newer than the
+stored observation. Older observations and equal-`iat` conflicts do not overwrite
+it; a fresh launch in a later second can refresh a changed route. This orders
+launch observations, not Cloud routing revisions: the issuer must resolve the
+URL from authoritative workspace metadata when issuing the assertion. Omitting
+the claim is backward-compatible and does not erase an existing value.
+
+Until a hosted tenant receives this metadata, generated public links are omitted
+rather than substituting a cell-wide hostname. Existing logged-in sessions and
+scheduled work do not populate it on their own; someone must launch through the
+updated issuer. There is no automatic backfill, routing-change push, or rewrite
+of URLs already embedded in historical content.
+
+Static/single-tenant installations retain their configured `AGOR_BASE_URL`,
+`ui.base_url`, `daemon.base_url`, and local fallback behavior. Deployment-wide
+OAuth callback URLs and internal executor endpoints remain separate and are not
+changed by this claim. Knowledge reader links need no `mode=edit` query; both
+`/ui/kb/...` and `/ui/knowledge/...` are supported routes.
 
 ## Compatibility and upgrade notes
 

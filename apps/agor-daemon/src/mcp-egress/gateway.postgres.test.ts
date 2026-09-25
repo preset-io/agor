@@ -115,7 +115,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             start_timestamp: new Date().toISOString(),
           },
           git_state: { ref_at_start: 'main', sha_at_start: 'test' },
-          tool_use_count: 0,
         });
         const mcpServer = await new MCPServerRepository(scoped).create({
           name: `ha-egress-${generateId()}`,

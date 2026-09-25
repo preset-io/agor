@@ -19,6 +19,26 @@ import type {
 } from '@agor/core/types';
 import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
+/**
+ * A refusal to admit a one-use link, as opposed to a change of authority.
+ *
+ * The lanes that redeem a sealed link — the Slack recovery token and the Slack
+ * connect token — collapse every binding failure into ONE generic `Forbidden`
+ * on purpose: a redeemer must not learn which of a dozen bindings moved. That
+ * silence is about the redeemer, though, and `classifyMCPAuthRecovery` is not
+ * the redeemer. Left undistinguished, every one of those refusals was reported
+ * to the user as "the MCP request authority ... changed or expired" — which
+ * sent someone whose only problem was a spent link off to re-check permissions
+ * that were fine.
+ *
+ * So the distinction is Agor-owned and in-process: this subclasses `Forbidden`
+ * rather than replacing it, keeping the 403, the `Forbidden` name, and the
+ * single generic message byte-identical over the wire. Nothing a client can
+ * observe tells the two apart; only the classifier, which is on this side of
+ * the boundary, can.
+ */
+export class MCPLinkAdmissionError extends Forbidden {}
+
 function target(mcpServerId?: string) {
   return {
     ...(mcpServerId ? { mcp_server_id: mcpServerId as MCPServerID } : {}),
@@ -26,6 +46,7 @@ function target(mcpServerId?: string) {
 }
 
 type TrustedRecoveryErrorConstructor =
+  | typeof MCPLinkAdmissionError
   | typeof MCPClientCredentialsConfigurationError
   | typeof MCPOAuthRefreshBusyError
   | typeof AmbiguousRefreshError
@@ -73,6 +94,8 @@ const OAUTH_FAILURE_GUIDANCE: Record<MCPOAuthFailureReason, string> = {
     'The OAuth metadata does not satisfy the effective compatibility profile. Verify the provider authorization/token endpoints and callback issuer support; no weaker policy is retried automatically.',
   endpoint_override_mismatch:
     'A saved OAuth endpoint override does not match the provider metadata. Review the saved authorization and token endpoints.',
+  redirect_uri_mismatch:
+    'The OAuth client is registered under a different Agor callback URL than this authorization request would use. Reconnect so a client is registered for the current callback URL.',
 };
 
 /**
@@ -106,6 +129,17 @@ export function classifyMCPAuthRecovery(
       action: 'review_configuration',
       message:
         'No bound OAuth grant is available. Legacy client-credential fields alone do not establish a saved machine-token connection. For browser-capable providers, configure authorization-code OAuth and reconnect. For a client-credentials-only server, use a supported bearer credential instead; browser sign-in cannot repair it.',
+    };
+  }
+  // Before the `Forbidden` branch, which it is a subclass of: a spent link is
+  // not evidence that anything about the user's access moved.
+  if (safeInstanceOf(error, MCPLinkAdmissionError)) {
+    return {
+      ...common,
+      category: 'link_not_admitted',
+      action: 'request_new_link',
+      message:
+        'This one-use sign-in link was not accepted — it may have expired, already been used, or been replaced by a newer request. Your access has not changed. Ask the agent for a new link, then open it while signed in as the same Agor user.',
     };
   }
   if (safeInstanceOf(error, Forbidden)) {
@@ -171,6 +205,20 @@ export function classifyMCPAuthRecovery(
               failureCode === 'endpoint_override_mismatch'
             ? failureCode
             : undefined;
+    if (failureCode === 'redirect_uri_mismatch') {
+      // Not a discovery failure: the provider said nothing. Agor refused its
+      // own authorization request because the client is bound to a different
+      // callback URL, which is a redirect-configuration problem.
+      return {
+        ...common,
+        ...policy,
+        failure_reason: 'redirect_uri_mismatch',
+        category: 'redirect_configuration_required',
+        action: 'configure_redirect',
+        message: OAUTH_FAILURE_GUIDANCE.redirect_uri_mismatch,
+        ...(options.redirectUri ? { redirect_uri: options.redirectUri } : {}),
+      };
+    }
     if (failureCode === 'client_registration_required') {
       return {
         ...common,
@@ -307,6 +355,19 @@ export function recoveryForOAuthAttemptFailure(
       action: 'contact_admin',
       message:
         'Your MCP authorization permission changed. Ask an administrator to review access, then reconnect.',
+    };
+  }
+  if (failureCode === 'authorization_never_returned') {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      // Agor cannot observe a redirect-URI mismatch: the provider refuses it
+      // on its own authorize page and never redirects back, so an attempt that
+      // expires still pending is the only proxy there is. It is named first
+      // because it is the one cause the user cannot resolve by trying harder.
+      message:
+        'The provider never sent the authorization back to Agor. The most common cause is that this OAuth client is not registered for Agor’s callback URL — ask an administrator to check the deployment public URL and the provider’s registered redirect URI. Otherwise the sign-in page may simply have been closed or left open too long; reconnect to try again.',
     };
   }
   if (failureCode === 'client_registration_invalidated') {

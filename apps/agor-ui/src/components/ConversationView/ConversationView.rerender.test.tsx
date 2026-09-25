@@ -149,14 +149,7 @@ describe('ConversationView streaming re-render isolation', () => {
     const streamB = makeStreamingMessage('stream-b', 'task-b', 'partial');
     initialReactiveState = baseState(new Map([['stream-b', streamB]]));
 
-    render(
-      <ConversationView
-        client={null}
-        sessionId={SESSION_ID as any}
-        sessionModel="model"
-        forceExpandAll
-      />
-    );
+    render(<ConversationView client={null} sessionId={SESSION_ID as any} sessionModel="model" />);
 
     expect(screen.getByTestId('msg-stream-b')).toBeInTheDocument();
     const baseline = new Map(messageRenders);
@@ -183,14 +176,7 @@ describe('ConversationView streaming re-render isolation', () => {
     const streamB = makeStreamingMessage('stream-b', 'task-b', 'partial');
     initialReactiveState = baseState(new Map([['stream-b', streamB]]));
 
-    render(
-      <ConversationView
-        client={null}
-        sessionId={SESSION_ID as any}
-        sessionModel="model"
-        forceExpandAll
-      />
-    );
+    render(<ConversationView client={null} sessionId={SESSION_ID as any} sessionModel="model" />);
     const baseline = new Map(messageRenders);
 
     // Same entries, fresh Map identity — e.g. an unrelated field changed on the

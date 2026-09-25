@@ -93,7 +93,6 @@ function taskInput(
       start_timestamp: new Date().toISOString(),
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'mcp-reprojection' },
-    tool_use_count: 0,
     ...overrides,
   };
 }

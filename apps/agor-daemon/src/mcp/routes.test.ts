@@ -100,6 +100,8 @@ describeIntegration('MCP Tools - Session Tools', () => {
     expect(toolNames).toContain('agor_boards_update');
     expect(toolNames).toContain('agor_tasks_list');
     expect(toolNames).toContain('agor_tasks_get');
+    expect(toolNames).toContain('agor_tasks_cancel_queued');
+    expect(toolNames).toContain('agor_tasks_reorder_queued');
     expect(toolNames).toContain('agor_users_list');
     expect(toolNames).toContain('agor_users_find');
     expect(toolNames).toContain('agor_users_get');

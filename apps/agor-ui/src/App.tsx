@@ -32,11 +32,13 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, Button, ConfigProvider, theme } from 'antd';
+import { Alert, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from './components/AgentSelectionGrid/availableAgents';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
+import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
@@ -83,14 +85,16 @@ import {
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
+import { DeviceRouter } from './surfaces/DeviceRouter';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
+  CLI_LOGIN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
+  MCP_CONNECT_ROUTE_PATHS,
   MCP_RECOVERY_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
-  routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
@@ -99,7 +103,6 @@ import {
   enrichAuthenticatedUser,
   hasObservedOnboardingCompletion,
 } from './utils/currentUserAuthority';
-import { isMobileDevice } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
@@ -118,7 +121,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
-import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
+import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -217,6 +220,16 @@ const loadMcpRecoveryPage = cacheRouteLoader(
   () => import('./pages/MCPSlackRecoveryPage'),
   (module) => ({ default: module.MCPSlackRecoveryPage })
 );
+const loadMcpConnectPage = cacheRouteLoader(
+  'mcp-connect',
+  () => import('./pages/MCPOAuthConnectPage'),
+  (module) => ({ default: module.MCPOAuthConnectPage })
+);
+const loadCliLoginPage = cacheRouteLoader(
+  'cli-login',
+  () => import('./pages/CLILoginPage'),
+  (module) => ({ default: module.CLILoginPage })
+);
 const loadMobileApp = cacheRouteLoader(
   'mobile',
   () => import('./components/mobile/MobileApp'),
@@ -249,6 +262,8 @@ const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
 const MCPSlackRecoveryPage = lazy(loadMcpRecoveryPage);
+const MCPOAuthConnectPage = lazy(loadMcpConnectPage);
+const CLILoginPage = lazy(loadCliLoginPage);
 const MobileApp = lazy(loadMobileApp);
 const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 
@@ -257,6 +272,8 @@ const routeModuleLoaders = {
   knowledge: loadKnowledgePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   'mcp-recovery': loadMcpRecoveryPage,
+  'mcp-connect': loadMcpConnectPage,
+  'cli-login': loadCliLoginPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
@@ -269,63 +286,6 @@ function getRouteModuleKey(surfaceId: RouteSurfaceId, pathname: string): RouteMo
 function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
   if (loadedRouteModuleKeys.has(moduleKey)) return Promise.resolve();
   return routeModuleLoaders[moduleKey]();
-}
-
-/**
- * DeviceRouter - Redirects users to mobile or desktop site based on device detection
- * Responds to window resize events for responsive switching
- */
-function DeviceRouter() {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (!routeUsesDeviceRouter(location.pathname)) return;
-
-    const checkAndRoute = () => {
-      const isMobile = isMobileDevice();
-      const isOnMobilePath = location.pathname.startsWith('/m');
-
-      const state = agorStore.getState();
-      const routeEntities = {
-        boards: state.boardById.values(),
-        sessions: state.sessionById.values(),
-      };
-
-      // Redirect mobile devices to mobile site
-      if (isMobile && !isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'mobile', routeEntities), {
-          replace: true,
-        });
-      }
-      // Redirect desktop devices away from mobile site
-      else if (!isMobile && isOnMobilePath) {
-        navigate(responsiveRoutePath(location.pathname, 'desktop', routeEntities), {
-          replace: true,
-        });
-      }
-    };
-
-    // Check on mount and route change
-    checkAndRoute();
-
-    // Debounced resize handler to avoid excessive redirects
-    let resizeTimeout: NodeJS.Timeout;
-    const handleResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(checkAndRoute, 200);
-    };
-
-    // Listen for window resize events for responsive switching
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      clearTimeout(resizeTimeout);
-    };
-  }, [location.pathname, navigate]);
-
-  return null;
 }
 
 function AppContent() {
@@ -933,6 +893,18 @@ function AppContent() {
     );
     if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
+    // Always end onboarding inside the first-task composer: if the user skipped
+    // the LLM step, fall back to their governed default agent so the pre-seeded
+    // bootstrap session still opens. When no model is connected, that session's
+    // first turn surfaces the inline connect-model panel (MissingCredentialPanel)
+    // rather than dropping the user on a bare board with a passive banner.
+    const bootstrapAgent =
+      result.agent ??
+      resolveAvailableUserAgenticTool(
+        currentUser,
+        agorStore.getState().agenticToolSettingsByName,
+        AVAILABLE_AGENTS
+      );
     const seeded = await seedOnboardingTeammate({
       slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
@@ -942,7 +914,7 @@ function AppContent() {
       teammateEmoji: result.teammateEmoji,
       sourceBranch: result.sourceBranch,
       sourceRemoteUrl: result.sourceRemoteUrl,
-      agent: result.agent,
+      agent: bootstrapAgent,
       suggestedIntegrations: result.suggestedIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.
@@ -1153,30 +1125,9 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="warning"
-          title={
-            unsupportedIdentityContract
-              ? 'Incompatible daemon configuration contract'
-              : 'Could not fetch daemon configuration'
-          }
-          description={
-            <div>
-              <p>{authConfigError.message}</p>
-              {unsupportedIdentityContract ? (
-                <p>Deploy compatible Agor UI and daemon versions, then retry.</p>
-              ) : (
-                <>
-                  <p>Make sure the daemon is running:</p>
-                  <p>
-                    <code>cd apps/agor-daemon && pnpm dev</code>
-                  </p>
-                </>
-              )}
-            </div>
-          }
-          action={<Button onClick={retryAuthConfig}>Retry</Button>}
-          showIcon
+        <DaemonConfigurationAlert
+          unsupportedIdentityContract={unsupportedIdentityContract}
+          onRetry={retryAuthConfig}
         />
       </div>
     );
@@ -1232,19 +1183,7 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert
-          type="error"
-          title="Failed to connect to Agor daemon"
-          description={
-            <div>
-              <p>{connectionError}</p>
-              <p>
-                Start the daemon with: <code>cd apps/agor-daemon && pnpm dev</code>
-              </p>
-            </div>
-          }
-          showIcon
-        />
+        <DaemonConnectionAlert message={connectionError} />
       </div>
     );
   }
@@ -2150,6 +2089,38 @@ function AppContent() {
 
   const mcpRecoveryElement = <MCPSlackRecoveryPage client={client} />;
 
+  const mcpConnectElement = <MCPOAuthConnectPage client={client} />;
+
+  const cliLoginElement = (
+    <CLILoginPage
+      client={client}
+      currentUserId={currentUser?.user_id ?? null}
+      currentUserEmail={currentUser?.email ?? null}
+    />
+  );
+
+  // The post-onboarding connect-AI / integrations banners. Shared verbatim by
+  // both shells so the mobile Home surfaces "AI not connected" proactively
+  // (desktop already shows it above its app content).
+  const onboardingBanners = (
+    <OnboardingBanners
+      authenticationGeneration={authenticationGeneration}
+      user={currentUser}
+      mcpServerCount={mcpServerCount}
+      gatewayChannelCount={gatewayChannelCount}
+      integrationsHydrated={integrationsHydrated}
+      canManageMcp={canManageMcp}
+      onOpenUserSettings={(tab) => {
+        setUserSettingsInitialTab(tab);
+        setOpenUserSettings(true);
+      }}
+      onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+      onCheckAuth={handleCheckAuth}
+      credentialVersion={credentialVersion}
+      connectionReady={connected && !connecting}
+    />
+  );
+
   // All desktop entity URLs (/b/, /s/, /w/, /a/) render the same
   // AgorApp — the multiple routes exist so react-router's useParams
   // (read inside useUrlState) populates the right named params for
@@ -2172,23 +2143,7 @@ function AppContent() {
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
       suppressLeftPanel={onboardingWizardOpen}
-      topBanner={
-        <OnboardingBanners
-          user={currentUser}
-          mcpServerCount={mcpServerCount}
-          gatewayChannelCount={gatewayChannelCount}
-          integrationsHydrated={integrationsHydrated}
-          canManageMcp={canManageMcp}
-          onOpenUserSettings={(tab) => {
-            setUserSettingsInitialTab(tab);
-            setOpenUserSettings(true);
-          }}
-          onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
-          onCheckAuth={handleCheckAuth}
-          credentialVersion={credentialVersion}
-          connectionReady={connected && !connecting}
-        />
-      }
+      topBanner={onboardingBanners}
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
@@ -2353,6 +2308,7 @@ function AppContent() {
             user={currentUser}
             client={client}
             allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
+            claudeOAuthCapability={featuresConfig?.claudeOAuthCapability}
             onUpdateUser={async (userId, updates) => {
               if (
                 !onboardingWizardOwner ||
@@ -2403,6 +2359,14 @@ function AppContent() {
               <Route key={path} path={path} element={mcpRecoveryElement} />
             ))}
 
+            {MCP_CONNECT_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={mcpConnectElement} />
+            ))}
+
+            {CLI_LOGIN_ROUTE_PATHS.map((path) => (
+              <Route key={path} path={path} element={cliLoginElement} />
+            ))}
+
             {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
                 but does not start the Workspace board/session store on fresh loads. */}
             {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
@@ -2416,7 +2380,18 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
+                  authGeneration={authenticationGeneration}
+                  isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
+                  topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
+                  onCreateSession={handleCreateSession}
+                  onForkSession={handleForkSession}
+                  onBtwForkSession={handleBtwForkSession}
+                  onSpawnSession={handleSpawnSession}
+                  onUpdateSession={handleUpdateSession}
+                  onDeleteSession={handleDeleteSession}
+                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
                   onResolveComment={handleResolveComment}
@@ -2425,6 +2400,10 @@ function AppContent() {
                   onLogout={logout}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
                   onOpenUserSettings={() => setOpenUserSettings(true)}
+                  onOpenAgenticToolSettings={(tool) => {
+                    setUserSettingsInitialTab(tool);
+                    setOpenUserSettings(true);
+                  }}
                   onUpdateBranch={handleUpdateBranch}
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}

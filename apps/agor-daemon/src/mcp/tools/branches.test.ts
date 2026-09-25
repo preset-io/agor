@@ -585,7 +585,12 @@ describe('agor_branches_create', () => {
       filesystem_status: 'creating',
       ...options.initial,
     };
-    const observed = { ...creating, ...options.observed };
+    const observed = {
+      ...creating,
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+      ...options.observed,
+    };
     const createBranch = vi.fn(async () => creating);
     const branchesGet = vi.fn(async () => observed);
     const app = {
@@ -633,6 +638,8 @@ describe('agor_branches_create', () => {
         branch_id: 'branch-new',
         created_by: 'user-b',
         ...(data as Record<string, unknown>),
+        base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+        base_sha: 'a'.repeat(40),
       };
     });
     const reposGet = vi.fn(async (_repoId: string) => ({
@@ -655,18 +662,29 @@ describe('agor_branches_create', () => {
       baseServiceParams,
     });
 
-    await create({
+    const result = await create({
       repoId: 'repo-1',
       branchName: 'user-b-feature',
       boardId: 'board-1',
       autoSuffix: false,
     });
+    const payload = JSON.parse(result.content[0].text);
 
     expect(createBranch).toHaveBeenCalledWith(
       'repo-1',
       expect.objectContaining({ name: 'user-b-feature', boardId: 'board-1' }),
       baseServiceParams
     );
+    expect(payload).toMatchObject({
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+      _resolution: {
+        outcome: 'resolved',
+        requested_ref: 'main',
+        resolved_ref: 'main',
+        resolved_sha: 'a'.repeat(40),
+      },
+    });
   });
 
   it('optionally waits and returns the authoritative ready branch in the existing flat response', async () => {
@@ -743,6 +761,7 @@ describe('agor_branches_create', () => {
       requestContext()
     );
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await waiting;
     const payload = JSON.parse(result.content[0].text);
@@ -760,8 +779,9 @@ describe('agor_branches_create', () => {
       },
     });
     expect(createBranch).toHaveBeenCalledOnce();
-    expect(branchesGet).toHaveBeenCalledTimes(2);
+    expect(branchesGet).toHaveBeenCalledTimes(3);
     expect(branchesGet.mock.calls[1][1]).not.toBe(branchesGet.mock.calls[0][1]);
+    expect(branchesGet.mock.calls[2][1]).not.toBe(branchesGet.mock.calls[1][1]);
   });
 
   it('returns a persisted materialization failure without losing creation metadata', async () => {
@@ -806,6 +826,8 @@ describe('agor_branches_create', () => {
       branch_id: 'teammate-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -867,6 +889,8 @@ describe('agor_branches_create', () => {
       branch_id: 'plain-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -904,6 +928,8 @@ describe('agor_branches_create', () => {
       branch_id: 'teammate-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({
       repo_id: 'repo-1',
@@ -969,6 +995,8 @@ describe('agor_branches_create', () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'teammate-branch',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn(async () => ({ board_id: 'board-auto', name: 'Helper' }));
@@ -1007,6 +1035,8 @@ describe('agor_branches_create', () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'teammate-branch',
       ...(data as Record<string, unknown>),
+      base_ref: (data as { sourceBranch?: string }).sourceBranch ?? 'main',
+      base_sha: 'a'.repeat(40),
     }));
     const reposGet = vi.fn(async () => ({ repo_id: 'repo-1', slug: 's', default_branch: 'main' }));
     const boardsCreate = vi.fn();
@@ -1348,6 +1378,87 @@ describe('agor_branches_set_zone', () => {
     expect(findByBranchId).not.toHaveBeenCalled();
   });
 
+  it('replaces a synthetic out-of-bounds placement with contained zone-relative coordinates', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'Branch 1',
+    };
+    const zone = {
+      type: 'zone',
+      x: 2400,
+      y: 80,
+      width: 740,
+      height: 720,
+      label: 'Review',
+    };
+    let persistedBoardObject = {
+      object_id: 'obj-branch-1',
+      board_id: 'board-1',
+      branch_id: 'branch-1',
+      zone_id: 'zone-review',
+      position: { x: 24, y: 1600 },
+    };
+    const boardObjectsPatch = vi.fn(
+      async (
+        _objectId: string,
+        update: { position: { x: number; y: number }; zone_id: string }
+      ) => {
+        persistedBoardObject = { ...persistedBoardObject, ...update };
+        return persistedBoardObject;
+      }
+    );
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'branches') return { get: vi.fn(async () => branch) };
+        if (name === 'boards') {
+          return {
+            get: vi.fn(async () => ({
+              board_id: 'board-1',
+              objects: { 'zone-review': zone },
+            })),
+          };
+        }
+        if (name === 'board-objects') {
+          return {
+            findByBranchId: vi.fn(async () => persistedBoardObject),
+            patch: boardObjectsPatch,
+          };
+        }
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = await setZone({ branchId: 'branch-1', zoneId: 'zone-review' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    // Placement and auto-arrange may choose different slots, but both use
+    // zone-relative coordinates. The non-zero origin is never added here.
+    expect(boardObjectsPatch).toHaveBeenCalledWith(
+      'obj-branch-1',
+      { position: { x: 80, y: 80 }, zone_id: 'zone-review' },
+      baseServiceParams
+    );
+    expect(persistedBoardObject.position).toEqual({ x: 80, y: 80 });
+    expect(parsed.position).toEqual({ x: 80, y: 80 });
+    expect(parsed.position).not.toEqual({ x: 24, y: 1600 });
+    expect(parsed.position.x + 500).toBeLessThanOrEqual(zone.width);
+    expect(parsed.position.y + 200).toBeLessThanOrEqual(zone.height);
+  });
+
   it('triggers a show_picker zone prompt when the target session belongs to the moved branch', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -1367,10 +1478,10 @@ describe('agor_branches_set_zone', () => {
     };
     const zone = {
       type: 'zone',
-      x: 0,
-      y: 0,
-      width: 400,
-      height: 200,
+      x: 2400,
+      y: 80,
+      width: 740,
+      height: 720,
       label: 'Evidence/QA',
       trigger: {
         behavior: 'show_picker',
@@ -1421,6 +1532,7 @@ describe('agor_branches_set_zone', () => {
       baseServiceParams,
     });
 
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const result = await setZone({
       branchId: 'branch-1',
       zoneId: 'zone-validate',
@@ -1433,7 +1545,12 @@ describe('agor_branches_set_zone', () => {
     expect(sessionsGet).toHaveBeenCalledWith('session-1', baseServiceParams);
     expect(boardObjectsPatch).toHaveBeenCalledWith(
       'obj-branch-1',
-      expect.objectContaining({ zone_id: 'zone-validate' }),
+      expect.objectContaining({
+        // Zone origin is intentionally non-zero: set_zone persists React Flow
+        // child coordinates, never canvas-absolute coordinates.
+        position: { x: 80, y: 80 },
+        zone_id: 'zone-validate',
+      }),
       baseServiceParams
     );
     expect(promptCreate).toHaveBeenCalledWith(
@@ -1445,6 +1562,7 @@ describe('agor_branches_set_zone', () => {
       { ...baseServiceParams, provider: undefined, route: { id: 'session-1' } }
     );
     expect(parsed.trigger.sessionId).toBe('session-1');
+    random.mockRestore();
   });
 
   it('rejects show_picker zone triggers when the target session belongs to another branch', async () => {
@@ -2244,5 +2362,116 @@ describe('agor_teammates_list', () => {
       limit: 26,
       offset: 0,
     });
+  });
+});
+
+describe('agor_branches_retry_provisioning', () => {
+  it('is discoverable (registered with an input schema)', () => {
+    const config = registerAndCaptureConfig('agor_branches_retry_provisioning', {
+      app: {
+        service() {
+          throw new Error('should not touch services during registration');
+        },
+      },
+      userId: 'user-1',
+    });
+    expect(config.inputSchema).toBeDefined();
+    // branchId is required — an empty payload must fail schema validation.
+    const parsed = config.inputSchema?.safeParse({});
+    expect(parsed?.success).toBe(false);
+  });
+
+  it('resolves the branch id and calls the shared retryBranchProvisioning service', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    // resolveBranchId → branches.get; the service resolves the short id to a
+    // full id, which is what must be forwarded to retryBranchProvisioning.
+    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-full-1' }));
+    const retryBranchProvisioning = vi.fn(async (branchId: string) => ({
+      branch_id: branchId,
+      filesystem_status: 'ready',
+      error_message: null,
+      path: '/worktrees/sample-app/feature-x',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: branchesGet };
+        if (name === 'repos') return { retryBranchProvisioning };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const retry = registerAndCaptureHandler('agor_branches_retry_provisioning', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await retry({ branchId: 'branch-short' });
+
+    expect(branchesGet).toHaveBeenCalledWith('branch-short', baseServiceParams);
+    expect(retryBranchProvisioning).toHaveBeenCalledWith('branch-full-1', baseServiceParams);
+    const payload = JSON.parse(result.content[0].text) as {
+      branch_id: string;
+      filesystem_status: string;
+    };
+    expect(payload.branch_id).toBe('branch-full-1');
+    expect(payload.filesystem_status).toBe('ready');
+  });
+});
+
+describe('agor_branches_clean', () => {
+  it('uses the authenticated clean route and returns acceptance without claiming completion', async () => {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const accepted = { branch_id: branchId, operation_id: 'operation', status: 'accepted' };
+    const create = vi.fn().mockResolvedValue(accepted);
+    const baseServiceParams = { provider: 'mcp', user: { user_id: 'manager', role: 'member' } };
+    const app = {
+      service: (path: string) => {
+        if (path === 'branches') return { get: vi.fn().mockResolvedValue({ branch_id: branchId }) };
+        if (path === '/branches/:id/clean') return { create };
+        throw new Error(path);
+      },
+    };
+    const clean = registerAndCaptureHandler('agor_branches_clean', { app, baseServiceParams });
+    const result = await clean({ branchId });
+    expect(create).toHaveBeenCalledWith({}, { ...baseServiceParams, route: { id: branchId } });
+    expect(JSON.stringify(result)).toContain('accepted');
+    expect(JSON.stringify(result)).not.toContain('cleaned successfully');
+  });
+});
+
+describe('management ownership transfer tool', () => {
+  it('forwards the actual caller and tenant to the explicit transfer service', async () => {
+    const patch = vi.fn().mockResolvedValue({ scope: 'management_only' });
+    const service = vi.fn().mockReturnValue({ patch });
+    const baseServiceParams = {
+      provider: 'mcp',
+      authenticated: true,
+      user: { user_id: 'caller', role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    };
+    const handler = registerAndCaptureHandler('agor_branches_transfer_ownership', {
+      app: { service },
+      userId: 'caller',
+      baseServiceParams,
+    });
+    await handler({
+      branchId: 'resource-id',
+      expectedOwnerUserId: 'old-owner',
+      targetUserId: 'new-owner',
+    });
+    expect(service).toHaveBeenCalledWith('branches/:id/ownership');
+    expect(patch).toHaveBeenCalledWith(
+      null,
+      {
+        expected_owner_user_id: 'old-owner',
+        target_user_id: 'new-owner',
+      },
+      { ...baseServiceParams, route: { id: 'resource-id' } }
+    );
   });
 });

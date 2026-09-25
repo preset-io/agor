@@ -60,10 +60,15 @@ export const MESSAGE_TYPE_VALUES = [
 
 export type MessageType = (typeof MESSAGE_TYPE_VALUES)[number];
 
+/** Serialized field sizes before a lossy, display-only transcript projection. */
+export type TranscriptTruncation = Record<string, { original_bytes: number }>;
+
 /**
  * Content block (for multi-modal messages)
  */
 export interface ContentBlock {
+  /** Omitted/truncated tool fields; never use this projection as executable input. */
+  transcript_truncation?: TranscriptTruncation;
   type:
     | 'text'
     | 'image'
@@ -116,6 +121,7 @@ export interface DiffEnrichment {
  * Tool use in a message
  */
 export interface ToolUse {
+  transcript_truncation?: TranscriptTruncation;
   id: string;
   name: string;
   input: Record<string, unknown>;
@@ -232,6 +238,9 @@ export interface Message {
   /** Full message content (type depends on message type) */
   content: string | ContentBlock[] | PermissionRequestContent | InputRequestContent;
 
+  /** Read-only lean projection hint; contains no reasoning text. */
+  has_deferred_reasoning?: boolean;
+
   /** Tool uses in this message (for assistant messages) */
   tool_uses?: ToolUse[];
 
@@ -324,6 +333,28 @@ export interface Message {
     [key: string]: unknown;
   };
 }
+
+/** Display metadata needed by the experimental lean transcript, never tool data. */
+export const LEAN_TRANSCRIPT_METADATA_FIELDS = [
+  'model',
+  'source',
+  'system_authored',
+  'widget_id',
+  'widget',
+  'is_agor_callback',
+  'is_btw_result',
+  'btw_prompt',
+  'btw_session_id',
+  'btw_caller_session_id',
+  'btw_caller_title',
+  'error_kind',
+  'tool',
+  'is_task_failure',
+  'is_missing_credential_failure',
+  'is_zero_turn_result',
+  'is_provider_failure_result',
+  'persistence_omission',
+] as const;
 
 /**
  * Message creation input (without generated fields)

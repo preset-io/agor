@@ -4,6 +4,7 @@ import { getModelDisplayName } from './modelDisplay';
 describe('getModelDisplayName', () => {
   it('renders single-segment versions without a minor', () => {
     expect(getModelDisplayName('claude-opus-5')).toBe('opus-5');
+    expect(getModelDisplayName('claude-opus-5-5')).toBe('opus-5.5');
     expect(getModelDisplayName('claude-sonnet-5')).toBe('sonnet-5');
     expect(getModelDisplayName('claude-fable-5')).toBe('fable-5');
   });

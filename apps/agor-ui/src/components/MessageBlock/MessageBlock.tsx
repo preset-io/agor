@@ -32,7 +32,7 @@ import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
-import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
+import { isLongMarkdown } from '../CollapsibleText/markdownPreview';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { MissingCredentialPanel } from '../MissingCredentialPanel';
@@ -50,7 +50,9 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { HistoryMarkdown } from './HistoryMarkdown';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
@@ -93,7 +95,7 @@ interface MessageBlockProps {
   sessionId?: string | null;
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
-  isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
+  isLatestMessage?: boolean; // Whether this is the most recent message (for pending tool status)
   teammateEmoji?: string; // Emoji override for teammate avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
@@ -106,6 +108,9 @@ interface MessageBlockProps {
   ) => void;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   compact?: boolean;
+  defaultTextExpanded?: boolean;
+  /** Stable presentation identity while a confirmed task gains its initial message. */
+  textChoiceKey?: string;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -339,6 +344,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   client = null,
   onOpenAgenticToolSettings,
   compact = false,
+  defaultTextExpanded = true,
+  textChoiceKey,
 }) => {
   const { token } = theme.useToken();
 
@@ -653,6 +660,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
 
+  // Task calls/results rendered as text bypass ToolUseRenderer. Keep their
+  // projection notices visible rather than treating omitted input as empty.
+  const taskTruncations = Array.isArray(message.content)
+    ? message.content
+        .filter(
+          (block) =>
+            (block.type === 'tool_use' && block.name === 'Task') ||
+            (block.type === 'tool_result' && isTaskResult)
+        )
+        .map((block) => block.transcript_truncation)
+    : [];
+
   // Also check for streaming thinking content
   const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
   const isThinking = 'isThinking' in message ? message.isThinking : false;
@@ -664,7 +683,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
 
-  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
+  const hasTaskTruncation = taskTruncations.some((value) => Object.keys(value ?? {}).length > 0);
+  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasTaskTruncation) {
     return null;
   }
 
@@ -676,6 +696,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   return (
     <>
+      <TranscriptTruncationNotice truncations={taskTruncations} />
       {/* Thinking blocks (collapsed by default) */}
       {hasThinking && (
         <ThinkingBlock
@@ -726,20 +747,23 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         gap: token.sizeUnit,
                       }}
                     >
-                      {textBeforeTools.map((text) => {
-                        // Use CollapsibleMarkdown for long text blocks (15+ lines)
-                        const shouldTruncate = text.split('\n').length > 15;
+                      {textBeforeTools.map((text, textIndex) => {
+                        const shouldTruncate = isLongMarkdown(text);
 
                         return (
-                          <div key={`text-${text.length}-${text.substring(0, 32)}`}>
+                          // Text slots are ordered within a message; content changes while streaming.
+                          // biome-ignore lint/suspicious/noArrayIndexKey: stable slot, never key streamed text by its changing content.
+                          <div key={`text-${textIndex}`}>
                             {shouldTruncate ? (
-                              <CollapsibleMarkdown
-                                maxLines={10}
-                                defaultExpanded={isLatestMessage}
+                              <HistoryMarkdown
+                                textKey={textChoiceKey ?? message.message_id}
+                                defaultExpanded={
+                                  isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
+                                }
                                 isStreaming={isStreaming}
                               >
                                 {text}
-                              </CollapsibleMarkdown>
+                              </HistoryMarkdown>
                             ) : (
                               <MarkdownRenderer content={text} inline isStreaming={isStreaming} />
                             )}
@@ -758,6 +782,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   // Bound the whole row (including avatar) and allow the body
                   // to shrink; the code body then owns horizontal scrolling.
                   root: { maxWidth: '100%', gap: compact ? 8 : undefined },
+                  // Bubble reserves 32px by default, but desktop user avatars
+                  // are 40px. Reserve their actual width instead of overflowing
+                  // the conversation and introducing a horizontal scrollbar.
+                  avatar: isUser ? { width: compact ? 32 : 40, flexShrink: 0 } : undefined,
                   body: { minWidth: 0, alignSelf: compact && isUser ? 'center' : undefined },
                   content: {
                     padding: compact && isUser ? '4px 10px' : undefined,
@@ -869,16 +897,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                     <div style={{ wordWrap: 'break-word' }}>
                       {(() => {
                         const combinedText = textAfterTools.join('\n\n');
-                        const shouldTruncate = combinedText.split('\n').length > 15;
+                        const shouldTruncate = isLongMarkdown(combinedText);
 
                         return shouldTruncate ? (
-                          <CollapsibleMarkdown
-                            maxLines={10}
-                            defaultExpanded={isLatestMessage}
+                          <HistoryMarkdown
+                            textKey={textChoiceKey ?? message.message_id}
+                            defaultExpanded={
+                              isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
+                            }
                             isStreaming={isStreaming}
                           >
                             {combinedText}
-                          </CollapsibleMarkdown>
+                          </HistoryMarkdown>
                         ) : (
                           <MarkdownRenderer
                             content={combinedText}

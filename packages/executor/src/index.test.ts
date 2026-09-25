@@ -194,6 +194,47 @@ describe('AgorExecutor watchdog handoff', () => {
     });
   });
 
+  it('reports quiescence for a stop claimed before this executor could connect', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const reportTerminationComplete = vi.fn().mockResolvedValue({});
+    const get = vi.fn().mockResolvedValue({
+      task_id: 'task-1',
+      status: 'stopping',
+      executor_mode: 'templated',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+      },
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: {
+        service: () => {
+          reportTerminationComplete: typeof reportTerminationComplete;
+          get: typeof get;
+        };
+      };
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete, get }) };
+
+    // connectExecutor rejected with Conflict because the task was already
+    // stopping; no termination request had been observed over the socket.
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
+    expect(get).toHaveBeenCalledOnce();
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    });
+    expect(runtime.execute).not.toHaveBeenCalled();
+  });
+
   it('warns once when provider cleanup remains active after Stop', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

@@ -46,7 +46,13 @@ vi.mock('../../utils/append-system-message.js', () => ({
 }));
 
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { registerAllWidgets } from '../../widgets/index.js';
 import { registerWidgetTools } from './widgets.js';
+
+// A widget's mint-time gate lives on its registry entry, and `mintWidgetMessage`
+// refuses a type this daemon has not registered. Same call `index.ts` makes at
+// boot.
+registerAllWidgets();
 
 function makeBoundaryApp(options: { createFailures?: number } = {}) {
   const rows = new Map<string, Message>();

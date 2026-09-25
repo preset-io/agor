@@ -6,7 +6,12 @@ instead of running `claude setup-token` on a machine with a browser and pasting 
 long-lived token into Agor. This documents the verified auth mechanism and the
 design rationale of the shipped feature.
 
-The Codex module is the template it mirrors:
+This document describes the original **local-file** implementation. The current
+backend storage mode, default-on capability/explicit opt-out, task-only access
+delivery and offline rollout contract are documented in
+[`config-yaml.mdx`](../../apps/agor-docs/content/guide/config-yaml.mdx).
+
+The Codex module is the template the local-file path mirrors:
 
 - `apps/agor-daemon/src/services/codex-device-auth.ts`
 - `apps/agor-daemon/src/services/codex-auth-shared.ts`
@@ -478,21 +483,16 @@ silently mutate account metadata in a background read.
 
 ---
 
-## ToS / acceptable-use considerations (NOT cleared)
+## Provider approval / acceptable-use considerations (NOT cleared)
 
-**Status: NOT cleared. The endpoint and UI are disabled by default.**
+The deployment setting is now default-on only where the effective capability
+admits a supported mode; explicit `agentic_tools.claude_subscription_oauth: false`
+opts out. This product default does **not** establish provider approval. See the
+[current operator contract](../../apps/agor-docs/content/guide/config-yaml.mdx)
+for independent readiness and release gates. API keys, pasted subscription
+tokens and disconnect remain separate from enabling new managed sign-ins.
 
-The deployment operator must set
-`agentic_tools.claude_subscription_oauth: true` only after confirming an
-authorized provider/client contract. Absence or `false` returns the stable
-`CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` error and hides the OAuth tab. This flag is
-an operator attestation, not a legal-policy decision made by Agor. API keys,
-pasted `claude setup-token` credentials, ordinary Claude execution, and logout
-are not gated by it. HA support remains an independent topology boundary: the
-constrained profile exposes the capability only when it also proves durable
-attempts, an exact per-user credential home, and cross-replica home locking.
-Other HA topologies remain unavailable even when the operator authorizes the
-provider flow.
+The following local-file rationale does not describe backend token storage:
 
 - The flow drives the **fixed public Claude Code client id** programmatically.
   The user authenticates with **their own** browser + credentials, and tokens

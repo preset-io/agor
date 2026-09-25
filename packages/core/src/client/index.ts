@@ -17,6 +17,7 @@ export type {
   FindResult,
   GatewayChannelsService,
   MessagesService,
+  OwnershipTransferService,
   ReposCloneService,
   ReposLocalService,
   ReposService,

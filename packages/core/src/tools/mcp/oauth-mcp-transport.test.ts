@@ -38,14 +38,18 @@ import {
   __dynamicClientCacheSizeForTests,
   __seedAuthCodeTokenCacheForTests,
   __seedDynamicClientCacheForTests,
+  assertAuthorizeRedirectUriMatchesClient,
   clearAuthCodeTokenCache,
   completeMCPOAuthFlow,
   discoverAuthorizationServerFromMcpOrigin,
   discoverResourceMetadataUrl,
   getAuthCodeTokenCacheStats,
+  isGoogleAuthorizationEndpoint,
   isOAuthRequired,
+  MCP_OAUTH_DCR_CLIENT_NAME,
   OAuthCallbackValidationError,
   OAuthCodeExchangeError,
+  OAuthConfigurationError,
   parseOAuthCallback,
   performMCPOAuthFlow,
   resolveMCPOAuthDiscovery,
@@ -53,6 +57,25 @@ import {
   startMCPOAuthFlow,
   validateMCPOAuthMetadata,
 } from './oauth-mcp-transport';
+
+describe('Google authorization endpoint classification', () => {
+  it('accepts only the exact HTTPS Google Accounts host', () => {
+    expect(isGoogleAuthorizationEndpoint(new URL('https://accounts.google.com/authorize'))).toBe(
+      true
+    );
+    expect(isGoogleAuthorizationEndpoint(new URL('http://accounts.google.com/authorize'))).toBe(
+      false
+    );
+    expect(
+      isGoogleAuthorizationEndpoint(
+        new URL('https://accounts.google.com.attacker.example/authorize')
+      )
+    ).toBe(false);
+    expect(
+      isGoogleAuthorizationEndpoint(new URL('https://accounts.google.example/authorize'))
+    ).toBe(false);
+  });
+});
 
 async function rejectedError<T extends Error>(promise: Promise<unknown>): Promise<T> {
   try {
@@ -1098,6 +1121,108 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     expect(authUrl.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:9999/oauth/callback');
   });
 
+  it.each(['https://gmailmcp.googleapis.com/mcp/v1', 'https://calendarmcp.googleapis.com/mcp/v1'])(
+    'requests a durable offline Google grant for %s',
+    async (resourceUri) => {
+      const ctx = await startMCPOAuthFlow('', 'configured-google-client', redirectUri, {
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://accounts.google.com',
+          authorization_endpoint:
+            'https://accounts.google.com/o/oauth2/v2/auth?prompt=select_account',
+          token_endpoint: 'https://oauth2.googleapis.com/token',
+        },
+        cacheKey: resourceUri,
+        resourceUri,
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      });
+
+      const authorizationUrl = new URL(ctx.authorizationUrl);
+      expect(authorizationUrl.searchParams.get('access_type')).toBe('offline');
+      expect(authorizationUrl.searchParams.get('prompt')?.split(/\s+/)).toEqual([
+        'select_account',
+        'consent',
+      ]);
+      expect(authorizationUrl.searchParams.get('client_id')).toBe('configured-google-client');
+    }
+  );
+
+  it('does not add Google-only offline parameters to another provider', async () => {
+    const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.example.test',
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://auth.example.test/token',
+      },
+      cacheKey: 'https://mcp.example.test/mcp',
+      resourceUri: 'https://mcp.example.test/mcp',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('access_type')).toBeNull();
+    expect(authorizationUrl.searchParams.get('prompt')).toBeNull();
+  });
+
+  it.each([
+    'https://accounts.google.com.attacker.example/authorize',
+    'https://accounts.google.example/authorize',
+  ])('does not trust a lookalike Google authorization host %s', async (authorizationEndpoint) => {
+    const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: new URL(authorizationEndpoint).origin,
+        authorization_endpoint: authorizationEndpoint,
+        token_endpoint: 'https://auth.example.test/token',
+      },
+      cacheKey: 'https://mcp.example.test/mcp',
+      resourceUri: 'https://mcp.example.test/mcp',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('access_type')).toBeNull();
+    expect(authorizationUrl.searchParams.get('prompt')).toBeNull();
+  });
+
+  it('rejects an insecure Google authorization endpoint before provider parameters apply', async () => {
+    await expect(
+      startMCPOAuthFlow('', 'configured-client', redirectUri, {
+        prefetchedAuthServerMetadata: {
+          issuer: 'http://accounts.google.com',
+          authorization_endpoint: 'http://accounts.google.com/authorize',
+          token_endpoint: 'https://oauth2.googleapis.com/token',
+        },
+        cacheKey: 'https://gmailmcp.googleapis.com/mcp/v1',
+        resourceUri: 'https://gmailmcp.googleapis.com/mcp/v1',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      })
+    ).rejects.toThrow('OAuth endpoints require HTTPS');
+  });
+
+  it('deduplicates consent while preserving existing Google prompts', async () => {
+    const ctx = await startMCPOAuthFlow('', 'configured-google-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://accounts.google.com',
+        authorization_endpoint:
+          'https://accounts.google.com/o/oauth2/v2/auth?prompt=consent%20select_account%20consent',
+        token_endpoint: 'https://oauth2.googleapis.com/token',
+      },
+      cacheKey: 'https://gmailmcp.googleapis.com/mcp/v1',
+      resourceUri: 'https://gmailmcp.googleapis.com/mcp/v1',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+
+    const authorizationUrl = new URL(ctx.authorizationUrl);
+    expect(authorizationUrl.searchParams.get('prompt')?.split(/\s+/)).toEqual([
+      'consent',
+      'select_account',
+    ]);
+  });
+
   it.each([
     ['http://127.0.0.1:9999/oauth/callback', 'native'],
     ['http://localhost:9999/oauth/callback', 'native'],
@@ -1318,6 +1443,256 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     await expect(startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions)).rejects.toThrow(
       'Dynamic Client Registration failed'
     );
+  });
+});
+
+describe('assertAuthorizeRedirectUriMatchesClient', () => {
+  const registered = 'https://agor.example.test/mcp-servers/oauth-callback';
+
+  it('accepts the binding the client was registered under', () => {
+    expect(() =>
+      assertAuthorizeRedirectUriMatchesClient({ registeredRedirectUri: registered }, registered)
+    ).not.toThrow();
+  });
+
+  it('refuses to authorize with a redirect URI the client is not registered under', () => {
+    try {
+      assertAuthorizeRedirectUriMatchesClient(
+        { registeredRedirectUri: registered },
+        'https://other.example.test/mcp-servers/oauth-callback'
+      );
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(OAuthConfigurationError);
+      expect((error as OAuthConfigurationError).failureCode).toBe('redirect_uri_mismatch');
+      expect((error as OAuthConfigurationError).failureReason).toBe('redirect_uri_mismatch');
+      // Never the provider's payload, and never the other URL.
+      expect((error as OAuthConfigurationError).message).not.toContain('other.example.test');
+    }
+  });
+
+  it('does not judge a configured client, whose provider-side binding Agor never saw', () => {
+    expect(() => assertAuthorizeRedirectUriMatchesClient({}, registered)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What Agor sends to Dynamic Client Registration.
+//
+// `client_name` is a fingerprint input for every stored registration (see
+// `MCP_OAUTH_DCR_CLIENT_NAME`), so it is pinned to the exact value deployed
+// registrations were made under.
+// ---------------------------------------------------------------------------
+
+describe('DCR request and redirect binding end to end', () => {
+  const originalFetch = globalThis.fetch;
+  const prefetchedOptions = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.example.test',
+      authorization_endpoint: 'https://auth.example.test/oauth/authorize',
+      token_endpoint: 'https://auth.example.test/oauth/token',
+      registration_endpoint: 'https://auth.example.test/oauth/register',
+    },
+    cacheKey: 'https://mcp.example.test/mcp',
+    resourceUri: 'https://mcp.example.test/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    reuseDynamicClientRegistration: false,
+  };
+
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const registerAndCapture = async (
+    redirectUri: string
+  ): Promise<{
+    body: Record<string, unknown>;
+    context: Awaited<ReturnType<typeof startMCPOAuthFlow>>;
+  }> => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'identity-client',
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions);
+    const body = JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0][1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    return { body, context };
+  };
+
+  it('registers under the one client name deployed registrations were made under', async () => {
+    const { body } = await registerAndCapture(
+      'https://agor.example.test/mcp-servers/oauth-callback'
+    );
+    // The literal, not the constant: this is the value on the wire, and the
+    // value every stored registration's fingerprint was computed from.
+    expect(body.client_name).toBe('Agor MCP Client');
+    expect(MCP_OAUTH_DCR_CLIENT_NAME).toBe('Agor MCP Client');
+  });
+
+  it('authorizes with exactly the redirect URI it registered, and records the binding', async () => {
+    const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+    const { body, context } = await registerAndCapture(redirectUri);
+    expect(body.redirect_uris).toEqual([redirectUri]);
+    expect(new URL(context.authorizationUrl).searchParams.get('redirect_uri')).toBe(redirectUri);
+    expect(context.registeredRedirectUri).toBe(redirectUri);
+    expect(context.clientSource).toBe('dcr');
+    expect(context.clientName).toBe('Agor MCP Client');
+    expect(context.registrationEndpoint).toBe('https://auth.example.test/oauth/register');
+  });
+
+  it('carries no registration binding for a configured client', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('a configured client must not register');
+    }) as unknown as typeof fetch;
+    const context = await startMCPOAuthFlow(
+      '',
+      'configured-client',
+      'https://agor.example.test/mcp-servers/oauth-callback',
+      prefetchedOptions
+    );
+    expect(context.clientSource).toBe('configured');
+    expect(context.registeredRedirectUri).toBeUndefined();
+    expect(context.clientName).toBeUndefined();
+  });
+});
+
+/**
+ * The one record of what Agor SENT that survives a front-channel refusal.
+ *
+ * `invalid_request — Mismatching redirect URI` is rejected at the provider's
+ * own error page: no callback arrives, so nothing downstream of the
+ * authorization request can ever be evidence. Before this line existed a
+ * production retry taught us nothing, because there was nothing on either
+ * side of the failure to compare.
+ *
+ * Which makes its CONTENT the test's real subject. A line that carried the
+ * authorization URL, or `client_id`, or the query string, would be worse than
+ * no line at all — it would put `state` and `code_challenge` into a log
+ * aggregator. So both halves are pinned: that the fields are there, and that
+ * nothing secret-shaped is.
+ */
+describe('oauth_authorize_built instrumentation', () => {
+  const originalFetch = globalThis.fetch;
+  const redirectUri = 'https://agor.example.test/mcp-servers/oauth-callback';
+  const prefetchedOptions = {
+    prefetchedAuthServerMetadata: {
+      issuer: 'https://auth.example.test',
+      authorization_endpoint: 'https://auth.example.test/oauth/authorize',
+      token_endpoint: 'https://auth.example.test/oauth/token',
+      registration_endpoint: 'https://register.example.test/oauth/register',
+    },
+    cacheKey: 'https://mcp.example.test/mcp',
+    resourceUri: 'https://mcp.example.test/mcp',
+    compatibilityMode: 'legacy' as const,
+    dcrMode: 'fallback' as const,
+    reuseDynamicClientRegistration: false,
+  };
+
+  let logged: string[];
+  beforeEach(() => {
+    clearAuthCodeTokenCache();
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const authorizeBuiltLine = (): string => {
+    const line = logged.find((entry) => entry.includes('event=oauth_authorize_built'));
+    expect(line).toBeDefined();
+    return line!;
+  };
+
+  it('reports origins, client provenance and the redirect comparison for a DCR client', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'built-client',
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'none',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions);
+
+    const line = authorizeBuiltLine();
+    expect(line).toContain('redirect_origin=https://agor.example.test');
+    expect(line).toContain('authorize_origin=https://auth.example.test');
+    expect(line).toContain('client_source=dcr');
+    expect(line).toContain('client_name=Agor MCP Client registration_origin=');
+    expect(line).toContain('registration_origin=https://register.example.test');
+    // The comparison a reader wants, rather than the two URLs it came from.
+    expect(line).toContain('registered_redirect_matches=true');
+  });
+
+  it('distinguishes "no observed registration" from "they differ"', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('a configured client must not register');
+    }) as unknown as typeof fetch;
+
+    await startMCPOAuthFlow('', 'configured-client', redirectUri, prefetchedOptions);
+
+    const line = authorizeBuiltLine();
+    expect(line).toContain('client_source=configured');
+    // A configured client's provider-side redirect URI is something Agor has
+    // never seen. `absent` says that; `false` would be a claim.
+    expect(line).toContain('registered_redirect_matches=absent');
+    expect(line).toContain('client_name=absent');
+    expect(line).toContain('registration_origin=absent');
+  });
+
+  it('puts nothing secret-shaped in the line', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const requested = JSON.parse(String(init?.body)) as { redirect_uris: string[] };
+      return new Response(
+        JSON.stringify({
+          client_id: 'secret-shaped-client-id',
+          client_secret: 'super-secret-value',
+          redirect_uris: requested.redirect_uris,
+          token_endpoint_auth_method: 'client_secret_post',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const context = await startMCPOAuthFlow('', undefined, redirectUri, prefetchedOptions);
+
+    const line = authorizeBuiltLine();
+    expect(line).not.toContain('secret-shaped-client-id');
+    expect(line).not.toContain('super-secret-value');
+    expect(line).not.toContain(context.state);
+    expect(line).not.toContain(context.pkceVerifier);
+    expect(line).not.toContain(context.authorizationUrl);
+    // No query string and no path — origins only, on every URL-shaped field.
+    expect(line).not.toContain('?');
+    expect(line).not.toContain('code_challenge');
+    expect(line).not.toContain('/mcp-servers/oauth-callback');
+    expect(line).not.toContain('/oauth/authorize');
+    expect(line).not.toContain('/oauth/register');
   });
 });
 

@@ -2,7 +2,7 @@
  * Modal for configuring zone identity, appearance, placement, and automation.
  */
 
-import type { AgenticToolName, BoardObject, ZoneTriggerBehavior } from '@agor-live/client';
+import type { AgenticToolName, BoardObject } from '@agor-live/client';
 import { isAgenticToolName } from '@agor-live/client';
 import {
   Alert,
@@ -27,6 +27,11 @@ import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 import { ExpandableAlert } from '../../ExpandableAlert';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
 import {
+  applyZoneConfigDraft,
+  createZoneConfigDraft,
+  type ZoneConfigDraft,
+} from './zoneConfigDraft';
+import {
   sanitizeZoneFontSize,
   ZONE_FONT_SIZE_MAX,
   ZONE_FONT_SIZE_MIN,
@@ -46,16 +51,10 @@ interface ZoneConfigModalProps {
   canEdit?: boolean;
 }
 
-interface ZoneFormValues {
-  name: string;
-  locked: boolean;
-  triggerBehavior: ZoneTriggerBehavior;
-  triggerTemplate: string;
-}
-
-// A newly configured trigger defaults to the picker. An empty template still
-// means an organizational-only zone and persists no trigger.
-const DEFAULT_TRIGGER_BEHAVIOR: ZoneTriggerBehavior = 'show_picker';
+type ZoneFormValues = Pick<
+  ZoneConfigDraft,
+  'name' | 'locked' | 'triggerBehavior' | 'triggerTemplate'
+>;
 
 export const ZoneConfigModal = ({
   open,
@@ -73,7 +72,9 @@ export const ZoneConfigModal = ({
   const [backgroundColor, setBackgroundColor] = useState<string | undefined>();
   const [fontSize, setFontSize] = useState<number | undefined>();
   const [clearLegacyColor, setClearLegacyColor] = useState(false);
-  const isInitializingRef = useRef(false);
+  const initialDraftRef = useRef<{ objectId: string; draft: ZoneConfigDraft } | null>(null);
+  const savingRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
   const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
@@ -81,9 +82,6 @@ export const ZoneConfigModal = ({
   const automationActive = Boolean(triggerTemplate?.trim());
   const zone = zoneData.type === 'zone' ? zoneData : undefined;
   const zoneTrigger = zone?.trigger;
-  const hasZoneTrigger = Boolean(zoneTrigger);
-  const zoneTriggerBehavior = zoneTrigger?.behavior;
-  const zoneTriggerTemplate = zoneTrigger?.template;
   const zoneTriggerAgent = zoneTrigger?.agent;
   const requiresSupportedToolSelection = Boolean(
     zoneTriggerAgent && !isAgenticToolName(zoneTriggerAgent) && triggerAgent === null
@@ -112,46 +110,33 @@ export const ZoneConfigModal = ({
         ? toTranslucentZoneFill(legacyColor, `${token.colorBgContainer}40`)
         : `${token.colorBgContainer}40`);
 
-  // Reset only when the modal opens. Live board patches must not erase edits in
-  // progress, but reopening should always reflect the freshest zone object.
+  // Keep the opening baseline: live patches must neither erase the draft nor
+  // turn untouched fields into edits. A different zone/open gets a fresh draft.
   useEffect(() => {
-    if (open && !isInitializingRef.current) {
-      isInitializingRef.current = true;
-      form.setFieldsValue({
-        name: zoneName,
-        locked: Boolean(zone?.locked),
-        triggerBehavior: hasZoneTrigger ? zoneTriggerBehavior : DEFAULT_TRIGGER_BEHAVIOR,
-        triggerTemplate: hasZoneTrigger ? zoneTriggerTemplate : '',
-      });
-      setBorderColor(zone?.borderColor);
-      setBackgroundColor(zone?.backgroundColor);
-      setFontSize(sanitizeZoneFontSize(zone?.fontSize));
+    if (open && zone && initialDraftRef.current?.objectId !== objectId) {
+      const draft = createZoneConfigDraft(zone, zoneName);
+      initialDraftRef.current = { objectId, draft };
+      form.setFieldsValue(draft);
+      setBorderColor(draft.borderColor);
+      setBackgroundColor(draft.backgroundColor);
+      setFontSize(draft.fontSize);
       setClearLegacyColor(false);
-      setTriggerAgent(
-        hasZoneTrigger
-          ? zoneTriggerAgent === undefined
-            ? 'claude-code'
-            : isAgenticToolName(zoneTriggerAgent)
-              ? zoneTriggerAgent
-              : null
-          : 'claude-code'
-      );
+      setTriggerAgent(draft.triggerAgent);
     } else if (!open) {
-      isInitializingRef.current = false;
+      initialDraftRef.current = null;
     }
-  }, [
-    open,
-    zoneName,
-    zone?.locked,
-    zone?.borderColor,
-    zone?.backgroundColor,
-    zone?.fontSize,
-    hasZoneTrigger,
-    zoneTriggerBehavior,
-    zoneTriggerTemplate,
-    zoneTriggerAgent,
-    form,
-  ]);
+  }, [open, objectId, zone, zoneName, form]);
+
+  // Validation yields. Re-read props before constructing the replacement so a
+  // received patch or permission change during validation is not lost.
+  const latestRef = useRef({ zone, objectId, open, canEdit, mutationGate, onUpdate, onCancel });
+  latestRef.current = { zone, objectId, open, canEdit, mutationGate, onUpdate, onCancel };
+  useEffect(
+    () => () => {
+      initialDraftRef.current = null;
+    },
+    []
+  );
 
   const handleBorderColorChange = (color: Color) => {
     // Introducing borderColor changes the renderer's fallback semantics. Keep
@@ -170,52 +155,53 @@ export const ZoneConfigModal = ({
 
   const handleSave = async () => {
     if (
+      savingRef.current ||
       !mutationGate.canMutate ||
       !canEdit ||
       requiresSupportedToolSelection ||
       triggerAgent === null
     )
       return;
+    const initial = initialDraftRef.current;
+    if (!initial) return;
+    // Guard synchronously as well as disabling the UI, including validation.
+    savingRef.current = true;
+    setIsSaving(true);
     try {
       const values = await form.validateFields();
-      if (!zone) {
-        onCancel();
+      const latest = latestRef.current;
+      if (
+        initialDraftRef.current !== initial ||
+        !latest.open ||
+        !latest.zone ||
+        latest.objectId !== initial.objectId ||
+        !latest.canEdit ||
+        !latest.mutationGate.canMutate
+      )
         return;
-      }
-
-      const template = values.triggerTemplate?.trim() || '';
-      const nextTrigger =
-        template && values.triggerBehavior
-          ? { behavior: values.triggerBehavior, template, agent: triggerAgent }
-          : undefined;
-      const hasChanges =
-        values.name !== zoneName ||
-        Boolean(values.locked) !== Boolean(zone.locked) ||
-        borderColor !== zone.borderColor ||
-        backgroundColor !== zone.backgroundColor ||
-        fontSize !== sanitizeZoneFontSize(zone.fontSize) ||
-        (clearLegacyColor && zone.color !== undefined) ||
-        template !== (zone.trigger?.template || '') ||
-        values.triggerBehavior !== (zone.trigger?.behavior || undefined) ||
-        triggerAgent !== (zone.trigger?.agent || 'claude-code');
-
-      if (hasChanges) {
-        const saved = await onUpdate(objectId, {
-          ...zone,
-          label: values.name,
-          locked: Boolean(values.locked),
-          borderColor,
-          backgroundColor,
-          fontSize,
-          color: clearLegacyColor ? undefined : zone.color,
-          trigger: nextTrigger,
-        });
+      const nextZone = applyZoneConfigDraft(latest.zone, initial.draft, {
+        ...values,
+        // Preserve the opening value if a field ever fails to register.
+        name: values.name ?? initial.draft.name,
+        locked: values.locked ?? initial.draft.locked,
+        triggerAgent,
+        borderColor,
+        backgroundColor,
+        fontSize,
+        clearLegacyColor,
+      });
+      if (nextZone) {
+        const saved = await latest.onUpdate(initial.objectId, nextZone);
         if (saved === false) return;
       }
-      onCancel();
+      if (initialDraftRef.current === initial && latestRef.current.open) {
+        latestRef.current.onCancel();
+      }
     } catch {
-      // Validation or persistence failed. Validation renders inline feedback;
-      // persistence keeps the modal open so the operator can retry.
+      // Validation or persistence failed; retain the draft for retry.
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -236,6 +222,7 @@ export const ZoneConfigModal = ({
           </div>
           <Space>
             <ColorPicker
+              disabled={isSaving}
               value={effectiveBorderColor}
               onChange={handleBorderColorChange}
               showText
@@ -246,7 +233,7 @@ export const ZoneConfigModal = ({
             </ColorPicker>
             <Button
               size="small"
-              disabled={borderColor === undefined && legacyColor === undefined}
+              disabled={isSaving || (borderColor === undefined && legacyColor === undefined)}
               onClick={() => {
                 if (legacyColor && backgroundColor === undefined) {
                   setBackgroundColor(
@@ -271,6 +258,7 @@ export const ZoneConfigModal = ({
           </div>
           <Space>
             <ColorPicker
+              disabled={isSaving}
               value={effectiveBackgroundColor}
               onChange={handleBackgroundColorChange}
               showText
@@ -291,7 +279,7 @@ export const ZoneConfigModal = ({
             </ColorPicker>
             <Button
               size="small"
-              disabled={backgroundColor === undefined && legacyColor === undefined}
+              disabled={isSaving || (backgroundColor === undefined && legacyColor === undefined)}
               onClick={() => {
                 if (legacyColor && borderColor === undefined) setBorderColor(legacyColor);
                 setBackgroundColor(undefined);
@@ -320,7 +308,10 @@ export const ZoneConfigModal = ({
               onChange={(value) => setFontSize(sanitizeZoneFontSize(value))}
               style={{ width: 112 }}
             />
-            <Button disabled={fontSize === undefined} onClick={() => setFontSize(undefined)}>
+            <Button
+              disabled={isSaving || fontSize === undefined}
+              onClick={() => setFontSize(undefined)}
+            >
               Use default
             </Button>
           </Space.Compact>
@@ -461,16 +452,24 @@ export const ZoneConfigModal = ({
     <Modal
       title="Zone settings"
       open={open}
-      onCancel={onCancel}
+      onCancel={() => {
+        if (!savingRef.current) onCancel();
+      }}
+      confirmLoading={isSaving}
+      cancelButtonProps={{ disabled: isSaving }}
+      closable={!isSaving}
+      mask={{ closable: !isSaving }}
+      keyboard={!isSaving}
       onOk={handleSave}
       okText="Save"
       okButtonProps={{
-        disabled: !mutationGate.canMutate || !canEdit || requiresSupportedToolSelection,
+        disabled: isSaving || !mutationGate.canMutate || !canEdit || requiresSupportedToolSelection,
       }}
       cancelText="Cancel"
       width={640}
     >
-      <Form form={form} layout="vertical">
+      {/* Inert also covers custom agent cards that do not consume Form.disabled. */}
+      <Form form={form} layout="vertical" disabled={isSaving} inert={isSaving}>
         <Tabs
           defaultActiveKey="automation"
           items={[
@@ -483,6 +482,10 @@ export const ZoneConfigModal = ({
               key: 'appearance',
               label: 'Appearance & placement',
               children: generalContent,
+              // Force-render so Form.Item name="name" registers with the Form
+              // instance even if the user saves without ever visiting this tab
+              // (otherwise validateFields() omits `name` and the save wipes it).
+              forceRender: true,
             },
           ]}
         />

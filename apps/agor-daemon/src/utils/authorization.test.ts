@@ -38,6 +38,7 @@ describe('environment configuration clears', () => {
         ...BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS,
         'environment',
         'environment_config',
+        'cleanup_policy',
         'environment_variant',
       ]) {
         for (const data of [{ [field]: value }, [{ notes: 'unchanged' }, { [field]: value }]]) {

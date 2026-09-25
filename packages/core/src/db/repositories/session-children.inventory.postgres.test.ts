@@ -125,7 +125,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
                       start_timestamp: '2023-11-14T22:13:20.000Z',
                     },
                     git_state: { ref_at_start: 'main', sha_at_start: 'fixture' },
-                    tool_use_count: 0,
                   },
                 }))
               )
