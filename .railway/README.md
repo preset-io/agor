@@ -160,7 +160,7 @@ automatic per-branch provisioner; new branches require separately provisioned,
 reviewed bindings and an appropriately scoped caller token. Never duplicate the
 bootstrap service/volume binding for another branch.
 
-- **Play:** preserve unrelated variables; restore the branch push trigger;
+- **Play:** preserve unrelated variables;
   adopt a pending/running deployment or deploy the pushed GitHub branch; wait up
   to 18 minutes for provider success and app health; return App/health URLs.
 - **Stop:** remove that service's matching GitHub push trigger, cancel queued
@@ -177,9 +177,11 @@ interrupted API mutations can leave billable resources: inspect and use Stop,
 never blindly retry Create. Direct Railway changes or a second independent
 controller remain outside this single-trusted-operator MVP's coordination.
 
-Pushes update the preview only while its trigger exists. **IaC apply may restore
+The environment-scoped project token cannot create GitHub push triggers. Play
+deploys the latest pushed branch explicitly; after Stop, pushes alone do not
+restart or update the preview. **IaC apply may restore
 a removed trigger**; do not apply the infrastructure config while intending to
-keep the environment stopped. After Stop, Play recreates the trigger. Runtime
+keep the environment stopped. Play does not recreate the trigger. Runtime
 source remains branch-tip based, not an exact-revision Sync guarantee. The domain
 is discovered and checked against the reviewed binding; recreation with a new
 domain requires an explicit binding update.

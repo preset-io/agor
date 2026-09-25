@@ -196,24 +196,12 @@ export class RailwayPreview {
     );
   }
   async start() {
-    const { triggers } = await this.inspect();
+    await this.inspect();
     await this.setVariables();
     const t = this.target;
-    if (!triggers.length) {
-      await this.client.query(
-        'mutation Trigger($input:DeploymentTriggerCreateInput!) { deploymentTriggerCreate(input:$input) { id } }',
-        {
-          input: {
-            projectId: t.projectId,
-            environmentId: t.environmentId,
-            serviceId: t.serviceId,
-            repository: t.repository,
-            branch: t.ref,
-            provider: 'github',
-          },
-        }
-      );
-    }
+    // Environment-scoped project tokens can deploy this connected source but
+    // cannot create GitHub deployment triggers. Keep stopped previews stopped
+    // across pushes; Play/Restart deploy the latest pushed branch explicitly.
     const active = (await this.deployments()).filter((d) => !TERMINAL.has(d.status));
     if (
       active.some(
