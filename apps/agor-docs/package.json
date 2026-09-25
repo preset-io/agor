@@ -15,10 +15,10 @@
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },
   "dependencies": {
-    "@scalar/api-reference-react": "0.9.67",
+    "@scalar/api-reference-react": "0.9.72",
     "@theguild/remark-mermaid": "^0.3.0",
     "katex": "^0.18.7",
-    "lucide-react": "^1.46.0",
+    "lucide-react": "^1.47.0",
     "next": "^15.5.25",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
