@@ -1,4 +1,11 @@
-# External MCP servers and Catalog
+---
+title: MCP Catalog & Connections
+description: Find and connect MCP servers, manage authentication, and troubleshoot tool access.
+---
+
+<a id="external-mcp-servers-and-catalog" />
+
+# MCP Catalog & Connections
 
 Agor can attach external MCP servers to individual sessions. Use **Catalog** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
 
@@ -6,18 +13,10 @@ Open **MCP Catalog** from the header’s shop icon or the same icon in the sessi
 
 ## Catalog visibility
 
-Curators can set `hidden: true` on an entry in
-`packages/core/src/mcp-catalog/curated.yaml` to remove it from catalog discovery,
-search, and new catalog installs by name. Hidden names return
-not found on catalog lookup, readiness, connect, and catalog start-session routes;
-there is no request parameter to reveal them. Omit `hidden` or set it to `false`
-and redeploy to offer the entry again. All definitions remain validated.
-
-This is not a runtime disable or authorization revocation. Saved connections,
-grants, attachment, and reconnect through **My Servers** (or an OAuth widget
-naming the saved server ID) retain their existing security and canonical catalog
-policy checks. Full definitions remain available internally for those checks and
-maintenance, even while hidden.
+The Catalog shows servers available for new connections. Hidden entries cannot
+be found or installed through Catalog. Hiding an entry does not revoke an
+existing connection: manage saved servers and reconnect through **My Servers**.
+Existing authentication and access checks still apply.
 
 Catalog availability can change between releases, including when a provider
 requires client approval that Agor cannot complete. A listed entry is not a
@@ -154,7 +153,51 @@ Editing authentication is patch-safe: leaving a saved secret blank preserves it,
 
 Connecting an entry again reuses the same owner-specific install; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
-> **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
+## Connection restrictions and recovery
+
+Your workspace's MCP security mode can restrict which servers are available.
+In `off` and `observe`, agents connect directly and receive reusable credentials;
+editing or removing a saved connection is **not a synchronous revocation boundary**
+for an already-running agent.
+
+In `compatibility` and `enforced`, eligible bounded Streamable HTTP connections go
+through the daemon instead. Reusable provider credentials stay in the daemon;
+the agent receives access scoped to its current task and authorized user, tenant,
+session, and server. This access stops working when the task is no longer live.
+
+These mediated modes do **not** support stdio, legacy SSE endpoint handoff,
+WebSocket, unbounded streaming, or servers requiring `ask` approval. Unsupported
+connections are omitted or fail closed, including on remote executors; they do
+not silently fall back to direct credentials. Some environment templates are
+also unsupported. If a required server disappears, ask an administrator to check
+[connection diagnostics and mode restrictions](/guide/config-yaml#mcp-connection-security).
+
+After a connection, credential, attachment, or permission change:
+
+- **Claude:** **Reconnect MCP** can refresh the connections without restarting
+  the conversation. Tool visibility changes that require a new turn still wait
+  for that turn. An uncertain reconnect timeout blocks further live replacement
+  for the current turn.
+- **Other integrations and historical Claude CLI sessions:** changes apply on
+  the next turn, not midway through the current one.
+- **Sign-in required:** replaced or disconnected OAuth grants may need fresh
+  authorization. Routine access-token refresh does not require reconnecting.
+
+Live recovery applies only in `compatibility` and `enforced`; direct modes apply
+configuration changes on the next turn. An excluded server does not prevent
+other eligible connections from recovering.
+
+**Agor does not replay a failed provider tool call automatically.** If dispatch
+was uncertain, check the external system before asking the agent to repeat an
+action: it may already have happened. In mediated modes, no new request hop is
+admitted after a relevant change commits, but an already-admitted request may
+complete. Disconnecting retires Agor's local grant; it does not revoke the grant
+at the provider.
+
+Only connect providers you trust. The gateway filters accidental credential
+reflection in bounded responses, but cannot stop a malicious provider from
+encoding or exfiltrating a credential it legitimately received. Filtering does
+not cover every short or low-complexity value.
 
 ## Shared OAuth consent and account deletion
 
@@ -215,6 +258,11 @@ token rotation; prefer a forward fix and fresh consent.
 ## Catalog curation for operators
 
 The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
+
+Set `hidden: true` to withdraw an entry from discovery and new installs by name;
+omit it or set it to `false` and redeploy to offer the entry again. Hidden
+entries remain validated and retain the policy checks needed by saved connections.
+Hiding is not credential revocation.
 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
 

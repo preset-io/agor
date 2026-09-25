@@ -317,6 +317,96 @@ stamps the stable operational defaults needed for a working deployment, but deli
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
 
+## MCP connection security
+
+These controls apply to external [MCP connections](/guide/mcp-servers), not Agor's
+own MCP server. Unlike the deployment settings above, the security mode is a
+**per-tenant setting managed through the authenticated API**, not a `config.yaml`
+key. Settings does not expose these controls.
+
+- `GET /mcp-egress/status`: members can inspect their tenant's mode and visible
+  connection diagnostics.
+- `PATCH /mcp-egress/status`: administrators can change the tenant's mode.
+
+### Choosing a mode
+
+| Mode | Credential handling and restrictions |
+| --- | --- |
+| `off` | Agents connect directly and receive reusable credentials. No gateway admission guarantee. |
+| `observe` | Direct connections remain, with secret-free observation logs. No gateway admission guarantee. |
+| `compatibility` | Eligible connections use task-scoped access through the daemon. Ineligible servers are omitted, not given raw credentials. |
+| `enforced` | Mediates the same supported connections and fails closed on raw-secret projection. Requires attestation that pre-gateway executors were terminated. |
+
+For mediated connections, Agor rechecks task, principal, tenant, attachment,
+branch access, server configuration, referenced environment credentials, and
+OAuth grant authority before each outbound hop, including credential refresh.
+**No request hop is admitted after a relevant mutation commits; a request
+admitted before that commit may complete.** This cannot retract an action already
+observed by the provider. Local cancellation is best-effort, not a fleet-wide
+revocation guarantee. A routine token refresh that preserves the grant's binding
+and generation does not invalidate it; disconnect, grant replacement, deletion
+of its consenting account, or loss of access prevents the next admission.
+
+### Supported connections and limits
+
+- **Bounded Streamable HTTP:** `POST` and `DELETE`, with JSON or JSON-only SSE
+  responses ending within 30 seconds and 16 MiB. GET, other methods, redirects,
+  legacy SSE endpoint handoff, WebSocket, and unbounded/non-JSON streaming are
+  refused.
+- **stdio and `ask` approval:** unavailable in both mediated modes. An `ask`
+  rule reports `approval_not_mediated`; interactive approval remains available
+  only through direct modes. `deny` is checked before mediated dispatch.
+- **Environment templates:** absolute `user.env.KEY` references and registered
+  static helpers, including nested/default fallbacks, are supported. `@root`,
+  `this`, relative paths, blocks, partials, dynamic/unknown helpers, and `lookup`
+  are not. An unsupported template reports `template_configuration`; if it
+  might reference user environment data, all user-defined environment keys are
+  scrubbed from that executor while unrelated servers remain available.
+- **Remote/delegated executors:** no raw-secret fallback. A server is unavailable
+  if the integration cannot consume the mediated HTTP connection.
+- **Capacity:** concurrent reservations/calls are bounded to 32 per process,
+  16 per tenant, 4 per task, and 8 per server. `429 egress_capacity_exceeded`
+  calls for bounded backoff, not an unbounded retry loop. Recovery never replays
+  provider operations. Recovery rate limits are process-local; HA nodes do not
+  share one aggregate budget.
+
+Providers remain credential recipients. Response filtering reduces accidental
+reflection but does not contain a malicious provider or guarantee removal of
+short or low-complexity secrets. See [connection recovery and trust](/guide/mcp-servers#connection-restrictions-and-recovery).
+
+### Diagnostics
+
+The status response includes supported/refused transports, process-local
+in-flight requests and credential reservations, and their oldest age. It lists
+up to 100 visible excluded servers with recovery actions and indicates when the
+list is truncated. Admission availability remains unknown without an independent
+probe. Members can inspect these diagnostics but cannot change the mode.
+
+`GET /health` reports mode, database health, and local active-request counts/age.
+Monitor `mcp_egress.proxy_ms`, stable secret-free rejection reasons in logs, and
+database latency. Local metrics do not establish fleet-wide availability. An
+unavailable durable authority check fails closed; a daemon crash cannot undo
+provider work already dispatched. Provider bodies, URLs, and errors are not logged.
+
+### Enabling mediation and rolling back
+
+1. Start at `off`, then use `observe` to inventory direct clients and transports.
+2. Enable `compatibility` and verify that required servers work and that excluded
+   transports, templates, missing grants, and `ask` rules show actionable status.
+3. Terminate every executor created before mediation, independently verify that
+   termination, then attest and enable `enforced`.
+
+Enabling mediation requires no additional schema migration. Changing an MCP
+connection does not invalidate the provider conversation handle or unrelated tasks.
+
+**Downgrading to `observe` or `off` restores direct credential exposure.** An
+administrator may do so even with local requests active, but must explicitly
+acknowledge raw-secret egress; the change is audited. It is an availability escape
+hatch, not a revocation operation. Pending reconnect notices become next-turn
+notices. Rolling back to a binary without gateway support also restores direct
+credentials even if the saved mode says `enforced`; treat it as the same security
+downgrade, not a way to retain enforcement on an older binary.
+
 ## Operator-configured analytics
 
 Analytics is disabled by default. It sends curated analytics events to the configured
