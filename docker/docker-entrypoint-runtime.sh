@@ -25,6 +25,10 @@ rsync -a --delete \
   --exclude=node_modules --exclude=dist --exclude=.turbo \
   "$AGOR_RUNTIME_STATE/checkout/" /app/
 cd /app
+# Optional shared SQLite watch runner; preserve the same data volume.
+if [ "${AGOR_RUNTIME_MODE:-build}" = "watch" ]; then
+  exec node /usr/local/lib/agor/runtime-watch.mjs
+fi
 export TURBO_CACHE_DIR="$AGOR_RUNTIME_STATE/turbo"
 export CI=true pnpm_config_verify_deps_before_run=false
 export NODE_ENV=production

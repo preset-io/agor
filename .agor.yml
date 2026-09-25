@@ -114,7 +114,7 @@ environment:
       description: >-
         EXPERIMENTAL, opt-in Railway SQLite preview. Requires an explicitly adopted
         branch binding and the caller's secure Railway project token/admin password.
-        Stop disables push auto-deploy and retains data; Nuke is protected for adopted volumes.
+        Stop retains data; Nuke replaces the owned volume and requires RAILWAY_API_TOKEN.
         Public app with Agor authentication. Single trusted operator, not Cloud/HA.
     codespaces-sqlite:
       start: >-

@@ -168,8 +168,18 @@ bootstrap service/volume binding for another branch.
   deployments, stop live deployments, and poll until the inventory is inactive.
   Keep the service, domain, database, config and cache. Storage remains billable.
 - **Logs:** read bounded provider logs without SSH, starts, or variable changes.
-- **Nuke:** deliberately refused for this adopted, data-bearing bootstrap volume.
-  Destructive reprovisioning is not implemented; use Stop, not project deletion.
+- **Nuke:** requires the caller's separate `RAILWAY_API_TOKEN` (workspace token).
+  Stops compute, checks that the volume has no other environment/service users,
+  deletes the owned volume, attaches a fresh volume, persists its new ID in
+  `AGOR_MANAGED_VOLUME_STATE`, and drains any automatic deployment. Accounts,
+  credentials, data and caches are reset; service/domain remain. The replacement
+  uses Railway's default volume size. No project or service deletion is performed.
+  Intent is persisted before delete/create: interrupted/unknown reset outcomes
+  block Play and further Nuke rather than blindly repeat destructive operations.
+  An operator must reconcile those outcomes against Railway's inventory. Keep
+  the original checked-in volume ID as the ownership seed; do not overwrite it
+  after Nuke. IaC preserves the state variable, but must be reviewed/reconciled
+  against the replacement volume before any future apply.
 
 The local exclusive lifecycle lock is not a distributed provider lease. A hard
 kill can leave a lock under `~/.agor/railway-lifecycle/`; inspect provider state
@@ -186,3 +196,37 @@ keep the environment stopped. Play does not recreate the trigger. Runtime
 source remains branch-tip based, not an exact-revision Sync guarantee. The domain
 is discovered and checked against the reviewed binding; recreation with a new
 domain requires an explicit binding update.
+
+## Remote watch mode
+
+`AGOR_RUNTIME_MODE=watch` is enabled for this opt-in preview. The existing
+`runtime-build` Docker target now delegates to the same SQLite development
+entrypoint used by Compose instead of packaging/installing a production release.
+No database wipe is needed when switching modes; existing accounts and passwords
+are retained. Set `AGOR_RUNTIME_MODE=build` in the launcher and IaC to return to
+packaged mode (requires Stop/Play). Normal Compose behavior is unchanged.
+
+The public port 3030 proxies `/ui/` and its HMR WebSocket to Vite on 5173;
+API/Socket.IO traffic goes to the daemon on 3031. `/health` is ready only when
+both are reachable. A single exact public hostname is allowed for Vite; no
+wildcard CORS, fixed development password, or provider token is enabled in the
+remote app. This publicly reachable dev server serves this public repository's
+source modules: it is NOT a private-source hosting recipe. Agor APIs still
+require login. Development UI responses use Vite's security behavior rather
+than the production daemon's static-asset CSP pipeline.
+
+After initial startup, one serialized poll fetches the pushed branch every
+10 seconds. Only a changed SHA triggers rsync; node_modules, build outputs and
+caches are preserved. UI edits use HMR; daemon/shared-package edits may restart
+the daemon and interrupt sessions. This is not atomic release deployment:
+watchers can observe intermediate multi-file updates and build errors, just as
+in local development. Polling continues after a bad source update so a later
+fix can recover it. The applied revision is logged as `Watch source updated`;
+the initial deployment build stamp is not a live synchronization status API.
+
+Dependency fingerprint changes, Docker/startup changes and database migrations
+require Stop/Play with a new image rather than being applied live. Network errors
+retain the last synced source. First startup still does the Compose initial
+workspace builds, and watcher CPU/RAM accrue costs while the preview is running.
+The supervisor terminates its process group on Stop; this is a single-container,
+single-controller experiment, not an HA/distributed lifecycle lease.

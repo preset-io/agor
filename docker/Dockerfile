@@ -324,7 +324,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends rsync \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /usr/local/lib/agor /opt/agor-runtime \
   && chown agor:agor /opt/agor-runtime
-COPY docker/runtime-checkout.mjs /usr/local/lib/agor/runtime-checkout.mjs
+COPY docker/runtime-checkout.mjs docker/runtime-watch.mjs /usr/local/lib/agor/
 COPY docker/docker-entrypoint-runtime.sh docker/docker-entrypoint-prod.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint-runtime.sh /usr/local/bin/docker-entrypoint-prod.sh \
   && node /usr/local/lib/agor/runtime-checkout.mjs fingerprint > /opt/agor-dependency-fingerprint

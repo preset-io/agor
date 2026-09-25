@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { resetVolume, VOLUME_STATE_VARIABLE, volumeState } from './volume-reset.mjs';
+
 const API = 'https://backboard.railway.com/graphql/v2';
 const TERMINAL = new Set(['REMOVED', 'FAILED', 'CRASHED', 'SKIPPED']);
 const PENDING = new Set([
@@ -46,12 +48,13 @@ export function selectBinding(bindings, { binding, repository, ref }) {
 }
 
 export class RailwayClient {
-  constructor(token, { request = fetch, signal } = {}) {
+  constructor(token, { request = fetch, signal, accountToken = false } = {}) {
     if (!token)
       throw new Error(
         'Save RAILWAY_API_KEY (Railway environment-scoped project token) in your secure global environment.'
       );
     this.token = token;
+    this.accountToken = accountToken;
     this.request = request;
     this.signal = signal;
   }
@@ -64,7 +67,12 @@ export class RailwayClient {
         signal: this.signal
           ? AbortSignal.any([this.signal, AbortSignal.timeout(30_000)])
           : AbortSignal.timeout(30_000),
-        headers: { 'Content-Type': 'application/json', 'Project-Access-Token': this.token },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.accountToken
+            ? { Authorization: `Bearer ${this.token}` }
+            : { 'Project-Access-Token': this.token }),
+        },
         body: JSON.stringify({ query, variables }),
       });
       if (!response.ok) throw new Error();
@@ -117,12 +125,15 @@ export class RailwayPreview {
     ) {
       throw new Error('Railway ownership/source mismatch; refusing to operate.');
     }
+    const state = volumeState(data.variables[VOLUME_STATE_VARIABLE], t);
+    if (state.phase !== 'ready')
+      throw new Error('Interrupted volume reset; operator reconciliation required');
     const volumes = data.environment.volumeInstances.edges
       .map(({ node }) => node)
       .filter((v) => v.serviceId === t.serviceId);
     if (
       volumes.length !== 1 ||
-      volumes[0].volumeId !== t.volumeId ||
+      volumes[0].volumeId !== state.volumeId ||
       volumes[0].mountPath !== '/home/agor/.agor'
     ) {
       throw new Error('Railway volume binding mismatch; refusing to operate.');
@@ -141,7 +152,7 @@ export class RailwayPreview {
     ) {
       throw new Error('Unexpected Railway deployment trigger; refusing to operate.');
     }
-    return { triggers };
+    return { triggers, volumeId: state.volumeId, state };
   }
   async deployments() {
     const t = this.target;
@@ -163,6 +174,22 @@ export class RailwayPreview {
     }
     throw new Error('Deployment inventory exceeded its safety bound; no cleanup attempted.');
   }
+  async setVolumeState(state) {
+    const t = this.target;
+    await this.client.query(
+      'mutation VolumeState($input:VariableUpsertInput!){variableUpsert(input:$input)}',
+      {
+        input: {
+          projectId: t.projectId,
+          environmentId: t.environmentId,
+          serviceId: t.serviceId,
+          name: VOLUME_STATE_VARIABLE,
+          value: JSON.stringify(state),
+          skipDeploys: true,
+        },
+      }
+    );
+  }
   async setVariables() {
     const password = this.env.RAILWAY_AGOR_ADMIN_PASSWORD;
     if (!password || [...password].length < 15 || Buffer.byteLength(password, 'utf8') > 72) {
@@ -174,6 +201,7 @@ export class RailwayPreview {
     const variables = {
       AGOR_ADMIN_PASSWORD: password,
       AGOR_RUNTIME_TARGET: 'runtime-build',
+      AGOR_RUNTIME_MODE: 'watch',
       AGOR_SOURCE_REPO: `https://github.com/${t.repository}.git`,
       AGOR_SOURCE_BRANCH: t.ref,
       AGOR_MANAGED_BRANCH_ID: t.binding,
@@ -335,12 +363,6 @@ export async function main() {
     throw new Error('Expected start, stop, logs or nuke');
   const bindings = JSON.parse(await readFile(new URL('./bindings.json', import.meta.url), 'utf8'));
   const target = selectBinding(bindings, values);
-  // This adopted volume contains the user's existing account/data. Never turn
-  // a first Play integration into permission to delete it or a shared project.
-  if (action === 'nuke')
-    throw new Error(
-      'This adopted Railway volume is protected. Use Stop to suspend compute; destructive reprovisioning is not enabled.'
-    );
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.once('SIGTERM', abort);
@@ -369,6 +391,16 @@ export async function main() {
       await preview.stop();
       console.log('Railway stopped; GitHub auto-deploy disabled, volume retained.');
     }
+    if (action === 'nuke') {
+      // biome-ignore lint/suspicious/noUndeclaredEnvVars: caller-owned operator credential; never sent to app.
+      const token = process.env.RAILWAY_API_TOKEN;
+      if (!token) throw new Error('Nuke requires a workspace token');
+      await resetVolume(
+        preview,
+        new RailwayClient(token, { accountToken: true, signal: controller.signal })
+      );
+      console.log('Railway reset completed; new empty volume bound, compute stopped.');
+    }
     if (action === 'logs') console.log(await preview.logs());
   } finally {
     if (locked) await rmdir(lock);
@@ -381,7 +413,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   main().catch(() => {
     // No raw exception: network/config/provider errors can contain secrets.
     console.error(
-      'Railway action failed. Check resource binding, secure variables and provider status. No automatic retry or volume deletion was performed.'
+      'Railway action failed. Check resource binding, secure variables and provider status. No automatic retry was performed. Nuke may have changed volume state; inspect before retrying.'
     );
     process.exitCode = 1;
   });

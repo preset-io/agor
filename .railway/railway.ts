@@ -21,7 +21,9 @@ export default defineRailway(() => {
       // Set with secrets.mjs first; never evaluate the password into this graph.
       AGOR_ADMIN_PASSWORD: preserve(),
       AGOR_MANAGED_BRANCH_ID: preserve(),
+      AGOR_MANAGED_VOLUME_STATE: preserve(),
       AGOR_RUNTIME_TARGET: 'runtime-build',
+      AGOR_RUNTIME_MODE: 'watch',
       AGOR_SOURCE_REPO: 'https://github.com/preset-io/agor.git',
       AGOR_SOURCE_BRANCH: 'investigate-railway-environment-variants',
       RAILWAY_DOCKERFILE_PATH: 'docker/Dockerfile',

@@ -247,6 +247,13 @@ fi
 # Runtime deployment overrides are consumed directly from the environment by
 # the daemon. Never materialize them into the operator-owned config.yaml.
 
+if [ "${AGOR_REMOTE_WATCH:-false}" = "true" ]; then
+  echo "Remote watch: retaining accounts; daemon handles secure first-run bootstrap."
+  if [ -n "${AGOR_RUNTIME_ADD_TOOLS:-}" ]; then
+    node /app/docker/runtime-tools.mjs
+    pnpm agor install --sync
+  fi
+else
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring development admin user exists..."
 if [ "${AGOR_ADMIN_PASSWORD:-}" = "admin" ] && [ "${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "true" ]; then
@@ -257,6 +264,8 @@ else
   ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin 2>&1)
 fi
 echo "$ADMIN_OUTPUT"
+
+fi
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)
 # Use dedicated script to query the database
@@ -319,7 +328,7 @@ sleep 3
 # serves the UI on a different port than the daemon API. Forwarded explicitly
 # so vite exposes it as import.meta.env.VITE_DAEMON_URL.
 echo "🎨 Starting UI on port ${UI_PORT:-5173}..."
-VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
+VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}" --strictPort --base "${VITE_BASE_PATH:-/}"
 
 # If UI exits, kill daemon, executor watch, and core watch
 kill $DAEMON_PID 2>/dev/null || true
