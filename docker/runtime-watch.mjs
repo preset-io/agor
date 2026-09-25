@@ -123,6 +123,11 @@ export async function syncIfChanged({ prepare, appliedSha, changedPaths, sync })
   return result.sha;
 }
 
+export function runtimeGit(simpleGit, safeEnv) {
+  return (baseDir) =>
+    simpleGit({ ...(baseDir ? { baseDir } : {}), timeout: { block: 30_000 } }).env(safeEnv);
+}
+
 async function main() {
   const env = process.env;
   const origin = new URL(env.AGOR_BASE_URL).origin;
@@ -132,7 +137,7 @@ async function main() {
   const { simpleGit } = require('simple-git');
   // Do not pass operator credentials to git or source synchronization.
   const safeEnv = { PATH: env.PATH, HOME: env.HOME, GIT_TERMINAL_PROMPT: '0' };
-  const git = (dir) => simpleGit(dir).env(safeEnv).timeout({ block: 30_000 });
+  const git = runtimeGit(simpleGit, safeEnv);
   const options = {
     state: env.AGOR_RUNTIME_STATE,
     repo: env.AGOR_SOURCE_REPO,

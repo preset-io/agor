@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import test from 'node:test';
-import { backendPort, createProxy, requiresRedeploy, syncIfChanged } from './runtime-watch.mjs';
+import {
+  backendPort,
+  createProxy,
+  requiresRedeploy,
+  runtimeGit,
+  syncIfChanged,
+} from './runtime-watch.mjs';
 
 test('public path routing keeps app/HMR separate from authenticated API/socket routes', () => {
   for (const path of ['/ui/', '/ui/@vite/client', '/ui/?token=synthetic'])
@@ -83,4 +90,11 @@ test('readiness preserves the daemon configuration contract consumed by the UI',
       proxy.close();
     }
   }
+});
+
+test('runtime git configures the real simple-git timeout option and strips inherited credentials', async () => {
+  const require = createRequire(new URL('../packages/git/package.json', import.meta.url));
+  const { simpleGit } = require('simple-git');
+  const git = runtimeGit(simpleGit, { PATH: process.env.PATH, HOME: process.env.HOME });
+  assert.match((await git(process.cwd()).revparse(['HEAD'])).trim(), /^[0-9a-f]{40}$/);
 });
