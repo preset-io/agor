@@ -334,35 +334,28 @@ chunks continue through the compatibility aliases.
 
 ### Agent channel history
 
-An admin can let session agents read recent Discord messages by enabling
-`agent_tools: { channel_history: true }` on a row (the **Let session agents
-read channel history** checkbox in Settings, or `channelHistory` in
-`agor_gateway_discord_setup`). It is off by default, and the older
-`agent_tools: []` value still means all agent tools are off.
+To let session agents read recent Discord messages, enable **Let session agents
+read channel history** in Settings → Gateway Channels, or set `channelHistory`
+in `agor_gateway_discord_setup`. The capability is off by default
+(`agent_tools: { channel_history: true }` enables it).
 
-Agents then call `agor_gateway_discord_channel_history_get`:
+Agents use `agor_gateway_discord_channel_history_get`:
 
-- Reads are limited to the row's allowlisted public parent channels and public
-  threads under them. Before reading, Agor confirms that the bot can view the
-  channel and read its history. Discord returns an empty list rather than an
-  error when Read Message History is missing, so a missing permission is
-  reported instead of looking like an empty channel.
-- From a session created by the row, the default target is the parent channel
-  of the session's thread. Other sessions on the row's target branch, such as
-  scheduled sessions, pass `gatewayChannelId` and `discordChannelId`. Callers
-  without session context need admin role or `all` branch permission.
-- Results are chronological: 50 messages by default and at most 200. Use
-  `before` or `after` message-ID cursors to page. Bot and system messages are
-  omitted unless `includeBotMessages` is true. Each call stays within the
-  row's catch-up page, text-size, timeout, and rate-limit bounds; the time and
-  rate-limit bounds apply to the whole call, not to each page. When the page
-  or text-size bound stops the read early, the result has `has_more: true` and a
-  `next_cursor`; running out of time or rate-limit budget is an error.
-- The bot token never reaches the agent. Message text is labeled untrusted.
-  Agor stores no separate copy of Discord history; like any tool result, the
-  messages appear in the calling session's transcript.
+- Reads are limited to allowlisted public parent channels and public threads
+  under them. The bot needs View Channel and Read Message History permissions.
+- In a session created by this gateway channel, the default target is the parent
+  channel of the session's thread. Other sessions on its target branch pass
+  `gatewayChannelId` and `discordChannelId`. Callers without session context
+  need admin role or `all` branch permission.
+- Results are chronological, with 50 messages by default and at most 200. Page
+  with either a `before` or an `after` message-ID cursor. Bot and system messages
+  are omitted unless `includeBotMessages` is true. Reads are bounded by the
+  gateway channel's catch-up limits; use `next_cursor` when `has_more` is true.
 
-No additional Discord permission or intent is needed beyond the setup below.
+Enabling this gives eligible sessions access through the bot, regardless of the
+Agor user's own Discord access. The bot token stays private, and message text
+is labeled untrusted. Returned messages become part of the calling session's
+transcript; Agor keeps no separate copy of Discord history.
 
 ### Setting up Discord
 
