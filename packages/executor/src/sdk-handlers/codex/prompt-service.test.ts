@@ -20,6 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BranchID, SessionUpdate } from '@agor/core/types';
+import type { ThreadEvent } from '@openai/codex-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   BranchRepository,
@@ -1602,7 +1603,7 @@ describe('CodexPromptService - tool payload mapping', () => {
 // running until the daemon safety-net (~15 min later) marked it failed.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('CodexPromptService - event_msg terminal handling (issue #1749)', () => {
-  type CodexPromptServiceTestHarness = CodexPromptService & {
+  type CodexPromptServiceTestHarness = {
     ensureCodexClient(config: { model_instructions_file: string }): Promise<void>;
     refreshClient(apiKey: string): void;
     codex: {
@@ -2060,7 +2061,9 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     try {
       const result = await tool.executePromptWithStreaming(testSessionId, 'go');
       expect(result.rawSdkResponse).toMatchObject({ type: 'turn.completed' });
-      const saved = messagesService.create.mock.calls.flatMap(([message]) => message.content ?? []);
+      const saved = messagesService.create.mock.calls.flatMap(([message]) =>
+        Array.isArray(message.content) ? message.content : []
+      );
       expect(saved).toContainEqual(
         expect.objectContaining({ type: 'tool_result', is_error: true })
       );
@@ -2244,6 +2247,89 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       expect(JSON.stringify(mockSessionsRepo.update.mock.calls)).not.toContain(sentinel);
     } finally {
       for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it.each([
+    '401 Unauthorized: Bearer SENTINEL_TOKEN',
+    '429 Too Many Requests https://SENTINEL_URL.test/?key=secret',
+    'Context window exceeded\nSENTINEL_PROMPT',
+    'Invalid request: SENTINEL_TOOL_INPUT',
+    'runtime failure SENTINEL_RUNTIME',
+  ])('keeps real message-only SDK failures unknown and generic: %s', async (message) => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    // 0.156.1 ThreadError has no status/code/context discriminator.
+    const events: ThreadEvent[] = [
+      { type: 'error', message },
+      { type: 'turn.failed', error: { message } },
+    ];
+    mockStreamEvents = events;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const failure = await drain(service).catch((value: unknown) => value);
+      expect((failure as Error).message).toBe(
+        'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.'
+      );
+      const logs = [...warn.mock.calls, ...error.mock.calls].flat().join('\n');
+      expect(logs).toContain('category=unknown type=UnknownError');
+      expect(logs).toContain('metadata=unavailable');
+      expect(logs).toMatch(/reference=[a-f0-9-]+:\d+ session_id=session-1/);
+      expect(logs).not.toContain('SENTINEL');
+      expect(logs).not.toContain('status=');
+      expect(logs).not.toContain('code=');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('logs structured SDK runtime exceptions without changing the generic interruption', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    // CodexExec.run forwards native child-process errors; paths/spawnargs are not safe.
+    mockStreamEvents = [];
+    mockStreamFailure = Object.assign(new Error('spawn /SENTINEL_PATH ENOENT'), {
+      code: 'ENOENT',
+      syscall: 'spawn /SENTINEL_PATH',
+      path: '/SENTINEL_PATH',
+      spawnargs: ['SENTINEL_PROMPT'],
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const failure = await drain(service).catch((value: unknown) => value);
+      expect((failure as Error).message).toBe(
+        'The Codex turn was interrupted before completion. Retry the prompt.'
+      );
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('event=stream_interrupted'));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('category=runtime_failure type=SystemError code=ENOENT')
+      );
+      expect(JSON.stringify(error.mock.calls)).not.toContain('SENTINEL');
+      expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    } finally {
+      mockStreamFailure = undefined;
+      error.mockRestore();
+    }
+  });
+
+  it('bounds repeated stream errors but retains the terminal failure diagnostic', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    mockStreamEvents = [
+      ...Array.from({ length: 100 }, () => ({ type: 'error', message: 'SENTINEL_RETRY' })),
+      { type: 'turn.failed', error: { message: 'SENTINEL_TERMINAL' } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(drain(service)).rejects.toThrow('Codex failed the turn');
+      expect(warn).toHaveBeenCalledTimes(21); // 20 details plus omission summary
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('omitted=80'));
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('event=turn_failed'));
+      expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain('SENTINEL');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
     }
   });
 
