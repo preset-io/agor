@@ -118,3 +118,101 @@ it('persists two real pointer drags when the first PATCH completes during the se
     expect(node.style.transform).toBe(`translate(${expected.x}px, ${expected.y}px)`)
   );
 });
+
+it('shows skipped-default warnings from an always_new drop response', async () => {
+  const user = { user_id: 'trigger-owner', role: 'member' } as User;
+  const board = {
+    board_id: 'trigger-board',
+    name: 'Trigger browser fixture',
+    objects: {
+      review: {
+        type: 'zone',
+        x: 700,
+        y: 0,
+        width: 740,
+        height: 720,
+        label: 'Review zone',
+        trigger: { behavior: 'always_new', template: 'Review fixture' },
+      },
+    },
+    primary_owner_user_id: user.user_id,
+  } as Board;
+  const branch = {
+    branch_id: 'trigger-branch',
+    board_id: board.board_id,
+    name: 'Trigger regression branch',
+    repo_id: 'trigger-repo',
+    filesystem_status: 'ready',
+    archived: false,
+  } as Branch;
+  const repo = { repo_id: branch.repo_id, slug: 'fixture/trigger' } as Repo;
+  const initial = {
+    object_id: 'trigger-object',
+    board_id: board.board_id,
+    branch_id: branch.branch_id,
+    entity_type: 'branch',
+    position: { x: 0, y: 0 },
+  } as BoardEntityObject;
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    userById: new Map([[user.user_id, user]]),
+    branchById: new Map([[branch.branch_id, branch]]),
+    repoById: new Map([[repo.repo_id, repo]]),
+    boardObjectsByBoardId: new Map([[board.board_id, [initial]]]),
+  });
+  // This is a real-browser consumer regression, not daemon E2E: only the
+  // transport response is stubbed. No prompt/provider is invoked.
+  const create = vi.fn(async () => ({ session: { mcp_defaults_skipped: 2 } }));
+  const client = {
+    service: () => ({
+      create,
+      patch: async (_id: string, data: Partial<BoardEntityObject>) => {
+        const result = { ...initial, ...data };
+        boardObjectPatched(result);
+        return result;
+      },
+      find: async () => ({ data: [], capabilities: [] }),
+      get: async () => ({ capabilities: [] }),
+      on: vi.fn(),
+      off: vi.fn(),
+    }),
+  } as unknown as AgorClient;
+  const view = render(
+    <App>
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <div style={{ width: '100%', height: 500 }}>
+          <SessionCanvas
+            board={board}
+            branches={[branch]}
+            client={client}
+            currentUserId={user.user_id}
+            height={500}
+          />
+        </div>
+      </ConnectionProvider>
+    </App>
+  );
+  const title = await screen.findByText(branch.name);
+  const zone = view.container.querySelector<HTMLElement>('[data-id="review"]')!;
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
+  await act(async () =>
+    userEvent.dragAndDrop(title, zone, {
+      targetPosition: { x: zone.getBoundingClientRect().width / 2, y: 100 },
+    })
+  );
+  await waitFor(() => expect(create).toHaveBeenCalledWith({ zoneId: 'review' }));
+  await waitFor(() =>
+    expect(screen.getByText(/2 unavailable default MCP server\(s\) were skipped/)).toBeVisible()
+  );
+});

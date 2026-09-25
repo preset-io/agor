@@ -629,14 +629,41 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         })
       )!;
       const mcpRepo = new SessionMCPServerRepository(scoped);
-      // Lock in stable order, in this same tenant transaction. A concurrent
+      // Resolve and deduplicate before sorting: mixed UUID/prefix spellings
+      // must not give concurrent creators opposite canonical lock orders.
+      // Keep the number of distinct requested defaults per canonical ID so a
+      // deletion after resolution preserves the skipped-default count.
+      const canonicalIds = new Map<MCPServerID, number>();
+      const handleMcpError = (error: unknown, count: number) => {
+        if (error instanceof MCPServerNotUsableError) {
+          throw new Forbidden('That MCP server is private to another user');
+        }
+        if (error instanceof EntityNotFoundError && error.entityType === 'MCPServer') {
+          if (explicitMcpServerIds === undefined) {
+            skippedMcpDefaults += count;
+            return;
+          }
+          throw new NotFound(
+            'That MCP server was not found. Remove the unavailable selection from MCP Servers and try again.'
+          );
+        }
+        throw error;
+      };
+      const serverRepo = new MCPServerRepository(scoped);
+      for (const requestedId of serverIds) {
+        try {
+          const serverId = await serverRepo.resolveCanonicalId(requestedId);
+          canonicalIds.set(serverId, (canonicalIds.get(serverId) ?? 0) + 1);
+        } catch (error) {
+          handleMcpError(error, 1);
+        }
+      }
+      // Lock in canonical order, in this same tenant transaction. A concurrent
       // delete either wins first (typed missing below) or waits for attachment.
       // SQLite's IMMEDIATE transaction already serializes writers. Do not catch
       // FK/storage errors: PostgreSQL would have aborted the transaction.
-      const serverRepo = new MCPServerRepository(scoped);
-      for (const requestedId of [...serverIds].sort()) {
+      for (const serverId of [...canonicalIds.keys()].sort()) {
         try {
-          const serverId = await serverRepo.resolveCanonicalId(requestedId);
           await lockRowForUpdate(
             scoped,
             scoped,
@@ -644,21 +671,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
             eq(mcpServers.mcp_server_id, serverId)
           );
           await mcpRepo.addServer(createdSession.session_id, serverId);
-          if (!attachedMcpServerIds.includes(serverId)) attachedMcpServerIds.push(serverId);
+          attachedMcpServerIds.push(serverId);
         } catch (error) {
-          if (error instanceof MCPServerNotUsableError) {
-            throw new Forbidden('That MCP server is private to another user');
-          }
-          if (error instanceof EntityNotFoundError && error.entityType === 'MCPServer') {
-            if (explicitMcpServerIds === undefined) {
-              skippedMcpDefaults++;
-              continue;
-            }
-            throw new NotFound(
-              'That MCP server was not found. Remove the unavailable selection from MCP Servers and try again.'
-            );
-          }
-          throw error;
+          handleMcpError(error, canonicalIds.get(serverId)!);
         }
       }
 
@@ -683,9 +698,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         });
       }
     }
-    return skippedMcpDefaults > 0
-      ? { ...created, mcp_defaults_skipped: skippedMcpDefaults }
-      : created;
+    // Enrich the fresh DTO without losing its non-enumerable tenant marker.
+    if (skippedMcpDefaults > 0) created.mcp_defaults_skipped = skippedMcpDefaults;
+    return created;
   }
 
   /**

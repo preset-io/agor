@@ -2203,9 +2203,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       // agent, and label.
                       (async () => {
                         try {
-                          await client
+                          const { session } = (await client
                             .service(`branches/${nodeId}/fire-zone-trigger`)
-                            .create({ zoneId });
+                            .create({ zoneId })) as { session: Session };
+                          const warning = getSessionCreationWarning(session);
+                          if (warning) showWarning(warning, { duration: 10 });
                         } catch (error) {
                           console.error('❌ Failed to execute always_new trigger:', error);
                         }
@@ -2321,7 +2323,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           }
         }, 500);
       },
-      [board, client, batchUpdateObjectPositions, nodes, placementWrites, commentById, setNodes]
+      [
+        board,
+        client,
+        batchUpdateObjectPositions,
+        nodes,
+        placementWrites,
+        commentById,
+        setNodes,
+        showWarning,
+      ]
     );
 
     // Cleanup debounce timers on unmount

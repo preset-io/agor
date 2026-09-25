@@ -218,7 +218,11 @@ describe('SessionsService create-time MCP attachment', () => {
         created_by: user.user_id,
         agentic_tool: 'claude-code',
         status: SessionStatus.IDLE,
-        mcpServerIds: [sharedServer.mcp_server_id, sharedServer.mcp_server_id],
+        mcpServerIds: [
+          sharedServer.mcp_server_id,
+          sharedServer.mcp_server_id,
+          sharedServer.mcp_server_id.replaceAll('-', '').slice(0, 31),
+        ],
       },
       { _agenticConfigResolved: true } as never
     );
@@ -284,7 +288,11 @@ describe('SessionsService create-time MCP attachment', () => {
     await new BranchRepository(db).update(branch.branch_id, {
       mcp_server_ids: [privateServer.mcp_server_id],
     });
-    for (const mcpServerIds of [[privateServer.mcp_server_id], undefined]) {
+    for (const mcpServerIds of [
+      [privateServer.mcp_server_id],
+      [privateServer.mcp_server_id.replaceAll('-', '').slice(0, 31)],
+      undefined,
+    ]) {
       await expect(
         service.create(
           {
