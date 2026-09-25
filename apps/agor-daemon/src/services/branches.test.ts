@@ -885,7 +885,7 @@ describe('BranchesService environment start async behavior', () => {
     });
   });
 
-  it('accepts branch-scoped RPC envelope for updateEnvironment', async () => {
+  it('clears nullable environment fields for internal callers', async () => {
     const { service } = createServiceHarness();
     const branch = {
       branch_id: 'wt-env-rpc' as BranchID,
@@ -911,17 +911,12 @@ describe('BranchesService environment start async behavior', () => {
       return { ...branch, ...(data as object) } as never;
     });
 
-    await service.updateEnvironment({
-      branch_id: branch.branch_id,
-      environment_update: {
-        status: 'stopped',
-        // Remote executor calls cross JSON, where undefined is dropped; null is
-        // the explicit clear sentinel.
-        process: null,
-        last_health_check: null,
-        access_urls: null,
-        health_url: null,
-      },
+    await service.updateEnvironment(branch.branch_id, {
+      status: 'stopped',
+      process: null,
+      last_health_check: null,
+      access_urls: null,
+      health_url: null,
     });
 
     const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as

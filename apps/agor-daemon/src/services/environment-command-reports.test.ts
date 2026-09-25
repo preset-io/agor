@@ -231,6 +231,25 @@ describe('executor-owned command reports', () => {
         } as AuthenticatedParams;
         const scope = { branch_id: branch.branch_id, attempt_id: attempt.id, action: 'start' };
         await reporter.create({ ...scope, kind: 'claim' }, reportParams);
+        const otherUserId = generateId();
+        await expect(
+          reporter.create(
+            {
+              ...scope,
+              kind: 'result',
+              outcome: 'succeeded',
+              message: 'another actor tried to settle the attempt',
+            },
+            {
+              ...reportParams,
+              user: { ...reportParams.user!, user_id: otherUserId, role: 'admin' },
+              authentication: {
+                ...reportParams.authentication!,
+                payload: { ...reportParams.authentication!.payload, sub: otherUserId },
+              },
+            } as AuthenticatedParams
+          )
+        ).rejects.toThrow('actor changed');
         const revokedParams = {
           ...reportParams,
           user: { ...reportParams.user!, role: 'viewer' as const },

@@ -96,10 +96,9 @@ export function renderEnvCell(
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
 
-  // The "open health URL" button uses the branch's own `health_check_url`
-  // (rendered at branch creation, then user-editable via the branch
-  // modal) rather than re-rendering the repo template at click time. This
-  // honours user edits and avoids a daemon round-trip.
+  // Prefer the current runtime's provider-reported health URL, falling back
+  // to the branch's static health URL. Treat either as an untrusted external
+  // destination when opening it.
   const healthUrl = getEnvironmentHealthUrl(branch);
 
   return (
@@ -135,7 +134,7 @@ export function renderEnvCell(
               icon={<GlobalOutlined />}
               onClick={(e) => {
                 e.stopPropagation();
-                window.open(healthUrl, '_blank');
+                window.open(healthUrl, '_blank', 'noopener,noreferrer');
               }}
               style={{ padding: '0 4px' }}
             />

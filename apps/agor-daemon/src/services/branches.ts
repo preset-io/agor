@@ -2530,46 +2530,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return branch;
   }
 
-  /**
-   * Custom method: Update environment status
-   */
+  /** Internal helper for health observations and local lifecycle transitions. */
   async updateEnvironment(
-    idOrData:
-      | BranchID
-      | {
-          branch_id?: BranchID;
-          branchId?: BranchID;
-          environment_update?: BranchEnvironmentUpdate;
-          environmentUpdate?: BranchEnvironmentUpdate;
-        },
-    environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
+    id: BranchID,
+    environmentUpdate: BranchEnvironmentUpdate,
     params?: BranchParams,
     internalOptions?: { beginLifecycle?: boolean }
   ): Promise<BranchWithZoneAndSessions> {
-    const isRpcEnvelope = typeof idOrData === 'object';
-    const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
-    const environmentUpdate = isRpcEnvelope
-      ? (idOrData.environment_update ?? idOrData.environmentUpdate)
-      : (environmentUpdateOrParams as BranchEnvironmentUpdate | undefined);
-    const resolvedParams = isRpcEnvelope
-      ? (environmentUpdateOrParams as BranchParams | undefined)
-      : params;
-
-    if (!id) {
-      throw new Error('Branch ID is required to update environment status');
-    }
-    if (!environmentUpdate) {
-      throw new Error('Environment update is required');
-    }
-    if (resolvedParams?.provider && usesAsyncEnvironmentCommands(this.app.get('config'))) {
-      throw new Forbidden(
-        'Use attempt-scoped environment command reports, not arbitrary environment patches'
-      );
-    }
-
-    const existing = await this.withTenantDatabase(resolvedParams, () =>
-      this.get(id, resolvedParams)
-    );
+    const existing = await this.withTenantDatabase(params, () => this.get(id, params));
 
     const updatedEnvironment = {
       ...existing.environment_instance,
@@ -2628,7 +2596,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // It also preserves branch.updated_at so health bookkeeping does not affect
     // branch ordering or modification semantics every five seconds.
     if (!hasChanged && !internalOptions?.beginLifecycle) {
-      return this.withTenantDatabase(resolvedParams, () =>
+      return this.withTenantDatabase(params, () =>
         this.branchRepo.update(
           id,
           { environment_instance: environmentPatch },
@@ -2638,7 +2606,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const branch = internalOptions?.beginLifecycle
-      ? await this.withTenantDatabase(resolvedParams, async () => {
+      ? await this.withTenantDatabase(params, async () => {
           await this.branchRepo.update(
             id,
             {
@@ -2647,16 +2615,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             },
             { invalidateEnvironmentObservation: true }
           );
-          return this.get(id, resolvedParams);
+          return this.get(id, params);
         })
-      : await this.withTenantDatabase(resolvedParams, () =>
+      : await this.withTenantDatabase(params, () =>
           this.patch(
             id,
             {
               environment_instance: environmentPatch,
               updated_at: new Date().toISOString(),
             },
-            resolvedParams
+            params
           )
         );
 
@@ -2666,14 +2634,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // params — so the realtime publish handler can route it to the tenant's
     // browser clients. Background transitions (health-monitor start→running,
     // executor stop/nuke→stopped) fire outside any request scope, so the tenant
-    // must come from `resolvedParams` here or the event is suppressed and the
+    // must come from `params` here or the event is suppressed and the
     // env card spinner hangs until a manual refresh. See #1750 and
     // emitServiceEvent for why the hook shape matters.
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',
       data: branch,
-      params: resolvedParams,
+      params,
       id,
     });
 
