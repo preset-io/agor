@@ -473,12 +473,13 @@ execution:
 
 ### Troubleshooting
 
-| Symptom                               | Likely cause                          | Fix                                          |
-| ------------------------------------- | ------------------------------------- | -------------------------------------------- |
-| `token rejected: expired`             | Token past its `exp`                  | Session will re-mint on next `GET /sessions` |
-| `token rejected: session … not found` | Token's session was deleted           | Expected — token can no longer be used       |
-| `token rejected: missing sub/uid/tid` | Pre-tenant-binding or malformed token | Fetch / recreate the session to re-mint      |
-| `token rejected: missing jti or exp`  | Pre-expiry-binding or malformed token | Fetch / recreate the session to re-mint      |
+If an external client receives an authentication error, check that it is using
+an Agor personal API key—not a browser login token or another provider's API
+key—and sending it through a supported authentication header.
+
+Agor manages internal session tokens automatically. If authentication errors
+persist in an Agor-launched session, contact your administrator. Do not share
+tokens or paste them into logs or support messages.
 
 ## Related Reading
 

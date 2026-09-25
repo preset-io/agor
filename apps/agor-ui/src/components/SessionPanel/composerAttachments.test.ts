@@ -5,7 +5,6 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
-  isSupportedComposerUploadFile,
   summarizeComposerFileRejections,
   validateComposerFileIntake,
 } from './composerAttachments';
@@ -95,7 +94,7 @@ describe('composerAttachments', () => {
     ).toBe('');
   });
 
-  it('matches the server image allowlist used by composer-native attachments', () => {
+  it('previews only raster images, never SVG', () => {
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: 'image/png' }))).toBe(
       true
     );
@@ -104,60 +103,59 @@ describe('composerAttachments', () => {
     ).toBe(false);
   });
 
-  it('validates composer upload file types before send', () => {
-    expect(
-      isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: 'text/plain' }))
-    ).toBe(true);
-    expect(
-      isSupportedComposerUploadFile(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))
-    ).toBe(false);
+  it('accepts any file type, including YAML, arbitrary binaries, HTML, and SVG', () => {
+    const files = [
+      new File(['a: 1'], 'agor-claw-experiment.agor-board.yaml', { type: 'application/x-yaml' }),
+      new File([new Uint8Array([0, 1, 2, 255])], 'blob.bin', { type: 'application/octet-stream' }),
+      new File(['<script>'], 'page.html', { type: 'text/html' }),
+      new File(['<svg />'], 'chart.svg', { type: 'image/svg+xml' }),
+      new File(['x'], 'Makefile', { type: '' }),
+    ];
 
-    const { acceptedFiles, rejections } = validateComposerFileIntake([
-      new File(['x'], 'notes.txt', { type: 'text/plain' }),
-      new File(['x'], 'unsafe.svg', { type: 'image/svg+xml' }),
-    ]);
+    const { acceptedFiles, rejections } = validateComposerFileIntake(files);
 
-    expect(acceptedFiles.map((file) => file.name)).toEqual(['notes.txt']);
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: expect.objectContaining({ name: 'unsafe.svg' }),
-        reason: 'Unsupported file type: image/svg+xml',
-      }),
-    ]);
+    expect(rejections).toEqual([]);
+    expect(acceptedFiles.map((file) => file.name)).toEqual(files.map((file) => file.name));
   });
 
-  it('infers supported file types from safe extensions when dropped files have empty MIME', () => {
-    expect(isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: '' }))).toBe(true);
+  it('infers known MIME types from extensions when dropped files have empty MIME', () => {
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: '' }))).toBe(true);
 
     const { acceptedFiles, rejections } = validateComposerFileIntake([
       new File(['x'], 'notes.txt', { type: '' }),
       new File(['x'], 'report.pdf', { type: '' }),
-      new File(['<svg />'], 'unsafe.svg', { type: '' }),
+      new File(['x'], 'config.toml', { type: '' }),
     ]);
 
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: expect.objectContaining({ name: 'unsafe.svg' }),
-        reason: 'Unsupported file type: unknown',
-      }),
-    ]);
+    expect(rejections).toEqual([]);
     expect(acceptedFiles.map((file) => [file.name, file.type])).toEqual([
       ['notes.txt', 'text/plain'],
       ['report.pdf', 'application/pdf'],
+      ['config.toml', ''],
     ]);
   });
 
-  it('does not trust extensions when the browser reports an unsupported MIME type', () => {
-    const { acceptedFiles, rejections } = validateComposerFileIntake([
-      new File(['<script>'], 'renamed.txt', { type: 'text/html' }),
-    ]);
+  it('still enforces per-file and combined size limits with clear messages', () => {
+    const policy = { maxFileBytes: 4, maxTotalBytes: 6, maxFiles: 10 };
+    const { acceptedFiles, rejections } = validateComposerFileIntake(
+      [
+        new File(['12345'], 'too-big.yaml', { type: 'application/x-yaml' }),
+        new File(['1234'], 'first.log', { type: 'text/plain' }),
+        new File(['1234'], 'second.log', { type: 'text/plain' }),
+      ],
+      [],
+      policy
+    );
 
-    expect(acceptedFiles).toHaveLength(0);
+    expect(acceptedFiles.map((file) => file.name)).toEqual(['first.log']);
     expect(rejections).toEqual([
       expect.objectContaining({
-        file: expect.objectContaining({ name: 'renamed.txt' }),
-        reason: 'Unsupported file type: text/html',
+        file: expect.objectContaining({ name: 'too-big.yaml' }),
+        reason: 'File is 5 B; the per-file limit is 4 B',
+      }),
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'second.log' }),
+        reason: 'Selected files exceed the 6 B combined upload limit',
       }),
     ]);
   });
@@ -186,9 +184,11 @@ describe('composerAttachments', () => {
     );
   });
 
-  it('prioritizes the cap message when mixed invalid and supported files exceed the cap', () => {
+  it('prioritizes the cap message when mixed oversized and valid files exceed the cap', () => {
     const files = [
-      new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
+      new File([new Uint8Array(51 * 1024 * 1024)], 'huge.bin', {
+        type: 'application/octet-stream',
+      }),
       ...Array.from(
         { length: 11 },
         (_, index) => new File(['x'], `note-${index}.txt`, { type: 'text/plain' })

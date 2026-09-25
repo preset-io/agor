@@ -112,11 +112,12 @@ async function mount(count: number, scheduled = false, notes?: string) {
       </ConnectionProvider>
     </App>
   );
-  await screen.findByRole('button', { name: 'Open session Conversation 0' });
+  await screen.findByRole('button', { name: /^Open session Conversation 0(;|$)/ });
   await waitFor(() => expect(flow).toBeDefined());
   const scroller = scheduled
-    ? (screen.getByRole('button', { name: 'Open session Conversation 0' }).closest('.nowheel')!
-        .firstElementChild as HTMLElement)
+    ? (screen
+        .getByRole('button', { name: /^Open session Conversation 0(;|$)/ })
+        .closest('.nowheel')!.firstElementChild as HTMLElement)
     : view.container.querySelector<HTMLElement>('.ant-tree-list-holder')!;
   await waitFor(() => {
     expect(scroller.clientHeight).toBeGreaterThan(0);
@@ -167,7 +168,7 @@ it.each([2, 100])(
       canvas: container.querySelector('.react-flow__pane')!,
       header: screen.getByText('Wheel routing'),
       control: screen.getByRole('button', { name: 'zoom in' }),
-      row: screen.getByRole('button', { name: 'Open session Conversation 0' }),
+      row: screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ }),
       scroller,
     };
     for (const [location, target] of Object.entries(targets)) {
@@ -201,7 +202,7 @@ it.each([2, 100])(
     const { flow, scroller } = await mount(count);
     const before = flow.getViewport();
     await act(async () =>
-      userEvent.wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), {
+      userEvent.wheel(screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ }), {
         delta: { y: 150 },
       })
     );
@@ -245,7 +246,7 @@ it('remeasures loaded sessions, nested wheel targets, and tree expansion at the 
     await waitFor(() =>
       expect(holder().firstElementChild!.clientHeight > holder().clientHeight).toBe(overflow)
     );
-    const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+    const row = screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ });
     const before = flow.getViewport();
     await act(async () => userEvent.wheel(row.querySelector('span')!, { delta: { x: 12, y: 80 } }));
     if (overflow) {
@@ -305,7 +306,7 @@ it('pans and zooms the canvas over scheduled lists while preserving pagination',
   await act(async () => flow.setViewport(before));
   await settle();
   await act(async () =>
-    userEvent.click(screen.getByRole('button', { name: 'Open session Conversation 20' }))
+    userEvent.click(screen.getByRole('button', { name: /^Open session Conversation 20(;|$)/ }))
   );
   expect(onSessionClick).toHaveBeenCalledWith('session-20');
 });
@@ -425,7 +426,7 @@ it('keeps pinch at both scroll edges and canvas zoom limits from escaping to bro
 it('preserves plain canvas panning, row clicks/keyboard activation, header drag and zoom controls', async () => {
   const { flow, container, onNodeDragStop } = await mount(2);
   const pane = container.querySelector('.react-flow__pane')!;
-  const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+  const row = screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ });
   const before = flow.getViewport();
   expect(wheel(pane, { deltaY: 50 }).defaultPrevented).toBe(true);
   expect(flow.getViewport().y).not.toBe(before.y);
@@ -456,7 +457,7 @@ it('leaves outside-canvas wheel and browser keyboard zoom shortcuts uncanceled',
   const before = flow.getViewport();
   for (const modifiers of [{}, { shiftKey: true }, { altKey: true }]) {
     expect(
-      wheel(screen.getByRole('button', { name: 'Open session Conversation 0' }), modifiers)
+      wheel(screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ }), modifiers)
         .defaultPrevented
     ).toBe(true);
   }
@@ -492,7 +493,7 @@ it('opts panel/popover cards out, cleans up mode changes, and leaves standalone 
       flow.setNodes((nodes) => nodes.map((node) => ({ ...node, data: { ...node.data, ...mode } })))
     );
     await settle();
-    const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+    const row = screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ });
     expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(!mode.panelMode && !mode.inPopover);
   }
   rerender(
@@ -506,7 +507,7 @@ it('opts panel/popover cards out, cleans up mode changes, and leaves standalone 
       />
     </App>
   );
-  const row = await screen.findByRole('button', { name: 'Open session Conversation 0' });
+  const row = await screen.findByRole('button', { name: /^Open session Conversation 0(;|$)/ });
   expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(false);
   unmount();
   expect(wheel(row, { ctrlKey: true }).defaultPrevented).toBe(false);
@@ -514,7 +515,7 @@ it('opts panel/popover cards out, cleans up mode changes, and leaves standalone 
 
 it('retains pointer anchoring and line-mode deltas when forwarding pinch', async () => {
   const { flow, container } = await mount(2);
-  const row = screen.getByRole('button', { name: 'Open session Conversation 0' });
+  const row = screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ });
   const rect = row.getBoundingClientRect();
   // Chromium's constructed WheelEvent uses integer client coordinates.
   const pointer = {

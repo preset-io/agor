@@ -25,6 +25,7 @@ import {
 import {
   ArtifactRepository,
   assertTenantWritable,
+  attachHiddenTenant,
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
@@ -63,6 +64,7 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   messageQueryValidator,
@@ -81,6 +83,7 @@ import type {
   AuthenticatedParams,
   Board,
   BoardID,
+  BoardImportResult,
   Branch,
   DeepReadonly,
   GatewayChannel,
@@ -2429,7 +2432,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace' | 'clean',
+        'ensureTeammateKnowledgeNamespace' | 'clean',
         Array<(context: HookContext) => HookContext>
       >;
     }): void;
@@ -2437,7 +2440,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
       clean: [requireMinimumRole(ROLES.MEMBER, 'clean branches')],
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],
@@ -2469,7 +2471,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('kb/documents')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [typedValidateQuery(knowledgeDocumentQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge documents')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
       update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
@@ -3682,6 +3684,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
   };
 
+  // Import custom methods don't publish automatically; emit `created` manually.
+  // `import_skipped` is diagnostics for the importing caller only, so it stays
+  // out of the broadcast board (keeping the hidden tenant marker).
+  const emitImportedBoardCreated = async (context: HookContext<Board>) => {
+    const result = context.result as BoardImportResult | undefined;
+    if (result) {
+      const { import_skipped: _importSkipped, ...board } = result;
+      emitServiceEvent(app, {
+        path: 'boards',
+        event: 'created',
+        data: attachHiddenTenant(board, result),
+        params: context.params,
+      });
+    }
+    return context;
+  };
+
   const boardUpdateAuthorization = [
     requireMinimumRole(ROLES.MEMBER, 'update boards'),
     ensureCanMutateBoard('update this board'),
@@ -3883,34 +3902,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      fromBlob: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          if (context.result) {
-            emitServiceEvent(app, {
-              path: 'boards',
-              event: 'created',
-              data: context.result,
-              params: context.params,
-            });
-          }
-          return context;
-        },
-      ],
-      fromYaml: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          if (context.result) {
-            emitServiceEvent(app, {
-              path: 'boards',
-              event: 'created',
-              data: context.result,
-              params: context.params,
-            });
-          }
-          return context;
-        },
-      ],
+      fromBlob: [clearRealtimeBranchVisibility, emitImportedBoardCreated],
+      fromYaml: [clearRealtimeBranchVisibility, emitImportedBoardCreated],
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         // Replacing an attached primary is cache-only because its board_id is

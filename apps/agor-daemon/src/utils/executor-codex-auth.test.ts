@@ -1,6 +1,7 @@
 import { writeVerifiedCodexAuthFile } from '@agor/core/codex/credential-file';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CodexAuthCredentialWriteError,
   deleteCodexAuthCredential,
   inspectCodexAuthViaExecutor,
   writeCodexAuthCredential,
@@ -63,6 +64,30 @@ describe('executor Codex auth dispatch', () => {
       ok: false,
       reason: 'unreadable',
     });
+  });
+
+  it('preserves only reviewed write failure codes and elapsed time', async () => {
+    const routing = { delegatedHomeKey: 'alice', userId: 'user-1' };
+    runMock.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'EXECUTOR_TIMEOUT', message: 'secret-token' },
+    });
+    const timeout = await writeCodexAuthCredential('secret-token', routing).catch(
+      (error: unknown) => error
+    );
+    expect(timeout).toBeInstanceOf(CodexAuthCredentialWriteError);
+    expect(timeout).toMatchObject({ code: 'EXECUTOR_TIMEOUT', durationMs: expect.any(Number) });
+    expect((timeout as Error).message).not.toContain('secret-token');
+
+    runMock.mockResolvedValueOnce({
+      success: false,
+      error: { code: 'secret-token', message: 'secret-token' },
+    });
+    const unknown = await writeCodexAuthCredential('secret-token', routing).catch(
+      (error: unknown) => error
+    );
+    expect(unknown).toMatchObject({ code: 'EXECUTOR_FAILURE' });
+    expect((unknown as Error).message).not.toContain('secret-token');
   });
 
   it('routes external auth helpers by trusted user and delegated home key', async () => {

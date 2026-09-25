@@ -39,6 +39,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
   let timer: ReturnType<typeof setInterval> | undefined;
   let sequence = 0;
   let consecutiveFailures = 0;
+  let firstFailureAt = 0;
   let latestPulse: { sequence: number; kind: ExecutorPulseKind; detail?: string } | undefined;
 
   const emit = async () => {
@@ -52,16 +53,21 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
       if (consecutiveFailures > 0) {
         log(
           `[executor.heartbeat] event=recovered task_id=${shortId(String(options.taskId))} ` +
-            `missed_writes=${consecutiveFailures}`
+            `missed_writes=${consecutiveFailures} outage_ms=${Date.now() - firstFailureAt}`
         );
         consecutiveFailures = 0;
       }
       options.onTask?.(task as Task);
-    } catch {
+    } catch (error) {
       consecutiveFailures += 1;
       if (consecutiveFailures === 1) {
+        firstFailureAt = Date.now();
+        // Class/code only: error messages can echo request payloads.
+        const code = (error as { code?: unknown } | null)?.code;
         warn(
           `[executor.heartbeat] event=write_failed task_id=${shortId(String(options.taskId))} ` +
+            `error=${JSON.stringify(error instanceof Error ? error.name : 'unknown')} ` +
+            `code=${typeof code === 'string' || typeof code === 'number' ? code : 'none'} ` +
             'retrying=true'
         );
       }

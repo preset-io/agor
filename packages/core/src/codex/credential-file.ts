@@ -372,6 +372,61 @@ async function currentGeneration(path: string): Promise<number> {
 }
 
 /**
+ * Prepare the empty branch-owned destination for a caller credential overlay.
+ * Unlike credential authority, this file must never contain credentials or be
+ * rewritten: replacing its dentry under a writable parent detaches existing
+ * bubblewrap file mounts in other sessions on the same branch. Exclusive
+ * creation elects one creator across processes; subsequent launches only
+ * validate. In particular, do not use stableInodeWrite here: truncation from
+ * inside a sandbox could instead erase the caller credential mounted on it.
+ *
+ * Uses the credential directory capability (trusted home anchor, no-follow
+ * writable leaf). Unsafe/nonempty placeholders require offline repair, not
+ * automatic replacement while other sandboxes may still be using them.
+ */
+export async function ensureEmptyCredentialMountpoint(
+  target: string,
+  testOptions: Pick<CredentialDirectoryTestOptions, 'afterDirectoryOpenForTest'> = {}
+): Promise<void> {
+  if (process.platform !== 'linux') {
+    throw new Error('Credential mountpoint preparation requires Linux');
+  }
+  const directory = await openCredentialDirectory(target, true);
+  try {
+    await testOptions.afterDirectoryOpenForTest?.();
+    const path = join(directory.path, basename(resolve(target)));
+    // Read-only even when creating. NONBLOCK lets us reject a hostile FIFO
+    // without hanging the daemon; NOFOLLOW also applies to the EEXIST arm.
+    const flags = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    let handle: FileHandle;
+    try {
+      handle = await openPath(path, flags | constants.O_CREAT | constants.O_EXCL, 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      handle = await openPath(path, flags);
+    }
+    try {
+      const metadata = await handle.stat();
+      if (
+        !metadata.isFile() ||
+        metadata.nlink !== 1 ||
+        metadata.size !== 0 ||
+        (metadata.mode & 0o7777) !== 0o600
+      ) {
+        throw new Error(
+          'Credential mountpoint must be an empty private singly-linked regular file'
+        );
+      }
+    } finally {
+      await handle.close();
+    }
+    await syncDirectory(directory);
+  } finally {
+    await directory.handle.close();
+  }
+}
+
+/**
  * Materialize the real files required by the credential authority and sandbox
  * masks without truncating existing authority bytes.
  *

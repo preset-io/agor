@@ -129,6 +129,24 @@ export function shouldRenderLiveTaskProgress(task: Task): boolean {
   return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
 }
 
+/**
+ * Cause-specific explanation for a verified interruption. `heartbeat_lost` also
+ * covers an executor process that exited mid-turn (crash or daemon restart);
+ * the Task's `error_message`, rendered beneath this copy, carries the detail.
+ */
+export function runtimeInterruptionDescription(task: Task): string {
+  const cause = task.termination_request?.cause ?? task.sdk_failure?.reason;
+  const reason =
+    cause === 'startup_timeout'
+      ? 'The executor did not start in time.'
+      : cause === 'heartbeat_lost'
+        ? 'The executor stopped unexpectedly or stopped responding. This can happen when Agor restarts during a task.'
+        : cause === 'sdk_health_failure'
+          ? 'The agent stopped making progress, so Agor ended the task.'
+          : 'Agor interrupted this task.';
+  return `${reason} Agor verified containment before making this session promptable.`;
+}
+
 function RuntimeInterruptionNotice({
   task,
   sessionId,
@@ -166,9 +184,7 @@ function RuntimeInterruptionNotice({
       message="Task interrupted"
       description={
         <>
-          {task.sdk_failure?.reason === 'startup_timeout'
-            ? 'The executor did not start in time. Agor verified containment before making this session promptable.'
-            : 'Agor lost contact with the executor and verified containment before making this session promptable.'}
+          {runtimeInterruptionDescription(task)}
           {task.error_message && <div>{task.error_message}</div>}
         </>
       }
@@ -916,6 +932,28 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           : Array.isArray(message.content) &&
             message.content.some((block) => block.type === 'text' || block.type === 'image'))
     )?.message_id;
+    const promptKey = `task:${task.task_id}:prompt`;
+    // Presentation only, derived from an already-admitted Task. Never insert this
+    // into reactive messages or persist it. Reuse MessageBlock so Markdown, copy,
+    // avatars and attachments have the same layout before/after message delivery.
+    const fallbackPrompt: Message = {
+      message_id: task.task_id,
+      task_id: task.task_id,
+      session_id: task.session_id,
+      role: MessageRole.USER,
+      type: 'user',
+      content: task.full_prompt,
+      content_preview: '',
+      index: task.message_range?.start_index ?? 0,
+      timestamp: task.message_range?.start_timestamp ?? task.created_at,
+      metadata: task.metadata?.is_agor_callback ? { is_agor_callback: true } : undefined,
+    };
+    const promptMessageId =
+      firstPromptId ?? (task.full_prompt ? fallbackPrompt.message_id : undefined);
+    const displayBlocks: Block[] =
+      !firstPromptId && task.full_prompt
+        ? [{ type: 'message', message: fallbackPrompt }, ...blocks]
+        : blocks;
     const hasTools = messages.some(
       (message) =>
         message.tool_uses?.length ||
@@ -1001,7 +1039,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       tell structural transcript changes (new message/chain,
                       task hydration, a block settling after streaming) apart
                       from per-frame streaming churn inside a block. */}
-        {blocks.map((block, blockIndex) => {
+        {displayBlocks.map((block, blockIndex) => {
           // A widget is intentionally the final actionable content of a turn.
           // Render it after the footer and outcome, not inside taskContent.
           if (block.type === 'message' && block.message.type === 'widget_request') return null;
@@ -1014,7 +1052,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               const content = block.message.content as PermissionRequestContent;
               if (content.status === PermissionStatus.PENDING) {
                 // Check if this is the first pending permission request
-                isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
+                isFirstPending = !displayBlocks.slice(0, blockIndex).some((b) => {
                   if (b.type === 'message' && b.message.type === 'permission_request') {
                     const c = b.message.content as PermissionRequestContent;
                     return c.status === PermissionStatus.PENDING;
@@ -1035,11 +1073,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
             // Check if this is the latest agent message (last message block)
             const isLatestMessage =
-              block.message.role === MessageRole.ASSISTANT && blockIndex === blocks.length - 1;
+              block.message.role === MessageRole.ASSISTANT &&
+              blockIndex === displayBlocks.length - 1;
 
+            const isPrompt = block.message.message_id === promptMessageId;
             const messageElement = (
               <MessageBlock
-                key={block.message.message_id}
+                key={isPrompt ? promptKey : block.message.message_id}
+                textChoiceKey={isPrompt ? promptKey : undefined}
                 message={block.message}
                 agentic_tool={agentic_tool}
                 userById={userById}
@@ -1059,23 +1100,29 @@ export const TaskBlock = React.memo<TaskBlockProps>(
               />
             );
             return (
-              <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+              <div
+                key={isPrompt ? promptKey : block.message.message_id}
+                data-conversation-block={getBlockMarker(block)}
+              >
                 {messageElement}
-                {block.message.message_id === firstPromptId && toolDisclosure}
+                {isPrompt && toolDisclosure}
               </div>
             );
           }
           if (block.type === 'agent-chain') {
+            const sourceBlockIndex = blockIndex - (displayBlocks.length - blocks.length);
             // Use first message ID as key for agent chain
             const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
             return (
               <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                 <AgentChain
                   messages={block.messages}
-                  revealRequested={revealLoadedActivity && blockIndex === firstAgentChainIndex}
+                  revealRequested={
+                    revealLoadedActivity && sourceBlockIndex === firstAgentChainIndex
+                  }
                   latestActivity={
-                    blockIndex === pendingActivityChainIndex ||
-                    (blockIndex === lastAgentChainIndex &&
+                    sourceBlockIndex === pendingActivityChainIndex ||
+                    (sourceBlockIndex === lastAgentChainIndex &&
                       latestActivity &&
                       block.messages.some((message) =>
                         messageHasTool(message, latestActivity.toolUseId)
@@ -1084,9 +1131,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       : undefined
                   }
                   isTaskRunning={runtimeLive && !hasPendingApproval}
-                  isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                  isLatest={isLatestTask && sourceBlockIndex === lastAgentChainIndex}
                   hasFollowingResponse={blocks
-                    .slice(blockIndex + 1)
+                    .slice(sourceBlockIndex + 1)
                     .some(
                       (next) =>
                         next.type === 'message' &&
@@ -1217,16 +1264,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       // room than the gaps between blocks inside one. Collapses against the
       // neighbouring turn rather than summing with it.
       <div data-task-block={task.task_id} style={{ marginBlockStart: token.margin }}>
-        {!firstPromptId && (
-          <>
-            {task.full_prompt && (
-              <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
-                {task.full_prompt}
-              </Typography.Paragraph>
-            )}
-            {toolDisclosure}
-          </>
-        )}
+        {!promptMessageId && toolDisclosure}
         <ContextUsageRule
           // Keep the wrapper and metadata for every turn, but reserve the
           // session's context gauge for its latest turn only.

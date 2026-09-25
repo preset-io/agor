@@ -18,6 +18,8 @@ import {
   type ContentBlock,
   type EffortLevel,
   type ExecutorPulseKind,
+  MCP_CLIENT_HINT_HEADER,
+  MCP_CLIENT_HINTS,
   type MCPServer,
   type MessageID,
   type PermissionMode,
@@ -930,7 +932,10 @@ export class OpenCodeTool {
       type: 'remote',
       url: `${await this.dependencies.getDaemonUrl()}/mcp`,
       enabled: true,
-      headers: { Authorization: `Bearer ${mcpToken}` },
+      headers: {
+        Authorization: `Bearer ${mcpToken}`,
+        [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.opencode,
+      },
     };
 
     const servers = await this.dependencies.resolveMcpServers(sessionId as SessionID);

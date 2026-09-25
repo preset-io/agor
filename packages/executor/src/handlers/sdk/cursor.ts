@@ -24,7 +24,7 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS, MessageRole } from '@agor/core/types';
 import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -211,6 +211,7 @@ async function buildCursorMcpServers(args: {
       url: `${daemonUrl}/mcp`,
       headers: {
         Authorization: `Bearer ${args.mcpToken}`,
+        [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.cursor,
       },
     };
   }

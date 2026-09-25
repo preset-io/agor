@@ -43,5 +43,6 @@ export * from './terminal';
 export * from './ui';
 export * from './upload';
 export * from './user';
+export * from './user-api-key';
 export * from './utils';
 export * from './widget';

@@ -123,7 +123,7 @@ function mount(
 const row = (title: string) =>
   screen.getByRole('button', { name: new RegExp(`^Open session ${title}`) });
 
-it('renders borderless single-line rows with status carried by a trailing dot', async () => {
+it('renders single-line rows with a selected inset border and trailing status mark', async () => {
   const { onCreateSession } = mount();
   const expectedHeight = isMobileViewport()
     ? MOBILE_TOUCH_TARGET
@@ -133,7 +133,7 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     const element = row(session.title!);
     const style = getComputedStyle(element);
     expect(style.borderTopWidth).toBe('0px');
-    expect(style.boxShadow).toBe('none');
+    expect(style.boxShadow === 'none').toBe(session.session_id !== 'review');
     expect(style.outlineStyle).toBe('none');
     expect(element.getBoundingClientRect().height).toBeCloseTo(expectedHeight, 0);
     const caret = element.closest('.ant-tree-treenode')!.querySelector('.ant-tree-switcher svg');
@@ -154,15 +154,22 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     expect(dot.getBoundingClientRect().right).toBeLessThanOrEqual(panelRight);
   }
 
-  // Rows sit flush: their own hover/selection fill separates them, so pitch is the row height.
+  // A one-size-unit gap keeps adjacent hover/selection fills from touching.
+  const rowGap = theme.getDesignToken(config).sizeUnit;
   expect(
     row('Astra recheck — Abuse').getBoundingClientRect().top -
       row('Security agor').getBoundingClientRect().top
-  ).toBeCloseTo(expectedHeight, 0);
+  ).toBeCloseTo(expectedHeight + rowGap, 0);
+  // Level guides reach across the gap, so a subtree still reads as one group.
+  const guide = row('Astra recheck — Abuse')
+    .closest('.ant-tree-treenode')!
+    .querySelector('.ant-tree-indent-unit')!;
+  expect(getComputedStyle(guide, '::before').bottom).toBe(`${-rowGap}px`);
 
   expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
+  // Running is a spinner, distinct from the pulsing dots that wait on the user.
   expect(within(row('Availability fixes')).getByRole('img', { name: 'Running' })).toHaveClass(
-    'status-dot-run'
+    'anticon-spin'
   );
   expect(
     within(row('Execution security — implementation')).getByRole('img', {
@@ -180,7 +187,7 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     within(row('Astra recheck — Abuse')).queryByRole('img', { name: /Ready|Running|failed/ })
   ).toBeNull();
 
-  // Selection is a fill, not the card-mode dashed outline.
+  // Selection retains its fill alongside the inset border.
   expect(getComputedStyle(row('Independent availability')).backgroundColor).not.toBe(TRANSPARENT);
   expect(getComputedStyle(row('Astra recheck — Abuse')).backgroundColor).toBe(TRANSPARENT);
 
@@ -212,7 +219,7 @@ it('shows the agent logo on every row and hides only the implied spawn marker', 
 
 it('nests rows one level inside their section with one chevron style', () => {
   mount();
-  const step = theme.getDesignToken(config).controlHeightSM;
+  const step = theme.getDesignToken(config).controlHeightXS;
 
   const headerChevron = document.querySelector('.ant-collapse-expand-icon svg')!;
   const treeChevron = screen
@@ -222,15 +229,35 @@ it('nests rows one level inside their section with one chevron style', () => {
   const tree = treeChevron.getBoundingClientRect();
   expect(header.width).toBeCloseTo(tree.width, 1);
   expect(getComputedStyle(headerChevron).color).toBe(getComputedStyle(treeChevron).color);
-  // Sections are containers: top-level rows sit exactly one indent step inside the header.
-  expect(tree.left + tree.width / 2 - (header.left + header.width / 2)).toBeCloseTo(step, 0);
-  expect(
-    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left -
-      screen.getByText('Sessions').getBoundingClientRect().left
-  ).toBeCloseTo(step, 0);
-
-  // A guide runs under the section chevron, and every nested level draws its own guide.
+  // Sections are containers: a guide runs under the section chevron and top-level rows'
+  // chevron column starts one size unit past it, so the section indent doesn't stack with it.
   const body = treeChevron.closest('.ant-collapse-body')!;
+  const guideX = body.getBoundingClientRect().left;
+  expect(guideX).toBeCloseTo(header.left + header.width / 2, 0);
+  const rootSwitcher = treeChevron.closest('.ant-tree-switcher')!.getBoundingClientRect();
+  // One size unit (plus the guide's own line) keeps the section guide and the
+  // first level guide from crowding each other.
+  const offset = rootSwitcher.left - guideX - theme.getDesignToken(config).sizeUnit;
+  expect(offset).toBeGreaterThanOrEqual(0);
+  expect(offset).toBeLessThanOrEqual(1);
+  expect(tree.left + tree.width / 2 - rootSwitcher.left).toBeCloseTo(step / 2, 0);
+  // The chevron target spans the compact column plus the row's empty lead-in, and its
+  // whole area toggles: the overhang sits above the row and inside the tree viewport.
+  const chevronButton = screen.getByRole('button', { name: 'Collapse Security agor' });
+  const target = chevronButton.getBoundingClientRect();
+  const tokens = theme.getDesignToken(config);
+  expect(target.width).toBeCloseTo(tokens.controlHeightXS + tokens.paddingXXS, 0);
+  expect(target.height).toBeCloseTo(tokens.controlHeightSM, 0);
+  const midY = target.top + target.height / 2;
+  for (const x of [target.left + 1, target.right - 1]) {
+    expect(chevronButton.contains(document.elementFromPoint(x, midY))).toBe(true);
+  }
+  // Rows stay visibly nested inside the section label.
+  expect(
+    row('Security agor').querySelector('.tool-icon')!.getBoundingClientRect().left
+  ).toBeGreaterThan(screen.getByText('Sessions').getBoundingClientRect().left);
+
+  // Every nested level draws its own guide.
   expect(getComputedStyle(body).borderInlineStartWidth).not.toBe('0px');
   const childUnit = row('Astra recheck — Abuse')
     .closest('.ant-tree-treenode')!
@@ -406,11 +433,11 @@ it('keeps gateway channels on the title line and scheduled runs on the title col
   expect(within(gateway).getByText('#eng-deploys')).toBeVisible();
   expect(gateway.querySelector('.ant-tag')).toBeNull();
   expect(gateway.getBoundingClientRect().height).toBeCloseTo(expectedHeight, 0);
-  // Paged scheduled rows keep the same flush rhythm as tree rows.
+  // Paged scheduled rows keep the same rhythm (row plus one-size-unit gap) as tree rows.
   expect(
     row('Weekly security digest').getBoundingClientRect().top -
       row('Nightly dependency audit').getBoundingClientRect().top
-  ).toBeCloseTo(expectedHeight, 0);
+  ).toBeCloseTo(expectedHeight + theme.getDesignToken(config).sizeUnit, 0);
 
   // Every section shares one title column and the same read-state tone.
   const title = (name: string) => within(row(name)).getByText(new RegExp(`^${name}`));
@@ -451,6 +478,30 @@ it('lets read sessions recede one step while sessions that need you stay full st
   probe.remove();
 });
 
+it('shows a title tooltip only when the title is truncated, without taking over the row', async () => {
+  const { onSessionClick } = mount();
+  const title = (name: string) => within(row(name)).getByText(new RegExp(`^${name}`));
+
+  // Titles that fit get no tooltip, native or otherwise.
+  const fits = title('Security agor');
+  expect(fits).not.toHaveAttribute('title');
+  expect(fits.scrollWidth).toBeLessThanOrEqual(fits.clientWidth);
+  await act(async () => page.elementLocator(fits).hover());
+  await act(() => new Promise((resolve) => setTimeout(resolve, 800)));
+  expect(screen.queryByRole('tooltip')).toBeNull();
+
+  const fullTitle = 'Execution security — implementation and regression validation';
+  const truncated = title('Execution security — implementation');
+  expect(truncated).not.toHaveAttribute('title');
+  expect(truncated.scrollWidth).toBeGreaterThan(truncated.clientWidth);
+  await act(async () => page.elementLocator(truncated).hover());
+  expect(await screen.findByRole('tooltip', {}, { timeout: 2000 })).toHaveTextContent(fullTitle);
+
+  // The row still opens its session on click.
+  await act(async () => page.elementLocator(truncated).click());
+  expect(onSessionClick).toHaveBeenCalledExactlyOnceWith('exec-impl');
+});
+
 it('re-renders memoized rows when a context-only input changes', async () => {
   const { onOpenSessionSettings, rerenderWith } = mount();
   const replacement = vi.fn();
@@ -466,7 +517,7 @@ it('re-renders memoized rows when a context-only input changes', async () => {
   expect(onOpenSessionSettings).not.toHaveBeenCalled();
 });
 
-it('tints failed rows, drops the logo outline, and gives the status mark trailing room', () => {
+it('tints failed rows, drops the logo outline, and mirrors row insets', () => {
   mount();
   const token = theme.getDesignToken(config);
   const probe = document.createElement('span');
@@ -487,8 +538,10 @@ it('tints failed rows, drops the logo outline, and gives the status mark trailin
   );
 
   const style = getComputedStyle(row('Security agor'));
-  expect(parseFloat(style.paddingRight)).toBe(token.paddingSM);
-  expect(parseFloat(style.paddingLeft)).toBe(token.paddingXXS);
+  // Equal insets on both sides keep the status mark mirrored with the logo, and
+  // keep the fill from hugging either.
+  expect(parseFloat(style.paddingRight)).toBe(token.paddingXS);
+  expect(parseFloat(style.paddingLeft)).toBe(token.paddingXS);
   probe.remove();
 });
 
@@ -525,4 +578,56 @@ it.each([
   const channels = (value: string) => value.match(/\d+/g)!.slice(0, 3).map(Number);
   const [a, b] = [channels(unselected), channels(selected)];
   expect(Math.max(...a.map((v, i) => Math.abs(v - b[i]!)))).toBeGreaterThan(10);
+});
+
+it('shares the fill-mode panel between sessions, scheduled runs, and gateway sessions', async () => {
+  const gatewaySource = {
+    channel_id: 'channel-1',
+    channel_type: 'slack',
+    channel_name: '#eng-deploys',
+    thread_id: 'thread-1',
+  };
+  const mixed = (scheduledCount: number) => [
+    ...Array.from({ length: 30 }, (_, i) => makeSession(`manual-${i}`, `Manual ${i}`)),
+    ...Array.from({ length: scheduledCount }, (_, i) =>
+      makeSession(`run-${i}`, `Scheduled ${i}`, {
+        scheduled_from_branch: true,
+        scheduled_run_at: 1_780_527_200_000 - i * 60_000,
+      })
+    ),
+    ...Array.from({ length: 20 }, (_, i) =>
+      makeSession(`gateway-${i}`, `Gateway ${i}`, {
+        custom_context: { gateway_source: { ...gatewaySource, thread_id: `thread-${i}` } },
+      } as Partial<Session>)
+    ),
+  ];
+  const section = (label: string) =>
+    screen.getByText(label).closest<HTMLElement>('.ant-collapse')!.getBoundingClientRect();
+  const labels = ['Sessions', 'Scheduled Runs', 'Gateway Sessions'];
+  const scheduledList = () =>
+    row('Scheduled 0').closest<HTMLElement>('.nowheel')!.firstElementChild as HTMLElement;
+
+  // Every section overflows: each gets an equal share, all fit, and each scrolls within.
+  mount(mixed(30), { fillAvailableHeight: true });
+  const panel = screen.getByTestId('panel').getBoundingClientRect();
+  await waitFor(() => {
+    const heights = labels.map((label) => section(label).height);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(2);
+    expect(section('Gateway Sessions').bottom).toBeLessThanOrEqual(panel.bottom);
+  });
+  expect(scheduledList().scrollHeight).toBeGreaterThan(scheduledList().clientHeight);
+  cleanup();
+
+  // A short scheduled list caps at its rows and hands the rest to its siblings.
+  mount(mixed(2), { fillAvailableHeight: true });
+  await waitFor(() => {
+    expect(scheduledList().scrollHeight).toBe(scheduledList().clientHeight);
+    // The list is exactly as tall as its rows, not an equal share of the panel.
+    expect(scheduledList().clientHeight).toBeCloseTo(
+      (scheduledList().firstElementChild as HTMLElement).offsetHeight,
+      0
+    );
+    expect(section('Scheduled Runs').height).toBeLessThan(section('Sessions').height);
+    expect(section('Sessions').height).toBeCloseTo(section('Gateway Sessions').height, 0);
+  });
 });

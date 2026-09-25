@@ -79,6 +79,8 @@ import type {
   BoardComment,
   BoardCommentReposition,
   BranchArchiveOrDeleteOptions,
+  CreateUserApiKeyRequest,
+  CurrentUserIdentity,
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
@@ -113,9 +115,11 @@ import {
   isBranchArchiveOrDeleteOptions,
   isCanonicalFullUuid,
   isTaskPendingDispatch,
+  isUserApiKeySource,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
+  normalizeRole,
   ROLES,
   SessionStatus,
   TaskStatus,
@@ -124,6 +128,7 @@ import {
 import { isNotFoundError } from '@agor/core/utils/errors';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import {
   gatewaySlackUploadExecutorCommandId,
@@ -299,8 +304,15 @@ import {
   enforceTotalUploadSize,
   getUploadLimits,
   type StagedMulterFile,
+  uploadContentHeaders,
 } from './utils/upload.js';
-import { toUploadErrorResponse, type UploadFailureStage } from './utils/upload-http-error.js';
+import {
+  classifyUploadAuthFailure,
+  toUploadErrorResponse,
+  type UploadAuthFailureDiagnostics,
+  type UploadFailureStage,
+  uuidOrUndefined,
+} from './utils/upload-http-error.js';
 import { getUploadStagingStore } from './utils/upload-staging.js';
 import { WIDGET_RESOLUTION_STORE_KEY, WidgetResolutionStore } from './widgets/resolution-store.js';
 import { resolveWidget } from './widgets/submissions.js';
@@ -808,6 +820,14 @@ export async function authenticateBearerHttpRequest(input: {
   };
 }
 
+/** Expose a bounded auth-failure reason to the upload route's failure log. */
+// biome-ignore lint/suspicious/noExplicitAny: Express 5 response locals
+function recordUploadAuthFailure(res: any, diagnostics: UploadAuthFailureDiagnostics): void {
+  res.locals ??= {};
+  res.locals.uploadFailureCode = `AUTH_${diagnostics.reason.toUpperCase()}`;
+  res.locals.uploadAuthFailure = diagnostics;
+}
+
 export function createUploadAuthMiddleware(input: {
   authentication: {
     create(
@@ -823,17 +843,27 @@ export function createUploadAuthMiddleware(input: {
       const authHeader = req.headers.authorization;
       const token = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
       if (!token) {
+        recordUploadAuthFailure(res, { reason: 'missing_bearer' });
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      req.feathers = await authenticateBearerHttpRequest({
-        authentication: input.authentication,
-        multiTenancy: input.multiTenancy,
-        headers: req.headers,
-        token,
-      });
+      try {
+        req.feathers = await authenticateBearerHttpRequest({
+          authentication: input.authentication,
+          multiTenancy: input.multiTenancy,
+          headers: req.headers,
+          token,
+        });
+      } catch (error) {
+        // Decoded without verification purely so the failure log can report
+        // the token's claimed subject and expiry; it grants nothing.
+        const unverified = jwt.decode(token, { json: true });
+        recordUploadAuthFailure(res, classifyUploadAuthFailure(error, unverified));
+        return res.status(401).json({ error: 'Authentication required' });
+      }
       next();
-    } catch {
+    } catch (error) {
+      recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
   };
@@ -2945,6 +2975,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           code: res.locals.uploadFailureCode ?? `HTTP_${res.statusCode}`,
           status: res.statusCode,
           type: res.locals.uploadFailureType ?? 'request',
+          route: '/sessions/:sessionId/upload',
+          session_id: uuidOrUndefined(req.params?.sessionId),
+          // Verified identity once authentication succeeded; otherwise the
+          // rejected token's claimed (unverified) subject and expiry.
+          user_id: (req as { feathers?: AuthenticatedParams }).feathers?.user?.user_id,
+          auth_reason: res.locals.uploadAuthFailure?.reason,
+          token_sub_unverified: res.locals.uploadAuthFailure?.claimedSubject,
+          token_expires_at_unverified: res.locals.uploadAuthFailure?.claimedExpiresAt,
         })
       );
     });
@@ -3089,22 +3127,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           res.setHeader('Content-Range', `bytes ${offset}-${offset + length - 1}/${upload.size}`);
         }
         const stream = await store.read({ ...readOwner, offset, ...(length ? { length } : {}) });
-        res.setHeader('Content-Type', upload.mimeType || 'application/octet-stream');
+        // Never echo an arbitrary client-declared MIME: see uploadContentHeaders.
+        for (const [name, value] of Object.entries(uploadContentHeaders(upload))) {
+          res.setHeader(name, value);
+        }
         res.setHeader('Content-Length', String(length ?? upload.size));
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        const safeInline = new Set([
-          'image/png',
-          'image/jpeg',
-          'image/gif',
-          'image/webp',
-          'application/pdf',
-        ]);
-        res.setHeader(
-          'Content-Disposition',
-          `${safeInline.has(upload.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`
-        );
         stream.once('error', (error) => res.destroy(error as Error));
         res.once('close', () =>
           (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
@@ -3993,12 +4021,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
+    // Literal on purpose: the realtime-publish and tenant-classification source
+    // scans read registered paths from this file (USER_API_KEYS_SERVICE_PATH).
     '/api/v1/user/api-keys',
     {
       async find(params: AuthenticatedParams) {
         return userApiKeysService.find(params);
       },
-      async create(data: { name: string }, params: AuthenticatedParams) {
+      async create(data: CreateUserApiKeyRequest, params: AuthenticatedParams) {
         return userApiKeysService.create(data, params);
       },
       async patch(id: string, data: { name?: string }, params: AuthenticatedParams) {
@@ -4016,6 +4046,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       patch: { role: ROLES.MEMBER, action: 'update API keys' },
       remove: { role: ROLES.MEMBER, action: 'delete API keys' },
     },
+    requireAuth
+  );
+
+  // Credential self-check for non-browser clients (`agor login --api-key`).
+  // Returns only the caller's own identity and the tenant the request was
+  // authenticated in, so a raw key can be validated without exchanging it for
+  // refresh-capable browser tokens.
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/me', // USER_IDENTITY_SERVICE_PATH; literal for the source scans
+    {
+      async find(params: AuthenticatedParams): Promise<CurrentUserIdentity> {
+        const user = params.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+        const authentication = params.authentication as
+          | { strategy?: string; api_key_id?: unknown; api_key_source?: unknown }
+          | undefined;
+        return {
+          user_id: user.user_id as UserID,
+          email: user.email,
+          name: (user as { name?: string }).name,
+          role: normalizeRole(user.role),
+          tenant_id: params.tenant?.tenant_id,
+          auth_strategy: authentication?.strategy,
+          ...(authentication?.strategy === 'api-key' &&
+          typeof authentication.api_key_id === 'string'
+            ? {
+                api_key_id: authentication.api_key_id,
+                api_key_source: isUserApiKeySource(authentication.api_key_source)
+                  ? authentication.api_key_source
+                  : 'manual',
+              }
+            : {}),
+        };
+      },
+    },
+    { find: { role: ROLES.VIEWER, action: 'read own identity' } },
     requireAuth
   );
 

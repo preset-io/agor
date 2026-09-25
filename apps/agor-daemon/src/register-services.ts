@@ -14,7 +14,10 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
-import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
+import {
+  ensureEmptyCredentialMountpoint,
+  openCredentialFileForBind,
+} from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
   getBranchHomePath,
@@ -163,6 +166,7 @@ import type {
 } from './declarations.js';
 import {
   containExecutorProcess,
+  isShutdownContainmentActive,
   markExecutorProcessExited,
   retainExecutorContainmentFence,
   trackExecutorProcess,
@@ -748,7 +752,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'update',
       'patch',
       'remove',
-      'updateEnvironment',
       'ensureTeammateKnowledgeNamespace',
       'clean',
     ],
@@ -1550,9 +1553,10 @@ function createExecuteHandler(
           // Bubblewrap requires an existing file mountpoint. Keep the
           // branch-owned inode deliberately empty: the caller credential is
           // visible only as a per-executor mount and is never copied into
-          // shared branch state. The capability-based writer refuses symlinked
-          // parent directories and replaces an adversarial final symlink.
-          await mutateCredentialFile({ target: destination, content: '' });
+          // shared branch state. Never replace this dentry: existing executors
+          // on this branch have their caller overlays attached to it. Unsafe
+          // or nonempty mountpoints fail closed rather than being repaired live.
+          await ensureEmptyCredentialMountpoint(destination);
           branchCodexAuthBind = {
             source: join(credentialRoute.codexHome, 'auth.json'),
             destination,
@@ -1860,7 +1864,16 @@ function createExecuteHandler(
           mode: spawnContext.mode,
           outcome: code === 0 ? 'success' : code === null ? 'unknown' : 'failure',
         });
-        console.log(`${logPrefix} Exited with code ${code}`);
+        // One structured line per prompt-executor exit. A matching
+        // `[task.termination] event=request_committed cause=heartbeat_lost`
+        // for the same task means this exit interrupted an active turn.
+        console.log(
+          `[executor.exit] event=process_exited task_id=${shortId(taskId)} ` +
+            `session_id=${shortId(sessionId)} mode=${spawnContext.mode} ` +
+            `pid=${localExecutorPid ?? 'none'} code=${code ?? 'none'} ` +
+            `signal=${spawnContext.signal ?? 'none'} ` +
+            `daemon_shutdown=${isShutdownContainmentActive(app)}`
+        );
 
         if (spawnContext.mode === 'local') {
           markExecutorProcessExited(sessionId, localExecutorPid, app);

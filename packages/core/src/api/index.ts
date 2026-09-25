@@ -22,9 +22,9 @@ import type {
   BoardCommentPatch,
   BoardCommentReposition,
   BoardExportBlob,
+  BoardImportResult,
   Branch,
   BranchCapabilityPolicy,
-  BranchEnvironmentUpdate,
   CancelQueuedTasksInput,
   CapabilityPolicyWorkspacePreferences,
   CardType,
@@ -669,7 +669,7 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from a JSON blob
    */
-  fromBlob(blob: BoardExportBlob, params?: Params): Promise<Board>;
+  fromBlob(blob: BoardExportBlob, params?: Params): Promise<BoardImportResult>;
 
   /**
    * Export board to YAML string
@@ -679,7 +679,10 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from YAML string
    */
-  fromYaml(data: { yaml?: string; content?: string } | string, params?: Params): Promise<Board>;
+  fromYaml(
+    data: { yaml?: string; content?: string } | string,
+    params?: Params
+  ): Promise<BoardImportResult>;
 
   /**
    * Clone an existing board with a new name
@@ -777,22 +780,6 @@ export interface BranchesService extends AgorService<Branch> {
    * Remove branch from board
    */
   removeFromBoard(id: string, params?: Params): Promise<Branch>;
-
-  /**
-   * Update environment status
-   */
-  updateEnvironment(
-    data:
-      | {
-          branch_id?: string;
-          branchId?: string;
-          environment_update?: BranchEnvironmentUpdate;
-          environmentUpdate?: BranchEnvironmentUpdate;
-        }
-      | string,
-    environmentUpdate?: BranchEnvironmentUpdate,
-    params?: Params
-  ): Promise<Branch>;
 
   /**
    * Start branch environment
@@ -966,7 +953,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromBlob = (
     boardsService as unknown as {
-      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<Board>;
+      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromBlob?.bind(boardsService);
 
@@ -991,7 +978,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromYaml = (
     boardsService as unknown as {
-      fromYaml?: (data: unknown, params?: Params) => Promise<Board>;
+      fromYaml?: (data: unknown, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromYaml?.bind(boardsService);
 
@@ -1374,7 +1361,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace', 'clean');
+    branchesService.methods('ensureTeammateKnowledgeNamespace', 'clean');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }

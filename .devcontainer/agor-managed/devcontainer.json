@@ -1,0 +1,23 @@
+{
+  "name": "Agor managed Codespaces SQLite (experimental)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
+  "forwardPorts": [3000, 5000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Agor daemon",
+      "onAutoForward": "silent"
+    },
+    "5000": {
+      "label": "Agor UI",
+      "onAutoForward": "silent"
+    }
+  },
+  "postStartCommand": "bash .devcontainer/agor-managed/start-agor-sqlite.sh",
+  "remoteUser": "vscode"
+}

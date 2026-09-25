@@ -135,11 +135,21 @@ describe('Knowledge discovery', () => {
               };
             if (path === 'kb/documents')
               return {
-                findAll: (params?: { query?: Record<string, unknown> }) =>
-                  docService.find({
-                    user,
-                    query: restQuery(params?.query),
-                  } as KnowledgeDocumentParams),
+                // Mirrors the client's findAll(): walk server pages to the total.
+                findAll: async (params?: { query?: Record<string, unknown> }) => {
+                  const rows = [];
+                  let total = Number.POSITIVE_INFINITY;
+                  while (rows.length < total) {
+                    const page = await docService.find({
+                      user,
+                      query: restQuery({ ...params?.query, $skip: rows.length }),
+                    } as KnowledgeDocumentParams);
+                    total = page.total;
+                    if (page.data.length === 0) break;
+                    rows.push(...page.data);
+                  }
+                  return rows;
+                },
                 get: (id: string, params?: { query?: Record<string, unknown> }) =>
                   docService.get(id, {
                     user,

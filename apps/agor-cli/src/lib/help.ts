@@ -54,7 +54,9 @@ export default class CustomHelp extends Help {
     this.log('');
     if (connectedTarget) {
       const probe = await probeAgorDaemon(connectedTarget.url);
-      const identityMatches = probe.deploymentId === connectedTarget.deploymentId;
+      const identityMatches =
+        probe.running &&
+        (!connectedTarget.pinDeployment || probe.deploymentId === connectedTarget.deploymentId);
       this.log(
         `  ${identityMatches ? chalk.green('●') : chalk.red('●')} Connected: ${chalk.bold(connectedTarget.url)}`
       );

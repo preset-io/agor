@@ -10,25 +10,7 @@ import {
   wrapRegisterTool,
 } from './register-tool-proxy.js';
 
-/** Bounded protocol labels, not client-provided method strings or request IDs. */
-const REQUEST_METHODS = new Set([
-  'initialize',
-  'ping',
-  'server/discover',
-  'tools/list',
-  'tools/call',
-  'resources/list',
-  'resources/templates/list',
-  'resources/read',
-  'notifications/initialized',
-  'notifications/cancelled',
-]);
-
-function requestMethod(body: unknown): string {
-  if (Array.isArray(body)) return 'batch';
-  const method = body && typeof body === 'object' ? (body as { method?: unknown }).method : null;
-  return typeof method === 'string' && REQUEST_METHODS.has(method) ? method : 'other';
-}
+import { requestMethod } from './request-method.js';
 
 /**
  * One request span includes admission; tool spans cover only registered handlers.

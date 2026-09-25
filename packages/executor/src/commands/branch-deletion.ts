@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import type {
   BranchDeletionAction,
@@ -32,6 +33,28 @@ export interface BranchDeletionOperations {
   reportFailure(
     failure: Exclude<BranchDeletionExecutionResult, { outcome: 'deleted' }>
   ): Promise<void>;
+}
+
+/** A missing external mount must never make an empty image directory look deleted. */
+export async function verifyDelegatedDeletionStorageMounts(input: {
+  tenantDataRoot: string;
+  branchesRoot: string;
+}): Promise<void> {
+  const tenant = await stat(input.tenantDataRoot);
+  const worktrees = await stat(input.branchesRoot);
+  const repos = await stat(resolve(input.tenantDataRoot, 'repos'));
+  const homes = await stat(resolve(input.tenantDataRoot, 'branch-homes'));
+  if (
+    !tenant.isDirectory() ||
+    !worktrees.isDirectory() ||
+    !repos.isDirectory() ||
+    !homes.isDirectory() ||
+    worktrees.dev === tenant.dev ||
+    repos.dev !== worktrees.dev ||
+    homes.dev !== worktrees.dev
+  ) {
+    throw new Error('Delegated deletion storage mounts are unavailable or inconsistent');
+  }
 }
 
 const FAILURE_MESSAGES: Record<BranchDeletionStage, string> = {
@@ -192,6 +215,10 @@ export async function handleBranchDelete(
     removeStorage: async () => {
       while ((await storageStep('quiesce', () => report('quiesce'))).remaining) {
         /* disable a bounded page of durable producers */
+      }
+
+      if (p.verifyDelegatedStorageMounts) {
+        await storageStep('validate_mounts', () => verifyDelegatedDeletionStorageMounts(p));
       }
 
       // Validate ALL roots before starting destructive work. The SDK home is

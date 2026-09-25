@@ -1,6 +1,10 @@
 import { BootstrapTenantUnsupportedError } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
-import { assertDevelopmentDefaultAdminCliRequest, presentCreateAdminFailure } from './create-admin';
+import {
+  assertDevelopmentDefaultAdminCliRequest,
+  presentCreateAdminFailure,
+  resolveAdminPassword,
+} from './create-admin';
 
 const exactRequest = {
   email: 'admin@agor.live',
@@ -70,5 +74,15 @@ describe('create-admin failure presentation', () => {
     });
     expect(presentCreateAdminFailure(dbError)).not.toMatch(/duplicate key/);
     expect(presentCreateAdminFailure(dbError)).toMatch(/Database/);
+  });
+});
+
+describe('local create-admin password resolution', () => {
+  it('prefers the explicit flag and otherwise reads the canonical environment variable', () => {
+    expect(resolveAdminPassword('from-flag', { AGOR_ADMIN_PASSWORD: 'from-env' })).toBe(
+      'from-flag'
+    );
+    expect(resolveAdminPassword(undefined, { AGOR_ADMIN_PASSWORD: 'from-env' })).toBe('from-env');
+    expect(resolveAdminPassword(undefined, {})).toBeUndefined();
   });
 });

@@ -9,9 +9,14 @@ import type { ArtifactID, BoardID, BranchID } from './id';
 export type BoardPosition = { x: number; y: number };
 
 /**
- * Board object types for canvas annotations
+ * Board object types for canvas annotations.
+ *
+ * Single source of truth for every consumer that enumerates object types
+ * (board import validation, MCP filters). Adding a type here forces the
+ * import validator's exhaustive per-type table to handle it.
  */
-export type BoardObjectType = 'text' | 'zone' | 'markdown' | 'app' | 'artifact';
+export const BOARD_OBJECT_TYPES = ['text', 'zone', 'markdown', 'app', 'artifact'] as const;
+export type BoardObjectType = (typeof BOARD_OBJECT_TYPES)[number];
 
 /**
  * Entity type discriminator for board objects
@@ -339,6 +344,61 @@ export interface Board {
 }
 
 /**
+ * Why a board import left an object out:
+ * - `unresolved_reference`: well-formed reference (e.g. an artifact) whose
+ *   target isn't available to the importer in this workspace
+ * - `unsupported_type`: object type this instance doesn't know
+ * - `invalid`: known type with missing/malformed fields
+ */
+export type BoardImportSkipReason = 'unresolved_reference' | 'unsupported_type' | 'invalid';
+
+export interface BoardImportSkippedObject {
+  object_id: string;
+  /** Declared object type, when it was a string. */
+  type?: string;
+  reason: BoardImportSkipReason;
+  /** Per-object detail for logs/CLI; UIs should prefer summarizeBoardImportSkips. */
+  detail: string;
+}
+
+/**
+ * Result of a board import: the created board plus the objects that were
+ * skipped rather than failing the whole import.
+ */
+export interface BoardImportResult extends Board {
+  import_skipped?: BoardImportSkippedObject[];
+}
+
+/**
+ * One short, user-facing sentence summarizing skipped objects, or null when
+ * nothing was skipped. Aggregates by reason so a board with many unavailable
+ * artifacts yields one message, not one per object.
+ */
+export function summarizeBoardImportSkips(
+  skipped: readonly BoardImportSkippedObject[] | undefined
+): string | null {
+  if (!skipped?.length) return null;
+  const unresolved = skipped.filter((s) => s.reason === 'unresolved_reference').length;
+  const unreadable = skipped.length - unresolved;
+  const parts: string[] = [];
+  if (unresolved) {
+    parts.push(
+      unresolved === 1
+        ? "1 referenced object isn't available to you in this workspace and couldn't be linked"
+        : `${unresolved} referenced objects aren't available to you in this workspace and couldn't be linked`
+    );
+  }
+  if (unreadable) {
+    parts.push(
+      unreadable === 1
+        ? '1 object was unsupported or malformed and was skipped'
+        : `${unreadable} objects were unsupported or malformed and were skipped`
+    );
+  }
+  return `${parts.join('; ')}.`;
+}
+
+/**
  * Portable board export format (shell only)
  *
  * Contains board metadata and annotations, but no branches or sessions.
@@ -357,7 +417,9 @@ export interface BoardExportBlob {
   default_others_can?: BranchPermissionLevel;
   default_others_fs_access?: BoardDefaultFsAccess;
 
-  // Annotations (zones, text, markdown)
+  // Canvas objects (see BoardObjectType). Import skips objects it cannot use
+  // with a warning; `artifact` objects are references only (no content) and
+  // are kept only when the artifact resolves for the importer.
   objects?: {
     [objectId: string]: BoardObject;
   };

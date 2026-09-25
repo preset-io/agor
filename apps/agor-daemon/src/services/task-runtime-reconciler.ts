@@ -9,6 +9,7 @@ import {
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
+  shortId,
   TaskRepository,
   type TaskRuntimeDiscoveryCursor,
   type TaskRuntimeDiscoveryRef,
@@ -314,6 +315,23 @@ export class TaskRuntimeReconciler {
     const session = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
       this.options.app.service('sessions').get(task.session_id, params)
     );
+    // A tracked local process whose leader has not exited distinguishes a
+    // hung/unreachable executor (or a stalled daemon write path) from a crash.
+    const tracked = getTrackedExecutor(task.session_id, this.options.app);
+    const detectedAt = this.options.now?.() ?? new Date();
+    console.warn(
+      `[distributed-work.task-runtime] event=heartbeat_stale` +
+        ` instance_id=${JSON.stringify(this.options.workIdentity.instanceId)}` +
+        ` task_id=${shortId(task.task_id)}` +
+        ` session_id=${shortId(task.session_id)}` +
+        ` status=${task.status}` +
+        ` mode=${task.executor_mode ?? 'local'}` +
+        ` approx_heartbeat_age_ms=${detectedAt.getTime() - Date.parse(task.last_executor_heartbeat_at)}` +
+        ` stale_after_ms=${this.options.config.stale_after_ms}` +
+        ` last_pulse=${task.latest_executor_pulse?.kind ?? 'none'}` +
+        ` tracked_pid=${tracked && tracked.taskId === task.task_id ? tracked.pid : 'none'}` +
+        ` leader_exited=${tracked && tracked.taskId === task.task_id ? tracked.leaderExited : 'unknown'}`
+    );
     const result = await requestExecutorTermination({
       app: this.options.app,
       taskId: task.task_id,
@@ -326,7 +344,7 @@ export class TaskRuntimeReconciler {
       expectedHeartbeatAt: task.last_executor_heartbeat_at,
       sdkFailure: {
         reason: 'heartbeat_lost',
-        detected_at: (this.options.now?.() ?? new Date()).toISOString(),
+        detected_at: detectedAt.toISOString(),
         tool: session.agentic_tool,
         last_pulse: task.latest_executor_pulse,
         termination: 'requested',

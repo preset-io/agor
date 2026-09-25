@@ -9,7 +9,10 @@ import type {
   BoardAccessMode,
   BoardExportBlob,
   BoardID,
+  BoardImportResult,
+  BoardImportSkippedObject,
   BoardObject,
+  BoardObjectType,
   Branch,
   BranchPermissionLevel,
   EffectiveCapabilityPolicyAccess,
@@ -32,7 +35,7 @@ import {
 } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
-import { generateId } from '../../lib/ids';
+import { generateId, isValidUUID } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
@@ -46,6 +49,7 @@ import {
   update,
 } from '../database-wrapper';
 import { type BoardInsert, type BoardRow, boards, users } from '../schema';
+import { ArtifactRepository } from './artifacts';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -81,6 +85,86 @@ function validateBoardPermissionDefaults(board: Partial<Board>): void {
       `Invalid board default_others_fs_access: ${board.default_others_fs_access}`
     );
   }
+}
+
+const isFiniteNumber = (value: unknown): boolean =>
+  typeof value === 'number' && Number.isFinite(value);
+const hasNumbers = (object: Record<string, unknown>, fields: readonly string[]): boolean =>
+  fields.every((field) => isFiniteNumber(object[field]));
+const isStringRecord = (value: unknown): boolean =>
+  !!value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  Object.values(value).every((entry) => typeof entry === 'string');
+
+/**
+ * Per-type import rules: return null to keep the object, or a reason to skip it.
+ * Keyed by every BoardObjectType so a new canvas type fails typecheck here
+ * until import decides how to handle it (export emits board.objects verbatim).
+ */
+const BOARD_OBJECT_IMPORT_RULES: Record<
+  BoardObjectType,
+  (object: Record<string, unknown>) => string | null
+> = {
+  // Legacy annotation type; no required fields.
+  text: () => null,
+  zone: (o) =>
+    hasNumbers(o, ['x', 'y', 'width', 'height']) ? null : 'missing position/dimensions',
+  markdown: (o) =>
+    hasNumbers(o, ['x', 'y', 'width']) && typeof o.content === 'string'
+      ? null
+      : 'missing position/width/content',
+  app: (o) =>
+    hasNumbers(o, ['x', 'y', 'width', 'height']) &&
+    typeof o.template === 'string' &&
+    isStringRecord(o.files)
+      ? null
+      : 'missing position/dimensions/template/files',
+  // Shape only. Whether the referenced artifact resolves is checked against
+  // the importing tenant/user in resolveImportedArtifactReferences.
+  artifact: (o) =>
+    hasNumbers(o, ['x', 'y', 'width', 'height']) &&
+    typeof o.artifact_id === 'string' &&
+    isValidUUID(o.artifact_id)
+      ? null
+      : 'missing position/dimensions/artifact_id',
+};
+
+/**
+ * Keep the board objects import can use; skip the rest with a warning.
+ * A single unusable object must never fail the whole board import.
+ */
+export function sanitizeImportedBoardObjects(objects: Record<string, unknown>): {
+  objects: Record<string, BoardObject>;
+  skipped: BoardImportSkippedObject[];
+} {
+  const kept: Record<string, BoardObject> = {};
+  const skipped: BoardImportSkippedObject[] = [];
+  for (const [id, object] of Object.entries(objects)) {
+    if (!object || typeof object !== 'object' || Array.isArray(object)) {
+      skipped.push({ object_id: id, reason: 'invalid', detail: 'must be an object' });
+      continue;
+    }
+    const type = (object as { type?: unknown }).type;
+    if (typeof type !== 'string' || !Object.hasOwn(BOARD_OBJECT_IMPORT_RULES, type)) {
+      skipped.push({
+        object_id: id,
+        type: typeof type === 'string' ? type : undefined,
+        reason: 'unsupported_type',
+        detail: `unsupported type ${JSON.stringify(type ?? null)}`,
+      });
+      continue;
+    }
+    const reason = BOARD_OBJECT_IMPORT_RULES[type as BoardObjectType](
+      object as Record<string, unknown>
+    );
+    if (reason) {
+      skipped.push({ object_id: id, type, reason: 'invalid', detail: reason });
+      continue;
+    }
+    kept[id] = object as BoardObject;
+  }
+  return { objects: kept, skipped };
 }
 
 /** Canonical portable Board template → create payload mapping. */
@@ -1227,14 +1311,78 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Import board from blob (JSON)
    *
-   * Creates a new board with fresh IDs and timestamps.
-   * Returns the created board.
+   * Creates a new board with fresh IDs and timestamps. Objects that cannot be
+   * imported are skipped and reported in `import_skipped`.
    */
-  async fromBlob(blob: BoardExportBlob, userId: string): Promise<Board> {
-    // Validate blob structure
-    this.validateBoardBlob(blob);
+  async fromBlob(blob: BoardExportBlob, userId: string): Promise<BoardImportResult> {
+    const { blob: importable, skipped } = await this.prepareBoardImport(blob, userId);
+    const board: BoardImportResult = await this.create(
+      mapBoardExportBlobToCreateData(importable, userId)
+    );
+    if (skipped.length) board.import_skipped = skipped;
+    return board;
+  }
 
-    return this.create(mapBoardExportBlobToCreateData(blob, userId));
+  /**
+   * Validate an untrusted export blob and drop the objects import cannot use.
+   * Structural problems (not an object, no name) still throw.
+   */
+  private async prepareBoardImport(
+    blob: unknown,
+    userId: string
+  ): Promise<{ blob: BoardExportBlob; skipped: BoardImportSkippedObject[] }> {
+    this.validateBoardBlob(blob);
+    if (!blob.objects) return { blob, skipped: [] };
+    const sanitized = sanitizeImportedBoardObjects(blob.objects);
+    const { objects, skipped } = await this.resolveImportedArtifactReferences(
+      sanitized.objects,
+      userId
+    );
+    return { blob: { ...blob, objects }, skipped: [...sanitized.skipped, ...skipped] };
+  }
+
+  /**
+   * Best-effort artifact references: keep one only if the artifact exists in
+   * the importing tenant and the importing user can see it (the same
+   * public-or-creator rule the board read filter applies). Same-workspace
+   * imports keep their artifacts; cross-workspace, deleted, or another user's
+   * private artifacts are dropped. The warning does not distinguish "missing"
+   * from "not yours", so it never confirms a private artifact exists.
+   */
+  private async resolveImportedArtifactReferences(
+    objects: Record<string, BoardObject>,
+    userId: string
+  ): Promise<{ objects: Record<string, BoardObject>; skipped: BoardImportSkippedObject[] }> {
+    const artifactIds = Object.values(objects).flatMap((object) =>
+      object.type === 'artifact' ? [object.artifact_id] : []
+    );
+    if (!artifactIds.length) return { objects, skipped: [] };
+
+    let visible = new Set<string>();
+    try {
+      visible = await new ArtifactRepository(this.db).findBoardReferenceVisibleIds(
+        artifactIds,
+        userId
+      );
+    } catch {
+      // Fail closed: an unverifiable reference is dropped, the board still imports.
+    }
+
+    const kept: Record<string, BoardObject> = {};
+    const skipped: BoardImportSkippedObject[] = [];
+    for (const [id, object] of Object.entries(objects)) {
+      if (object.type === 'artifact' && !visible.has(object.artifact_id)) {
+        skipped.push({
+          object_id: id,
+          type: 'artifact',
+          reason: 'unresolved_reference',
+          detail: `artifact ${object.artifact_id} is not available to you in this workspace`,
+        });
+        continue;
+      }
+      kept[id] = object;
+    }
+    return { objects: kept, skipped };
   }
 
   /**
@@ -1257,13 +1405,14 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Import board from YAML string
    */
-  async fromYaml(yamlContent: string, userId: string): Promise<Board> {
+  async fromYaml(yamlContent: string, userId: string): Promise<BoardImportResult> {
     const blob = this.parseYamlToBlob(yamlContent);
     return this.fromBlob(blob, userId);
   }
 
   /**
-   * Parse YAML string into a validated BoardExportBlob without creating a board
+   * Parse YAML string into a structurally validated BoardExportBlob without
+   * creating a board (per-object filtering happens in prepareBoardImport)
    * Uses JSON_SCHEMA to prevent code execution via malicious YAML tags
    * while still correctly parsing numbers, booleans, and null
    */
@@ -1307,30 +1456,14 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       throw new RepositoryError('Invalid board export: name is required');
     }
 
-    // Validate objects structure
-    if (b.objects) {
-      for (const [id, obj] of Object.entries(b.objects)) {
-        if (!obj || typeof obj !== 'object') {
-          throw new RepositoryError(`Invalid object ${id}: must be an object`);
-        }
-
-        if (!obj.type || !['zone', 'text', 'markdown'].includes(obj.type)) {
-          throw new RepositoryError(`Invalid object ${id}: unsupported type`);
-        }
-
-        // Type-specific validation
-        if (obj.type === 'zone') {
-          const zone = obj as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
-          if (
-            typeof zone.x !== 'number' ||
-            typeof zone.y !== 'number' ||
-            typeof zone.width !== 'number' ||
-            typeof zone.height !== 'number'
-          ) {
-            throw new RepositoryError(`Invalid zone ${id}: missing position/dimensions`);
-          }
-        }
-      }
+    // Individual objects are filtered (not rejected) by prepareBoardImport;
+    // only the container shape is structural.
+    if (
+      b.objects !== undefined &&
+      b.objects !== null &&
+      (typeof b.objects !== 'object' || Array.isArray(b.objects))
+    ) {
+      throw new RepositoryError('Invalid board export: objects must be a map of objects');
     }
 
     // Validate custom_context if present

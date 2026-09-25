@@ -30,6 +30,9 @@ export const DEFAULT_EXECUTOR_KILL_GRACE_MS = 2_000;
 // outside an application composition root retain the legacy default registry.
 const defaultRegistryOwner = {};
 const executorProcessesByOwner = new WeakMap<object, Map<string, ExecutorContainmentIdentity>>();
+// Owners whose graceful shutdown has begun signaling every tracked executor.
+// Diagnostic only: lets exit handlers attribute a SIGTERM to the daemon itself.
+const shutdownContainmentOwners = new WeakSet<object>();
 
 function executorProcesses(owner?: object): Map<string, ExecutorContainmentIdentity> {
   const key = owner ?? defaultRegistryOwner;
@@ -509,7 +512,13 @@ export async function verifyExecutorContainmentFence(
   return verified;
 }
 
+/** True once this daemon's graceful shutdown started containing all executors. */
+export function isShutdownContainmentActive(owner?: object): boolean {
+  return shutdownContainmentOwners.has(owner ?? defaultRegistryOwner);
+}
+
 export async function containAllTrackedExecutors(owner?: object): Promise<void> {
+  shutdownContainmentOwners.add(owner ?? defaultRegistryOwner);
   await Promise.all(
     [...executorProcesses(owner).values()].map((tracked) =>
       containExecutorProcess(tracked.sessionId, tracked.taskId, {}, owner).then((result) => {
