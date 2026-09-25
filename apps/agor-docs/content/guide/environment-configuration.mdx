@@ -808,6 +808,10 @@ starts of the same Codespace reuse its Docker layers unless dependency inputs
 changed, so this does not require a nightly job for normal stop/start cycles.
 The reference variant gives the cold path a bounded 20 minutes; missing-SSH
 configuration errors fail immediately rather than consuming that deadline.
+Standalone Agor lifecycle execution has a fixed 25-minute safety bound, leaving
+time for launcher setup and result reporting without adding per-variant timeout
+or retry machinery. Delegated HA jobs retain their shorter operator-configured
+execution envelope.
 GitHub Codespaces prebuilds can accelerate the outer devcontainer, but
 [GitHub does not make Docker-in-Docker available during prebuild creation](https://docs.github.com/en/codespaces/reference/allowing-your-codespace-to-access-a-private-registry),
 so a prebuild cannot absorb this nested image build. A future faster cold path
@@ -821,6 +825,11 @@ and is not a Cloud/HA credential-sponsorship or distributed-leasing design. Neve
 put a GitHub token in `.agor.yml`, template overrides, branch data, URLs, or
 launcher output. A production integration should use a tenant- and actor-scoped
 credential store plus a durable provider binding and lifecycle lease.
+
+Stop preserves the Codespace and its SQLite volume. Before rendering a different
+variant, Nuke the Codespaces variant (or delete the Codespace in GitHub); after a
+variant switch Agor intentionally does not retain the old variant's cleanup
+command.
 
 ---
 

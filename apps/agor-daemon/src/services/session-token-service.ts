@@ -257,14 +257,19 @@ export class SessionTokenService {
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
    */
-  generateCommandToken(commandId: string, userId: string, branchId?: string): Promise<string> {
+  generateCommandToken(
+    commandId: string,
+    userId: string,
+    branchId?: string,
+    expirationMs = EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS
+  ): Promise<string> {
     return this.generateTokenWithPurpose(
       commandId,
       userId,
       {
         branchId,
         maxUses: -1,
-        expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+        expirationMs,
       },
       EXECUTOR_COMMAND_TOKEN_PURPOSE
     );
@@ -654,9 +659,12 @@ export async function issueExecutorCommandToken(
   app: object,
   commandId: string,
   userId: string,
-  branchId?: string
+  branchId?: string,
+  expirationMs?: number
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
-  return service.generateCommandToken(commandId, userId, branchId);
+  return expirationMs === undefined
+    ? service.generateCommandToken(commandId, userId, branchId)
+    : service.generateCommandToken(commandId, userId, branchId, expirationMs);
 }

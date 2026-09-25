@@ -7,6 +7,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
+  ENVIRONMENT_COMMAND_BUDGET,
   environmentCommandTokenId,
   type TenantID,
 } from '@agor/core/types';
@@ -73,6 +74,7 @@ describe('executor-owned command reports', () => {
     await runWithTenantContext(tenantId, async () => {
       const admitted = await service.startEnvironment(branch.branch_id, params);
       const attempt = admitted.environment_instance!.command_attempt!;
+      expect(attempt.command_budget_ms).toBe(ENVIRONMENT_COMMAND_BUDGET.standaloneCommandMs);
       expect(spawn).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'environment.lifecycle',
@@ -95,7 +97,12 @@ describe('executor-owned command reports', () => {
       ).toHaveBeenCalledWith(
         environmentCommandTokenId('start', attempt.id),
         user.user_id,
-        branch.branch_id
+        branch.branch_id,
+        ENVIRONMENT_COMMAND_BUDGET.launchMs +
+          ENVIRONMENT_COMMAND_BUDGET.claimMs +
+          ENVIRONMENT_COMMAND_BUDGET.standaloneCommandMs +
+          ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
+          ENVIRONMENT_COMMAND_BUDGET.reportMs
       );
     });
   });
@@ -224,6 +231,10 @@ describe('executor-owned command reports', () => {
         } as AuthenticatedParams;
         const scope = { branch_id: branch.branch_id, attempt_id: attempt.id, action: 'start' };
         await reporter.create({ ...scope, kind: 'claim' }, reportParams);
+        const revokedParams = {
+          ...reportParams,
+          user: { ...reportParams.user!, role: 'viewer' as const },
+        } as AuthenticatedParams;
         await reporter.create(
           {
             ...scope,
@@ -232,7 +243,7 @@ describe('executor-owned command reports', () => {
             message: 'remote trigger exited zero',
             access_urls: [{ name: 'Preview', url: 'https://preview.example.test' }],
           },
-          reportParams
+          revokedParams
         );
         expect((await service.get(branch.branch_id)).environment_instance).toMatchObject({
           status: 'running',

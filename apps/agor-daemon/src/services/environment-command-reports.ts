@@ -13,6 +13,7 @@ import {
   ENVIRONMENT_COMMAND_BUDGET,
   type EnvironmentCommandReport,
   environmentCommandTokenId,
+  type UserID,
 } from '@agor/core/types';
 import { z } from 'zod';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
@@ -64,8 +65,8 @@ export class EnvironmentCommandReportsService {
   async create(data: unknown, params?: AuthenticatedParams) {
     const parsed = reportSchema.safeParse(data);
     if (!parsed.success) throw new BadRequest('Invalid or oversized environment command report');
-    const rawReport = parsed.data as EnvironmentCommandReport & { access_urls?: unknown };
-    let report: EnvironmentCommandReport = rawReport;
+    const rawReport = parsed.data;
+    let report = rawReport as EnvironmentCommandReport;
     if (
       rawReport.kind === 'result' &&
       (rawReport.lifecycle_result !== undefined || rawReport.access_urls !== undefined)
@@ -83,13 +84,14 @@ export class EnvironmentCommandReportsService {
           lifecycle_result: decodeEnvironmentLifecycleResult(
             rawReport.lifecycle_result ?? { access_urls: legacyAccessUrls }
           ),
-        };
+        } as EnvironmentCommandReport;
       } catch {
         throw new BadRequest('Invalid or oversized environment command report');
       }
     }
     if (
       !params?.provider ||
+      !params.user ||
       !matchesExecutorCommandRuntimeScope(
         params,
         environmentCommandTokenId(report.action, report.attempt_id),
@@ -109,15 +111,23 @@ export class EnvironmentCommandReportsService {
         'Environment command credential and request must match the current tenant'
       );
     }
+    const expectedRequester = params.user.user_id as UserID;
     return runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
       const branches = new BranchRepository(scoped);
-      await ensureCanControlBranchEnvironment(
-        branches,
-        report.branch_id,
-        params,
-        'report an environment command'
-      );
-      const environment = await new EnvironmentCommandRepository(scoped).report(report);
+      if (report.kind === 'claim') {
+        await ensureCanControlBranchEnvironment(
+          branches,
+          report.branch_id,
+          params,
+          'claim an environment command'
+        );
+      }
+      // Claim checks current permission. Later progress/result reports carry no
+      // new authority: the exact token and persisted initiating actor may only
+      // settle the already-authorized attempt, even after permission revocation.
+      const environment = await new EnvironmentCommandRepository(scoped).report(report, {
+        expectedRequester,
+      });
       const branch = await branches.findById(report.branch_id);
       if (branch)
         emitServiceEvent(this.app, {

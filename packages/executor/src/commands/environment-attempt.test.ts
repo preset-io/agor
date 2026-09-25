@@ -38,8 +38,8 @@ async function fixture(command: string) {
     reports.push(JSON.parse(options.body as string));
     return new Response(
       JSON.stringify({
-        command_deadline: payload.params.attempt!.commandDeadline,
-        result_deadline: payload.params.attempt!.resultDeadline,
+        command_deadline: payload.params.attempt.commandDeadline,
+        result_deadline: payload.params.attempt.resultDeadline,
       }),
       { status: 200 }
     );

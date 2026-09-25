@@ -507,7 +507,7 @@ test('preview readiness fails fast when the custom devcontainer has no SSH serve
     }).start(),
     /built without the SSH transport.*rebuild its dev container or Nuke it/i
   );
-  assert.ok(ticks < 3);
+  assert.ok(ticks <= 3);
 });
 
 test('redaction removes common credentials and provider control lines', () => {
@@ -610,7 +610,11 @@ test('the gh adapter reconciles the preview through one bounded SSH command', as
   assert.equal(calls[0].options.timeout, 120);
   assert.equal(calls[0].options.check, true);
   assert.match(calls[0].argv.at(-1), /\/workspaces\/agor/);
+  assert.match(calls[0].argv.at(-1), /env CODESPACE_NAME='octocat-agor-new123' bash .devcontainer/);
   assert.match(calls[0].argv.at(-1), /start-agor-sqlite\.sh/);
+
+  await client.reconcilePreview('octocat-agor-new123', REPOSITORY, 5);
+  assert.equal(calls[1].options.timeout, 5);
 });
 
 test('the gh adapter changes only the requested Codespace port visibility', async () => {

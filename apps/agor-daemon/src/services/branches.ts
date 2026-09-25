@@ -359,6 +359,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     const config = this.app.get('config');
     assertAsyncEnvironmentCommandConfig(config);
+    const asynchronous = usesAsyncEnvironmentCommands(config);
+    const commandBudgetMs = asynchronous
+      ? ENVIRONMENT_COMMAND_BUDGET.commandMs
+      : ENVIRONMENT_COMMAND_BUDGET.standaloneCommandMs;
     const command =
       action === 'start'
         ? branch.start_command
@@ -371,6 +375,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       execution.kind === 'command'
         ? await this.resolveEnvironmentExecutorContext(branch, params)
         : undefined;
+    const commandCredentialMs =
+      ENVIRONMENT_COMMAND_BUDGET.launchMs +
+      ENVIRONMENT_COMMAND_BUDGET.claimMs +
+      commandBudgetMs +
+      ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
+      ENVIRONMENT_COMMAND_BUDGET.reportMs;
+    if (
+      context &&
+      (config.execution?.session_token_expiration_ms ?? 86_400_000) < commandCredentialMs
+    ) {
+      throw new BadRequest(
+        `execution.session_token_expiration_ms must be at least ${commandCredentialMs} for managed environment commands`
+      );
+    }
     const userId = ((params as AuthenticatedParams | undefined)?.user?.user_id ??
       branch.created_by) as UserID;
     const attemptId = generateId();
@@ -381,7 +399,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             this.app,
             environmentCommandTokenId(action, attemptId),
             userId,
-            branch.branch_id
+            branch.branch_id,
+            commandCredentialMs
           )
         )
       : undefined;
@@ -391,6 +410,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         action,
         attemptId,
         userId,
+        commandBudgetMs,
         confirmationOf,
       })
     );
@@ -460,7 +480,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             startCommand: action === 'start' ? command : undefined,
             stopCommand: action === 'stop' ? command : undefined,
             nukeCommand: action === 'nuke' ? command : undefined,
-            appUrl: branch.app_url,
             attempt: {
               id: attemptId,
               claimDeadline: environment.command_attempt!.claim_deadline,
@@ -482,14 +501,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             branch_fs_access: context!.branchFsAccess,
           },
         };
-        if (usesAsyncEnvironmentCommands(config)) {
+        if (asynchronous) {
           await dispatchEnvironmentCommand(payload, executorOptions);
         } else if (options?.awaitResult) {
           await requestExecutor(payload, {
             ...executorOptions,
             timeoutMs:
               ENVIRONMENT_COMMAND_BUDGET.claimMs +
-              ENVIRONMENT_COMMAND_BUDGET.commandMs +
+              commandBudgetMs +
               ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
               ENVIRONMENT_COMMAND_BUDGET.reportMs,
           });

@@ -366,9 +366,10 @@ export class GitHubCodespacesClient {
     const repoName = repository.split('/', 2)[1];
     const command =
       `cd ${shellQuote(`/workspaces/${repoName}`)} && ` +
+      `env CODESPACE_NAME=${shellQuote(name)} ` +
       'bash .devcontainer/agor-managed/start-agor-sqlite.sh';
     await this.runner(['gh', 'codespace', 'ssh', '-c', name, '--', command], {
-      timeout: Math.max(this.callTimeout, timeoutSeconds),
+      timeout: Math.max(1, timeoutSeconds),
       check: true,
     });
   }
@@ -679,9 +680,14 @@ export class CodespaceController {
     return current;
   }
 
-  async waitForState(owner, repositoryId, name, desired) {
-    const deadline = this.monotonic() + this.waitSeconds;
+  async waitForState(owner, repositoryId, name, desired, deadline) {
+    deadline ??= this.monotonic() + this.waitSeconds;
     while (true) {
+      if (this.monotonic() >= deadline) {
+        throw new LauncherError(
+          `timed out after ${this.waitSeconds}s waiting for Codespace state ${desired}`
+        );
+      }
       const resource = await this.client.getCodespace(name);
       validateResource(resource, {
         owner,
@@ -700,16 +706,22 @@ export class CodespaceController {
           `timed out after ${this.waitSeconds}s waiting for Codespace state ${desired} (last: ${state || 'unknown'})`
         );
       }
-      await this.sleep(3_000);
+      const remainingMilliseconds = Math.max(1, Math.floor((deadline - this.monotonic()) * 1_000));
+      await this.sleep(Math.min(3_000, remainingMilliseconds));
     }
   }
 
-  async waitForPreview(name, { repair = false } = {}) {
-    const deadline = this.monotonic() + this.waitSeconds;
+  async waitForPreview(name, { repair = false, deadline } = {}) {
+    deadline ??= this.monotonic() + this.waitSeconds;
     let lastError = 'preview not ready';
     let repaired = false;
     const expectedPorts = new Set([this.appPort, this.healthPort]);
     while (true) {
+      if (this.monotonic() >= deadline) {
+        throw new LauncherError(
+          `timed out after ${this.waitSeconds}s waiting for the Codespace preview: ${lastError}`
+        );
+      }
       try {
         const ports = await this.client.listPorts(name);
         const actualPorts = new Set(
@@ -732,17 +744,18 @@ export class CodespaceController {
         }
         lastError = error.message;
       }
-      if (repair && !repaired) {
-        repaired = true;
-        const remainingSeconds = Math.max(1, Math.floor(deadline - this.monotonic()));
-        await this.client.reconcilePreview(name, this.repository, remainingSeconds);
-      }
       if (this.monotonic() >= deadline) {
         throw new LauncherError(
           `timed out after ${this.waitSeconds}s waiting for the Codespace preview: ${lastError}`
         );
       }
-      await this.sleep(3_000);
+      if (repair && !repaired) {
+        repaired = true;
+        const remainingSeconds = Math.max(1, Math.ceil(deadline - this.monotonic()));
+        await this.client.reconcilePreview(name, this.repository, remainingSeconds);
+      }
+      const remainingMilliseconds = Math.max(1, Math.floor((deadline - this.monotonic()) * 1_000));
+      await this.sleep(Math.min(3_000, remainingMilliseconds));
     }
   }
 
@@ -783,6 +796,7 @@ export class CodespaceController {
   }
 
   async start() {
+    const deadline = this.monotonic() + this.waitSeconds;
     const discovery = await this.discover();
     let resource = discovery.resource;
     const rediscovered = Boolean(resource);
@@ -818,11 +832,17 @@ export class CodespaceController {
       throw new LauncherError(`Codespace is in terminal state ${state}; nuke it before retrying`);
     }
 
-    resource = await this.waitForState(discovery.owner, discovery.repositoryId, name, 'Available');
+    resource = await this.waitForState(
+      discovery.owner,
+      discovery.repositoryId,
+      name,
+      'Available',
+      deadline
+    );
     // Creation runs the devcontainer postStart hook. A rediscovered resource
     // may instead contain a failed/stopped preview stack, so Play acts as one
     // bounded reconciliation attempt before returning to readiness polling.
-    const readyPorts = await this.waitForPreview(name, { repair: rediscovered });
+    const readyPorts = await this.waitForPreview(name, { repair: rediscovered, deadline });
     const ports = await this.reconcilePortVisibility(name, readyPorts);
     await this.saveBinding(discovery.owner, resource, { resolvedSha });
     return { resource, ports };

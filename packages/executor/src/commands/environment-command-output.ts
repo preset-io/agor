@@ -8,45 +8,6 @@ export const ENVIRONMENT_RESULT_PREFIX = 'AGOR_ENVIRONMENT_RESULT=';
 const MAX_ENVIRONMENT_RESULT_BYTES = 8 * 1024;
 const MAX_CONTROL_LINE_BYTES = ENVIRONMENT_RESULT_PREFIX.length + MAX_ENVIRONMENT_RESULT_BYTES;
 
-/** Parse the complete, deliberately tiny stdout result protocol. */
-export function parseEnvironmentCommandOutput(output: string): {
-  output: string;
-  environmentResult?: EnvironmentLifecycleResult;
-} {
-  const resultLines: string[] = [];
-  const visibleLines: string[] = [];
-
-  for (const line of output.split('\n')) {
-    if (line.startsWith(ENVIRONMENT_RESULT_PREFIX)) {
-      resultLines.push(line.slice(ENVIRONMENT_RESULT_PREFIX.length));
-    } else {
-      visibleLines.push(line);
-    }
-  }
-
-  if (resultLines.length === 0) return { output };
-  if (resultLines.length !== 1) {
-    throw new Error('environment command emitted more than one result line');
-  }
-
-  const encoded = resultLines[0]!;
-  if (Buffer.byteLength(encoded, 'utf8') > MAX_ENVIRONMENT_RESULT_BYTES) {
-    throw new Error('environment command result exceeds the size limit');
-  }
-
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(encoded);
-  } catch {
-    throw new Error('environment command emitted invalid result JSON');
-  }
-
-  return {
-    output: visibleLines.join('\n'),
-    environmentResult: validateEnvironmentLifecycleResult(decoded),
-  };
-}
-
 interface OutputSink {
   write(value: string): unknown;
 }

@@ -246,4 +246,81 @@ describe('shared environment command admission and transitions', () => {
       ).rejects.toThrow('non-archived');
     }
   );
+
+  dbTest(
+    'clears dynamic URLs at Start/Stop boundaries and persists the admitted budget',
+    async ({ db }) => {
+      const seeded = await seedEnvironmentCommandBranch(db);
+      const branches = new BranchRepository(db);
+      const branch = (await branches.update(seeded.branch.branch_id, {
+        app_url: 'https://provider.example.test',
+      }))!;
+      const commands = new EnvironmentCommandRepository(db);
+      const startId = generateId();
+      const starting = await commands.admit({
+        branch,
+        action: 'start',
+        attemptId: startId,
+        userId: seeded.user.user_id,
+        commandBudgetMs: BUDGET.standaloneCommandMs,
+      });
+      expect(starting).toMatchObject({
+        access_urls: [{ name: 'App', url: 'https://provider.example.test' }],
+        command_attempt: { command_budget_ms: BUDGET.standaloneCommandMs },
+      });
+      expect(
+        Date.parse(starting.command_attempt!.command_deadline) -
+          Date.parse(starting.command_attempt!.requested_at)
+      ).toBe(BUDGET.claimMs + BUDGET.standaloneCommandMs);
+      const startScope = {
+        branch_id: branch.branch_id,
+        action: 'start' as const,
+        attempt_id: startId,
+      };
+      await commands.report({ ...startScope, kind: 'claim' });
+      await commands.report({
+        ...startScope,
+        kind: 'result',
+        outcome: 'succeeded',
+        message: 'ready',
+        lifecycle_result: {
+          app: 'https://dynamic.example.test',
+          health: 'https://dynamic.example.test/health',
+        },
+      });
+
+      const stopId = generateId();
+      await commands.admit({
+        branch,
+        action: 'stop',
+        attemptId: stopId,
+        userId: seeded.user.user_id,
+      });
+      const stopScope = {
+        branch_id: branch.branch_id,
+        action: 'stop' as const,
+        attempt_id: stopId,
+      };
+      await commands.report({ ...stopScope, kind: 'claim' });
+      const stopped = await commands.report({
+        ...stopScope,
+        kind: 'result',
+        outcome: 'succeeded',
+        message: 'stopped',
+      });
+      expect(stopped.health_url).toBeUndefined();
+      expect(stopped.access_urls).toEqual([{ name: 'App', url: 'https://provider.example.test' }]);
+
+      const restarted = await commands.admit({
+        branch,
+        action: 'start',
+        attemptId: generateId(),
+        userId: seeded.user.user_id,
+      });
+      expect(restarted.health_url).toBeUndefined();
+      expect(restarted.access_urls).toEqual([
+        { name: 'App', url: 'https://provider.example.test' },
+      ]);
+    }
+  );
 });

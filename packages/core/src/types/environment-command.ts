@@ -9,7 +9,10 @@ export const ENVIRONMENT_COMMAND_REPORT_SERVICE = 'environment-command-reports';
 export const ENVIRONMENT_COMMAND_BUDGET = {
   launchMs: 10_000,
   claimMs: 60_000,
+  /** External/HA jobs keep their existing short execution envelope. */
   commandMs: 300_000,
+  /** Standalone commands historically had no cap; bound them without breaking slow cold starts. */
+  standaloneCommandMs: 25 * 60_000,
   cleanupMs: 5_000,
   reportMs: 30_000,
   outputBytes: 32_768,
@@ -21,6 +24,8 @@ export interface EnvironmentCommandAttempt {
   action: EnvironmentCommandAction;
   requested_by: UserID;
   requested_at: string;
+  /** Persisted so every replica and executor uses the admitted command budget. */
+  command_budget_ms?: number;
   claim_deadline: string;
   command_deadline: string;
   result_deadline: string;
@@ -47,8 +52,6 @@ export type EnvironmentCommandReport = {
       truncated?: boolean;
       message: string;
       lifecycle_result?: EnvironmentLifecycleResult;
-      /** Upgrade-only field accepted from executors using the former result-file contract. */
-      access_urls?: Array<{ name: string; url: string }>;
     }
 );
 

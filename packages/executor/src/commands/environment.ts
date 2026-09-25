@@ -18,8 +18,6 @@ import { handleEnvironmentAttempt } from './environment-attempt.js';
 import { EnvironmentOutput, runBoundedEnvironmentShell } from './environment-shell.js';
 import type { CommandOptions } from './index.js';
 
-export { parseEnvironmentCommandOutput } from './environment-command-output.js';
-
 export async function handleEnvironmentLogs(
   payload: EnvironmentLogsPayload,
   options: CommandOptions
@@ -91,14 +89,5 @@ export async function handleEnvironmentLifecycle(
     };
   }
 
-  if (!payload.params.attempt) {
-    return {
-      success: false,
-      error: {
-        code: 'ENVIRONMENT_COMMAND_FAILED',
-        message: 'Environment lifecycle attempt metadata is required',
-      },
-    };
-  }
   return handleEnvironmentAttempt(payload);
 }

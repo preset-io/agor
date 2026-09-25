@@ -8,7 +8,6 @@ import {
 } from '@agor/core/environment/lifecycle-result';
 import {
   type BranchID,
-  ENVIRONMENT_COMMAND_BUDGET as BUDGET,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   type EnvironmentCommandReport,
 } from '@agor/core/types';
@@ -44,9 +43,8 @@ async function report(
 export async function handleEnvironmentAttempt(
   payload: EnvironmentLifecyclePayload
 ): Promise<ExecutorResult> {
-  const attempt = payload.params.attempt!;
+  const attempt = payload.params.attempt;
   const action = payload.params.action;
-  if (action === 'restart') throw new Error('Asynchronous Restart is not supported');
   const scope = { branch_id: payload.params.branchId as BranchID, attempt_id: attempt.id, action };
   // Never run after a failed, duplicate, late, or unacknowledged claim.
   const claimed = await report(
@@ -56,8 +54,7 @@ export async function handleEnvironmentAttempt(
   );
   const deadline = Math.min(
     Date.parse(claimed.command_deadline),
-    Date.parse(attempt.commandDeadline),
-    Date.now() + BUDGET.commandMs
+    Date.parse(attempt.commandDeadline)
   );
   const resultDeadline = Math.min(
     Date.parse(claimed.result_deadline),
