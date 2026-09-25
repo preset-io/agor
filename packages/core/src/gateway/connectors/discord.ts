@@ -120,12 +120,20 @@ interface VerifiedDiscordThread {
 }
 
 function defaultDiscordTransport(token: string): DiscordTransport {
-  const rest = new REST({ version: '10' }).setToken(token);
+  // Clients are built on first use: connectors are often created only to
+  // validate config or serve one read, and each REST client starts recurring
+  // cache sweeper timers that are never cleared.
+  let rest: REST | undefined;
+  const sharedRest = () => {
+    rest ??= new REST({ version: '10' }).setToken(token);
+    return rest;
+  };
   let historyRest: DiscordRestTransport | undefined;
   return {
-    rest,
-    // Built on first history read: most connectors never read history. Agent
-    // reads are one-shot, so the client runs no cache sweeper timers.
+    get rest() {
+      return sharedRest();
+    },
+    // Agent history reads are one-shot, so this client runs no sweeper timers.
     get historyRest() {
       historyRest ??= new REST({
         version: '10',
@@ -138,7 +146,7 @@ function defaultDiscordTransport(token: string): DiscordTransport {
     createGateway: ({ onSessionInfo }) =>
       new WebSocketManager({
         token,
-        rest,
+        rest: sharedRest(),
         intents:
           GatewayIntentBits.Guilds |
           GatewayIntentBits.GuildMessages |

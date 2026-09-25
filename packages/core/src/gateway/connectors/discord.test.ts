@@ -1242,6 +1242,16 @@ describe('Discord agent channel history', () => {
     ).resolves.toMatchObject({ channelId: parentId, messages: [] });
   });
 
+  it('starts no REST client timers until a request needs a client', () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      new DiscordConnector(config);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
   it('reads through the dedicated history REST client, not the shared one', async () => {
     const shared = historyTransport();
     const history = historyTransport();
