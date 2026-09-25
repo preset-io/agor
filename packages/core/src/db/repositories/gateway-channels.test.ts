@@ -632,7 +632,7 @@ describe('GatewayChannelRepository', () => {
         expect.arrayContaining([
           'at least one allowed_user_ids or allowed_role_ids entry is required',
           'files must be a boolean',
-          'agent_tools must be an empty array',
+          'agent_tools must be [] or an object of capability toggles',
         ])
       );
       expect(validateDiscordConfig({ ...discordConfig, files: true })).toEqual({
