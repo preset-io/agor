@@ -50,7 +50,7 @@
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
-    "@anthropic-ai/sdk": "^0.125.0",
+    "@anthropic-ai/sdk": "^0.127.0",
     "@discordjs/rest": "^2.6.3",
     "@discordjs/ws": "^2.0.4",
     "@feathersjs/authentication": "^5.0.50",
