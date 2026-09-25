@@ -1,7 +1,7 @@
 import { generateId } from '@agor/core/ids/browser';
 import type { ContextUsageSnapshot } from '@agor/core/types';
 import { type Message, MessageRole, type Task, TaskStatus } from '@agor-live/client';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { theme } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ContextUsageRule } from './ContextUsageRule';
@@ -112,31 +112,15 @@ describe('ContextUsageRule', () => {
     view({ metadata: <span>synthetic-model</span> });
 
     expect(rule()).toBeNull();
-    expect(metadataRegion()).not.toBeNull();
-    expect(screen.getByText('synthetic-model')).toBeInTheDocument();
+    expect(metadataRegion()).toBeVisible();
+    expect(screen.getByText('synthetic-model')).toBeVisible();
   });
 
-  it('dims the line at rest and fades it out when the turn is revealed', () => {
-    view({ used: 91_000, limit: 100_000 });
-    const opacity = () => Number(rule()!.style.opacity || 1);
-
-    expect(opacity()).toBeGreaterThan(0);
-    expect(opacity()).toBeLessThan(1);
-    expect(band(rule()!).color).toBe(asRenderedColor(tokens().error));
-    fireEvent.mouseEnter(screen.getByLabelText('Turn and its metadata'));
-    expect(opacity()).toBe(0);
-  });
-
-  it('lifts the usage label when the turn is revealed', () => {
+  it('keeps the latest gauge visible beside metadata', () => {
     view({ used: 12_000, limit: 100_000, usageLabel: <span>12% via pill</span> });
     const label = screen.getByTestId('turn-usage-label');
-    const turn = screen.getByLabelText('Turn and its metadata');
-
-    expect(label.style.color).toBe(asRenderedColor(tokens().text.rest));
-    fireEvent.mouseEnter(turn);
     expect(label.style.color).toBe(asRenderedColor(tokens().text.revealed));
-    fireEvent.mouseLeave(turn);
-    expect(label.style.color).toBe(asRenderedColor(tokens().text.rest));
+    expect(rule()).toBeVisible();
   });
 
   it("shows the caller's label as the only percentage in the row", () => {
@@ -197,7 +181,26 @@ describe('ContextUsageRule in a task turn', () => {
     expect(within(screen.getByTestId('turn-usage-label')).getByText('12%')).toBeVisible();
   });
 
-  it('lifts the actual percentage Tag color when the turn is revealed', () => {
+  it('shows metadata values with decorative dots between, never at the ends', () => {
+    turn({
+      ...baseTask,
+      normalized_sdk_response: {
+        contextWindowLimit: 100_000,
+        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    } as unknown as Task);
+
+    const region = screen.getByRole('region', { name: 'Turn metadata' });
+    const values = region.firstElementChild!;
+    const dots = Array.from(values.children).filter((child) => child.textContent === '·');
+    expect(region).toBeVisible();
+    expect(dots).toHaveLength((values.children.length - 1) / 2);
+    expect(dots.every((dot) => dot.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(values.firstElementChild?.textContent).not.toBe('·');
+    expect(values.lastElementChild?.textContent).not.toBe('·');
+  });
+
+  it('keeps the actual percentage Tag readable at rest', () => {
     turn({
       ...baseTask,
       computed_context_window: 12_000,
@@ -207,12 +210,7 @@ describe('ContextUsageRule in a task turn', () => {
       },
     } as unknown as Task);
     const tag = screen.getByText('12%');
-    const turnRegion = screen.getByLabelText('Turn and its metadata');
-    expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.rest));
-    fireEvent.mouseEnter(turnRegion);
     expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.revealed));
-    fireEvent.mouseLeave(turnRegion);
-    expect(getComputedStyle(tag).color).toBe(asRenderedColor(tokens().text.rest));
   });
 
   it('adds nothing to a turn the executor reported no usage for', () => {
@@ -274,6 +272,7 @@ describe('ContextUsageRule in a task turn', () => {
     expect(within(oldTurn).queryByTestId('context-usage-rule')).toBeNull();
     expect(within(oldTurn).queryByTestId('turn-usage-label')).toBeNull();
     expect(oldTurn.querySelector('[aria-label="Turn metadata"]')).not.toBeNull();
+    expect(oldTurn.querySelector('[aria-label="Turn metadata"]')).toBeVisible();
     expect(oldTurn).toContainElement(oldAnswer);
     expect(screen.getByText('Here is the answer')).toBe(oldAnswer);
     expect(

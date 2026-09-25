@@ -289,7 +289,7 @@ const longMetadata = (
   </Flex>
 );
 
-it('shows context usage only below the latest turn as a new turn streams and older history pages in', async () => {
+it('keeps historical metadata visible and compact while the sole gauge follows the latest turn', () => {
   const withUsage = (task: Task) =>
     ({
       ...task,
@@ -305,139 +305,49 @@ it('shows context usage only below the latest turn as a new turn streams and old
   const { container } = render(<ConversationView client={null} sessionId={sessionId} />);
   const oldTurn = container.querySelector<HTMLElement>(`[data-task-block="${first.task_id}"]`)!;
   const oldAnswer = screen.getByText(/Answer 18\./);
-  const oldRegion = oldTurn.querySelector<HTMLElement>('[aria-label="Turn and its metadata"]')!;
   const oldFooter = oldTurn.querySelector<HTMLElement>('[aria-label="Turn metadata"]')!;
-  const oldFooterHeight = oldFooter.parentElement!.parentElement!.getBoundingClientRect().height;
+  const oldRowHeight = oldFooter.parentElement!.getBoundingClientRect().height;
+  expect(oldFooter).toBeVisible();
   expect(oldTurn.querySelector('[data-testid="context-usage-rule"]')).not.toBeNull();
-  expect(oldTurn.querySelector('[data-testid="turn-usage-label"]')).toHaveTextContent('22%');
 
   act(() => update({ ...state, tasks: [first, second] }));
   expect(container.querySelectorAll('[data-testid="context-usage-rule"]')).toHaveLength(0);
   expect(container.querySelectorAll('[data-testid="turn-usage-label"]')).toHaveLength(0);
   expect(screen.getByText(/Answer 18\./)).toBe(oldAnswer);
-  expect(oldFooter.parentElement!.parentElement!.getBoundingClientRect().height).toBe(
-    oldFooterHeight
-  );
-
-  await userEvent.hover(oldAnswer);
-  await waitFor(() => expect(oldFooter).toBeVisible());
-  expect(oldFooter.querySelector('.anticon-check-circle')).not.toBeNull();
-  expect(oldFooter.querySelector('.anticon-thunderbolt')).not.toBeNull();
+  expect(oldFooter).toBeVisible();
   expect(oldFooter).toHaveTextContent('synthetic-model');
   expect(oldFooter).toHaveTextContent('test');
-  fireEvent.mouseLeave(oldRegion);
-  await waitFor(() => expect(oldFooter).not.toBeVisible());
-  await userEvent.tab();
-  act(() => oldRegion.focus());
-  expect(oldRegion).toHaveFocus();
-  await waitFor(() => expect(oldFooter).toBeVisible());
+  expect(oldFooter.parentElement!.getBoundingClientRect().height).toBeLessThan(30);
+  expect(oldFooter.parentElement!.getBoundingClientRect().height).toBeCloseTo(oldRowHeight, 0);
 
   act(() => update({ ...state, tasks: [tasks[17], first, withUsage(second)] }));
   expect(container.querySelectorAll('[data-testid="context-usage-rule"]')).toHaveLength(1);
   expect(container.querySelectorAll('[data-testid="turn-usage-label"]')).toHaveLength(1);
   expect(oldTurn.querySelector('[data-testid="context-usage-rule"]')).toBeNull();
-  expect(oldTurn.querySelector('[data-testid="turn-usage-label"]')).toBeNull();
+  expect(oldFooter).toBeVisible();
   expect(screen.getByText(/Answer 18\./)).toBe(oldAnswer);
   const newest = container.querySelector<HTMLElement>(`[data-task-block="${second.task_id}"]`)!;
   expect(newest.querySelector('[data-testid="turn-usage-label"]')).toHaveTextContent('22%');
 });
 
-it('reveals the answer footer metadata on keyboard focus and dismisses on Escape', async () => {
-  render(footer(longMetadata));
-  expect(screen.getByText('synthetic-model')).not.toBeVisible();
-
-  await userEvent.tab();
-  await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
-
-  await userEvent.keyboard('{Escape}');
-  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
-});
-
-it('reveals the answer footer metadata while the turn is hovered', async () => {
-  render(footer(longMetadata));
-  const answer = screen.getByText('The assistant answer');
-
-  await userEvent.hover(answer);
-  await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
-  await userEvent.unhover(answer);
-  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
-});
-
-it('pins the answer footer metadata open on tap and releases it on the next tap', async () => {
-  render(footer(longMetadata));
-  const answer = screen.getByText('The assistant answer');
-  const tap = () => {
-    fireEvent.pointerDown(answer, { pointerType: 'touch', clientX: 10, clientY: 10 });
-    fireEvent.pointerUp(answer, { pointerType: 'touch', clientX: 10, clientY: 10 });
-  };
-
-  tap();
-  await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
-  tap();
-  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
-});
-
-it('keeps the rule full width at rest and fades it out as the values arrive', async () => {
+it('keeps long metadata visible and scrollable without clipping or moving the next turn', () => {
   const { container } = render(
-    <div>
-      {footer(<ModelPill model="m" />)}
+    <div style={{ width: Math.min(window.innerWidth, 390) }}>
+      {footer(longMetadata)}
       <p>The next turn</p>
     </div>
   );
-  const answer = screen.getByText('The assistant answer');
-  const line = () => screen.getByTestId('context-usage-rule');
-  // Queried structurally: at rest the values are `visibility: hidden`, so they
-  // are deliberately absent from the accessibility tree.
-  const values = () => container.querySelector<HTMLElement>('[aria-label="Turn metadata"]')!;
-  const label = () => screen.getByText('60%');
-  const next = () => screen.getByText('The next turn').getBoundingClientRect();
-
-  // At rest the line spans the whole cell, so its fill reads against the full
-  // row rather than against whatever the values left over.
-  const atRest = line().getBoundingClientRect();
-  const cell = line().parentElement!.getBoundingClientRect();
-  expect(atRest.left).toBe(cell.left);
-  expect(atRest.width).toBe(cell.width);
-  expect(atRest.width).toBeGreaterThan(values().getBoundingClientRect().width);
-  expect(atRest.right).toBeLessThanOrEqual(label().getBoundingClientRect().left);
-  expect(Number(getComputedStyle(line()).opacity)).toBeGreaterThan(0);
-  expect(Number(getComputedStyle(line()).opacity)).toBeLessThan(1);
-
-  const hiddenNext = next().top;
-  await userEvent.hover(answer);
-  await waitFor(() => expect(screen.getByRole('region', { name: 'Turn metadata' })).toBeVisible());
-
-  // Revealed, the values take the same cell and the line fades out under
-  // them; nothing resizes and the turn below does not move.
-  await waitFor(() => expect(Number(getComputedStyle(line()).opacity)).toBe(0));
-  expect(line().getBoundingClientRect().width).toBe(atRest.width);
-  expect(line().getBoundingClientRect().left).toBe(atRest.left);
-  expect(next().top).toBe(hiddenNext);
-});
-
-it('scrolls the turn metadata as one line at phone width', async () => {
-  // Fixed 390px frame rather than a viewport instance, so the overflow this
-  // asserts is the same on every browser project.
-  render(<div style={{ width: 390 }}>{footer(longMetadata)}</div>);
-  await userEvent.hover(screen.getByText('The assistant answer'));
   const row = screen.getByRole('region', { name: 'Turn metadata' });
-  await waitFor(() => expect(screen.getByText('synthetic-model')).toBeVisible());
-
-  // One line that scrolls: wider than its box horizontally, never taller.
+  const line = screen.getByTestId('context-usage-rule');
+  const nextTop = screen.getByText('The next turn').getBoundingClientRect().top;
+  expect(row).toBeVisible();
+  expect(line).toBeVisible();
   expect(row.scrollWidth).toBeGreaterThan(row.clientWidth);
   expect(row.scrollHeight).toBeLessThanOrEqual(row.clientHeight + 1);
-  expect(getComputedStyle(row).flexWrap).toBe('nowrap');
-
-  // Scrollable rather than clipped: the exact reach depends on the values.
   row.scrollLeft = row.scrollWidth;
   expect(row.scrollLeft).toBeGreaterThan(0);
-
-  // A horizontal swipe across the values scrolls them; it must not be read as
-  // the tap that pins the footer open, so the reveal still ends on unhover.
-  fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 200, clientY: 10 });
-  fireEvent.pointerUp(row, { pointerType: 'touch', clientX: 120, clientY: 10 });
-  await userEvent.unhover(screen.getByText('The assistant answer'));
-  await waitFor(() => expect(screen.getByText('synthetic-model')).not.toBeVisible());
+  expect(screen.getByText('The next turn').getBoundingClientRect().top).toBe(nextTop);
+  expect(container.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 });
 
 it('keeps familiar icon-led tool rows and results inside the quiet outer disclosure', async () => {

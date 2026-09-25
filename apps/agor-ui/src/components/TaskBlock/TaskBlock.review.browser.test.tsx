@@ -86,7 +86,6 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
   await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 3'));
   act(() => {
     timestamp.blur();
-    fireEvent.mouseLeave(screen.getByLabelText('Turn and its metadata'));
   });
   await act(async () => userEvent.click(nextTimestamp));
   await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Message index: 4'));
@@ -97,33 +96,27 @@ it('keeps notice boundaries, grouped timestamp access, and keyboard usage access
   });
   const tag = usage.querySelector('.ant-tag')!;
   const label = screen.getByTestId('turn-usage-label');
-  const expectStableUsageColor = async () =>
-    waitFor(() => {
-      // Both elements animate on reveal. Do not compare two in-flight frames:
-      // wait for the label to reach its target, then require the Tag to match.
-      expect(getComputedStyle(label).color).toBe(label.style.color);
-      expect(getComputedStyle(tag).color).toBe(label.style.color);
-    });
-  await expectStableUsageColor();
+  expect(getComputedStyle(label).color).toBe(label.style.color);
+  expect(getComputedStyle(tag).color).toBe(label.style.color);
   expect(usage).toHaveClass('ant-btn');
   await act(async () => userEvent.keyboard('{Tab}'));
   act(() => usage.focus());
   expect(usage).toHaveFocus();
   expect(getComputedStyle(usage).outlineStyle).not.toBe('none');
-  await expectStableUsageColor();
+  expect(getComputedStyle(tag).color).toBe(label.style.color);
   await act(async () => userEvent.keyboard('{Enter}'));
   expect(usage).toHaveAttribute('aria-expanded', 'true');
   await waitFor(() => expect(screen.getByText('Context Window Usage')).toBeVisible());
   await act(async () => userEvent.keyboard('{Escape}'));
   expect(usage).toHaveAttribute('aria-expanded', 'false');
-  // Exercise the touch pointer path in the real browser, including the phone viewport.
+  // Metadata remains visible after touching ordinary answer text.
   act(() => {
     usage.blur();
     const answer = screen.getByText('Continued answer');
     fireEvent.pointerDown(answer, { pointerType: 'touch', clientX: 20, clientY: 20 });
     fireEvent.pointerUp(answer, { pointerType: 'touch', clientX: 20, clientY: 20 });
   });
-  expect(screen.getByLabelText('Turn metadata')).toHaveStyle({ visibility: 'visible' });
+  expect(screen.getByLabelText('Turn metadata')).toBeVisible();
   await act(async () => userEvent.hover(usage));
   await waitFor(() => expect(usage).toHaveAttribute('aria-expanded', 'true'));
   expect(container.scrollWidth).toBeLessThanOrEqual(window.innerWidth);

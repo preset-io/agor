@@ -1,4 +1,4 @@
-/** TaskBlock renders one continuous turn, with lazy supporting activity and hover metadata. */
+/** TaskBlock renders one continuous turn, with lazy supporting activity and visible metadata. */
 
 import {
   AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
@@ -53,6 +53,28 @@ const { Paragraph } = Typography;
 // Default-param `= new Map()` would mint a fresh Map per render and defeat
 // the MessageBlock memos below whenever the prop is omitted.
 const EMPTY_USER_MAP = new Map<string, User>();
+
+function MetadataList({ children, gap }: { children: React.ReactNode; gap: number }) {
+  const items = React.Children.toArray(children).filter((item) => item !== '');
+  return (
+    <Flex wrap={false} gap={gap} align="center" style={{ width: 'max-content', flexShrink: 0 }}>
+      {items.flatMap((item, index) =>
+        index === 0
+          ? [item]
+          : [
+              <Typography.Text
+                key={`separator-before-${React.isValidElement(item) ? item.key : String(item)}`}
+                aria-hidden="true"
+                type="secondary"
+              >
+                ·
+              </Typography.Text>,
+              item,
+            ]
+      )}
+    </Flex>
+  );
+}
 
 /**
  * Block types for rendering
@@ -827,12 +849,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       ) : undefined;
 
     const metadataPills = (
-      <Flex
-        wrap={false}
-        gap={token.sizeUnit}
-        align="center"
-        style={{ width: 'max-content', flexShrink: 0 }}
-      >
+      <MetadataList gap={token.sizeUnit}>
         <TimerPill
           style={plainPillStyle}
           status={task.status}
@@ -903,7 +920,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             Report
           </Tag>
         )}
-      </Flex>
+      </MetadataList>
     );
 
     const [detailsError, setDetailsError] = useState<string | null>(null);
