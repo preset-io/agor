@@ -81,6 +81,11 @@ describe('AppHeader store-selector re-render isolation', () => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
+  it('shows the watch-preview marker only in development', () => {
+    const header = renderHeader(<AppHeader />);
+    expect(header.queryByText('Watch preview') !== null).toBe(import.meta.env.DEV);
+  });
+
   it('a patch to a slice AppHeader does not select leaves the header un-rendered', async () => {
     renderHeader(<AppHeader />);
 

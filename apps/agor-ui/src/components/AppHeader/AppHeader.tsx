@@ -237,6 +237,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           <BrandMark size={50} />
           <BrandLogo level={3} style={{ marginTop: -6 }} />
         </button>
+        {import.meta.env.DEV && <Tag color="green">Watch preview</Tag>}
         {instanceLabel &&
           (instanceDescription ? (
             <Popover
