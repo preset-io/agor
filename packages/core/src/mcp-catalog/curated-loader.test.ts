@@ -795,6 +795,18 @@ describe('catalog visibility validation', () => {
       parseCuratedCatalog(hidden.replace('category: dev-tools', 'category: invalid'))
     ).toThrow(/category/);
     expect(() => parseCuratedCatalog(`${hidden}    transport: stdio\n`)).toThrow(/stdio/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace(/\s+permission_disclosure:.*\n/, '\n'))
+    ).toThrow(/permission_disclosure/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('https://mcp.example.com/mcp', 'file:///tmp/mcp'))
+    ).toThrow(/remote_url/);
+    expect(() =>
+      parseCuratedCatalog(`${hidden}    oauth:\n      client_secret: forbidden\n`)
+    ).toThrow(/client_secret/);
+    expect(() => parseCuratedCatalog(`${hidden}    auth_type: credentials\n`)).toThrow(
+      /credentials/
+    );
     expect(() => parseCuratedCatalog(hidden + hidden.replace('entries:', 'unpublished:'))).toThrow(
       /duplicate entry name/
     );

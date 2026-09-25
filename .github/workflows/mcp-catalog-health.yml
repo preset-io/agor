@@ -4,6 +4,8 @@
 # remain advisory, while deterministic auth contradictions and unusable OAuth
 # contracts fail where a curator can fix them. The daily run applies the same
 # gate so actionable vendor drift produces normal workflow failure alerts.
+# All definitions receive static validation; deliberately hidden entries skip
+# live reachability/OAuth discovery and are explicitly reported as skipped.
 name: MCP catalog health
 
 on:
