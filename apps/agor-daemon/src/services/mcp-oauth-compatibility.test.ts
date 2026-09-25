@@ -225,7 +225,7 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
 
 it('resolves actual hidden saved installs through the full runtime catalog, without mutation', async () => {
   const definitions = (await loadCatalog()).filter((entry) => entry.hidden);
-  expect(definitions).toHaveLength(6);
+  expect(definitions).toHaveLength(7);
   for (const definition of definitions) {
     const server = catalogServer({
       catalog_entry_name: definition.name,
