@@ -10,7 +10,7 @@ const target = Object.freeze({
 
 export async function setBootstrapPassword(env = process.env, request = fetch) {
   const password = env.RAILWAY_AGOR_ADMIN_PASSWORD;
-  const token = env.RAILWAY_TOKEN || env.RAILWAY_API_KEY;
+  const token = env.RAILWAY_API_KEY || env.RAILWAY_TOKEN;
   if (!token) throw new Error('Missing Railway project token (RAILWAY_TOKEN).');
   if (!password) throw new Error('Missing RAILWAY_AGOR_ADMIN_PASSWORD.');
   if ([...password].length < 15 || Buffer.byteLength(password, 'utf8') > 72) {

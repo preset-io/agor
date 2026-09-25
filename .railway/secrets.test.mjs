@@ -28,6 +28,16 @@ test('secret transfer is scoped, redirect-free, and never deploys or resets acco
   assert.equal(calls, 1);
 });
 
+test('project token precedence matches the lifecycle launcher', async () => {
+  await setBootstrapPassword(
+    { ...env, RAILWAY_API_KEY: 'preferred-project-token' },
+    async (_url, options) => {
+      assert.equal(options.headers['Project-Access-Token'], 'preferred-project-token');
+      return Response.json({ data: { variableUpsert: true } });
+    }
+  );
+});
+
 test('provider and transport errors cannot disclose credentials', async () => {
   for (const request of [
     async () => {

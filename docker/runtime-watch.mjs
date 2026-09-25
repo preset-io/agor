@@ -13,7 +13,10 @@ export function backendPort(url) {
 export function requiresRedeploy(paths) {
   return paths.some(
     (path) =>
-      path.startsWith('docker/') || path.includes('/migrations/') || path === '.railway/railway.ts'
+      path.startsWith('docker/') ||
+      path.startsWith('packages/core/drizzle/') ||
+      path.includes('/migrations/') ||
+      path === '.railway/railway.ts'
   );
 }
 

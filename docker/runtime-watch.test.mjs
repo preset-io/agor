@@ -41,12 +41,22 @@ test('poll skips unchanged commits, applies once, rejects startup/schema/depende
   options.changedPaths = async () => ['docker/Dockerfile'];
   await assert.rejects(syncIfChanged(options), /redeploy/);
   assert.equal(syncs, 1);
+  for (const migration of [
+    'packages/core/drizzle/sqlite/0001_example.sql',
+    'packages/core/drizzle/postgres/0001_example.sql',
+    'packages/core/drizzle/sqlite/meta/_journal.json',
+    'packages/core/drizzle/postgres/meta/_journal.json',
+  ]) {
+    assert.equal(requiresRedeploy([migration]), true);
+    options.changedPaths = async () => ['apps/agor-ui/src/index.tsx', migration];
+    await assert.rejects(syncIfChanged(options), /redeploy/);
+    assert.equal(syncs, 1, 'mixed application and migration updates must not partially sync');
+  }
   options.prepare = async () => {
     throw new Error('dependencies differ');
   };
   await assert.rejects(syncIfChanged(options), /dependencies/);
   assert.equal(syncs, 1);
-  assert.equal(requiresRedeploy(['packages/core/src/db/migrations/sqlite/new.sql']), true);
 });
 
 test('proxy rejects cross-origin WebSocket upgrades before reaching a backend', async () => {
