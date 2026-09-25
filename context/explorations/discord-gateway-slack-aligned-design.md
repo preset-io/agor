@@ -579,7 +579,8 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   timeout, or rate limit beyond the row's catch-up budget returns a clear,
   content-free error; an empty channel with both permissions returns an empty
   result. If Discord returns empty content for an ordinary user message with no
-  supported rich payload (Message Content unavailable), the read fails rather
+  supported rich payload (an attachment, embed, component, sticker, or poll),
+  meaning Message Content is unavailable, the read fails rather
   than returning silently blank messages. A forwarded message has empty
   content of its own; it is read from its first `message_snapshots` entry, so
   its text and attachments are the forwarded message's and it is flagged
@@ -604,7 +605,9 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   keep validating and mean all capabilities off. The listener, cursor, and
   delivery behavior are unchanged. Catch-up shares the message reader, so the
   one catch-up change is that a forwarded message no longer fails catch-up;
-  its forwarded text is included like any other message.
+  its forwarded text is included like any other message. Catch-up attributes
+  that text to the person who forwarded it and does not mark it as forwarded;
+  only the agent tool flags forwards.
 
 ### Externally observable contracts
 
@@ -630,9 +633,9 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
 | Readable channels        | Allowlisted parent channels plus public threads under them                                                                                                                                                                                               |
 | Config shape             | Slack-style object `agent_tools: { channel_history: true }`; `[]` stays valid as all off                                                                                                                                                                 |
 | Scope                    | Channel history only; DM-on-join and guild search are separate work                                                                                                                                                                                      |
-| Default                  | Off per row; admin opt-in                                                                                                                                                                                                                                |
-| Access                   | Same branch binding and no-session privilege rule as the Slack tools                                                                                                                                                                                     |
-| Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds                                                                                                                                                                                      |
+| Default                  | Off per row; admin opt-in, following the Slack precedent and the least-privilege rule                                                                                                                                                                    |
+| Access                   | Same branch binding and no-session privilege rule as the Slack tools (existing Slack tool contract)                                                                                                                                                      |
+| Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds; a reversible default, with separate budgets deferred                                                                                                                                |
 | Session-record retention | Tool results, including Discord messages from people who never mentioned the bot, are stored in the calling session's transcript like any tool result, as summon catch-up prompts already are. "No transcript" means no separate provider-history mirror |
 | Forwarded messages       | Read from the snapshot and flagged `is_forwarded`; catch-up no longer fails on a forward                                                                                                                                                                 |
 
