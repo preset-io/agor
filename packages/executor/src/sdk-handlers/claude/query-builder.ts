@@ -21,7 +21,7 @@ import type {
   PromptOrigin,
   ToolPermission,
 } from '@agor/core/types';
-import { isGatewaySession } from '@agor/core/types';
+import { isGatewaySession, MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
@@ -467,6 +467,7 @@ export async function setupQuery(
           url: `${daemonUrl}/mcp`,
           headers: {
             Authorization: `Bearer ${mcpToken}`,
+            [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.claude,
           },
           ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
         },
@@ -793,7 +794,10 @@ export async function setupQuery(
               dynamic[AGOR_MCP_SERVER_NAME] = {
                 type: 'http',
                 url: `${daemonUrl}/mcp`,
-                headers: { Authorization: `Bearer ${session.mcp_token}` },
+                headers: {
+                  Authorization: `Bearer ${session.mcp_token}`,
+                  [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.claude,
+                },
                 ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
               };
             }

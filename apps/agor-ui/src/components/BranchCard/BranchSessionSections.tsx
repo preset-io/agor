@@ -59,6 +59,7 @@ import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
+import { OverflowTooltip } from '../OverflowTooltip';
 import { getChannelIcon } from '../Pill';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import {
@@ -92,8 +93,8 @@ const ROW_ENTER_STAGGER_MS = 15;
 const ROW_ENTER_MAX_STAGGER = 8;
 const ROW_ENTER_CLEAR_MS = 400;
 const EMPTY_ENTERING_ROWS: ReadonlyMap<string, number> = new Map();
-/** Rows carry their own hover/selection fill, so Tree's 4px node gap is just air. */
-const TREE_ROW_STYLES = { item: { marginBottom: 0 } };
+/** Truncated titles wait a beat, so scanning down a dense list doesn't flash a tooltip per row. */
+const TITLE_TOOLTIP_DELAY_S = 0.5;
 
 function getSessionRowAccessibleLabel(session: Session, hiddenChildCount = 0): string {
   const details = [
@@ -411,6 +412,18 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const enteringRowsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(enteringRowsTimer.current), []);
   const rowHeight = isMobileViewport ? MOBILE_TOUCH_TARGET : token.controlHeight;
+  // One size unit between rows, so adjacent hover/selection fills don't touch.
+  const rowGap = token.sizeUnit;
+  // Tree's node margin is replaced by an equal padding: padding stays inside the
+  // measured node, so the virtual list's heights and the level guides stay continuous.
+  // The level guides (index.css) extend across the gap via --agor-session-row-gap.
+  const treeRowStyles = useMemo(
+    () => ({
+      root: { '--agor-session-row-gap': `${rowGap}px` } as React.CSSProperties,
+      item: { marginBottom: 0, paddingBottom: rowGap },
+    }),
+    [rowGap]
+  );
   const { archiveSession: archiveSessionUnstable } = useSessionActions(client);
   // useSessionActions returns a new function per render; keep row handlers memo-stable.
   const archiveSession = useStableCallback(archiveSessionUnstable);
@@ -851,14 +864,20 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const sessionRowStyle = (session: Session): React.CSSProperties => ({
-    // Borderless rows: status lives in the trailing mark, selection and failure in the fill.
     border: 0,
     borderRadius: token.borderRadiusSM,
+    // Inset selection border keeps row geometry unchanged and leaves the native
+    // keyboard focus outline independent. Shared by tree, search and scheduled rows.
+    // Use the neutral foreground for near-white in dark themes and contrast in light themes.
+    boxShadow:
+      session.session_id === selectedSessionId
+        ? `inset 0 0 0 ${token.lineWidth}px ${token.colorText}`
+        : undefined,
     paddingBlock: 0,
-    // Equal, tight insets: the logo sits close to the chevron and the status mark
-    // mirrors it inside a selected or failed fill, on the card's content grid.
-    paddingInlineStart: token.paddingXXS,
-    paddingInlineEnd: token.paddingXXS,
+    // Equal insets: the logo and the status mark sit one small step inside a
+    // selected, hovered or failed fill instead of hugging its edges.
+    paddingInlineStart: token.paddingXS,
+    paddingInlineEnd: token.paddingXS,
     minHeight: rowHeight,
     background: getSessionRowFill(token, {
       failed: isSessionRowFailed(session),
@@ -883,16 +902,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   ) => {
     const titleText = getSessionDisplayTitle(session, { includeAgentFallback: true });
     return (
-      <Typography.Text
+      <OverflowTooltip
         title={titleText}
-        style={getSessionRowTitleStyle(token, {
-          read: isSessionRowRead(session, session.session_id === selectedSessionId),
-          parent: options.parent,
-          hug: options.hug,
-        })}
+        placement="topLeft"
+        mouseEnterDelay={TITLE_TOOLTIP_DELAY_S}
       >
-        <HighlightMatch text={titleText} query={options.query ?? ''} />
-      </Typography.Text>
+        <Typography.Text
+          style={getSessionRowTitleStyle(token, {
+            read: isSessionRowRead(session, session.session_id === selectedSessionId),
+            parent: options.parent,
+            hug: options.hug,
+          })}
+        >
+          <HighlightMatch text={titleText} query={options.query ?? ''} />
+        </Typography.Text>
+      </OverflowTooltip>
     );
   };
 
@@ -1160,27 +1184,32 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 parent: Boolean(node.children?.length),
               })}
               {isGateway && (
-                <Typography.Text
-                  type="secondary"
+                <OverflowTooltip
                   title={gatewaySource?.channel_name ?? 'Gateway'}
-                  style={{
-                    fontSize: token.fontSizeSM,
-                    flex: '0 1 auto',
-                    minWidth: 0,
-                    maxWidth: '45%',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
+                  placement="topLeft"
+                  mouseEnterDelay={TITLE_TOOLTIP_DELAY_S}
                 >
-                  {gatewaySource ? (
-                    <>
-                      {getChannelIcon(gatewaySource.channel_type)} {gatewaySource.channel_name}
-                    </>
-                  ) : (
-                    'Gateway'
-                  )}
-                </Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      fontSize: token.fontSizeSM,
+                      flex: '0 1 auto',
+                      minWidth: 0,
+                      maxWidth: '45%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {gatewaySource ? (
+                      <>
+                        {getChannelIcon(gatewaySource.channel_type)} {gatewaySource.channel_name}
+                      </>
+                    ) : (
+                      'Gateway'
+                    )}
+                  </Typography.Text>
+                </OverflowTooltip>
               )}
             </Flex>
             {hiddenChildCount > 0 && (
@@ -1277,8 +1306,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         blockNode
         selectable={false}
         titleRender={renderMemoSessionNode}
-        // Rows carry their own hover/selection fill, so Tree's 4px node gap is just air.
-        styles={TREE_ROW_STYLES}
+        styles={treeRowStyles}
       />
     </ConfigProvider>
   );
@@ -1292,10 +1320,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   // Section chevrons share the top-level tree chevron column.
   const sectionHeaderStyle: React.CSSProperties = { paddingInline: 0 };
   // Section bodies hang off a guide under the header's chevron; rows' own chevron
-  // column starts right at the guide, so the indent doesn't stack with it.
+  // column starts one size unit past the guide, so the indent doesn't stack with it
+  // but the section guide and the first level guide don't crowd each other.
   const sectionBodyGuide: React.CSSProperties = {
     marginInlineStart: treeColumn / 2,
-    paddingInlineStart: 0,
+    paddingInlineStart: token.sizeUnit,
     borderInlineStart: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
   };
   // The chevron slot supplies the one standard step before the title.
@@ -1305,7 +1334,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <Flex
       align="center"
       justify="center"
-      style={{ width: treeColumn, marginInlineEnd: token.paddingXXS }}
+      style={{ width: treeColumn, marginInlineEnd: token.paddingXS }}
     >
       {renderChevron(Boolean(isActive))}
     </Flex>
@@ -1351,7 +1380,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         <div className="nodrag">
           <Tooltip title={isCreating ? undefined : 'New session'}>
             <Button
-              type="text"
+              // The section's primary action: a solid primary + so it stands out from
+              // the header's quiet text controls.
+              type="primary"
               size={isMobileViewport ? 'middle' : 'small'}
               icon={<PlusOutlined />}
               aria-label="New Session"
@@ -1390,7 +1421,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     <PagedSessions
       key={branch.branch_id}
       sessions={scheduledSessions}
-      rowGap={0}
+      rowGap={rowGap}
       fillAvailableHeight={fillPanel}
       onContentSizeChange={scheduledSection.onContentSizeChange}
     >
@@ -1515,7 +1546,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           <PagedSessions
             key={`${branch.branch_id}:${trimmedSearchQuery}`}
             sessions={searchResults}
-            rowGap={0}
+            rowGap={rowGap}
           >
             {(session) => renderFlatSessionRow(session, trimmedSearchQuery)}
           </PagedSessions>

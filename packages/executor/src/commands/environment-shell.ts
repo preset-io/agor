@@ -26,7 +26,9 @@ export async function runBoundedEnvironmentShell(options: {
   cwd: string;
   env?: Record<string, string>;
   deadline: number;
-  output: EnvironmentOutput;
+  output?: EnvironmentOutput;
+  onStdout?: (chunk: Buffer) => void;
+  onStderr?: (chunk: Buffer) => void;
   cleanupMs?: number;
 }): Promise<{ outcome: 'succeeded' | 'failed' | 'unknown'; message: string }> {
   assertEnvCommandAllowed(options.command, options.action);
@@ -42,8 +44,15 @@ export async function runBoundedEnvironmentShell(options: {
     stdio: 'pipe',
   });
   child.stdin.end();
-  child.stdout.on('data', (chunk) => options.output.append(chunk));
-  child.stderr.on('data', (chunk) => options.output.append(chunk));
+  if (!options.output && (!options.onStdout || !options.onStderr)) {
+    throw new Error('Environment shell output capture is required');
+  }
+  child.stdout.on('data', (chunk: Buffer) =>
+    options.onStdout ? options.onStdout(chunk) : options.output!.append(chunk)
+  );
+  child.stderr.on('data', (chunk: Buffer) =>
+    options.onStderr ? options.onStderr(chunk) : options.output!.append(chunk)
+  );
   let cleanupFailed = false;
   const signalGroup = (signal: NodeJS.Signals) => {
     if (!child.pid) return;

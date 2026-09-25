@@ -1100,6 +1100,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         'git.branch.add',
         userId,
         branch.branch_id,
+        undefined,
         attemptId
       );
 

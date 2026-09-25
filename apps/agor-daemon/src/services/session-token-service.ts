@@ -263,6 +263,7 @@ export class SessionTokenService {
     commandId: string,
     userId: string,
     branchId?: string,
+    expirationMs = EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
     provisioningAttemptId?: string
   ): Promise<string> {
     if (
@@ -278,7 +279,7 @@ export class SessionTokenService {
         branchId,
         provisioningAttemptId,
         maxUses: -1,
-        expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+        expirationMs,
       },
       EXECUTOR_COMMAND_TOKEN_PURPOSE
     );
@@ -671,11 +672,21 @@ export async function issueExecutorCommandToken(
   commandId: string,
   userId: string,
   branchId?: string,
+  expirationMs?: number,
   provisioningAttemptId?: string
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
-  return provisioningAttemptId === undefined
+  if (provisioningAttemptId !== undefined) {
+    return service.generateCommandToken(
+      commandId,
+      userId,
+      branchId,
+      expirationMs,
+      provisioningAttemptId
+    );
+  }
+  return expirationMs === undefined
     ? service.generateCommandToken(commandId, userId, branchId)
-    : service.generateCommandToken(commandId, userId, branchId, provisioningAttemptId);
+    : service.generateCommandToken(commandId, userId, branchId, expirationMs);
 }

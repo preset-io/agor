@@ -186,6 +186,7 @@ dbTest(
               command,
               user,
               branchId,
+              undefined,
               command === 'git.branch.add' ? attemptId : undefined
             )
           );

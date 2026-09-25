@@ -75,6 +75,7 @@ export class EnvironmentCommandRepository {
     action: EnvironmentCommandAction;
     attemptId: string;
     userId: UserID;
+    commandBudgetMs?: number;
     confirmationOf?: string;
   }): Promise<Environment> {
     return this.mutate(input.branch.branch_id, (previous, now, row) => {
@@ -120,7 +121,15 @@ export class EnvironmentCommandRepository {
       } else if (input.confirmationOf) {
         throw new RepositoryError('Start confirmation is only valid for Start');
       }
-      const commandDeadline = now.getTime() + BUDGET.claimMs + BUDGET.commandMs;
+      const commandBudgetMs = input.commandBudgetMs ?? BUDGET.commandMs;
+      if (
+        !Number.isSafeInteger(commandBudgetMs) ||
+        commandBudgetMs < 1 ||
+        commandBudgetMs > BUDGET.standaloneCommandMs
+      ) {
+        throw new RepositoryError('Invalid environment command budget');
+      }
+      const commandDeadline = now.getTime() + BUDGET.claimMs + commandBudgetMs;
       const next: Environment = {
         ...environment,
         status: input.action === 'start' ? 'starting' : 'stopping',
@@ -129,6 +138,7 @@ export class EnvironmentCommandRepository {
           action: input.action,
           requested_by: input.userId,
           requested_at: now.toISOString(),
+          command_budget_ms: commandBudgetMs,
           claim_deadline: new Date(now.getTime() + BUDGET.claimMs).toISOString(),
           command_deadline: new Date(commandDeadline).toISOString(),
           result_deadline: new Date(
@@ -146,11 +156,18 @@ export class EnvironmentCommandRepository {
       delete next.last_health_check;
       delete next.last_command;
       delete next.last_error;
+      if (input.action === 'start') {
+        delete next.health_url;
+        next.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
+      }
       return { value: next, environment: next };
     });
   }
 
-  async report(report: EnvironmentCommandReport): Promise<Environment> {
+  async report(
+    report: EnvironmentCommandReport,
+    options?: { expectedRequester?: UserID }
+  ): Promise<Environment> {
     return this.mutate(report.branch_id, (environment, now, row) => {
       const attempt = environment.command_attempt;
       if (
@@ -160,6 +177,9 @@ export class EnvironmentCommandRepository {
         attempt.action !== report.action
       ) {
         throw new RepositoryError('Stale environment command report');
+      }
+      if (options?.expectedRequester && attempt.requested_by !== options.expectedRequester) {
+        throw new RepositoryError('Environment command actor changed');
       }
       if (report.kind === 'result' && attempt.finished_at) {
         // Duplicate delivery is harmless; it never overwrites the first settlement.
@@ -174,7 +194,10 @@ export class EnvironmentCommandRepository {
         next.command_attempt!.claimed_at = now.toISOString();
         // The command receives a full budget from claim, never past the hard admission deadline.
         next.command_attempt!.command_deadline = new Date(
-          Math.min(Date.parse(attempt.command_deadline), now.getTime() + BUDGET.commandMs)
+          Math.min(
+            Date.parse(attempt.command_deadline),
+            now.getTime() + (attempt.command_budget_ms ?? BUDGET.commandMs)
+          )
         ).toISOString();
       } else {
         if (!attempt.claimed_at)
@@ -194,16 +217,28 @@ export class EnvironmentCommandRepository {
             report.truncated
           );
           if (report.outcome === 'succeeded' && report.action === 'start') {
-            settled.status = row.health_check_url ? 'starting' : 'running';
+            const effectiveHealthUrl = report.lifecycle_result?.health ?? row.health_check_url;
+            settled.status = effectiveHealthUrl ? 'starting' : 'running';
             settled.last_health_check = {
               timestamp: now.toISOString(),
               status: 'unknown',
-              message: row.health_check_url
+              message: effectiveHealthUrl
                 ? 'Start command succeeded; waiting for health observation'
                 : 'Start command reported success; no health check configured',
             };
-            settled.access_urls =
-              report.access_urls ?? (row.app_url ? [{ name: 'App', url: row.app_url }] : []);
+            if (report.lifecycle_result?.health) {
+              settled.health_url = report.lifecycle_result.health;
+            } else {
+              delete settled.health_url;
+            }
+            settled.access_urls = report.lifecycle_result?.app
+              ? [{ name: 'App', url: report.lifecycle_result.app }]
+              : row.app_url
+                ? [{ name: 'App', url: row.app_url }]
+                : [];
+          } else if (report.outcome === 'succeeded') {
+            delete settled.health_url;
+            settled.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
           }
           return { value: settled, environment: settled };
         }

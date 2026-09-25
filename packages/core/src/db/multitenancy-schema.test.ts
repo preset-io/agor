@@ -161,6 +161,19 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
+  it('limits API-key host tenant discovery to routing rows and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0115_api_key_host_tenant_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'api_key_host_tenant_discovery'");
+    expect(migration).toContain(`"namespace" = 'tenant.routing'`);
+    expect(migration).toContain(`"key" = 'public_url'`);
+    expect(migration).not.toContain('WITH CHECK');
+    expect(migration).not.toContain('user_api_keys');
+  });
+
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0069_upload_maintenance.sql');
 

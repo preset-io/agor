@@ -4,11 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getMcpServersForSession: vi.fn(),
   sendAndWait: vi.fn(),
+  configured: vi.fn(),
+}));
+
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
 }));
 
 vi.mock('@agor/core/mcp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/mcp')>()),
   getMcpServersForSession: mocks.getMcpServersForSession,
+  resolveScopedMCPAuthHeaders: vi.fn(async () => ({ Authorization: 'Bearer external-token' })),
 }));
 
 vi.mock('@agor/core/agentic-integrations', () => ({
@@ -17,7 +24,8 @@ vi.mock('@agor/core/agentic-integrations', () => ({
       start = vi.fn();
       stop = vi.fn();
       createSession = this.resumeSession;
-      async resumeSession() {
+      async resumeSession(idOrOptions: unknown, options?: unknown) {
+        mocks.configured(options ?? idOrOptions);
         return {
           sessionId: 'provider-thread-A',
           setModel: vi.fn(),
@@ -35,7 +43,15 @@ import { CopilotPromptService } from './prompt-service.js';
 describe('CopilotPromptService MCP identity scoping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getMcpServersForSession.mockResolvedValue([]);
+    mocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'external',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+        },
+      },
+    ]);
   });
 
   it('sends current execution identity on each resumed provider request', async () => {
@@ -46,6 +62,7 @@ describe('CopilotPromptService MCP identity scoping', () => {
           created_by: 'session-owner',
           sdk_session_id: 'provider-thread-A',
           branch_id: 'branch-1',
+          mcp_token: 'test-token',
         }),
       } as never,
       undefined,
@@ -58,6 +75,19 @@ describe('CopilotPromptService MCP identity scoping', () => {
       )) {
         // Consume the provider turn.
       }
+      expect(mocks.configured.mock.lastCall?.[0]).toMatchObject({
+        mcpServers: {
+          agor: {
+            headers: {
+              Authorization: 'Bearer test-token',
+              'x-agor-mcp-client': 'copilot',
+            },
+          },
+        },
+      });
+      expect(mocks.configured.mock.lastCall?.[0].mcpServers.external.headers).toEqual({
+        Authorization: 'Bearer external-token',
+      });
       expect(mocks.sendAndWait).toHaveBeenLastCalledWith(
         {
           prompt: expect.stringContaining(

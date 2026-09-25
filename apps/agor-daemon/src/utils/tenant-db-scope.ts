@@ -1,5 +1,6 @@
 import {
   type AgorConfig,
+  isMissingTenantContextError,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -19,6 +20,10 @@ import {
 import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+import {
+  createApiKeyHostTenantResolver,
+  hasPersonalApiKeyHeader,
+} from '../auth/api-key-host-tenant.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
 interface TenantDatabaseScopeOptions {
@@ -170,6 +175,10 @@ export function deferWithTenantContext(
 
 export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScopeOptions) {
   const multiTenancy = resolveMultiTenancyConfig(options.config);
+  const resolveApiKeyHostTenant = createApiKeyHostTenantResolver({
+    db: options.db,
+    config: options.config,
+  });
 
   const bearerPayloadFromHeaders = (headers: Record<string, unknown> | undefined): unknown => {
     const authorization = readHeaderValue(headers, 'authorization');
@@ -186,7 +195,7 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
     }
   };
 
-  const resolveTenantForDatabaseScope = (context: HookContext) => {
+  const resolveTenantForDatabaseScope = async (context: HookContext): Promise<TenantContext> => {
     const params = context.params as HookContext['params'] & {
       headers?: Record<string, unknown>;
       connection?: { tenant?: unknown; data?: { tenant?: unknown } };
@@ -214,13 +223,26 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       if (error instanceof TenantResolutionError && inheritedTenantId) {
         return { tenant_id: inheritedTenantId as TenantID, source: 'explicit' as const };
       }
+      // An external request presenting only an opaque personal API key has no
+      // signed tenant. Route it by the trusted workspace Host; the key is then
+      // verified under that tenant's RLS by the api-key strategy.
+      // Only when no tenant identity was presented at all: a malformed or
+      // conflicting identity stays terminal and is never rescued by the Host.
+      if (
+        isMissingTenantContextError(error) &&
+        resolveApiKeyHostTenant &&
+        context.params.provider &&
+        hasPersonalApiKeyHeader(paramsWithConnectionTenant.headers)
+      ) {
+        return resolveApiKeyHostTenant(paramsWithConnectionTenant.headers);
+      }
       throw error;
     }
   };
 
   return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
     try {
-      context.params.tenant = resolveTenantForDatabaseScope(context);
+      context.params.tenant = await resolveTenantForDatabaseScope(context);
     } catch (error) {
       if (error instanceof TenantResolutionError) {
         throw new NotAuthenticated(error.message);

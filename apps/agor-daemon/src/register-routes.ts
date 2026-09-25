@@ -79,6 +79,8 @@ import type {
   BoardComment,
   BoardCommentReposition,
   BranchArchiveOrDeleteOptions,
+  CreateUserApiKeyRequest,
+  CurrentUserIdentity,
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
@@ -113,9 +115,11 @@ import {
   isBranchArchiveOrDeleteOptions,
   isCanonicalFullUuid,
   isTaskPendingDispatch,
+  isUserApiKeySource,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
+  normalizeRole,
   ROLES,
   SessionStatus,
   TaskStatus,
@@ -4017,12 +4021,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerAuthenticatedRoute(
     app,
+    // Literal on purpose: the realtime-publish and tenant-classification source
+    // scans read registered paths from this file (USER_API_KEYS_SERVICE_PATH).
     '/api/v1/user/api-keys',
     {
       async find(params: AuthenticatedParams) {
         return userApiKeysService.find(params);
       },
-      async create(data: { name: string }, params: AuthenticatedParams) {
+      async create(data: CreateUserApiKeyRequest, params: AuthenticatedParams) {
         return userApiKeysService.create(data, params);
       },
       async patch(id: string, data: { name?: string }, params: AuthenticatedParams) {
@@ -4040,6 +4046,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       patch: { role: ROLES.MEMBER, action: 'update API keys' },
       remove: { role: ROLES.MEMBER, action: 'delete API keys' },
     },
+    requireAuth
+  );
+
+  // Credential self-check for non-browser clients (`agor login --api-key`).
+  // Returns only the caller's own identity and the tenant the request was
+  // authenticated in, so a raw key can be validated without exchanging it for
+  // refresh-capable browser tokens.
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/me', // USER_IDENTITY_SERVICE_PATH; literal for the source scans
+    {
+      async find(params: AuthenticatedParams): Promise<CurrentUserIdentity> {
+        const user = params.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+        const authentication = params.authentication as
+          | { strategy?: string; api_key_id?: unknown; api_key_source?: unknown }
+          | undefined;
+        return {
+          user_id: user.user_id as UserID,
+          email: user.email,
+          name: (user as { name?: string }).name,
+          role: normalizeRole(user.role),
+          tenant_id: params.tenant?.tenant_id,
+          auth_strategy: authentication?.strategy,
+          ...(authentication?.strategy === 'api-key' &&
+          typeof authentication.api_key_id === 'string'
+            ? {
+                api_key_id: authentication.api_key_id,
+                api_key_source: isUserApiKeySource(authentication.api_key_source)
+                  ? authentication.api_key_source
+                  : 'manual',
+              }
+            : {}),
+        };
+      },
+    },
+    { find: { role: ROLES.VIEWER, action: 'read own identity' } },
     requireAuth
   );
 

@@ -1747,6 +1747,8 @@ export const userApiKeys = pgTable(
     name: text('name').notNull(),
     prefix: text('prefix').notNull(), // first 12 chars: 'agor_sk_XXXX' for identification
     key_hash: text('key_hash').notNull(), // bcrypt hash of full key
+    // 'manual' (created in settings) | 'cli_login' (minted by `agor login`)
+    source: text('source').notNull().default('manual'),
     created_at: t.timestamp('created_at').notNull(),
     last_used_at: t.timestamp('last_used_at'),
   },
