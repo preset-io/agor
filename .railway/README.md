@@ -176,6 +176,7 @@ bootstrap service/volume binding for another branch.
   uses Railway's default volume size. No project or service deletion is performed.
   Intent is persisted before delete/create: interrupted/unknown reset outcomes
   block Play and further Nuke rather than blindly repeat destructive operations.
+  Stop and Logs remain available to drain/inspect compute during reset recovery.
   An operator must reconcile those outcomes against Railway's inventory. Keep
   the original checked-in volume ID as the ownership seed; do not overwrite it
   after Nuke. IaC preserves the state variable, but must be reviewed/reconciled
@@ -230,3 +231,9 @@ retain the last synced source. First startup still does the Compose initial
 workspace builds, and watcher CPU/RAM accrue costs while the preview is running.
 The supervisor terminates its process group on Stop; this is a single-container,
 single-controller experiment, not an HA/distributed lifecycle lease.
+
+Remote watch runs JavaScript-only tsup watchers and executor `tsc --noCheck`
+emission after the initial full builds, avoiding several resident declaration
+and semantic type-checking processes. Local Compose keeps its full watchers;
+run `pnpm check`/CI for type errors. This reduces memory pressure but does not
+make preview capacity unlimited.

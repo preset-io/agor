@@ -102,7 +102,7 @@ export class RailwayPreview {
   ) {
     Object.assign(this, { client, target, env, request, signal, wait, now, report });
   }
-  async inspect() {
+  async inspect({ allowPendingReset = false } = {}) {
     const t = this.target;
     const data = await this.client.query(
       `query Inspect($projectId:String!,$environmentId:String!,$serviceId:String!) {
@@ -126,15 +126,16 @@ export class RailwayPreview {
       throw new Error('Railway ownership/source mismatch; refusing to operate.');
     }
     const state = volumeState(data.variables[VOLUME_STATE_VARIABLE], t);
-    if (state.phase !== 'ready')
+    if (state.phase !== 'ready' && !allowPendingReset)
       throw new Error('Interrupted volume reset; operator reconciliation required');
     const volumes = data.environment.volumeInstances.edges
       .map(({ node }) => node)
       .filter((v) => v.serviceId === t.serviceId);
     if (
-      volumes.length !== 1 ||
-      volumes[0].volumeId !== state.volumeId ||
-      volumes[0].mountPath !== '/home/agor/.agor'
+      state.phase === 'ready' &&
+      (volumes.length !== 1 ||
+        volumes[0].volumeId !== state.volumeId ||
+        volumes[0].mountPath !== '/home/agor/.agor')
     ) {
       throw new Error('Railway volume binding mismatch; refusing to operate.');
     }
@@ -297,7 +298,7 @@ export class RailwayPreview {
     );
   }
   async stop() {
-    const { triggers } = await this.inspect();
+    const { triggers } = await this.inspect({ allowPendingReset: true });
     // Disable future GitHub pushes before draining queued and active deployments.
     for (const trigger of triggers)
       await this.client.query('mutation Disable($id:String!) { deploymentTriggerDelete(id:$id) }', {
@@ -307,7 +308,7 @@ export class RailwayPreview {
     const requested = new Set();
     while (this.now() < deadline) {
       this.signal?.throwIfAborted();
-      await this.inspect();
+      await this.inspect({ allowPendingReset: true });
       const active = (await this.deployments()).filter((d) => !TERMINAL.has(d.status));
       if (!active.length) return;
       for (const deployment of active) {
@@ -327,7 +328,7 @@ export class RailwayPreview {
     throw new Error('Railway stop is not confirmed; inspect provider state. Volume retained.');
   }
   async logs() {
-    await this.inspect();
+    await this.inspect({ allowPendingReset: true });
     const latest = (await this.deployments())[0];
     if (!latest) return 'No Railway deployments.';
     const result = await this.client.query(
@@ -394,7 +395,12 @@ export async function main() {
     if (action === 'nuke') {
       // biome-ignore lint/suspicious/noUndeclaredEnvVars: caller-owned operator credential; never sent to app.
       const token = process.env.RAILWAY_API_TOKEN;
-      if (!token) throw new Error('Nuke requires a workspace token');
+      if (!token) {
+        console.error(
+          'Nuke requires RAILWAY_API_TOKEN (workspace token) in your secure environment.'
+        );
+        throw new Error('Nuke requires a workspace token');
+      }
       await resetVolume(
         preview,
         new RailwayClient(token, { accountToken: true, signal: controller.signal })

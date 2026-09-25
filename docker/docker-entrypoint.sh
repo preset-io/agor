@@ -40,7 +40,11 @@ git config --global --add safe.directory /app 2>/dev/null || true
 echo "🔧 Fixing home directory permissions..."
 mkdir -p -m 0700 /home/agor/.agor
 mkdir -p /home/agor/.cache
-sudo -n chown -R agor:agor /home/agor 2>/dev/null || true
+if [ "${AGOR_REMOTE_WATCH:-false}" = "true" ]; then
+  sudo -n chown agor:agor /home/agor/.agor /home/agor/.cache 2>/dev/null || true
+else
+  sudo -n chown -R agor:agor /home/agor 2>/dev/null || true
+fi
 
 echo "✅ Home directory permissions fixed"
 
@@ -193,24 +197,38 @@ while [ ! -f "/app/packages/client/dist/index.d.ts" ]; do
 done
 echo "✅ @agor-live/client initial build complete (including type definitions)"
 
+# Remote previews need executable JS updates, not six resident type checkers.
+# Initial builds above still emit types; pnpm check/CI remains authoritative.
+watch_workspace() {
+  if [ "${AGOR_REMOTE_WATCH:-false}" = "true" ]; then
+    if [ "$1" = "@agor/executor" ]; then
+      pnpm --filter "$1" exec tsc --watch --noCheck
+    else
+      TSUP_CLEAN=false pnpm --filter "$1" exec tsup --watch
+    fi
+  else
+    pnpm --filter "$1" dev
+  fi
+}
+
 # Start watch modes for hot-reload
 echo "🔄 Starting watch modes..."
-pnpm --filter @agor/git dev &
+watch_workspace @agor/git &
 GIT_PID=$!
 
-pnpm --filter @agor/core dev &
+watch_workspace @agor/core &
 CORE_PID=$!
 
-pnpm --filter @agor/agentic-tool-opencode dev &
+watch_workspace @agor/agentic-tool-opencode &
 AGENTIC_TOOL_OPENCODE_PID=$!
 
-pnpm --filter @agor/agentic-tools dev &
+watch_workspace @agor/agentic-tools &
 AGENTIC_TOOLS_PID=$!
 
-pnpm --filter @agor/executor dev &
+watch_workspace @agor/executor &
 EXECUTOR_PID=$!
 
-pnpm --filter @agor-live/client dev &
+watch_workspace @agor-live/client &
 CLIENT_PID=$!
 
 echo "✅ Watch modes started (git, core, agentic tools, executor, and client will rebuild on file changes)"

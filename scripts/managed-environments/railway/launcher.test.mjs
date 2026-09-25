@@ -265,3 +265,34 @@ test('workspace API credential uses Bearer only and is never part of service var
   );
   await p.setVariables();
 });
+
+test('Stop can drain compute during an interrupted reset without adopting/deleting a volume', async () => {
+  const s = snapshot();
+  s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify({
+    version: 1,
+    binding,
+    seedVolumeId: target.volumeId,
+    volumeId: target.volumeId,
+    phase: 'creating',
+  });
+  s.environment.volumeInstances.edges = [];
+  let removed = false;
+  const client = fake((q) => {
+    if (q.includes('query Inspect')) return s;
+    if (q.includes('query Deployments'))
+      return inventory(removed ? [] : [{ id: 'owned-deployment', status: 'SUCCESS' }]);
+    if (q.includes('deploymentRemove')) {
+      removed = true;
+      return {};
+    }
+    throw new Error('Unexpected mutation');
+  });
+  const preview = new RailwayPreview(client, target, { wait: async () => {} });
+  await assert.rejects(preview.start());
+  await preview.stop();
+  assert.equal(removed, true);
+  assert.equal(
+    client.calls.some((c) => c.q.includes('volumeDelete') || c.q.includes('volumeCreate')),
+    false
+  );
+});
