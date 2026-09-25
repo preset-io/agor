@@ -2300,7 +2300,9 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       expect((failure as Error).message).toBe(
         'The Codex turn was interrupted before completion. Retry the prompt.'
       );
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('event=stream_interrupted'));
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('event=stream_start_failed')
+      );
       expect(error).toHaveBeenCalledWith(
         expect.stringContaining('category=runtime_failure type=SystemError code=ENOENT')
       );
@@ -2408,6 +2410,8 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
   it.each([
     ['before event iteration', null],
     ['before event iteration', 'existing-thread-id'],
+    ['on initial iteration', null],
+    ['on initial iteration', 'existing-thread-id'],
     ['while iterating events', null],
     ['while iterating events', 'existing-thread-id'],
   ])(
@@ -2423,7 +2427,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
             ? vi.fn().mockRejectedValue(new Error('runStreamed aborted unexpectedly'))
             : vi.fn().mockResolvedValue({
                 events: (async function* () {
-                  yield { type: 'turn.started' };
+                  if (failurePoint === 'while iterating events') yield { type: 'turn.started' };
                   throw new Error('event iterator failed');
                 })(),
               }),
@@ -2434,11 +2438,24 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         codex.startThread = vi.fn(() => thread);
       }
 
-      await expect(drain(service)).rejects.toThrow(
-        failurePoint === 'before event iteration'
-          ? 'Codex could not start the turn. Retry the prompt.'
-          : 'The Codex turn was interrupted before completion. Retry the prompt.'
-      );
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await expect(drain(service)).rejects.toThrow(
+          failurePoint === 'before event iteration'
+            ? 'Codex could not start the turn. Retry the prompt.'
+            : 'The Codex turn was interrupted before completion. Retry the prompt.'
+        );
+        expect(error).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(
+            failurePoint === 'while iterating events'
+              ? 'event=stream_interrupted'
+              : 'event=stream_start_failed'
+          )
+        );
+        expect(thread.runStreamed).toHaveBeenCalledTimes(1);
+      } finally {
+        error.mockRestore();
+      }
 
       if (sdkSessionId === null) {
         expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
