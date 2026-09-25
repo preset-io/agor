@@ -85,7 +85,7 @@ const BASE_SESSION = {
 // below is variant-agnostic.
 // ---------------------------------------------------------------------------
 
-export type StageVariant = 'coding' | 'gateway' | 'collab';
+export type StageVariant = 'coding' | 'gateway' | 'collab' | 'worktree';
 
 interface StageVariantConfig {
   headerTitle: string;
@@ -151,6 +151,21 @@ const STAGE_VARIANTS: Record<StageVariant, StageVariantConfig> = {
         "bindings: { 'mod+b': toggleSidebar, ...boardHotkeys /* mod+1..9 → jumpToBoard */ },",
     },
     queuedPrompt: MULTIPLAYER_FOLLOWUP,
+  },
+  worktree: {
+    headerTitle: 'Fix the flaky login test',
+    prompt: 'Fix the flaky login test — it fails intermittently in CI.',
+    promptCreatedBy: CURRENT_USER_ID,
+    priorPrompt: 'Add a session-timeout warning modal.',
+    priorResponse:
+      'Done — warning modal fires at 25 minutes idle, dismissible, extends the session on click.',
+    readInput: { file_path: 'apps/web/src/auth/__tests__/login.test.ts' },
+    editInput: {
+      file_path: 'apps/web/src/auth/__tests__/login.test.ts',
+      old_string: "await page.click('#submit');\n  await expect(page).toHaveURL('/dashboard');",
+      new_string:
+        "await page.click('#submit');\n  await page.waitForLoadState('networkidle');\n  await expect(page).toHaveURL('/dashboard');",
+    },
   },
 };
 

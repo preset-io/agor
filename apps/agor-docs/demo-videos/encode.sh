@@ -8,6 +8,8 @@
 #   ./encode.sh --showcase boards      # subset: only the named showcase scene(s)
 #                                      # (frames/ dirs are deleted scene-by-scene for
 #                                      #  disk headroom, so encode each as you go)
+#   ./encode.sh --booth multiAgentRace genealogyTree ...  # 1080p + 4K for named
+#                                      # scenes (conference-TV masters; frames kept)
 #
 # Inputs:  frames/<scene>/f%05d.png  (from capture.mjs, 3840×2160)
 # Outputs: out/<scene>.mp4           (1080p, hero-embed grade)
@@ -15,6 +17,7 @@
 #          out/agor-hero.mp4         (scenes stitched with fade-through-dark joins)
 #          out/agor-hero-poster.jpg
 #          out/showcase-<name>.mp4 + out/showcase-<name>-poster.jpg  (--showcase)
+#          out/booth-<name>-1080p.mp4 + out/booth-<name>-4k.mp4 + poster (--booth)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -33,11 +36,13 @@ FPS=30
 FADE=0.25
 PUBLISH=false
 SHOWCASE=false
+BOOTH=false
 SELECTED=()
 for arg in "$@"; do
   case "$arg" in
     --publish) PUBLISH=true ;;
     --showcase) SHOWCASE=true ;;
+    --booth) BOOTH=true ;;
     -*)
       echo "Unknown argument: $arg" >&2
       exit 1
@@ -45,15 +50,55 @@ for arg in "$@"; do
     *) SELECTED+=("$arg") ;;
   esac
 done
+if $SHOWCASE && $BOOTH; then
+  echo "--showcase and --booth are mutually exclusive." >&2
+  exit 1
+fi
 if ((${#SELECTED[@]} > 0)); then
-  if ! $SHOWCASE; then
-    echo "Scene subsets are only supported with --showcase." >&2
+  if ! $SHOWCASE && ! $BOOTH; then
+    echo "Scene subsets are only supported with --showcase or --booth." >&2
     exit 1
   fi
-  SHOWCASE_SCENES=("${SELECTED[@]}")
+  if $SHOWCASE; then SHOWCASE_SCENES=("${SELECTED[@]}"); fi
+fi
+if $BOOTH && ((${#SELECTED[@]} == 0)); then
+  echo "--booth requires at least one scene name." >&2
+  exit 1
 fi
 
 mkdir -p out
+
+# --booth: 1080p + 4K masters for named scenes, for conference-TV playback.
+# Frames are NOT deleted (unlike --showcase) — these are meant to be
+# re-encodable later without a recapture.
+if $BOOTH; then
+  for scene in "${SELECTED[@]}"; do
+    if [[ ! -d "frames/$scene" ]]; then
+      echo "frames/$scene missing — run: node capture.mjs --scene $scene" >&2
+      exit 1
+    fi
+    echo "── encoding booth-$scene (1080p)"
+    ffmpeg -y -loglevel error -framerate "$FPS" -i "frames/$scene/f%05d.png" \
+      -vf "scale=1920:1080:flags=lanczos,format=yuv420p" \
+      -c:v libx264 -profile:v high -crf 21 -preset slow -movflags +faststart -an \
+      "out/booth-$scene-1080p.mp4"
+    echo "── encoding booth-$scene (4K)"
+    ffmpeg -y -loglevel error -framerate "$FPS" -i "frames/$scene/f%05d.png" \
+      -vf "scale=3840:2160:flags=lanczos,format=yuv420p" \
+      -c:v libx264 -profile:v high -crf 18 -preset slow -movflags +faststart -an \
+      "out/booth-$scene-4k.mp4"
+    ffmpeg -y -loglevel error -i "out/booth-$scene-1080p.mp4" -vframes 1 -q:v 4 \
+      "out/booth-$scene-poster.jpg"
+    for variant in 1080p 4k; do
+      bytes=$(stat -f%z "out/booth-$scene-$variant.mp4" 2>/dev/null || stat -c%s "out/booth-$scene-$variant.mp4")
+      mb=$(echo "scale=2; $bytes / 1048576" | bc)
+      echo "booth-$scene-$variant.mp4: ${mb} MB"
+    done
+  done
+
+  echo "done. (--booth masters are for conference-TV playback, not the public site — --publish is a no-op here.)"
+  exit 0
+fi
 
 # --showcase: encode only the carousel renditions and exit — the hero pipeline
 # below is left completely untouched (no re-encode, no republish).

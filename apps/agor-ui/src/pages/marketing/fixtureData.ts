@@ -261,6 +261,65 @@ export const demoBoard: Board = {
         `,
       },
     },
+    'app-leaderboard': {
+      type: 'app',
+      x: 2520,
+      y: 80,
+      width: 620,
+      height: 495,
+      title: 'Agent leaderboard artifact',
+      description: 'Tasks-completed leaderboard, published by an AI teammate.',
+      template: 'react',
+      showEditor: false,
+      showConsole: false,
+      entryFile: '/App.js',
+      files: {
+        '/App.js': `
+          import './styles.css';
+
+          const rows = [
+            ['🥇', 'Claude Code', 14, '$18.72', '#a78bfa'],
+            ['🥈', 'Codex', 9, '$12.90', '#14b8a6'],
+            ['🥉', 'Gemini', 6, '$6.41', '#f59e0b'],
+            ['', 'OpenCode', 2, '$1.15', '#94a3b8'],
+          ];
+          const maxTasks = Math.max(...rows.map(([, , tasks]) => tasks));
+
+          export default function App() {
+            return (
+              <main className="board">
+                <header><span>This week</span><h1>Agent leaderboard</h1></header>
+                <div className="rows">
+                  {rows.map(([medal, label, tasks, cost, color]) => (
+                    <div className="row" key={label} style={{ '--color': color }}>
+                      <span className="medal">{medal}</span>
+                      <span className="label">{label}</span>
+                      <div className="bar"><i style={{ width: \`\${(tasks / maxTasks) * 100}%\` }} /></div>
+                      <b>{tasks}</b>
+                      <small>{cost}</small>
+                    </div>
+                  ))}
+                </div>
+              </main>
+            );
+          }
+        `,
+        '/styles.css': `
+          body { margin:0; background:#07111f; color:#eaffff; font-family: Inter, ui-sans-serif, system-ui; }
+          .board { min-height:100vh; box-sizing:border-box; padding:18px; background:radial-gradient(circle at 15% 100%, rgba(167,139,250,.28), transparent 38%), linear-gradient(135deg,#08111f,#111827 58%,#0b1d1a); border:1px solid rgba(255,255,255,.14); }
+          header span { display:block; color:#a7f3d0; text-transform:uppercase; font-size:10px; letter-spacing:.16em; font-weight:800; }
+          header h1 { margin:2px 0 16px; font-size:24px; letter-spacing:-.04em; }
+          .rows { display:grid; gap:10px; }
+          .row { display:grid; grid-template-columns:24px 96px 1fr 28px 56px; align-items:center; gap:10px; padding:10px 12px; border-radius:14px; background:rgba(2,6,23,.55); border:1px solid rgba(255,255,255,.08); }
+          .medal { font-size:16px; text-align:center; }
+          .label { font-size:13px; font-weight:700; }
+          .bar { height:8px; border-radius:99px; background:rgba(255,255,255,.08); overflow:hidden; }
+          .bar i { display:block; height:100%; border-radius:99px; background:var(--color); box-shadow:0 0 12px var(--color); }
+          .row b { font-size:14px; text-align:right; }
+          .row small { color:#cbd5e1; text-align:right; }
+        `,
+      },
+    },
     'note-architecture': {
       type: 'markdown',
       x: 1440,
@@ -389,6 +448,72 @@ export const branchFixtures = [
       ['Gemini', 'gemini', SessionStatus.COMPLETED, 'summarize risks'],
     ],
   },
+  {
+    id: '019ee88d-demo-branch-0000-000000000106',
+    name: 'checkout-empty-state',
+    ref: 'checkout-empty-state',
+    zoneId: 'zone-teammates',
+    position: { x: 620, y: 120 },
+    issue: 'https://github.com/preset-io/agor/issues/301',
+    notes:
+      'Same prompt, four models, one branch: fix the checkout empty-state illustration. First clean diff wins.',
+    env: { status: 'running', url: 'http://localhost:8420' },
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'redraw the empty-cart illustration'],
+      ['Codex', 'codex', SessionStatus.RUNNING, 'redraw the empty-cart illustration'],
+      ['Gemini', 'gemini', SessionStatus.RUNNING, 'redraw the empty-cart illustration'],
+      ['OpenCode', 'opencode', SessionStatus.RUNNING, 'redraw the empty-cart illustration'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000107',
+    name: 'auth-token-refresh-race',
+    ref: 'auth-token-refresh-race',
+    zoneId: 'zone-teammates',
+    position: { x: 620, y: 650 },
+    issue: 'https://github.com/preset-io/agor/issues/318',
+    notes:
+      'Genealogy in action: Claude spawned a repro and a review, then forked the repro to try a fix.',
+    env: { status: 'running', url: 'http://localhost:8421' },
+    // Flat here — GENEALOGY_OVERRIDES below wires session-2..4 into a tree
+    // (session-1 root; session-2/4 spawned from it; session-3 forked from
+    // session-2) without extending the shared BranchFixture tuple shape.
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'investigate flaky token refresh'],
+      ['Codex', 'codex', SessionStatus.COMPLETED, 'reproduce with a stress test'],
+      ['Codex', 'codex', SessionStatus.RUNNING, 'patch the race with a mutex'],
+      ['Gemini', 'gemini', SessionStatus.IDLE, 'audit token expiry edge cases'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000108',
+    name: 'docs-freshness-check',
+    ref: 'docs-freshness-check',
+    zoneId: 'zone-ship',
+    position: { x: 70, y: 950 },
+    issue: 'https://linear.app/agor/issue/AG-241',
+    notes: 'Nightly cron: crawl the docs site, flag stale code samples against `main`.',
+    env: { status: 'stopped', url: 'http://localhost:8422' },
+    // session-2 gets scheduled_from_branch: true below (SCHEDULED_RUN_OVERRIDES)
+    // so it renders in BranchSessionSections' dedicated "Scheduled Runs" list.
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.COMPLETED, 'flagged 3 stale snippets last night'],
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'nightly docs freshness crawl'],
+    ],
+  },
+  {
+    id: '019ee88d-demo-branch-0000-000000000109',
+    name: 'fix-flaky-login-test',
+    ref: 'fix-flaky-login-test',
+    zoneId: 'zone-review',
+    position: { x: 80, y: 900 },
+    issue: 'https://github.com/preset-io/agor/issues/329',
+    notes: 'Spun up straight from the canvas — no terminal, one form.',
+    env: { status: 'starting', url: 'http://localhost:8423' },
+    sessions: [
+      ['Claude', 'claude-code', SessionStatus.RUNNING, 'investigate the flaky login test'],
+    ],
+  },
 ] as const satisfies readonly BranchFixture[];
 
 export const demoBranches = branchFixtures.map(
@@ -442,30 +567,68 @@ export const demoBoardEntityObjects: BoardEntityObject[] = branchFixtures.map((f
   created_at: demoNow,
 }));
 
-export const demoSessions = branchFixtures.flatMap((fixture, branchIndex) =>
-  fixture.sessions.map(
-    ([title, tool, status, description, readyForPrompt], sessionIndex) =>
-      ({
-        session_id: `${fixture.id}-session-${sessionIndex + 1}`,
-        agentic_tool: tool,
-        status,
-        created_at: demoNow,
-        last_updated: demoNow,
-        created_by: demoUsers[(branchIndex + sessionIndex) % demoUsers.length].user_id,
-        unix_username: null,
-        branch_id: fixture.id as BranchID,
-        branch_board_id: demoBoardId,
-        url: `/ui/s/${shortId(fixture.id)}${sessionIndex}`,
-        contextFiles: [],
-        genealogy: { children: [] },
-        tasks: [],
-        title: `${title}: ${description}`,
-        description,
-        ready_for_prompt: readyForPrompt === true,
-        archived: false,
-      }) as unknown as Session
+// auth-token-refresh-race's sessions are listed flat in branchFixtures above
+// (the shared BranchFixture tuple has no room for genealogy edges); this
+// wires session-2..4 into a fork/spawn tree afterward. buildSessionTree
+// (BranchCard/buildSessionTree.ts) derives the whole UI tree purely from
+// parent_session_id (spawn) / forked_from_session_id (fork), so this is the
+// only place a genealogy demo needs to touch.
+const RACE_TREE_BRANCH_ID = '019ee88d-demo-branch-0000-000000000107';
+const raceTreeSessionId = (n: number) => `${RACE_TREE_BRANCH_ID}-session-${n}`;
+const GENEALOGY_OVERRIDES: Record<
+  string,
+  { parent_session_id?: string; forked_from_session_id?: string }
+> = {
+  // session-1 "investigate flaky token refresh" is the root.
+  [raceTreeSessionId(2)]: { parent_session_id: raceTreeSessionId(1) }, // spawn: repro
+  [raceTreeSessionId(3)]: { forked_from_session_id: raceTreeSessionId(2) }, // fork: patch attempt
+  [raceTreeSessionId(4)]: { parent_session_id: raceTreeSessionId(1) }, // spawn: audit
+};
+
+// docs-freshness-check's session-2 is a cron-fired run — the "Scheduled
+// Runs" list in BranchSessionSections is just sessions with this flag set.
+const SCHEDULED_RUN_OVERRIDES: Record<string, { scheduled_from_branch: boolean }> = {
+  '019ee88d-demo-branch-0000-000000000108-session-2': { scheduled_from_branch: true },
+};
+
+export const demoSessions = branchFixtures
+  .flatMap((fixture, branchIndex) =>
+    fixture.sessions.map(
+      ([title, tool, status, description, readyForPrompt], sessionIndex) =>
+        ({
+          session_id: `${fixture.id}-session-${sessionIndex + 1}`,
+          agentic_tool: tool,
+          status,
+          created_at: demoNow,
+          last_updated: demoNow,
+          created_by: demoUsers[(branchIndex + sessionIndex) % demoUsers.length].user_id,
+          unix_username: null,
+          branch_id: fixture.id as BranchID,
+          branch_board_id: demoBoardId,
+          url: `/ui/s/${shortId(fixture.id)}${sessionIndex}`,
+          contextFiles: [],
+          genealogy: { children: [] },
+          tasks: [],
+          title: `${title}: ${description}`,
+          description,
+          ready_for_prompt: readyForPrompt === true,
+          archived: false,
+        }) as unknown as Session
+    )
   )
-);
+  .map((session) => {
+    const genealogyOverride = GENEALOGY_OVERRIDES[session.session_id];
+    const scheduledOverride = SCHEDULED_RUN_OVERRIDES[session.session_id];
+    return genealogyOverride || scheduledOverride
+      ? {
+          ...session,
+          ...(genealogyOverride
+            ? { genealogy: { ...session.genealogy, ...genealogyOverride } }
+            : {}),
+          ...scheduledOverride,
+        }
+      : session;
+  });
 
 export const demoCards = [
   {
@@ -583,6 +746,32 @@ export const demoComments = [
       },
     },
     mentions: [demoUsers[2].user_id],
+    created_at: new Date(demoNow),
+  },
+  {
+    // Zone-trigger toast for the zoneDrop scene: parked above
+    // multiplayer-presence's header (well clear of the two pins above), it
+    // rides along for free while the branch is dragged since spatial-comment
+    // position is branch-relative, and only pops its bubble when the scene
+    // dispatches a hover right after the drop lands in Review.
+    comment_id: '019ee88d-demo-comment-0000-000000000303',
+    board_id: demoBoardId,
+    created_by: demoUsers[4].user_id,
+    content: '',
+    content_preview: '',
+    branch_id: branchFixtures[1].id as BranchID,
+    resolved: false,
+    edited: false,
+    reactions: [],
+    position: {
+      relative: {
+        parent_id: branchFixtures[1].id,
+        parent_type: 'branch',
+        offset_x: 460,
+        offset_y: 40,
+      },
+    },
+    mentions: [],
     created_at: new Date(demoNow),
   },
 ] as unknown as BoardComment[];

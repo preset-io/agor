@@ -42,6 +42,23 @@ const SCENES = {
   boards: { floorMs: 10_000 },
   sessions: { floorMs: 6_000 },
   gateway: { floorMs: 5_000 },
+  // Booth-loop candidates. Wide establishing beat briefly shows the
+  // Sandpack cost-cockpit app, so keep a boards-like floor.
+  multiAgentRace: { floorMs: 8_000 },
+  genealogyTree: { floorMs: 8_000 },
+  zoneDrop: { floorMs: 8_000 },
+  // No canvas/Sandpack in frame — the marketplace panel covers it entirely.
+  marketplace: { floorMs: 1_000 },
+  teammateReveal: { floorMs: 8_000 },
+  scheduleFiring: { floorMs: 8_000 },
+  // New Sandpack artifact in frame at t=0 — give it the same generous floor
+  // as the other artifact-bearing scenes.
+  leaderboard: { floorMs: 10_000 },
+  newBranch: { floorMs: 8_000 },
+  worktreePr: { floorMs: 6_000 },
+  knowledge: { floorMs: 3_000 },
+  autoAdvance: { floorMs: 8_000 },
+  canvasHoverPreview: { floorMs: 10_000 },
 };
 
 const parseArgs = (argv) => {
