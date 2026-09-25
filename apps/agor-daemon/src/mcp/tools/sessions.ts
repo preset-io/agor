@@ -1062,7 +1062,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, "once" fires on the first completion then auto-disables'
+            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, including turns processing child results. Use it for coordinators: C completes -> B processes -> B completes -> A. "once" is consumed by the first completion, which may only be the delegation turn. No descendant ownership transfer.'
           ),
         parentSessionId: z
           .string()
@@ -1403,7 +1403,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback mode: "once" fires once then auto-disables, "persistent" fires every time (optional)'
+            'Callback mode: "persistent" fires on every completion, including processing child results; use for multi-hop coordinators. "once" auto-disables after the first completion (even an initial delegation turn). Does not change exact-task callback scope (optional)'
           ),
       }),
     },

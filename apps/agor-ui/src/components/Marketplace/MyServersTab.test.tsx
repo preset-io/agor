@@ -1,8 +1,8 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { message } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyServersTab } from './MyServersTab';
 
 const overview: MCPMarketplaceOverview = {
@@ -121,7 +121,15 @@ async function confirmServerRemoval(title: string): Promise<void> {
 }
 
 describe('Marketplace server inventory and settings', () => {
-  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    // Keep static notifications from scheduling React work after jsdom teardown.
+    vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
+    vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('renders a production empty state with a catalog route action', () => {
     const browse = vi.fn();

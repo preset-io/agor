@@ -7,7 +7,7 @@
  * - Control last message inclusion
  */
 
-import { Form, Input, Switch, Typography } from 'antd';
+import { Form, Input, Select, Switch, Typography } from 'antd';
 import type React from 'react';
 
 const { Text, Paragraph } = Typography;
@@ -28,17 +28,31 @@ export const CallbackConfigForm: React.FC<CallbackConfigFormProps> = ({ showHelp
       {/* Enable/Disable Callbacks */}
       <Form.Item
         name={['callbackConfig', 'enabled']}
-        label="Enable Child Completion Callbacks"
+        label="Enable Completion Callbacks"
         valuePropName="checked"
       >
         <Switch />
       </Form.Item>
       {showHelpText && (
         <Paragraph type="secondary" style={{ fontSize: 12, marginTop: -16, marginBottom: 16 }}>
-          When enabled, this session will receive notifications when spawned child sessions complete
-          their tasks. The callback message includes the child's final result inline.
+          When this session completes a task, notify its configured callback target. Child sessions
+          keep their own callback settings; changing this does not transfer their results.
         </Paragraph>
       )}
+
+      <Form.Item
+        name={['callbackConfig', 'mode']}
+        label="Callback mode"
+        extra="Use Persistent for coordinators awaiting child results: C completes → B processes the result → B completes → A is notified. B's initial delegation turn can also notify A. Once is consumed by the first completion, not the end of a descendant chain."
+      >
+        <Select
+          virtual={false}
+          options={[
+            { value: 'persistent', label: 'Persistent — every completion until unlinked' },
+            { value: 'once', label: 'Once — next completion only' },
+          ]}
+        />
+      </Form.Item>
 
       {/* Include Last Message Toggle */}
       <Form.Item

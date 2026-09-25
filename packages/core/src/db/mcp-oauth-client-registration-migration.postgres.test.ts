@@ -398,6 +398,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // Rewind 0112's schema too: replaying its ledger must recreate the table.
       await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
 
+      // Rewind the later completion schema too, not just its ledger entry.
+      // The policy on tasks references the outbox and must be removed first.
+      await executeRaw(db, sql`DROP POLICY IF EXISTS completion_callback_task_discovery ON tasks`);
+      await executeRaw(db, sql`DROP TABLE completion_subscriptions`);
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
       await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);

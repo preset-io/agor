@@ -94,6 +94,28 @@ Drizzle determines pending migrations by comparing each journal entry's `when` a
 
 When inserting manual or backfill migrations into `meta/_journal.json`, ensure the `when` value is **strictly greater** than every preceding entry. The sqlite and postgres journals are tracked independently — apply this rule to each one separately.
 
+### Callback-draft / management-transfer watermark collision
+
+Main's `0111_management_ownership_transfer` and the withdrawn callback draft's
+`0111_transitive_completion_subscriptions` both used `1789344000005`; the draft's
+PostgreSQL retirement used `1789344000006`. Keep main's journal entry unchanged.
+`0117_callback_ownership_reconciliation` runs at `1790129000216` in both dialects:
+it creates missing inert callback storage, preserves existing rows, removes
+retired discovery policies while enforcing tenant RLS, and idempotently removes
+owner-immutability triggers. This supports either already-applied history without
+replaying non-idempotent DDL or silently skipping the other branch's changes.
+It also idempotently restores main's KB receipt storage: the draft retirement
+and earlier reconciliation watermarks (`1789344000006` / `1789344000007`) could
+skip `0112_kb_import_receipts`. Main's published journal entries remain unchanged.
+The original callback SQL files remain historical fixtures, not journal entries.
+The immediate predecessor `7475feacb` used `1790129000214`, skipping SQLite's
+`0115_user_api_key_source` and PostgreSQL's equal-watermark
+`0115_api_key_host_tenant_discovery`. The same `0117` also repairs those: the
+PostgreSQL policy is guarded in SQL, while `migrate-sqlite.ts` guards the marked
+SQLite `ADD COLUMN` (SQLite has no `ADD COLUMN IF NOT EXISTS`). That runner keeps
+DDL and the original migration hash/watermark in one libsql migration batch,
+including when main's source-column migration runs earlier in the batch.
+
 ### Avoid `CHECK` constraints for enum-like columns on SQLite
 
 Don't use `CHECK(col IN ('a', 'b', 'c'))` on a SQLite column. When a new value is added (e.g. extending `others_can` with `'session'`), the CHECK constraint forces a full table-recreation migration — SQLite can't alter constraints in place. This is error-prone and easy to forget when updating TypeScript enums.

@@ -77,6 +77,26 @@ describe('branch deletion ownership review coverage', () => {
     expect(IMPERATIVE_TENANT_TABLES.map((table) => table.name)).toEqual(['kb_unit_embeddings']);
   });
 
+  it('preserves inert completion rows while clearing deleted references', () => {
+    for (const field of [
+      'callback_session_id',
+      'root_session_id',
+      'root_task_id',
+      'active_session_id',
+      'active_task_id',
+      'delivery_task_id',
+    ]) {
+      expect(BRANCH_DELETION_RELATIONS['completion_subscriptions.' + field].disposition).toBe(
+        'clear_reference'
+      );
+    }
+    for (const field of ['origin_session_id', 'origin_task_id', 'path', 'terminal_snapshot']) {
+      expect(
+        BRANCH_DELETION_NON_FK_RELATIONS['completion_subscriptions.' + field].disposition
+      ).toBe('retain');
+    }
+  });
+
   it('does not reinterpret SET NULL knowledge and artifact provenance as ownership', () => {
     expect(BRANCH_DELETION_RELATIONS['kb_namespaces.branch_id'].disposition).toBe('classify');
     expect(BRANCH_DELETION_RELATIONS['artifacts.branch_id'].disposition).toBe('clear_reference');
