@@ -36,3 +36,30 @@ export function formatExecutorFailure(error: unknown): string {
   if (text.length <= MAX_FAILURE_MESSAGE_LENGTH) return text;
   return `${text.slice(0, MAX_FAILURE_MESSAGE_LENGTH - 1)}…`;
 }
+
+function ownIdentifier(error: unknown, property: string, pattern: RegExp): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, property);
+    const value = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    return typeof value === 'string' && pattern.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Bounded `key=value` log fields identifying a task failure without its message.
+ * Only identifier-shaped own data fields are read (e.g. CodexLifecycleError's
+ * `failureCode` / `failureKind`); anything else is omitted.
+ */
+export function executorFailureLogFields(error: unknown): string {
+  const errorType = ownIdentifier(error, 'name', /^[A-Za-z]{1,40}Error$/);
+  const failureCode = ownIdentifier(error, 'failureCode', /^[a-z_]{1,48}$/);
+  const failureKind = ownIdentifier(error, 'failureKind', /^[a-z_]{1,48}$/);
+  return (
+    (errorType ? ` error_type=${errorType}` : '') +
+    (failureCode ? ` failure_code=${failureCode}` : '') +
+    (failureKind ? ` failure_kind=${failureKind}` : '')
+  );
+}
