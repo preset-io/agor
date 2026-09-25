@@ -155,10 +155,11 @@ describe('ContextUsageRule in a task turn', () => {
     content: 'Here is the answer',
   } as unknown as Message;
 
-  const turn = (task: Task) =>
+  const turn = (task: Task, currentUserId?: string) =>
     render(
       <TaskBlock
         task={task}
+        currentUserId={currentUserId}
         isLatestTask
         taskMessages={[answer]}
         taskMessagesLoaded
@@ -181,24 +182,46 @@ describe('ContextUsageRule in a task turn', () => {
     expect(within(screen.getByTestId('turn-usage-label')).getByText('12%')).toBeVisible();
   });
 
-  it('shows metadata values with decorative dots between, never at the ends', () => {
-    turn({
-      ...baseTask,
-      normalized_sdk_response: {
-        contextWindowLimit: 100_000,
-        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-      },
-    } as unknown as Task);
+  it.each([
+    { creator: 'me', viewer: 'me', tokens: true, valueCount: 2, creatorVisible: false },
+    { creator: 'me', viewer: 'me', tokens: false, valueCount: 1, creatorVisible: false },
+    { creator: 'teammate', viewer: 'me', tokens: true, valueCount: 3, creatorVisible: true },
+    { creator: 'teammate', viewer: 'me', tokens: false, valueCount: 2, creatorVisible: true },
+    { creator: '', viewer: 'me', tokens: true, valueCount: 2, creatorVisible: false },
+    { creator: '', viewer: 'me', tokens: false, valueCount: 1, creatorVisible: false },
+  ])(
+    'separates only visible metadata for creator=$creator, tokens=$tokens',
+    ({ creator, viewer, tokens, valueCount, creatorVisible }) => {
+      turn(
+        {
+          ...baseTask,
+          created_by: creator,
+          model: undefined,
+          git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
+          normalized_sdk_response: tokens
+            ? {
+                contextWindowLimit: 100_000,
+                tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              }
+            : undefined,
+        } as Task,
+        viewer
+      );
 
-    const region = screen.getByRole('region', { name: 'Turn metadata' });
-    const values = region.firstElementChild!;
-    const dots = Array.from(values.children).filter((child) => child.textContent === '·');
-    expect(region).toBeVisible();
-    expect(dots).toHaveLength((values.children.length - 1) / 2);
-    expect(dots.every((dot) => dot.getAttribute('aria-hidden') === 'true')).toBe(true);
-    expect(values.firstElementChild?.textContent).not.toBe('·');
-    expect(values.lastElementChild?.textContent).not.toBe('·');
-  });
+      const region = screen.getByRole('region', { name: 'Turn metadata' });
+      const values = region.firstElementChild!;
+      const children = Array.from(values.children);
+      const dots = children.filter((child) => child.textContent === '·');
+      expect(region).toBeVisible();
+      expect(children).toHaveLength(valueCount * 2 - 1);
+      expect(dots).toHaveLength(valueCount - 1);
+      expect(dots.every((dot) => dot.getAttribute('aria-hidden') === 'true')).toBe(true);
+      expect(
+        children.every((child, index) => (index % 2 === 1) === (child.textContent === '·'))
+      ).toBe(true);
+      expect(within(region).queryByText('Unknown User') !== null).toBe(creatorVisible);
+    }
+  );
 
   it('keeps the actual percentage Tag readable at rest', () => {
     turn({

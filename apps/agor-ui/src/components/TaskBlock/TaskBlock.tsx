@@ -867,7 +867,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {scheduledFromBranch && scheduledRunAt && (
           <ScheduledRunPill style={plainPillStyle} scheduledRunAt={scheduledRunAt} />
         )}
-        {task.created_by && (
+        {task.created_by && task.created_by !== currentUserId && (
           <CreatedByTag
             style={plainPillStyle}
             createdBy={task.created_by}
