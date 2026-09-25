@@ -188,6 +188,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             children: (
               <TeammateTab
                 branch={branch}
+                client={client}
+                onRetired={onClose}
                 canEdit={form.canEditGeneral}
                 state={form.teammate}
                 setField={form.setTeammate}

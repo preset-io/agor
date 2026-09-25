@@ -38,7 +38,8 @@ function freezeEntry(entry: MCPCatalogEntry): MCPCatalogEntry {
 }
 
 /**
- * The catalog, parsed on first use.
+ * Full definitions, including hidden entries, parsed on first use.
+ * Keep this unfiltered for saved-connection policy validation and maintenance.
  *
  * @param filePath Overrides the checked-in file. Tests pass this; it bypasses
  * the cache, because a test that pointed at its own fixture and got the shipped
@@ -57,7 +58,7 @@ export function loadCatalog(filePath?: string): Promise<readonly MCPCatalogEntry
   return loaded;
 }
 
-/** Find one entry by its catalog name. */
+/** Find a full definition, including hidden entries. Not a discovery surface. */
 export function findCatalogEntry(
   entries: readonly MCPCatalogEntry[],
   name: string

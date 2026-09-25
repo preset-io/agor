@@ -243,7 +243,7 @@ describe('shared environment command admission and transitions', () => {
       await branches.update(branch.branch_id, { archived: true });
       await expect(
         commands.admit({ branch, action: 'start', attemptId: generateId(), userId: user.user_id })
-      ).rejects.toThrow('non-archived');
+      ).rejects.toThrow('require a ready');
     }
   );
 

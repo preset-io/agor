@@ -354,6 +354,10 @@ export interface MessagesServiceImpl
  * Branches service with custom methods (server-side implementation)
  */
 export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+  retireTeammate(
+    id: BranchID,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BranchCleanAccepted>;
   clean(
     input: { branchId: import('@agor/core/types').BranchID },
     params?: FeathersParams

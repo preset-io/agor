@@ -208,6 +208,7 @@ import {
   type SchedulerService,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
+import { createSpawnPromptService } from './services/session-spawn-prompt';
 import {
   lockTenantAuthorizationFence,
   resolveCurrentTenantAuthorityActor,
@@ -2563,52 +2564,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/spawn-prompt',
-    {
-      async create(
-        data: {
-          userPrompt?: string;
-          /**
-           * Permission mode for the *parent* session's prompt. The spawn
-           * config's `permissionMode` (child's intended mode) is rendered into
-           * the meta-prompt; this field governs how the parent prompt is sent.
-           */
-          parentPermissionMode?: import('@agor/core/types').PermissionMode;
-          // Remaining fields are spawn-subsession context (incl. the *child*
-          // session's permissionMode/modelConfig/etc) — see
-          // `SpawnSubsessionContext` in @agor/core for the shape.
-          [key: string]: unknown;
-        },
-        params: RouteParams
-      ) {
-        const id = params.route?.id;
-        if (!id) throw new BadRequest('Session ID required');
-        if (typeof data?.userPrompt !== 'string') {
-          throw new BadRequest('userPrompt (string) is required');
-        }
-
-        const { renderSpawnSubsessionPrompt } = await import(
-          '@agor/core/templates/spawn-subsession-template'
-        );
-        // Render the meta-prompt against the child-session config (the rest
-        // of `data`). `parentPermissionMode` is intentionally excluded — it's
-        // the parent's send-mode, not part of the template.
-        const { parentPermissionMode, ...spawnContext } = data;
-        const metaPrompt = renderSpawnSubsessionPrompt(
-          spawnContext as unknown as import('@agor/core/templates/spawn-subsession-template').SpawnSubsessionContext
-        );
-
-        const promptService = app.service('/sessions/:id/prompt');
-        return promptService.create(
-          {
-            prompt: metaPrompt,
-            permissionMode: parentPermissionMode,
-            messageSource: 'agor',
-            metadata: { system_authored: true },
-          },
-          { ...params, provider: undefined, route: { id } }
-        );
-      },
-    },
+    createSpawnPromptService(app),
     {
       create: { role: ROLES.MEMBER, action: 'send spawn-subsession prompts' },
     },
@@ -4288,7 +4244,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // Explicit, non-destructive repair for a branch whose filesystem provisioning
-  // landed in 'failed'. A stranded 'creating' attempt is not retryable. Shares
+  // landed in 'failed', or an active stale archive outcome. Creating is not retryable. Shares
   // the exact same service implementation the MCP tool and UI use, so REST, MCP
   // and UI can never drift. A live 'creating' attempt conflicts, 'ready' no-ops;
   // the transition is an atomic claim. Returns the (possibly-updated) branch row.
@@ -4311,11 +4267,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // in the service (not here) is what keeps REST, MCP and the UI on one
       // check.
       //
-      // Identity split (intentional): the caller must hold branch control, but
-      // the executor runs as `branch.created_by`, not as the caller. That
-      // mirrors the create path (the directory must be materialized as its
-      // owner to be usable) and re-runs provisioning the owner already
-      // initiated, so it grants no capability the owner had not exercised.
+      // Recovery uses the authorized caller's execution identity and credentials.
       create: { role: ROLES.MEMBER, action: 'retry branch provisioning' },
     },
     requireAuth
@@ -4395,6 +4347,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.service('/branches/:id/clean').hooks({
     around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
     before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'clean branches')] },
+  });
+
+  // Explicit, metadata-only retirement: same tenant/write boundary as cleanup.
+  app.use('/branches/:id/retire-teammate', {
+    async create(data: unknown, params: RouteParams) {
+      if (
+        !params.route?.id ||
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        Object.keys(data).length
+      )
+        throw new BadRequest('Retirement accepts an empty body and branch route ID only');
+      return branchesService.retireTeammate(
+        params.route.id as import('@agor/core/types').BranchID,
+        params
+      );
+    },
+  });
+  app.service('/branches/:id/retire-teammate').hooks({
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
+    before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'retire teammates')] },
   });
 
   // Archive/delete branch

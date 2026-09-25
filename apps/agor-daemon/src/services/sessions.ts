@@ -1150,7 +1150,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       data.codexApprovalPolicy !== undefined ||
       data.codexNetworkAccess !== undefined;
     const inheritedPresetId =
-      targetTool === parent.agentic_tool ? parent.agentic_tool_preset_id : undefined;
+      // Explicit inline selection detaches from the parent's preset. The
+      // materializer still enforces the workspace's inline-configuration policy.
+      !hasAtomicOverride && targetTool === parent.agentic_tool
+        ? parent.agentic_tool_preset_id
+        : undefined;
     const presetId = data.presetId ?? inheritedPresetId ?? undefined;
     if (presetId && hasAtomicOverride) {
       throw new BadRequest(

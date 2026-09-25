@@ -1,5 +1,17 @@
-import type { AgorClient, Branch, EffectiveBranchAccess, Repo, User } from '@agor-live/client';
-import { getBranchCleanupBlockReason, resolveRepoCleanupPolicy } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  EffectiveBranchAccess,
+  EffectiveCapabilityPolicyAccess,
+  Repo,
+  User,
+} from '@agor-live/client';
+import {
+  getBranchCleanupBlockReason,
+  isTeammate,
+  resolveRepoCleanupPolicy,
+} from '@agor-live/client';
 import { useEffect, useState } from 'react';
 import {
   useAuthenticatedAuthorityScope,
@@ -22,6 +34,9 @@ export function useArchiveDeleteEligibility(
     branch: Branch;
     repo: Repo;
     access: EffectiveBranchAccess;
+    board?: Board;
+    boardUnavailable: boolean;
+    canEditBoard: boolean;
     scope: readonly unknown[] | null;
   } | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -37,11 +52,33 @@ export function useArchiveDeleteEligibility(
       client.service('repos').get(branch.repo_id),
       client.service('branches/:id/effective-access').find({ route: { id: branch.branch_id } }),
     ])
-      .then(([currentBranch, repo, access]) => {
+      .then(async ([currentBranch, repo, access]) => {
+        let board: Board | undefined;
+        let boardAccess: EffectiveCapabilityPolicyAccess | undefined;
+        let boardUnavailable = false;
+        // Board visibility/control is independent of branch Manager authority.
+        // Keep a successfully read primary designation even if its access read fails.
+        if (isTeammate(currentBranch) && currentBranch.board_id) {
+          try {
+            board = await client.service('boards').get(currentBranch.board_id);
+            if (board) {
+              boardAccess = (await client.service('boards/:id/effective-access').find({
+                route: { id: board.board_id },
+              })) as unknown as EffectiveCapabilityPolicyAccess;
+            } else {
+              boardUnavailable = true;
+            }
+          } catch {
+            boardUnavailable = true;
+          }
+        }
         if (operation.isCurrent())
           setLoaded({
             branch: currentBranch,
             repo,
+            board,
+            boardUnavailable,
+            canEditBoard: boardAccess?.capabilities.includes('board.edit') ?? false,
             access: access as unknown as EffectiveBranchAccess,
             scope: authority.operationScope,
           });
@@ -92,6 +129,9 @@ export function useArchiveDeleteEligibility(
       getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false));
   return {
     policy,
+    board: current?.board,
+    boardUnavailable: current?.boardUnavailable ?? false,
+    canEditBoard: current?.canEditBoard ?? false,
     cleanupReason,
     managementReason,
     workspaceReason,

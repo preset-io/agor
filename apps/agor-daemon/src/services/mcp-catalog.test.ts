@@ -1,7 +1,7 @@
 /**
  * MCPCatalogService tests
  *
- * The service has two jobs: hand over the whole catalog, and resolve one entry
+ * The service has two jobs: hand over the visible catalog, and resolve one entry
  * by name for the connect flow. It takes no query, so what these assert is that
  * a query cannot change the answer — a filter that appeared to be honoured here
  * would be a second, divergent implementation of the browser's filtering.
@@ -13,8 +13,12 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { AuthenticatedParams, BranchID } from '@agor/core/types';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MCPCatalogService } from './mcp-catalog';
+import { createMCPCatalogConnectService } from './mcp-catalog-connect';
+import { MCPCatalogReadinessService } from './mcp-catalog-readiness';
+import { createMCPCatalogStartSessionService } from './mcp-catalog-start-session';
 
 /**
  * A fixture catalog rather than the shipped one.
@@ -36,6 +40,7 @@ entries:
     transport: streamable-http
     auth_type: none
   - name: com.bravo/mcp
+    hidden: false
     title: Bravo
     description: A searching thing.
     category: search
@@ -57,6 +62,7 @@ unpublished:
     remote_url: https://mcp.charlie.example/mcp
     transport: streamable-http
   - name: com.delta/mcp
+    hidden: true
     category: data-storage
     capabilities: [databases]
     benefit: Delta reads a database.
@@ -83,17 +89,12 @@ const service = () => new MCPCatalogService(catalogPath);
 const names = (entries: Array<{ name: string }>) => entries.map((entry) => entry.name);
 
 describe('MCPCatalogService find', () => {
-  it('returns every entry from both lists, most popular first', async () => {
+  it('returns visible entries from both lists, most popular first', async () => {
     const result = await service().find();
 
-    expect(result.total).toBe(4);
-    // Ranked entries lead; the unranked pair falls back to name order.
-    expect(names(result.data)).toEqual([
-      'com.alpha/mcp',
-      'com.bravo/mcp',
-      'com.charlie/mcp',
-      'com.delta/mcp',
-    ]);
+    expect(result.total).toBe(3);
+    // Ranked entries lead; the hidden entry is absent before counting.
+    expect(names(result.data)).toEqual(['com.alpha/mcp', 'com.bravo/mcp', 'com.charlie/mcp']);
   });
 
   it('describes the response as the whole catalog, unpaged', async () => {
@@ -101,7 +102,7 @@ describe('MCPCatalogService find', () => {
 
     // The envelope stays, because it is the shape every client parses. It says
     // "one page, containing everything" rather than describing a window.
-    expect(result.limit).toBe(4);
+    expect(result.limit).toBe(3);
     expect(result.skip).toBe(0);
     expect(result.data).toHaveLength(result.total);
   });
@@ -124,10 +125,13 @@ describe('MCPCatalogService find', () => {
       { name: 'com.alpha/mcp' },
       { $limit: 2, $skip: 1 },
       { $limit: 5000 },
+      { hidden: true },
+      { includeHidden: true },
+      { include_hidden: true },
     ] as const) {
       const result = await service().find({ query } as never);
 
-      expect(result.total, `query ${JSON.stringify(query)} changed the total`).toBe(4);
+      expect(result.total, `query ${JSON.stringify(query)} changed the total`).toBe(3);
       expect(names(result.data), `query ${JSON.stringify(query)} changed the entries`).toEqual(
         unchanged
       );
@@ -141,6 +145,10 @@ describe('MCPCatalogService get', () => {
     expect(entry.benefit).toBe('Charlie reads logs.');
     // Absent from the file, so read as "not stated" rather than as open.
     expect(entry.auth_type).toBe('unknown');
+  });
+
+  it('does not resolve hidden entries for discovery or new installs', async () => {
+    await expect(service().get('com.delta/mcp')).rejects.toThrow(/com\.delta\/mcp/);
   });
 
   it('reports a name the catalog does not carry as not found', async () => {
@@ -163,6 +171,63 @@ describe('MCPCatalogService write surface', () => {
     const first = await service().find();
     first.data.length = 0;
 
-    expect((await service().find()).data).toHaveLength(4);
+    expect((await service().find()).data).toHaveLength(3);
   });
+});
+
+it('rejects hidden names before connect, readiness, or catalog session side effects', async () => {
+  const app = {
+    service: (name: string) => {
+      if (name !== 'mcp-catalog') throw new Error(`Unexpected service access: ${name}`);
+      return service();
+    },
+  };
+  const params = {
+    user: { user_id: '01900000-0000-7000-8000-000000000001' },
+  } as AuthenticatedParams;
+  const listCandidates = vi.fn();
+  const isGrantAuthorized = vi.fn();
+  await expect(
+    createMCPCatalogConnectService(app, {
+      listCandidates,
+      isGrantAuthorized,
+      getCandidate: vi.fn(),
+      async runInTenantDatabaseScope() {
+        throw new Error('Unexpected database access');
+      },
+    }).create(
+      {
+        catalog_key: 'com.delta/mcp',
+        acknowledged_disclosure: 'Reads the database.',
+      },
+      params
+    )
+  ).rejects.toThrow(/not found/);
+  await expect(
+    new MCPCatalogReadinessService(app, { listCandidates, isGrantAuthorized }).get(
+      'com.delta/mcp',
+      params
+    )
+  ).rejects.toThrow(/not found/i);
+  await expect(
+    createMCPCatalogStartSessionService(app).create(
+      {
+        catalog_key: 'com.delta/mcp',
+        mcp_server_id: 'saved-server',
+        teammate_branch_id: '01900000-0000-7000-8000-000000000002' as BranchID,
+        agentic_tool: 'codex',
+      },
+      params
+    )
+  ).rejects.toThrow(/not found/);
+  expect(listCandidates).not.toHaveBeenCalled();
+  expect(isGrantAuthorized).not.toHaveBeenCalled();
+});
+
+it('re-enables the preserved definition after changing only hidden to false', async () => {
+  const restoredPath = path.join(tempDir, 'restored.yaml');
+  await fs.writeFile(restoredPath, CATALOG.replace('hidden: true', 'hidden: false'));
+  const restored = new MCPCatalogService(restoredPath);
+  expect((await restored.find()).total).toBe(4);
+  expect((await restored.get('com.delta/mcp')).remote_url).toBe('https://mcp.delta.example/mcp');
 });

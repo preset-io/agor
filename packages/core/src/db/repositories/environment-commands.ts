@@ -79,7 +79,7 @@ export class EnvironmentCommandRepository {
     confirmationOf?: string;
   }): Promise<Environment> {
     return this.mutate(input.branch.branch_id, (previous, now, row) => {
-      assertBranchActivityAllowed(row);
+      assertBranchActivityAllowed(row, { requireRecoveryReady: true });
       if (row.archived || (row.filesystem_status && row.filesystem_status !== 'ready')) {
         throw new RepositoryError('Environment commands require a ready, non-archived branch');
       }

@@ -509,7 +509,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:packaged": "node scripts/packaged-entry-import-smoke.mjs && node scripts/packaged-tenant-scope-smoke.mjs",
-    "test:runtime": "node --test test/tenant-public-url.runtime.mjs",
+    "test:runtime": "node --test test/tenant-public-url.runtime.mjs test/oauth-refresh.runtime.mjs",
     "test:postgres": "tsx src/db/scripts/test-postgres.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

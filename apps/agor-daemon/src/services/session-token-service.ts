@@ -256,18 +256,28 @@ export class SessionTokenService {
    * The durable authority schema predates taskless commands, so its historical
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
+   * Provisioning additionally signs the admitted generation. Durable authority
+   * binds the complete token fingerprint, so no separate attempt state is needed.
    */
   generateCommandToken(
     commandId: string,
     userId: string,
     branchId?: string,
-    expirationMs = EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS
+    expirationMs = EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+    provisioningAttemptId?: string
   ): Promise<string> {
+    if (
+      provisioningAttemptId !== undefined &&
+      (commandId !== 'git.branch.add' || !branchId || !provisioningAttemptId)
+    ) {
+      throw new Error('Provisioning scope requires a branch materialization command and attempt');
+    }
     return this.generateTokenWithPurpose(
       commandId,
       userId,
       {
         branchId,
+        provisioningAttemptId,
         maxUses: -1,
         expirationMs,
       },
@@ -296,6 +306,7 @@ export class SessionTokenService {
     scope: {
       taskId?: string;
       branchId?: string;
+      provisioningAttemptId?: string;
       maxUses?: number;
       expirationMs?: number;
     },
@@ -334,6 +345,7 @@ export class SessionTokenService {
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
+      provisioning_attempt_id: scope.provisioningAttemptId,
       // Ensure two otherwise-identical issuances in the same second produce
       // distinct bearer credentials and authority rows.
       jti: randomUUID(),
@@ -660,10 +672,20 @@ export async function issueExecutorCommandToken(
   commandId: string,
   userId: string,
   branchId?: string,
-  expirationMs?: number
+  expirationMs?: number,
+  provisioningAttemptId?: string
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
+  if (provisioningAttemptId !== undefined) {
+    return service.generateCommandToken(
+      commandId,
+      userId,
+      branchId,
+      expirationMs,
+      provisioningAttemptId
+    );
+  }
   return expirationMs === undefined
     ? service.generateCommandToken(commandId, userId, branchId)
     : service.generateCommandToken(commandId, userId, branchId, expirationMs);

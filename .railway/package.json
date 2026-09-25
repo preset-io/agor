@@ -1,0 +1,17 @@
+{
+  "name": "agor-railway-config",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "railway": "3.11.0"
+  },
+  "devDependencies": {
+    "@railway/cli": "5.62.1"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test *.test.mjs",
+    "secrets": "node secrets.mjs",
+    "plan": "railway config plan",
+    "apply": "railway config apply"
+  }
+}

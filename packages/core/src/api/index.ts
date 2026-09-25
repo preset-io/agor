@@ -729,7 +729,7 @@ export interface UsersService extends AgorService<User> {
    * recorded as an explicit user pick.
    */
   setPrimaryTeammate(
-    data: { branchId: string; expectedUserId: UserID },
+    data: { branchId: string | null; expectedUserId: UserID },
     params?: Params
   ): Promise<Branch | null>;
   /** Set an onboarding/default teammate only when the caller is still unset. */

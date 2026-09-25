@@ -2,7 +2,12 @@ import { act, cleanup, configure, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { checkBrowserSanity } from '../../test/browserSanity';
-import { CatalogHarness, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
+import {
+  CatalogHarness,
+  catalogEntry,
+  catalogOverview,
+  makeCatalogClient,
+} from './MCPCatalogModal.test-fixtures';
 
 checkBrowserSanity();
 // Native Playwright input must commit mousedown before focus/mouseup. Wrapping
@@ -178,4 +183,45 @@ describe('MCP Catalog real Chromium flows', () => {
       expect(api.overviewRead).not.toHaveBeenCalled();
     }
   );
+});
+
+it('excludes hidden cards, searches, and counts but retains saved connections', async () => {
+  const hiddenNames = [
+    'com.figma.mcp/mcp',
+    'com.vercel/vercel-mcp',
+    'com.intercom/mcp',
+    'com.squareup/mcp',
+    'com.canva/mcp',
+    'com.dropbox/mcp',
+    'com.newrelic/mcp-server',
+  ];
+  const api = makeCatalogClient([
+    catalogEntry,
+    ...hiddenNames.map((name) => ({ ...catalogEntry, name, title: name, hidden: true })),
+  ]);
+  api.overviewRead.mockResolvedValue({
+    ...catalogOverview,
+    servers: catalogOverview.servers.map((server) => ({
+      ...server,
+      name: 'vercel',
+      display_name: 'Saved Vercel',
+      catalog_entry_name: 'com.vercel/vercel-mcp',
+    })),
+  });
+  render(<CatalogHarness client={api.client} />);
+  const trigger = screen.getByRole('button', { name: 'Open MCP Catalog' });
+  trigger.scrollIntoView();
+  await userEvent.click(trigger);
+  const modal = await findCatalogModal();
+  await screen.findByRole('button', { name: 'Open DeepWiki' });
+  for (const name of hiddenNames) expect(screen.queryByText(name)).not.toBeInTheDocument();
+  const search = within(modal).getByPlaceholderText(/Search/);
+  await userEvent.fill(search, 'vercel');
+  await screen.findByText(/No.*match/i);
+  expect(screen.getByText('0 of 1 servers match')).toBeInTheDocument();
+  await userEvent.clear(search);
+  await screen.findByRole('button', { name: 'Open DeepWiki' });
+  await activateTab(/My Servers/);
+  await screen.findByText('Saved Vercel');
+  expect(api.connect).not.toHaveBeenCalled();
 });

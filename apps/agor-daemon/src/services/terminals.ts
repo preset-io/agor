@@ -371,7 +371,7 @@ export class TerminalsService {
       }
 
       await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
-        await lockBranchForAdmission(db, branch.branch_id);
+        await lockBranchForAdmission(db, branch.branch_id, { requireRecoveryReady: true });
       });
       if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
         throw new Forbidden('Terminal start was cancelled');

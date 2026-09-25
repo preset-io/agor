@@ -17,10 +17,16 @@
 
 import { getBaseUrl } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
-import type { MessageID, SessionID } from '@agor/core/types';
+import { loadCatalog } from '@agor/core/mcp-catalog';
+import type { MCPCatalogEntry, MessageID, SessionID } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
+  loadCatalog: vi.fn(),
+}));
 
 vi.mock('../../utils/append-system-message.js', () => ({
   appendSystemMessage: vi.fn(),
@@ -64,6 +70,7 @@ vi.mock('@agor/core/db', async (importOriginal) => ({
 }));
 
 import { hostedTenantRouting } from '../../../test/hosted-tenant-routing-fixture.js';
+import { MCPCatalogService } from '../../services/mcp-catalog.js';
 import type { MCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import {
   mcpOAuthGrantIsConnected,
@@ -129,6 +136,9 @@ interface MakeAppOpts {
 }
 
 function makeApp(opts: MakeAppOpts = {}) {
+  vi.mocked(loadCatalog).mockResolvedValue(
+    opts.catalogEntry === null ? [] : [(opts.catalogEntry ?? NOTION_ENTRY) as MCPCatalogEntry]
+  );
   const calls: ServiceCall[] = [];
   const record = (service: string, method: string, args: unknown[]) =>
     calls.push({ service, method, args });
@@ -401,6 +411,18 @@ describe('agor_widgets_request_oauth — catalog install', () => {
     expect(widget.params.permissionDisclosure).toBe(NOTION_ENTRY.permission_disclosure);
   });
 
+  it('refuses a hidden catalog name before any install or widget, using the real catalog boundary', async () => {
+    const { app, calls } = makeApp({ catalogEntry: { ...NOTION_ENTRY, hidden: true } });
+    const catalog = new MCPCatalogService();
+    app.service('mcp-catalog').get = (id) => catalog.get(String(id));
+    const tools = registerAndCapture({ app });
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ catalogEntryName: NOTION_ENTRY.name })
+    ).rejects.toThrow(/No MCP catalog entry/);
+    expect(calls.some((c) => c.service === 'mcp-catalog/connect')).toBe(false);
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
   it('refuses an unknown catalog name and points at the catalog tool', async () => {
     const { app } = makeApp({ catalogEntry: null });
     const tools = registerAndCapture({ app });
@@ -465,6 +487,21 @@ describe('agor_widgets_request_oauth — an existing catalog install requested b
     expect(second.status).toBe('pending');
     expect(second.params.catalogEntryName).toBe('com.notion/mcp');
     expect(second.params.permissionDisclosure).toBe(NOTION_ENTRY.permission_disclosure);
+  });
+
+  it('keeps reconnect disclosure for a hidden saved connection without offering a new install', async () => {
+    const { app, calls } = makeApp({
+      server: INSTALLED,
+      catalogEntry: { ...NOTION_ENTRY, hidden: true },
+    });
+    const tools = registerAndCapture({ app });
+    await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure).toBe(
+      NOTION_ENTRY.permission_disclosure
+    );
+    expect(
+      calls.some((c) => c.service === 'mcp-catalog' || c.service === 'mcp-catalog/connect')
+    ).toBe(false);
   });
 
   it('refuses, before superseding anything, when the entry has left the catalog', async () => {

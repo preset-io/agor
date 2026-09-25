@@ -30,6 +30,58 @@ function entry(auth_type: MCPCatalogEntry['auth_type']): MCPCatalogEntry {
 }
 
 describe('auditCatalogHealth', () => {
+  it.each([undefined, false])(
+    'skips hidden endpoints but still reports visible auth drift (hidden=%s)',
+    async (hidden) => {
+      const probe = vi.fn().mockResolvedValue({ authType: 'none' });
+      const oauthMetadataReady = vi.fn();
+      const hiddenEntry = { ...entry('oauth'), name: 'example/hidden', hidden: true };
+      const visibleEntry = { ...entry('oauth'), hidden };
+      const results = await auditCatalogHealth([hiddenEntry, visibleEntry], {
+        probe,
+        oauthMetadataReady,
+      });
+
+      expect(results).toEqual([
+        {
+          name: hiddenEntry.name,
+          status: 'skipped-hidden',
+          expectedAuth: 'oauth',
+          observedAuth: 'unknown',
+          reason: 'catalog_entry_hidden',
+        },
+        {
+          name: visibleEntry.name,
+          status: 'auth-drift',
+          expectedAuth: 'oauth',
+          observedAuth: 'none',
+          reason: 'auth_mismatch',
+        },
+      ]);
+      expect(probe).toHaveBeenCalledExactlyOnceWith(visibleEntry.remote_url);
+      expect(oauthMetadataReady).not.toHaveBeenCalled();
+    }
+  );
+
+  it('skips hidden OAuth discovery without suppressing visible metadata failures', async () => {
+    const hidden = { ...entry('oauth'), hidden: true };
+    const visible = { ...entry('oauth'), name: 'example/visible' };
+    const probe = vi.fn().mockResolvedValue({ authType: 'oauth' });
+    const oauthMetadataReady = vi
+      .fn()
+      .mockRejectedValue(new OAuthConfigurationError('pkce_required', 'S256 required'));
+
+    const results = await auditCatalogHealth([hidden, visible], { probe, oauthMetadataReady });
+
+    expect(results.map(({ status }) => status)).toEqual([
+      'skipped-hidden',
+      'oauth-metadata-not-ready',
+    ]);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(visible.remote_url);
+    expect(oauthMetadataReady).toHaveBeenCalledExactlyOnceWith(visible, undefined);
+    expect(results[1].reason).toBe('pkce_required');
+  });
+
   it('retains the closed storage-policy reason without provider prose', async () => {
     const [result] = await auditCatalogHealth([entry('oauth')], {
       probe: async () => ({ authType: 'oauth' }),
@@ -79,7 +131,7 @@ describe('auditCatalogHealth', () => {
   it('expects Datadog to audit as OAuth-ready without requiring a challenge header', async () => {
     const datadog = entry('oauth');
     datadog.name = 'com.datadoghq/mcp';
-    datadog.remote_url = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp';
+    datadog.remote_url = 'https://mcp.datadoghq.com/v1/mcp';
     const oauthMetadataReady = vi.fn().mockResolvedValue(undefined);
 
     const [result] = await auditCatalogHealth([datadog], {

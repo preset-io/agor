@@ -21,6 +21,15 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
 
 const ENTRIES = [
   {
+    hidden: true,
+    name: 'com.hidden/mcp',
+    category: 'productivity',
+    capabilities: ['issues'],
+    auth_type: 'oauth',
+    popularity_rank: 0,
+  },
+  {
+    hidden: false,
     name: 'com.notion/mcp',
     has_remote: true,
     remote_url: 'https://mcp.notion.com/mcp',
@@ -104,6 +113,12 @@ describe('agor_mcp_catalog_list', () => {
       'io.github.github/github-mcp-server',
     ]);
     expect(payload.pagination).toMatchObject({ total: 3, hasMore: false, nextOffset: null });
+  });
+
+  it('never discovers hidden definitions even with search or a bypass parameter', async () => {
+    const result = await run({ search: 'hidden', includeHidden: true });
+    expect(result.catalog_entries).toEqual([]);
+    expect(result.pagination).toMatchObject({ total: 0, hasMore: false, nextOffset: null });
   });
 
   it('resolves a product name to its reverse-DNS catalog identity', async () => {

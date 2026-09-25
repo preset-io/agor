@@ -401,6 +401,36 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
+  it('offers Fellow with discovered OAuth and discloses its permission-gated read/write tools', async () => {
+    const fellow = (await loadCuratedCatalog()).find((entry) => entry.name === 'app.fellow/mcp');
+    expect(fellow).toMatchObject({
+      title: 'Fellow',
+      category: 'productivity',
+      capabilities: ['notes', 'tasks', 'channels'],
+      remote_url: 'https://fellow.app/mcp',
+      website_url: 'https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+    });
+    expect(fellow?.hidden).toBeUndefined();
+    expect(fellow?.oauth).toBeUndefined();
+    expect(fellow?.credentials).toBeUndefined();
+    for (const authority of [
+      'admin to enable MCP',
+      'per-user Fellow permissions',
+      'transcripts',
+      'action items',
+      'calendar events',
+      'channels',
+      'create, replace, edit, and rename agendas',
+      'permanently delete',
+      'agenda templates',
+      "meeting series' default template",
+    ]) {
+      expect(fellow?.permission_disclosure).toContain(authority);
+    }
+  });
+
   it('keeps material destructive, sensitive, and operational authority in disclosures', async () => {
     const entries = await loadCuratedCatalog();
     const disclosure = (name: string): string => {
@@ -598,15 +628,17 @@ describe('the shipped catalog', () => {
     );
   });
 
-  it('keeps Datadog on its validated OAuth path rather than the bearer fallback', async () => {
+  it('uses Datadog’s documented US1 v1 endpoint with unchanged OAuth and transport', async () => {
     const entries = await loadCuratedCatalog();
     const datadog = entries.find((entry) => entry.name === 'com.datadoghq/mcp');
 
     expect(datadog).toMatchObject({
-      remote_url: 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp',
+      remote_url: 'https://mcp.datadoghq.com/v1/mcp',
+      transport: 'streamable-http',
       auth_type: 'oauth',
     });
     expect(datadog?.credentials).toBeUndefined();
+    expect(datadog?.oauth).toBeUndefined();
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
@@ -742,5 +774,41 @@ describe('the shipped catalog — everything on the shelf can be taken off it', 
     // executing third-party code on the executor host, beside every session.
     const entries = await loadCuratedCatalog();
     expect(entries.filter((entry) => entry.transport === 'stdio')).toEqual([]);
+  });
+});
+
+describe('catalog visibility validation', () => {
+  it('preserves optional boolean visibility without excluding definitions', () => {
+    expect(parseCuratedCatalog(VALID_ENTRY)[0].hidden).toBeUndefined();
+    for (const hidden of [true, false]) {
+      expect(parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${hidden}\n`)[0].hidden).toBe(hidden);
+    }
+  });
+
+  it.each(['"true"', '"false"', '1', 'null'])('rejects non-boolean hidden: %s', (value) => {
+    expect(() => parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${value}\n`)).toThrow(/hidden/);
+  });
+
+  it('still validates hidden definitions, including transport and duplicate identities', () => {
+    const hidden = `${VALID_ENTRY}    hidden: true\n`;
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('category: dev-tools', 'category: invalid'))
+    ).toThrow(/category/);
+    expect(() => parseCuratedCatalog(`${hidden}    transport: stdio\n`)).toThrow(/stdio/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace(/\s+permission_disclosure:.*\n/, '\n'))
+    ).toThrow(/permission_disclosure/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('https://mcp.example.com/mcp', 'file:///tmp/mcp'))
+    ).toThrow(/remote_url/);
+    expect(() =>
+      parseCuratedCatalog(`${hidden}    oauth:\n      client_secret: forbidden\n`)
+    ).toThrow(/client_secret/);
+    expect(() => parseCuratedCatalog(`${hidden}    auth_type: credentials\n`)).toThrow(
+      /credentials/
+    );
+    expect(() => parseCuratedCatalog(hidden + hidden.replace('entries:', 'unpublished:'))).toThrow(
+      /duplicate entry name/
+    );
   });
 });

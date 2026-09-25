@@ -28,6 +28,34 @@ lists: pruning the last branch entry would change the list to empty and thereby
 activate user-default inheritance. Creation-time handling also covers existing
 stale lists and a server deleted while a session is being created.
 
+## Catalog visibility
+
+Curators can set `hidden: true` on an entry in
+`packages/core/src/mcp-catalog/curated.yaml` to remove it from catalog discovery,
+search, and new catalog installs by name. Hidden names return
+not found on catalog lookup, readiness, connect, and catalog start-session routes;
+there is no request parameter to reveal them. Omit `hidden` or set it to `false`
+and redeploy to offer the entry again. All definitions remain validated.
+
+This is not a runtime disable or authorization revocation. Saved connections,
+grants, attachment, and reconnect through **My Servers** (or an OAuth widget
+naming the saved server ID) retain their existing security and canonical catalog
+policy checks. Full definitions remain available internally for those checks and
+maintenance, even while hidden.
+
+Vercel, Intercom, Square, Canva, Dropbox, and New Relic are currently hidden based
+on the September 9–10 review, not a new provider certification. The first four had
+documented provider-client or callback approval requirements. Dropbox involved
+trusted-client DCR admission; its observed nonspecific `403` did not prove
+callback rejection. New Relic DCR succeeded, but subsequent authorization failed;
+allowlisting was not confirmed. Figma is also hidden following a September 24
+user report that provider approval is required; this was not independently
+verified. There are seven hidden providers. Asana, incident.io, and Datadog are
+not hidden by this change. Onboarding recommendations remain hardcoded; Figma
+has been removed from the “Build me an app” recommendations so the existing
+eligible choices fill the kit. None of the seven hidden providers is actively
+recommended; recommendations are not dynamically filtered by catalog visibility.
+
 ## Authentication
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
@@ -38,6 +66,15 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
+
+Datadog now uses its [documented US1 endpoint](https://github.com/datadog-labs/mcp-server),
+`https://mcp.datadoghq.com/v1/mcp`, without additional toolsets or permissions.
+Saved rows are not automatically migrated from `/api/unstable/mcp-server/mcp`.
+Those rows no longer match the current catalog: absent an explicit compatibility
+override, they fall back to strict OAuth, which invalidates grants bound to the
+former marketplace policy. Explicit Catalog Connect can reconcile the caller's
+owned row to the new endpoint through the existing flow; old-resource grants are
+not reusable there, so renewed authorization is required.
 
 ### Inspecting OAuth policy and failures
 

@@ -2,15 +2,19 @@ import type { Branch, BranchID, UserID } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
 import { and, eq, isNull } from 'drizzle-orm';
 import { analyticsLogger } from '../../analytics/logger';
+import { lockBranchForAdmission } from '../branch-admission';
+import { lockBranchReferenceMutation } from '../branch-reference-admission';
 import type { Database } from '../client';
 import {
   jsonExtract,
   jsonRemoveProperty,
   jsonSetString,
+  runDatabaseTransaction,
   select,
   update,
 } from '../database-wrapper';
 import { users } from '../schema';
+import { RepositoryError } from './base';
 import { BranchRepository } from './branches';
 
 /** Analytics event emitted whenever a user's primary teammate branch is set. */
@@ -131,6 +135,27 @@ export class UserPrimaryTeammateRepository {
     branchId: BranchID,
     options: SetPrimaryTeammateOptions
   ): Promise<void> {
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockBranchReferenceMutation(tx);
+        const branch = await lockBranchForAdmission(tx, branchId, { primaryDesignationOnly: true });
+        if (branch.archived) throw new RepositoryError('Primary teammate must be active');
+        return new UserPrimaryTeammateRepository(tx).setPrimaryTeammateLocked(
+          userId,
+          branchId,
+          options
+        );
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  private async setPrimaryTeammateLocked(
+    userId: UserID,
+    branchId: BranchID,
+    options: SetPrimaryTeammateOptions
+  ): Promise<void> {
     await update(this.db, users)
       .set({
         updated_at: new Date(),
@@ -147,6 +172,27 @@ export class UserPrimaryTeammateRepository {
 
   /** Set a default only when no explicit/concurrent selection already exists. */
   async setPrimaryTeammateIfUnset(
+    userId: UserID,
+    branchId: BranchID,
+    options: SetPrimaryTeammateOptions
+  ): Promise<boolean> {
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockBranchReferenceMutation(tx);
+        const branch = await lockBranchForAdmission(tx, branchId, { primaryDesignationOnly: true });
+        if (branch.archived) throw new RepositoryError('Primary teammate must be active');
+        return new UserPrimaryTeammateRepository(tx).setPrimaryTeammateIfUnsetLocked(
+          userId,
+          branchId,
+          options
+        );
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  private async setPrimaryTeammateIfUnsetLocked(
     userId: UserID,
     branchId: BranchID,
     options: SetPrimaryTeammateOptions

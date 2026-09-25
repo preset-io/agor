@@ -17,7 +17,10 @@ import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
 import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
-import { buildModelConfigFromFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
+import {
+  buildModelConfigFromFormValues,
+  getEffectiveCodexFormValues,
+} from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
 import {
   getUserAgenticToolDefault,
@@ -81,6 +84,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       const sameToolAsParent = agentTool === session?.agentic_tool;
       const modelConfig =
         userDefaults?.modelConfig ?? (sameToolAsParent ? session?.model_config : undefined);
+      const permissionMode =
+        userDefaults?.permissionMode ??
+        (sameToolAsParent ? session?.permission_config?.mode : undefined) ??
+        getDefaultPermissionMode(agentTool);
+      const parentCodex = sameToolAsParent ? session?.permission_config?.codex : undefined;
       return {
         agent: agentTool,
         // Seed the config source from the parent (same tool): the parent's preset
@@ -91,10 +99,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           : userSelection || userDefaults
             ? USER_DEFAULT_AGENTIC_CONFIGURATION
             : undefined,
-        permissionMode:
-          userDefaults?.permissionMode ||
-          (sameToolAsParent ? session?.permission_config?.mode : undefined) ||
-          getDefaultPermissionMode(agentTool),
+        permissionMode,
         // Existing user defaults are sent as explicit form values. If the user
         // has no saved model default and the child keeps the same tool, leaving
         // this undefined would inherit the parent model in resolveChildSessionConfig;
@@ -103,9 +108,12 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         // Surfaced as its own field (the effort chip binds to it), folded back
         // into model_config on submit.
         effort: modelConfig?.effort,
-        codexSandboxMode: userDefaults?.codexSandboxMode,
-        codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
-        codexNetworkAccess: userDefaults?.codexNetworkAccess,
+        // Seed only genuinely configured values (user → same-tool parent).
+        // Missing values stay derived from the current mode, not frozen at the
+        // opening mode. Display and submit complete them without mutating state.
+        codexSandboxMode: userDefaults?.codexSandboxMode ?? parentCodex?.sandboxMode,
+        codexApprovalPolicy: userDefaults?.codexApprovalPolicy ?? parentCodex?.approvalPolicy,
+        codexNetworkAccess: userDefaults?.codexNetworkAccess ?? parentCodex?.networkAccess,
       };
     },
     [currentUser, session]
@@ -191,9 +199,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
               modelConfig: values.modelConfig,
               effort: values.effort,
             });
-            spawnConfig.codexSandboxMode = values.codexSandboxMode;
-            spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
-            spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
+            if (spawnConfig.agent === 'codex') {
+              // Explicitly send what the controls show, including derived false:
+              // omission would let the child resolver inherit unrelated parent values.
+              Object.assign(spawnConfig, getEffectiveCodexFormValues(values));
+            }
           }
           // MCP attachments are session-scoped and remain editable regardless
           // of whether the agent configuration comes from a preset or inline.
@@ -262,7 +272,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       confirmLoading={loading}
       okButtonProps={{ disabled: !hasActiveParentTool }}
       width={700}
-      forceRender
+      // A successful submit closes while the loading icon is animating out.
+      // Retaining that hidden button can strand its exit motion (and its
+      // "loading" accessible name) on the next open. Dispose after close;
+      // rejected submits stay mounted and retain their draft.
+      destroyOnHidden
     >
       <div style={{ marginBottom: 16 }}>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
@@ -359,7 +373,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                 />
 
                 {selectedAgent === 'codex' && isInlineConfig && (
-                  <CodexSettingsForm showHelpText={false} />
+                  <CodexSettingsForm showHelpText={false} showEffectiveDefaults />
                 )}
 
                 {/* Session-scope env var selections (only the creator / admin

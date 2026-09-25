@@ -1,3 +1,4 @@
+import { BRANCH_FILESYSTEM_ACTIONS } from '@agor/core/types';
 /**
  * Repos Service
  *
@@ -27,9 +28,11 @@ import {
 import {
   BranchMaintenanceRepository,
   BranchRepository,
+  enqueueAfterTenantDatabaseCommit,
   generateId,
   getCurrentTenantId,
   RepoRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   shortId,
@@ -91,7 +94,8 @@ export type RepoParams = QueryParams<{
   slug?: string;
   managed_by_agor?: boolean;
   cleanup?: boolean; // For delete operations: true = delete filesystem, false = database only
-}>;
+}> &
+  AuthenticatedParams;
 
 /**
  * Reduce an error to a short, log/DB-safe message. Strips embedded credentials
@@ -1095,7 +1099,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         this.app,
         'git.branch.add',
         userId,
-        branch.branch_id
+        branch.branch_id,
+        undefined,
+        attemptId
       );
 
       // Retry/watchdog callers have no pre-resolved routing; create passes its
@@ -1108,55 +1114,79 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         `${logPrefix} enqueue git.branch.add (reason=${reason}, storage_mode=${storageMode})`
       );
 
-      spawnExecutorFireAndForget(
-        {
-          command: 'git.branch.add',
-          sessionToken,
-          daemonUrl: getDaemonUrl(),
-          params: {
-            branchId: branch.branch_id,
-            repoId: repo.repo_id,
-            userId: userId as string | undefined,
-            principalBranchAccess: 'write',
-            // Echoed back on the executor's terminal patch so a superseded
-            // attempt's late ack can be discarded instead of overwriting a
-            // newer one.
-            ...(attemptId ? { provisioningAttemptId: attemptId } : {}),
-            restoreMode: branch.provisioning_operation === 'restore',
-            allowExistingCheckout: reason !== 'create',
-            useReference:
-              storageMode === 'clone' &&
-              !getTeammateConfig(branch)?.localHome &&
-              !!repo.local_path &&
-              shouldUseCloneReferencePath(this.app.get('config')),
+      const launch = () =>
+        spawnExecutorFireAndForget(
+          {
+            command: 'git.branch.add',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              branchId: branch.branch_id,
+              repoId: repo.repo_id,
+              userId: userId as string | undefined,
+              principalBranchAccess: 'write',
+              // Echoed back on the executor's terminal patch so a superseded
+              // attempt's late ack can be discarded instead of overwriting a
+              // newer one.
+              ...(attemptId ? { provisioningAttemptId: attemptId } : {}),
+              restoreMode: branch.provisioning_operation === 'restore',
+              allowExistingCheckout: reason !== 'create',
+              useReference:
+                storageMode === 'clone' &&
+                !getTeammateConfig(branch)?.localHome &&
+                !!repo.local_path &&
+                shouldUseCloneReferencePath(this.app.get('config')),
+            },
           },
-        },
-        {
-          logPrefix,
-          delegatedHomeKey: homeKey,
-          templateVariables: {
-            branch_id: branch.branch_id,
-            user_id: userId,
-            branch_fs_access: 'write',
-          },
-          onExit: (code) => {
-            if (code === 0) {
-              // Success path: the executor patched 'ready' itself.
-              console.log(`${logPrefix} executor exited cleanly (code 0)`);
-              return;
+          {
+            logPrefix,
+            delegatedHomeKey: homeKey,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: 'write',
+            },
+            onExit: (code) => {
+              if (code === 0) {
+                // Success path: the executor patched 'ready' itself.
+                console.log(`${logPrefix} executor exited cleanly (code 0)`);
+                return;
+              }
+              console.error(
+                `${logPrefix} executor exited with code ${code ?? 'null'}; running safety-net reconcile`
+              );
+              void this.reconcileBranchFilesystemAfterExit(
+                branch.branch_id,
+                code,
+                tenantId,
+                attemptId
+              );
+            },
+          }
+        );
+      // REST uses short scopes; MCP may own an outer transaction. Neither the
+      // attempt nor its command credential may be consumed before commit.
+      if (
+        reason !== 'create' &&
+        enqueueAfterTenantDatabaseCommit(async () => {
+          const work = async () => {
+            try {
+              launch();
+            } catch (error) {
+              await this.markBranchProvisioningFailedIfStuck(
+                branch.branch_id,
+                `Failed to spawn executor: ${sanitizeProvisioningError(error)}`,
+                tenantId,
+                attemptId
+              );
             }
-            console.error(
-              `${logPrefix} executor exited with code ${code ?? 'null'}; running safety-net reconcile`
-            );
-            void this.reconcileBranchFilesystemAfterExit(
-              branch.branch_id,
-              code,
-              tenantId,
-              attemptId
-            );
-          },
-        }
-      );
+          };
+          if (tenantId) await runWithTenantContext(tenantId, work);
+          else await work();
+        })
+      )
+        return branch;
+      launch();
       return branch;
     } catch (error) {
       // Synchronous spawn failure (token generation, routing resolution, or a
@@ -1246,40 +1276,29 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Explicit, authorized repair for a branch whose provisioning FAILED.
-   *
-   * This endpoint never decides that a `creating` attempt is orphaned:
-   *
-   * - `ready`                         → no-op (idempotent).
-   * - `creating`                      → 409 in-progress, even after a restart.
-   * - `failed`                        → atomically claim `failed → creating`
-   *                                     and re-dispatch the executor.
-   * - preserved/cleaned/deleted/other → 409; use restore/unarchive instead.
-   *
-   * The row-locked claim allows only one dispatcher across concurrent retries.
-   * Generation-fenced exit/ack handling can establish a known failure; the
-   * standalone startup reconciler is a separate, tenant-scoped safety net.
-   * HA startup deliberately does not run that reconciler. A stranded `creating`
-   * row needs separately established containment/recovery authority, not an
-   * age-based takeover through this endpoint. This is failed-attempt retry,
-   * not multi-tenant or HA orphan recovery.
+   * Authorized retry/restore through one atomic admission and executor owner.
+   * Active failed or stale archive outcomes are repairable; archived branches
+   * enter only via unarchive's internal restoreArchived argument. Creating is
+   * never taken over based on age. A ready active branch is a no-op.
    */
-  async retryBranchProvisioning(branchId: string, params?: RepoParams): Promise<Branch> {
+  async retryBranchProvisioning(
+    branchId: string,
+    params?: RepoParams,
+    restoreArchived = false
+  ): Promise<Branch> {
     const branchesService = this.app.service('branches');
     // Read through the service so short IDs resolve and RBAC hooks fire.
     const branch = (await branchesService.get(branchId, params)) as Branch;
     const status = branch.filesystem_status;
-    const logPrefix = `[branch-provisioning ${shortId(branch.branch_id)}]`;
     const branchRepo = new BranchRepository(this.db);
 
     // Authorization. The `get` above only establishes VIEW access, and the CAS
     // below writes through the repository — so it never passes through the
     // branches-service `patch` hook that normally demands `all`. Without this
-    // gate any member who can *see* a failed branch could trigger provisioning
-    // under `branch.created_by`'s execution identity and credentials. Assert the
+    // gate any member who can *see* a failed branch could trigger provisioning. Assert the
     // canonical branch-control level (effective `all`, owner, or global admin)
     // here in the service so REST, MCP and the UI are covered by one check;
-    // internal calls and service accounts bypass, as everywhere else.
+    // The row-locked validation below also requires a caller and filesystem write access.
     await this.withTenantDatabase(params, () =>
       ensureCanControlBranchEnvironment(
         branchRepo,
@@ -1292,7 +1311,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Archived branches have their own restore/unarchive lifecycle. Status alone
     // does not catch this: archiving overwrites `filesystem_status`, but an
     // already-`failed` branch that was then archived can still read `failed`.
-    if (branch.archived) {
+    if (branch.archived && !restoreArchived) {
       throw new Conflict(
         'This branch is archived. Unarchive it first — archived branches are restored through the unarchive flow, not by retrying provisioning.',
         {
@@ -1303,7 +1322,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       );
     }
 
-    if (status === 'ready') {
+    const restore =
+      restoreArchived || BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === status);
+    if (status === 'ready' && !restore) {
       return branch;
     }
     if (status === 'creating') {
@@ -1315,9 +1336,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           filesystemStatus: status,
         }
       );
-    } else if (status !== 'failed') {
+    } else if (status !== 'failed' && !restore) {
       throw new Conflict(
-        `Branch provisioning cannot be retried from status "${status ?? 'unknown'}". Only a failed provisioning attempt is retryable; use the branch restore/unarchive flow for archived or cleaned branches.`,
+        `Branch provisioning cannot be retried from status "${status ?? 'unknown'}". Only failed or active preserved/cleaned/deleted records are recoverable; use unarchive for archived branches.`,
         {
           code: 'BRANCH_PROVISIONING_NOT_RETRYABLE',
           branchId: branch.branch_id,
@@ -1333,30 +1354,69 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new BadRequest(`Repo ${branch.repo_id} not found for branch ${branchId}`);
     }
 
-    // Atomic claim: only the caller that flips failed → creating dispatches.
-    // The claim stamps a fresh attempt generation onto the row, which fences
-    // this dispatch's acknowledgements against any attempt that came before it.
+    const requestUser = params?.user;
+    if (!requestUser) throw new NotAuthenticated('Authentication required');
+    const validate = async (db: import('@agor/core/db').Database, current: Branch) => {
+      await ensureBranchWorkspaceAccess(
+        new BranchRepository(db),
+        current,
+        requestUser.user_id,
+        requestUser.role as UserRole,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      );
+      if (current.path !== branch.path || current.repo_id !== branch.repo_id)
+        throw new Conflict('Branch location changed; refresh before recovery');
+      if (
+        (current.storage_mode ?? 'worktree') === 'worktree' &&
+        resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      )
+        throw new BadRequest(
+          'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
+        );
+    };
     const { claimed, branch: claimedBranch } = await this.withTenantDatabase(params, () =>
-      branchRepo.claimFailedForProvisioningRetry(branch.branch_id, generateId())
+      branchRepo.claimForProvisioning(branch.branch_id, generateId(), {
+        restore,
+        archived: restoreArchived,
+        validate,
+      })
     );
     if (!claimed) {
-      console.log(
-        `${logPrefix} retry ignored — another attempt already claimed it (status=${claimedBranch.filesystem_status})`
+      // A competing attempt can finish before our locked read. Returning its
+      // durable ready state is a safe no-op, never another executor admission.
+      if (
+        !claimedBranch.archived &&
+        !claimedBranch.deletion_status &&
+        claimedBranch.filesystem_status === 'ready'
+      )
+        return claimedBranch;
+      if (claimedBranch.filesystem_status === 'creating') {
+        throw new Conflict(
+          'Branch provisioning is already in progress. Wait for it to finish before retrying.',
+          {
+            code: 'BRANCH_PROVISIONING_IN_PROGRESS',
+            branchId: claimedBranch.branch_id,
+            filesystemStatus: 'creating',
+          }
+        );
+      }
+      throw new Conflict(
+        'Branch recovery is blocked or its state changed. Refresh before retrying.'
       );
-      return claimedBranch;
     }
     this.emitBranchPatched(claimedBranch, params);
-
-    // Provision as the branch's original owner so impersonation/credentials
-    // match the create path. Dispatch inside the tenant scope too: it reads
-    // impersonation config from the database, and it captures the ambient tenant
-    // so the executor's async onExit safety net can re-enter the right scope.
-    const userId = branch.created_by as UserID;
-    // Take the dispatch result rather than the claimed row: a synchronous spawn
-    // failure marks the branch `failed` in there, and returning the pre-dispatch
-    // `creating` object would report an in-flight retry that never started.
-    return await this.withTenantDatabase(params, () =>
-      this.dispatchBranchProvisioning(claimedBranch, repo, userId, params, 'retry')
+    // Use the authorized caller's credentials and execution identity, never the
+    // original creator's credentials for another manager's recovery request.
+    return this.withTenantDatabase(params, () =>
+      this.dispatchBranchProvisioning(
+        claimedBranch,
+        repo,
+        requestUser.user_id as UserID,
+        params,
+        restore ? 'restore' : 'retry'
+      )
     );
   }
 

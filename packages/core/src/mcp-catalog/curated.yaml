@@ -1,10 +1,15 @@
 # The MCP catalog.
 #
-# This file is the catalog. The marketplace offers exactly what is listed here
-# and nothing else, so an entry added is a server users can find and an entry
+# This file is the catalog. The marketplace offers its visible entries
+# and nothing else, so a visible entry added is a server users can find and an entry
 # removed is one they can no longer install. It lives in the repository rather
 # than in an admin UI so every change is reviewed in a pull request and rolls
 # back like code.
+#
+# `hidden: true` removes discovery and new catalog installs by name, not saved
+# connections, grants, reconnect, or runtime policy. Omit it or set false to
+# re-enable after review and redeploy (the catalog is process-cached). Hidden
+# definitions still undergo full validation and remain available to maintenance.
 #
 # `name` is the reverse-DNS identity, unique across both lists, and it is what
 # an installed server records — so renaming an entry orphans every install of
@@ -83,6 +88,8 @@ entries:
     auth_type: oauth
 
   - name: com.figma.mcp/mcp
+    # Sept 24: user-reported provider approval requirement; not independently verified.
+    hidden: true
     category: dev-tools
     capabilities: [design, notes]
     benefit: Give an agent the actual design file so generated UI matches the spec instead of approximating it.
@@ -95,6 +102,9 @@ entries:
     auth_type: oauth
 
   - name: com.vercel/vercel-mcp
+    # Sept 9–10 review: documented provider-client or callback approval required.
+    # Historical evidence, not current provider certification.
+    hidden: true
     category: dev-tools
     capabilities: [deployments, projects, logs]
     benefit: Inspect deployments and read build logs so an agent can diagnose a failed ship on its own.
@@ -305,6 +315,9 @@ entries:
     auth_type: oauth
 
   - name: com.newrelic/mcp-server
+    # Sept 9–10 review: DCR succeeded but subsequent authorization failed.
+    # Allowlisting was NOT confirmed; not current provider certification.
+    hidden: true
     category: observability
     capabilities: [metrics, logs, alerts, sql]
     benefit: Run NRQL and read APM data so performance questions get answered with numbers.
@@ -581,6 +594,9 @@ unpublished:
     website_url: https://preset.io/
 
   - name: com.dropbox/mcp
+    # Sept 9–10 review: trusted-client DCR admission; observed nonspecific 403
+    # does not establish callback rejection. Not current provider certification.
+    hidden: true
     category: data-storage
     capabilities: [files, web-search]
     benefit: Give an agent read access to project files without copying them into the repository.
@@ -604,6 +620,18 @@ unpublished:
     transport: sse
     auth_type: oauth
 
+  - name: app.fellow/mcp
+    title: Fellow
+    category: productivity
+    capabilities: [notes, tasks, channels]
+    benefit: Bring meeting decisions and action items into your session, and prepare agendas from that context.
+    starter_prompt: Summarise the decisions and my action items from meetings this week. Do not change any agendas or templates.
+    permission_disclosure: Requires a Fellow workspace admin to enable MCP connections and the tools you use. Acts with your per-user Fellow permissions. Reads meeting notes, summaries, transcripts, participants, action items, calendar events, channels, agendas, and templates. Enabled tools can create, replace, edit, and rename agendas; create, edit, permanently delete, and apply agenda templates; and set a meeting series' default template. Data returned by Fellow is sent to the agent and AI provider running this Agor session.
+    website_url: https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server
+    remote_url: https://fellow.app/mcp
+    transport: streamable-http
+    auth_type: oauth
+
   - name: com.clickup/mcp
     category: productivity
     capabilities: [tasks, docs, notes]
@@ -619,6 +647,9 @@ unpublished:
       compatibility_mode: strict
 
   - name: com.squareup/mcp
+    # Sept 9–10 review: documented provider-client or callback approval required.
+    # Historical evidence, not current provider certification.
+    hidden: true
     category: productivity
     capabilities: [payments, crm]
     benefit: Read Square orders and catalog data so an agent can reconcile sales without exporting CSVs.
@@ -631,6 +662,9 @@ unpublished:
     auth_type: oauth
 
   - name: com.intercom/mcp
+    # Sept 9–10 review: documented provider-client or callback approval required.
+    # Historical evidence, not current provider certification.
+    hidden: true
     category: productivity
     capabilities: [crm, docs]
     benefit: Read support conversations so an agent can turn recurring complaints into concrete issues.
@@ -643,6 +677,9 @@ unpublished:
     auth_type: oauth
 
   - name: com.canva/mcp
+    # Sept 9–10 review: documented provider-client or callback approval required.
+    # Historical evidence, not current provider certification.
+    hidden: true
     category: productivity
     capabilities: [design]
     benefit: Generate and export Canva designs from a session instead of switching to the editor.
@@ -701,7 +738,7 @@ unpublished:
     permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
     icon_url: https://www.google.com/s2/favicons?domain=datadoghq.com&sz=64
     popularity_rank: 14
-    remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+    remote_url: https://mcp.datadoghq.com/v1/mcp
     transport: streamable-http
     auth_type: oauth
     website_url: https://docs.datadoghq.com/mcp_server/setup/

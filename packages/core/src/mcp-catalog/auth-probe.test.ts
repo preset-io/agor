@@ -179,14 +179,12 @@ describe('probeRemoteAuthType', () => {
     const oauthMetadataValid = vi.fn().mockResolvedValue(true);
 
     await expect(
-      probeRemoteAuth('https://mcp.datadoghq.com/api/unstable/mcp-server/mcp', {
+      probeRemoteAuth('https://mcp.datadoghq.com/v1/mcp', {
         fetchImpl,
         oauthMetadataValid,
       })
     ).resolves.toEqual({ authType: 'oauth' });
-    expect(oauthMetadataValid).toHaveBeenCalledWith(
-      'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp'
-    );
+    expect(oauthMetadataValid).toHaveBeenCalledWith('https://mcp.datadoghq.com/v1/mcp');
   });
 
   it('does not reinterpret an explicit non-OAuth challenge through metadata fallback', async () => {

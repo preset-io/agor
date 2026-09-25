@@ -93,6 +93,29 @@ environment:
       logs: docker compose -p agor-{{branch.name}} logs --tail=100
       health: http://localhost:{{add 3000 branch.unique_id}}/health
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
+    railway-sqlite:
+      start: >-
+        node scripts/managed-environments/railway/launcher.mjs start
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      stop: >-
+        node scripts/managed-environments/railway/launcher.mjs stop
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      logs: >-
+        node scripts/managed-environments/railway/launcher.mjs logs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      nuke: >-
+        node scripts/managed-environments/railway/launcher.mjs nuke
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      app: https://railway.com
+      description: >-
+        EXPERIMENTAL, opt-in Railway SQLite preview. Requires an explicitly adopted
+        branch binding and the caller's secure Railway project token/admin password.
+        Stop retains data; Nuke replaces the owned volume and requires RAILWAY_API_TOKEN.
+        Public app with Agor authentication. Single trusted operator, not Cloud/HA.
     codespaces-sqlite:
       start: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start

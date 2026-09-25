@@ -363,6 +363,153 @@ workspace removal reject delegated/external executors when they would change fil
 Branch `updated_at` is metadata activity, not evidence of filesystem inactivity.
 There is no scheduler or age cutoff.
 
+### Restoring a workspace
+
+Unarchive admits an executor restore and clears the archive timestamp and actor
+atomically. Wait for `filesystem_status: ready` before starting a session; acceptance
+alone is not completion. A failure remains visible with a retryable error.
+
+If the unarchive acknowledgement is lost, the UI stops waiting after 30 seconds
+and reports an **unknown outcome**, not failure or readiness. Refresh the page to read the current state; do not assume an active branch's
+filesystem is ready. The UI does not automatically replay the request. A late
+acknowledgement updates the message, but acceptance still is not recovery completion.
+
+An already-active branch left with `preserved`, `cleaned`, or `deleted` status can
+use **Recover** on its card or in the board primary teammate panel,
+`agor_branches_retry_provisioning`, or
+`POST /branches/:id/retry-provisioning` with `{}`. Recovery requires branch Manager
+and filesystem write access and runs as the requesting user. It does not require
+archiving the branch again. An in-flight `creating` attempt or unsettled maintenance
+blocks recovery; elapsed time alone never authorizes a replacement executor.
+Stop or cancel unfinished tasks, stop the environment, and reconcile pending uploads
+before requesting recovery.
+
+Failed recovery continues to block new tasks, uploads, terminals, and environment
+commands until a subsequent attempt validates readiness. Metadata/bootstrap records
+are not proof that the workspace is usable.
+
+The executor validates existing Git refs and repository linkage before readiness.
+For a missing worktree, a retained local branch is reattached at its exact SHA,
+including local-only and unpushed commits. Remote/base reconstruction is used only
+when no local branch is retained. This preservation policy is tied to the admitted
+filesystem-recovery attempt, not a caller-supplied Git option. Ordinary remote
+restore still fast-forwards behind local refs and refuses ahead or diverged refs.
+If a local ref appears during reconstruction, recovery refuses to replace it;
+retry after inspecting the retained history. Clone recovery requires an actual local `.git`
+directory; symlinks and separate Git directories are not adopted.
+Broken or foreign linkage fails without overwriting files. Local teammate homes
+are personal directories and need not have Git metadata; missing or empty homes
+must be restored from your own backup, never recreated from the public template.
+Clean removes ignored files (not necessarily disposable build outputs), not the working directory; Delete removes the
+workspace. Neither a historical `cleaned` status nor an archive timestamp establishes
+which action caused a later missing Git target.
+
+User and board **primary teammate** designations independently block cleanup,
+archive, and permanent deletion, regardless of repository cleanup policy. To retire
+a teammate intentionally, a branch Manager can choose **Retire teammate — keep files**
+inside **Archive or Delete Branch** (also available in Teammate settings), or `POST /branches/:id/retire-teammate` with `{}`. For an active teammate the Archive dialog uses this explicit, file-preserving
+retirement flow, so private personal preferences cannot become a surprise failure
+after the dialog closes. Permanent deletion is available after retirement. This atomically
+archives the teammate and clears personal primary preferences, preserving all files.
+Outstanding tasks, pending uploads, active environments, and maintenance still block
+retirement. A board primary must first be cleared or reassigned by that board's
+Editor or Manager, using **Clear primary teammate** or **Replace primary teammate**
+in the board's Teammate panel; branch management alone does not grant board authority.
+
+Personal routing preferences are not a permanent veto over branch management, even
+when a former collaborator can no longer access the teammate. Users can also choose
+**Clear primary assistant** in their own settings, or call
+`users.setPrimaryTeammate({ branchId: null, expectedUserId })`, without choosing a
+replacement. Ordinary cleanup/archive/delete retains primary protection; retirement
+is a separate, explicit, file-preserving action. Permanent deletion, if wanted,
+remains a later authorized operation.
+
+### Recovery rollout and operator preflight
+
+Deploy matching daemon, core, executor and clients together, including pinned delegated
+launcher images. Drain older provisioning attempts before enabling recovery; an old
+executor cannot safely acknowledge the new attempt-bound protocol. Do not run mixed
+versions against recovery work. No schema change is needed, but that is not a
+readiness or storage preflight.
+
+The new task/upload/terminal admission fence is **only for persisted recovery
+lineage** (`provisioning_operation: restore`) whenever the filesystem is not `ready`.
+Lineage is sticky: successful recovery does not clear it. If that branch later
+becomes nonready (including standalone Clean), producers are fenced again until
+Recover validates readiness. It survives failed attempts and subsequent retries.
+It does not retroactively fence historical
+active `cleaned`/`preserved` rows that have never entered recovery. Existing broader
+session-creation and environment-command readiness checks still apply; metadata
+references are not filesystem readiness. Coordinate a maintenance window with
+users before explicitly recovering an active branch: stop tasks and the environment,
+settle uploads and maintenance, and stop unmanaged writers. Do not clear private
+claim/attempt fields or set `ready` manually to bypass a fence.
+
+Before rollout, an authorized operator should inventory **each tenant separately**.
+For PostgreSQL, use the application's non-superuser, non-BYPASSRLS role, in a
+read-only transaction, with a tenant ID obtained from trusted operator context
+(not an arbitrary request header). This returns counts, not paths or personal data:
+
+```sql
+BEGIN READ ONLY;
+SELECT set_config('agor.tenant_id', '<authorized-tenant-id>', true);
+SELECT count(*) AS active_nonready
+FROM branches
+WHERE tenant_id = current_setting('agor.tenant_id') AND NOT archived
+  AND (filesystem_status IN ('creating', 'failed', 'preserved', 'cleaned', 'deleted')
+       OR deletion_status IS NOT NULL);
+SELECT filesystem_status, deletion_status,
+       COALESCE(data->>'provisioning_operation', 'legacy/unset') AS operation,
+       storage_mode,
+       count(*) AS branches
+FROM branches
+WHERE tenant_id = current_setting('agor.tenant_id') AND NOT archived
+  AND (filesystem_status IN ('creating', 'failed', 'preserved', 'cleaned', 'deleted')
+       OR deletion_status IS NOT NULL)
+GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4;
+ROLLBACK;
+```
+
+SQLite is static-tenant only: use a read-only connection to that installation's
+DB, omit the tenant-setting statement and tenant predicates, and use
+`json_extract(data, '$.provisioning_operation')` instead of `data->>'provisioning_operation'`.
+For both databases, inspect the authorized branch detail for each affected row and
+record the recovery owner and plan before rollout. A count is not proof files exist.
+Archived branches need the same storage review when scheduled for unarchive.
+
+Blockers requiring operator work include unfinished tasks, active environments,
+pending uploads, unknown maintenance outcomes, still-owned `creating` attempts,
+missing/empty personal homes, and missing/stale/foreign Git registration. Historical
+worktrees are unsupported for restore in hosted multi-tenant mode. Use validated
+backups and **target-scoped storage repair** in the actual executor storage context;
+verify ownership, path, ref and registration before retry. Agor does not repair
+missing registration for an existing checkout or stale registration for a missing
+checkout. Never casually run global `git worktree repair` or `git worktree prune`:
+Git 2.39 repair can scan siblings and prune registration for homes invisible inside
+a sandbox. Take backups and verify sibling visibility with an operator before any
+storage repair. Do not reconstruct or remove retained local history.
+
+Recovery deliberately executes as the requesting Manager (with write access), not
+the branch creator. Command credentials, tenant identity and delegated home key
+belong to that caller; this is not creator impersonation or a storage ownership
+transfer. The executor still targets the persisted branch path and validates its
+identity. A delegated launcher must map authorized Managers to the **same persistent
+branch storage**, retain caller-private credentials/homes, and provide suitable
+filesystem ownership/access. Agor does not chown or copy creator credentials. If the
+substrate only exposes creator-owned storage, coordinate its access policy before
+recovery; fail closed rather than silently creating a different caller's workspace.
+Local handler/routing tests do not certify an operator's external substrate.
+
+Primary protection also remains for standalone Clean. The canonical `localHome`
+marker identifies modern personal homes, but its absence (or a Git repo backing a
+teammate) does not prove legacy ignored files are disposable build output. The
+current policy cannot safely make that distinction: even `git clean -fdX` can remove
+ignored personal databases and memory. No new protection flag or inferred path/type
+heuristic is added. Non-primary repo branches retain normal policy-controlled Clean;
+for a primary teammate, keep it active and use a separately reviewed, target-specific
+build-output cleanup rather than retiring it just to reclaim build space. Retirement
+never runs Clean and never silently disables or replaces a primary.
+
 ### Deletion and retained data
 
 Permanent deletion is not account-wide or provider-wide erasure. Shared repositories,

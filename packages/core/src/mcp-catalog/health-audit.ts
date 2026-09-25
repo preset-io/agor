@@ -7,8 +7,10 @@ import {
 } from '../tools/mcp/oauth-mcp-transport';
 import { assertSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/safe-outbound-fetch';
 import { probeRemoteAuth, type RemoteAuthProbeResult } from './auth-probe';
+import { isCatalogEntryVisible } from './query';
 
 export type CatalogHealthStatus =
+  | 'skipped-hidden'
   | 'ready'
   | 'credential-required'
   | 'oauth-now-available'
@@ -18,6 +20,7 @@ export type CatalogHealthStatus =
   | 'oauth-metadata-not-ready';
 
 export type CatalogHealthReason =
+  | 'catalog_entry_hidden'
   | 'probe_failed'
   | 'auth_mismatch'
   | 'credential_not_verified'
@@ -137,6 +140,18 @@ export async function auditCatalogHealth(
   const results = new Array<CatalogHealthResult>(entries.length);
   let nextIndex = 0;
   const auditOne = async (entry: MCPCatalogEntry): Promise<CatalogHealthResult> => {
+    // Live health gates the offered catalog, not deliberately unavailable
+    // providers. The caller still validates ALL definitions before this audit;
+    // this skip does not change saved-install/runtime OAuth policy.
+    if (!isCatalogEntryVisible(entry)) {
+      return {
+        name: entry.name,
+        status: 'skipped-hidden',
+        expectedAuth: entry.auth_type,
+        observedAuth: 'unknown',
+        reason: 'catalog_entry_hidden',
+      };
+    }
     const observed = entry.remote_url
       ? await probe(entry.remote_url)
       : ({ authType: 'unknown' } satisfies RemoteAuthProbeResult);
