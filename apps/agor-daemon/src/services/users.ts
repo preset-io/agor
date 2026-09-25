@@ -375,6 +375,8 @@ interface CreateUserData {
  * Update user input
  */
 interface UpdateUserData {
+  access_disabled?: boolean;
+  revoke_logins?: boolean;
   email?: string;
   password?: string;
   name?: string;
@@ -420,6 +422,7 @@ interface AuthorizedUserMutation {
 const USER_AUTHORITY_DENIED = 'You do not have authority to manage this user';
 const ADMIN_OWNED_USER_FIELDS = new Set<keyof UpdateUserData>([
   'role',
+  'access_disabled',
   'unix_username',
   'filesystem_home',
   'must_change_password',
@@ -543,6 +546,14 @@ export class UsersService {
   }
 
   private assertPatchAllowed(data: UpdateUserData): void {
+    if (data.access_disabled !== undefined && !this.identityAuthority.capabilities.users.delete) {
+      this.externallyManaged(IdentityCapability.USER_DELETE, AgorUserLifecycleAuthority.EXTERNAL);
+    }
+    for (const field of ['access_disabled', 'revoke_logins'] as const) {
+      if (Object.hasOwn(data, field) && typeof data[field] !== 'boolean') {
+        throw new BadRequest(`Invalid ${field}`);
+      }
+    }
     if (data.role !== undefined && !this.identityAuthority.capabilities.users.roleWrite) {
       this.externallyManaged(IdentityCapability.USER_ROLE_WRITE, AgorRoleAuthority.CLAIMS);
     }
@@ -615,7 +626,7 @@ export class UsersService {
       throw new Forbidden(USER_AUTHORITY_DENIED);
     }
     const actor = await this.loadUserRow(claimed.user_id, params);
-    if (!actor) {
+    if (!actor || actor.access_disabled) {
       // Keep deleted/cross-tenant principals indistinguishable from an
       // insufficiently privileged in-tenant actor.
       throw new Forbidden(USER_AUTHORITY_DENIED);
@@ -677,7 +688,9 @@ export class UsersService {
       return { target, actor };
     }
 
+    if (actor.access_disabled) throw new Forbidden(USER_AUTHORITY_DENIED);
     if (actor.user_id === target.user_id) {
+      if (data.access_disabled === true) throw new Forbidden('You cannot disable your own account');
       if (requestedRole && requestedRole !== normalizeRole(target.role)) {
         throw new Forbidden('You cannot change your own role');
       }
@@ -735,6 +748,7 @@ export class UsersService {
     return sql`EXISTS (
       SELECT 1 FROM ${users} authority_actor
       WHERE authority_actor.user_id = ${actor.user_id}
+        AND authority_actor.access_disabled = false
         AND authority_actor.role = ${actor.role}${tenantCheck}
     )`;
   }
@@ -746,8 +760,9 @@ export class UsersService {
       ? await select(this.db).from(users).where(tenant).all()
       : await select(this.db).from(users).all();
     if (
-      superadmins.filter((user: UserRow) => normalizeRole(user.role) === ROLES.SUPERADMIN).length <=
-      1
+      superadmins.filter(
+        (user: UserRow) => normalizeRole(user.role) === ROLES.SUPERADMIN && !user.access_disabled
+      ).length <= 1
     ) {
       throw new Forbidden('The last superadmin cannot be demoted or deleted');
     }
@@ -1034,8 +1049,30 @@ export class UsersService {
     ) {
       await this.assertNotLastSuperadmin(authority.target, params);
     }
+    const accessChanged =
+      data.access_disabled !== undefined &&
+      data.access_disabled !== authority.target.access_disabled;
+    if (accessChanged && data.access_disabled) {
+      await this.assertNotLastSuperadmin(authority.target, params);
+      if (hasMinimumRole(authority.target.role, ROLES.ADMIN)) {
+        const remaining = await select(this.db).from(users).where(tenantPredicate(params)).all();
+        if (
+          !remaining.some(
+            (user: UserRow) =>
+              user.user_id !== id && !user.access_disabled && hasMinimumRole(user.role, ROLES.ADMIN)
+          )
+        ) {
+          throw new Forbidden('The last active administrator cannot be disabled');
+        }
+      }
+    }
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
+    if (accessChanged) updates.access_disabled = data.access_disabled;
+    if (accessChanged || data.revoke_logins === true) {
+      updates.credential_generation = sql`${users.credential_generation} + 1`;
+      updates.tokens_valid_after = now;
+    }
     const selectionNamesToRemove = new Set<string>();
 
     // Handle password separately (needs hashing)
@@ -1959,6 +1996,7 @@ export class UsersService {
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
+      access_disabled: row.access_disabled,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
       // Per-tool credential presence (boolean only — never expose decrypted values).
@@ -2063,6 +2101,7 @@ class UsersServiceWithAuth extends UsersService {
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
+      access_disabled: row.access_disabled,
       credential_generation: row.credential_generation,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       created_at: row.created_at,

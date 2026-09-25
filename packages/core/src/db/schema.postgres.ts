@@ -1124,6 +1124,7 @@ export const users = pgTable(
 
     // Monotonic local-credential generation copied into interactive JWTs.
     credential_generation: integer('credential_generation').notNull().default(0),
+    access_disabled: t.bool('access_disabled').notNull().default(false),
 
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
@@ -1268,6 +1269,23 @@ export const users = pgTable(
  * user projection. The JSON copy on users remains a compatibility/audit cache;
  * this relation is the lookup and uniqueness authority.
  */
+/** Durable external authority, including pre-JIT disabled subjects. */
+export const externalUserAuthority = pgTable(
+  'external_user_authority',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    identity_key: text('identity_key').notNull(),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    revision: text('revision').notNull(),
+    login_epoch: text('login_epoch').notNull(),
+    active: t.bool('active').notNull(),
+    role: text('role').notNull(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.tenant_id, table.identity_key] }) })
+);
+
 export const userExternalIdentities = pgTable(
   'user_external_identities',
   {

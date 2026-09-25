@@ -1,3 +1,5 @@
+import { assertUserAccessEnabled } from './token-invalidation.js';
+import type { UserAuthorityCheck } from './user-authority.js';
 /**
  * Runtime JWT Authentication Strategy
  *
@@ -54,6 +56,7 @@ function propagateTenantFromJwtPayload(
 }
 
 export interface RuntimeJWTStrategyOptions {
+  checkUserAuthority?: UserAuthorityCheck;
   sessionTokenService?: SessionTokenService;
   multiTenancy?: ResolvedMultiTenancyConfig;
   executorRevocationFence?: ExecutorConnectionRevocationFence;
@@ -66,12 +69,14 @@ export interface RuntimeJWTStrategyOptions {
  * service and terminal identities remain separate credential families.
  */
 export class RuntimeJWTStrategy extends JWTStrategy {
+  private readonly checkUserAuthority?: UserAuthorityCheck;
   private readonly sessionTokenService?: SessionTokenService;
   private readonly executorRevocationFence?: ExecutorConnectionRevocationFence;
   private readonly multiTenancy?: ResolvedMultiTenancyConfig;
 
   constructor(options: RuntimeJWTStrategyOptions = {}) {
     super();
+    this.checkUserAuthority = options.checkUserAuthority;
     this.sessionTokenService = options.sessionTokenService;
     this.multiTenancy = options.multiTenancy;
     this.executorRevocationFence = options.executorRevocationFence;
@@ -251,7 +256,15 @@ export class RuntimeJWTStrategy extends JWTStrategy {
       throw new NotAuthenticated('Service tokens require the reserved service subject');
     }
 
+    if (result.user) assertUserAccessEnabled(result.user);
     if (payload?.type === 'executor-session') {
+      if (this.checkUserAuthority) {
+        await this.checkUserAuthority(
+          resolveSignedRuntimeTenant(this.multiTenancy, payload)?.tenant_id ?? '',
+          String(payload.sub ?? ''),
+          payload
+        );
+      }
       if (!isExecutorSessionTokenPayload(payload)) {
         throw new Error('Invalid executor token purpose');
       }
@@ -300,6 +313,15 @@ export class RuntimeJWTStrategy extends JWTStrategy {
 
     if (result.user) {
       assertUserTokenNotInvalidated(result.user, payload);
+      if (this.checkUserAuthority) {
+        await this.checkUserAuthority(
+          resolveSignedRuntimeTenant(this.multiTenancy, payload)?.tenant_id ?? '',
+          String(payload?.sub ?? ''),
+          payload
+        );
+      } else if (payload?.source_api_key_id !== undefined) {
+        throw new NotAuthenticated('Source key authority unavailable');
+      }
     }
 
     return result;

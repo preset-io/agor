@@ -1,3 +1,7 @@
+import { createAdapter } from '@socket.io/redis-adapter';
+import Redis from 'ioredis';
+import { installUserAuthorityCheck } from '../auth/user-authority.js';
+import { UsersService } from '../services/users.js';
 /**
  * Production-shaped Socket.IO tenant-isolation coverage.
  *
@@ -32,7 +36,7 @@ import {
   socketio,
 } from '@agor/core/feathers';
 import type { Board, BoardID, TenantContext, User, UserID, UUID } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
@@ -125,6 +129,151 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
       await (rawDb as Database & { $client: { end: () => Promise<void> } }).$client.end();
     });
+
+    it.skipIf(!process.env.AGOR_TEST_REDIS_URL)(
+      'healthy Redis plus missed publication: two PG replicas renew from durable disabled authority',
+      async () => {
+        const tenantId = `ha-revoke-${generateId()}`;
+        const user = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new UsersRepository(scoped).create({
+            email: `revoked-${generateId()}@example.test`,
+            role: 'member',
+          })
+        );
+        const survivor = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new UsersRepository(scoped).create({
+            email: `survivor-${generateId()}@example.test`,
+            role: 'member',
+          })
+        );
+        const peerRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+        const peerDb = createTenantScopedDatabaseProxy(peerRaw, {
+          requireScope: true,
+          label: 'socket-revocation-peer',
+        });
+        const servers: HttpServer[] = [];
+        const sockets: ReturnType<typeof createSocketIOConfig>[] = [];
+        const redis: Redis[] = [];
+        const localClients: AgorClient[] = [];
+        const adapterKey = `revocation-${generateId()}`;
+        const multiTenancy = {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        } as const;
+        const start = async (database: TenantScopeAwareDatabase) => {
+          const app = feathersExpress(feathers());
+          app.set('authentication', {
+            secret: JWT_SECRET,
+            entity: 'user',
+            entityId: 'user_id',
+            service: 'users',
+            authStrategies: ['jwt'],
+            jwtOptions: {
+              issuer: RUNTIME_JWT_ISSUER,
+              audience: RUNTIME_JWT_AUDIENCE,
+              algorithm: 'HS256',
+            },
+          });
+          app.use('users', {
+            async get(id: UserID, params?: TenantParams) {
+              return runWithTenantDatabaseScope(database, params?.tenant?.tenant_id, (scoped) =>
+                new UsersRepository(scoped).findById(id)
+              );
+            },
+          });
+          const auth = new AuthenticationService(app);
+          auth.register(
+            'jwt',
+            new RuntimeJWTStrategy({
+              multiTenancy,
+              checkUserAuthority: installUserAuthorityCheck(app, database),
+            })
+          );
+          app.use('authentication', auth);
+          const pub = new Redis(process.env.AGOR_TEST_REDIS_URL!);
+          const sub = new Redis(process.env.AGOR_TEST_REDIS_URL!);
+          redis.push(pub, sub);
+          await Promise.all([pub.ping(), sub.ping()]);
+          const socketConfig = createSocketIOConfig(app as never, {
+            corsOrigin: '*',
+            credentialsAllowed: false,
+            multiTenancy,
+            adapter: createAdapter(pub, sub, { key: adapterKey }),
+          });
+          sockets.push(socketConfig);
+          app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
+          configureChannels(app as never);
+          const server = await new Promise<HttpServer>((resolve) => {
+            const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+          });
+          servers.push(server);
+          const address = server.address();
+          if (!address || typeof address === 'string') throw new Error('Missing test address');
+          return `http://127.0.0.1:${address.port}`;
+        };
+        try {
+          const urls = [await start(db), await start(peerDb)];
+          for (const [index, principal] of [user, user, survivor].entries()) {
+            const token = issueRuntimeToken(
+              {
+                sub: principal.user_id,
+                type: 'access',
+                tenant_id: tenantId,
+                auth_credential_generation: 0,
+              },
+              JWT_SECRET,
+              '5m'
+            );
+            const client = createClient(urls[index === 0 ? 0 : 1], false, {
+              reconnectionAttempts: 0,
+              socketAuthentication: { accessToken: token },
+            });
+            localClients.push(client);
+            client.io.connect();
+            await waitForConnect(client);
+          }
+          const peerSocket = sockets[1]
+            .getSocketServer()!
+            .sockets.sockets.get(localClients[1].io.id!)!;
+          await peerSocket.join('synthetic-health-probe');
+          const received = new Promise<void>((resolve) =>
+            localClients[1].io.once('synthetic-health-probe', () => resolve())
+          );
+          sockets[0]
+            .getSocketServer()!
+            .to('synthetic-health-probe')
+            .emit('synthetic-health-probe', true);
+          await received; // A real cross-replica Redis broadcast, not a mocked bus.
+          const disconnected = localClients
+            .slice(0, 2)
+            .map(
+              (client) =>
+                new Promise<void>((resolve) => client.io.once('disconnect', () => resolve()))
+            );
+          // No application hooks: deliberately miss the otherwise healthy Redis invalidation.
+          await runWithTenantDatabaseScope(db, tenantId, () =>
+            new UsersService(db).patch(user.user_id, { access_disabled: true })
+          );
+          const realNow = performance.now.bind(performance);
+          vi.spyOn(performance, 'now').mockImplementation(() => realNow() + 31_000);
+          await Promise.all(disconnected);
+          expect(localClients[2].io.connected).toBe(true);
+          expect(await redis[0].ping()).toBe('PONG');
+          vi.restoreAllMocks();
+          localClients[1].io.connect();
+          await expect(waitForConnect(localClients[1])).rejects.toThrow();
+        } finally {
+          vi.restoreAllMocks();
+          for (const client of localClients) client.io.close();
+          for (const server of servers)
+            await new Promise<void>((resolve) => server.close(() => resolve()));
+          for (const connection of redis) connection.disconnect();
+          await (peerRaw as Database & { $client: { end(): Promise<void> } }).$client.end();
+        }
+      },
+      30_000
+    );
 
     it('fails closed for cross-tenant IDs, private boards, forged tenant metadata, stale rooms, and reconnects', async () => {
       const tenantA = `socket-a-${generateId()}`;
@@ -260,7 +409,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       });
       const authentication = new AuthenticationService(app);
-      authentication.register('jwt', new RuntimeJWTStrategy({ multiTenancy }));
+      authentication.register(
+        'jwt',
+        new RuntimeJWTStrategy({
+          multiTenancy,
+          checkUserAuthority: installUserAuthorityCheck(app, db),
+        })
+      );
       app.use('authentication', authentication);
 
       const socketConfig = createSocketIOConfig(app as never, {

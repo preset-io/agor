@@ -54,6 +54,8 @@ describe('UsersTable role authority', () => {
     expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
     expect(screen.queryByLabelText('Edit other@example.test')).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Delete /)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign out all' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
   });
 
@@ -67,6 +69,7 @@ describe('UsersTable role authority', () => {
     expect(screen.queryByLabelText('Delete superadmin@example.test')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
     expect(screen.getByLabelText('Delete member@example.test')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument();
     expect(screen.getByLabelText('Edit admin@example.test')).toBeInTheDocument();
     expect(screen.queryByLabelText('Delete admin@example.test')).not.toBeInTheDocument();
   });

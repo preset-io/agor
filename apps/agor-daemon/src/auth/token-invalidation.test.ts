@@ -1,3 +1,4 @@
+import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { AuthenticationService, feathers } from '@agor/core/feathers';
 import type { User, UserID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
@@ -33,6 +34,7 @@ import {
   authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
 } from './token-invalidation';
+import { installUserAuthorityCheck } from './user-authority';
 
 const JWT_SECRET = 'password-token-invalidation-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
@@ -47,7 +49,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 function authTime(ms: number) {
-  return { [AUTH_TOKEN_ISSUED_AT_MS_CLAIM]: ms };
+  return { auth_format: 1, [AUTH_TOKEN_ISSUED_AT_MS_CLAIM]: ms };
 }
 
 function expectNoTokenMarker(value: unknown): void {
@@ -68,13 +70,13 @@ test('treats tokens issued at the invalidation boundary as stale', () => {
   expect(authTokenIssuedAtClaim(1_000, user)[AUTH_TOKEN_ISSUED_AT_MS_CLAIM]).toBe(1_001);
 });
 
-test('requires current user metadata while accepting legacy generation-zero token claims', () => {
+test('requires current user metadata and rejects legacy token format', () => {
   expect(() => assertUserTokenNotInvalidated({}, { sub: 'user-1', type: 'access' })).toThrow(
     /credential metadata unavailable/
   );
   expect(() =>
     assertUserTokenNotInvalidated({ credential_generation: 0 }, { sub: 'user-1', type: 'access' })
-  ).not.toThrow();
+  ).toThrow(/Session expired/);
 });
 
 test('rejects a token from an older credential generation without using clocks', () => {
@@ -130,7 +132,11 @@ function createAuthApp(
   app.use('users', usersService);
 
   const authentication = new AuthenticationService(app);
-  authentication.register('jwt', new RuntimeJWTStrategy());
+  const checkUserAuthority = installUserAuthorityCheck(app, db);
+  authentication.register(
+    'jwt',
+    new RuntimeJWTStrategy({ checkUserAuthority, multiTenancy: resolveMultiTenancyConfig({}) })
+  );
   const localStrategy = new AgorLocalStrategy();
   authentication.register('local', localStrategy);
   const apiKeysRepo = new UserApiKeysRepository(db);
@@ -164,7 +170,7 @@ function createAuthApp(
     },
   });
 
-  return { app, usersService, localStrategy, apiKeysRepo };
+  return { app, usersService, localStrategy, apiKeysRepo, checkUserAuthority };
 }
 
 async function createUser(service: UsersService, email: string): Promise<User> {
@@ -527,7 +533,7 @@ dbTest('fresh login after forced password change gets usable tokens', async ({ d
 dbTest(
   'API-key login after a password change issues usable current-generation tokens',
   async ({ db }) => {
-    const { app, usersService, apiKeysRepo } = createAuthApp(db);
+    const { app, usersService, apiKeysRepo, checkUserAuthority } = createAuthApp(db);
     const user = await createUser(usersService, 'api-key-generation@example.test');
     await usersService.patch(user.user_id, { password: 'replacement api key passphrase' });
     const { rawKey } = await apiKeysRepo.create(user.user_id, 'Generation regression');
@@ -555,6 +561,8 @@ dbTest(
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       usersService,
+      checkUserAuthority,
+      multiTenancy: resolveMultiTenancyConfig({}),
     }).create({ refreshToken: loginResult.refreshToken });
     expect(refreshResult.user.email).toBe(user.email);
     expect(
@@ -594,5 +602,152 @@ dbTest(
       .create({ strategy: 'jwt', accessToken: loginResult.accessToken }, { provider: 'rest' });
     expect(accessResult.user.email).toBe(user.email);
     expectNoTokenMarker(accessResult.user);
+  }
+);
+
+dbTest(
+  'disable denies fresh password and API-key login; re-enable never revives old JWTs',
+  async ({ db }) => {
+    const { app, usersService, apiKeysRepo, checkUserAuthority } = createAuthApp(db);
+    const admin = await usersService.create({
+      email: 'admin-gate@example.test',
+      password: 'admin-password-1234',
+      role: ROLES.ADMIN,
+    });
+    const user = await createUser(usersService, 'gate@example.test');
+    const auth = app.service('authentication');
+    const login = () =>
+      auth.create({ strategy: 'local', email: user.email, password: 'old-password-1234' });
+    const old = await login();
+    const key = await apiKeysRepo.create(user.user_id, 'test');
+    const params = { provider: 'rest', user: admin };
+    await usersService.patch(user.user_id, { access_disabled: true }, params);
+    await expect(login()).rejects.toThrow(/disabled/);
+    await expect(auth.create({ strategy: 'api-key', apiKey: key.rawKey })).rejects.toThrow(
+      /disabled/
+    );
+    await expect(auth.create({ strategy: 'jwt', accessToken: old.accessToken })).rejects.toThrow(
+      /disabled/
+    );
+    await expect(checkUserAuthority('default', user.user_id)).rejects.toThrow(/revoked|disabled/);
+    await usersService.patch(user.user_id, { access_disabled: false }, params);
+    await expect(auth.create({ strategy: 'jwt', accessToken: old.accessToken })).rejects.toThrow(
+      /expired/
+    );
+    await expect(login()).resolves.toHaveProperty('accessToken');
+    await expect(
+      usersService.patch(admin.user_id, { access_disabled: true }, params)
+    ).rejects.toThrow(/own account/);
+  }
+);
+
+dbTest(
+  'key lineage survives refresh and JWT reauthentication; deletion leaves unrelated logins valid',
+  async ({ db }) => {
+    const { app, usersService, apiKeysRepo, checkUserAuthority } = createAuthApp(db);
+    const user = await createUser(usersService, 'lineage@example.test');
+    const auth = app.service('authentication');
+    const unrelated = await auth.create({
+      strategy: 'local',
+      email: user.email,
+      password: 'old-password-1234',
+    });
+    const key = await apiKeysRepo.create(user.user_id, 'lineage');
+    const exchanged = await auth.create({ strategy: 'api-key', apiKey: key.rawKey });
+    const refreshed = await createRefreshTokenService({
+      jwtSecret: JWT_SECRET,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      usersService,
+      checkUserAuthority,
+      multiTenancy: resolveMultiTenancyConfig({}),
+    }).create({ refreshToken: exchanged.refreshToken });
+    const renewed = await auth.create({ strategy: 'jwt', accessToken: refreshed.accessToken });
+    for (const token of [
+      exchanged.accessToken,
+      exchanged.refreshToken,
+      refreshed.accessToken,
+      refreshed.refreshToken,
+      renewed.accessToken,
+      renewed.refreshToken,
+    ]) {
+      expect(jwt.decode(token)).toMatchObject({ source_api_key_id: key.key.id, auth_format: 1 });
+    }
+    await apiKeysRepo.delete(key.key.id, user.user_id);
+    for (const accessToken of [exchanged.accessToken, refreshed.accessToken, renewed.accessToken]) {
+      await expect(auth.create({ strategy: 'jwt', accessToken })).rejects.toThrow(/revoked/);
+    }
+    await expect(
+      createRefreshTokenService({
+        jwtSecret: JWT_SECRET,
+        accessTokenTtl: ACCESS_TOKEN_TTL,
+        refreshTokenTtl: REFRESH_TOKEN_TTL,
+        usersService,
+        checkUserAuthority,
+        multiTenancy: resolveMultiTenancyConfig({}),
+      }).create({ refreshToken: renewed.refreshToken })
+    ).rejects.toThrow();
+    await expect(
+      auth.create({ strategy: 'jwt', accessToken: unrelated.accessToken })
+    ).resolves.toHaveProperty('accessToken');
+  }
+);
+
+dbTest(
+  'revoke-logins affects only the target generation and permits primary authentication',
+  async ({ db }) => {
+    const { app, usersService, apiKeysRepo } = createAuthApp(db);
+    const user = await createUser(usersService, 'signout@example.test');
+    const other = await createUser(usersService, 'other@example.test');
+    const auth = app.service('authentication');
+    const login = (email: string) =>
+      auth.create({ strategy: 'local', email, password: 'old-password-1234' });
+    const old = await login(user.email);
+    const surviving = await login(other.email);
+    const key = await apiKeysRepo.create(user.user_id, 'survives-signout');
+    await usersService.patch(user.user_id, { revoke_logins: true }, { provider: 'rest', user });
+    await expect(auth.create({ strategy: 'jwt', accessToken: old.accessToken })).rejects.toThrow(
+      /expired/
+    );
+    await expect(
+      auth.create({ strategy: 'jwt', accessToken: surviving.accessToken })
+    ).resolves.toHaveProperty('accessToken');
+    await expect(login(user.email)).resolves.toHaveProperty('accessToken');
+    await expect(auth.create({ strategy: 'api-key', apiKey: key.rawKey })).resolves.toHaveProperty(
+      'accessToken'
+    );
+    await expect(
+      usersService.patch(other.user_id, { revoke_logins: true }, { provider: 'rest', user })
+    ).rejects.toThrow();
+  }
+);
+
+dbTest(
+  'serialized disable mutations preserve a last active local administrator',
+  async ({ db }) => {
+    const { usersService } = createAuthApp(db);
+    const first = await usersService.create({
+      email: 'last-admin-a@example.test',
+      password: 'test-password-1234',
+      role: 'admin',
+    });
+    await expect(usersService.patch(first.user_id, { access_disabled: true })).rejects.toThrow(
+      /last active administrator/
+    );
+    const second = await usersService.create({
+      email: 'last-admin-b@example.test',
+      password: 'test-password-1234',
+      role: 'admin',
+    });
+    const results = await Promise.allSettled([
+      usersService.patch(first.user_id, { access_disabled: true }),
+      usersService.patch(second.user_id, { access_disabled: true }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const current = await Promise.all([
+      usersService.get(first.user_id),
+      usersService.get(second.user_id),
+    ]);
+    expect(current.filter((user) => !user.access_disabled)).toHaveLength(1);
   }
 );

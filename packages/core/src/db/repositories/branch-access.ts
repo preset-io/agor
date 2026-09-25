@@ -1,3 +1,4 @@
+import { externalUserAuthorityPredicate } from './external-user-authority';
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
 import type {
@@ -5,6 +6,7 @@ import type {
   BranchID,
   BranchPolicyCapability,
   CapabilityPolicyFsAccess,
+  ExternalUserAuthorityState,
   SessionID,
   UserID,
   UUID,
@@ -146,6 +148,7 @@ export async function resolveSessionRuntimeBranchAccess(
   input: {
     sessionId: SessionID | string;
     principalUserId: UserID | string;
+    externalAuthority?: Pick<ExternalUserAuthorityState, 'provider' | 'issuer'>;
   }
 ): Promise<SessionRuntimeBranchAccess | null> {
   const principal = input.principalUserId;
@@ -222,7 +225,14 @@ export async function resolveSessionRuntimeBranchAccess(
     .from(sessions)
     .innerJoin(branches, eq(branches.branch_id, sessions.branch_id))
     .innerJoin(branchPermissionConfigs, effectiveConfigCondition())
-    .leftJoin(users, eq(users.user_id, principal))
+    .leftJoin(
+      users,
+      and(
+        eq(users.user_id, principal),
+        eq(users.access_disabled, false),
+        externalUserAuthorityPredicate(principal, input.externalAuthority)
+      )
+    )
     .where(eq(sessions.session_id, input.sessionId))
     .limit(1)
     .one();

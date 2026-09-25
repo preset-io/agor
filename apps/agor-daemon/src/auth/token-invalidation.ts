@@ -2,6 +2,24 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticationUserAuthMetadata, UserAuthMetadata } from '@agor/core/types';
 import type { JwtPayload } from 'jsonwebtoken';
 
+export const AUTH_FORMAT_CLAIM = 'auth_format';
+export const AUTH_FORMAT_VERSION = 1;
+export const SOURCE_API_KEY_CLAIM = 'source_api_key_id';
+
+export function assertUserAccessEnabled(user: { access_disabled?: boolean }): void {
+  if (user.access_disabled === true) throw new NotAuthenticated('User access is disabled');
+}
+
+export function sourceApiKeyClaims(
+  payload: Record<string, unknown> | undefined
+): Record<string, string> {
+  const id = payload?.[SOURCE_API_KEY_CLAIM];
+  if (id === undefined) return {};
+  if (typeof id !== 'string' || !id || id.length > 128)
+    throw new NotAuthenticated('Invalid source key');
+  return { [SOURCE_API_KEY_CLAIM]: id };
+}
+
 export const AUTH_TOKEN_ISSUED_AT_MS_CLAIM = 'auth_time_ms';
 export const AUTH_CREDENTIAL_GENERATION_CLAIM = 'auth_credential_generation';
 
@@ -41,6 +59,9 @@ export function assertUserTokenNotInvalidated(
   payload: UserAuthTokenPayload | undefined
 ): asserts user is AuthenticationUserAuthMetadata {
   assertAuthenticationUserAuthMetadata(user);
+  if (payload?.[AUTH_FORMAT_CLAIM] !== AUTH_FORMAT_VERSION) {
+    throw new NotAuthenticated('Session expired, please login again');
+  }
   const currentGeneration = user.credential_generation;
   const tokenGeneration = credentialGeneration(payload?.[AUTH_CREDENTIAL_GENERATION_CLAIM]);
 
@@ -63,6 +84,7 @@ export function assertUserTokenNotInvalidated(
 export function assertAuthenticationUserAuthMetadata(
   user: UserAuthMetadata
 ): asserts user is AuthenticationUserAuthMetadata {
+  assertUserAccessEnabled(user);
   if (credentialGeneration(user.credential_generation) === null) {
     throw new NotAuthenticated('Authentication credential metadata unavailable');
   }

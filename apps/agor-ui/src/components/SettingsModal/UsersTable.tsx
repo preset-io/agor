@@ -179,6 +179,15 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     ]);
   }, [userById, searchTerm, groupsByUser, groupById]);
 
+  const changeAccess = async (user: User, updates: UpdateUserInput) => {
+    const operation = operationGuard.begin();
+    try {
+      await onUpdate?.(user.user_id, updates, operation.isCurrent);
+    } catch {
+      if (operation.isCurrent()) showError('Could not update user access');
+    }
+  };
+
   const handleDelete = (userId: string) => {
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
@@ -295,13 +304,34 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 88,
+      width: 260,
       render: (_: unknown, user: User) => {
         const showEdit = canEditUser(user);
         const showDelete = canDeleteUser(user);
         if (!showEdit && !showDelete) return null;
         return (
           <SettingsActionGroup>
+            {user.access_disabled && <Tag color="error">Disabled</Tag>}
+            {showDelete && onUpdate && (
+              <Popconfirm
+                title={user.access_disabled ? 'Enable user access?' : 'Disable user access?'}
+                description="Existing logins will be revoked. Already running commands may continue."
+                onConfirm={() => changeAccess(user, { access_disabled: !user.access_disabled })}
+              >
+                <Button size="small" danger={!user.access_disabled}>
+                  {user.access_disabled ? 'Enable' : 'Disable'}
+                </Button>
+              </Popconfirm>
+            )}
+            {showEdit && onUpdate && (
+              <Popconfirm
+                title="Sign out all runtime logins?"
+                description="Fresh sign-in is still allowed. Personal API keys remain valid."
+                onConfirm={() => changeAccess(user, { revoke_logins: true })}
+              >
+                <Button size="small">Sign out all</Button>
+              </Popconfirm>
+            )}
             {showEdit && (
               <Button
                 type="text"

@@ -1,3 +1,10 @@
+import {
+  BROWSER_AUTHORITY_RENEW_MS,
+  BrowserAuthorityLease,
+  bindBrowserAuthorityLease,
+} from '../auth/browser-authority-lease.js';
+import { getUserAuthorityCheck } from '../auth/user-authority.js';
+import { getDaemonMetrics } from '../metrics/index.js';
 /**
  * Socket.io Configuration
  *
@@ -515,10 +522,38 @@ export function createSocketIOConfig(
     let authenticationFailures = 0;
     // Machine and impersonation sockets are bounded capabilities and retire at
     // their verified bearer expiry. Ordinary user sockets keep the immutable
-    // identity accepted at the handshake until disconnect or explicit
-    // revocation; routine REST access-token rotation must not tear down PTYs or
-    // subscriptions.
+    // identity accepted at handshake, with a separately renewed authority lease;
+    // routine REST access-token rotation does not tear down PTYs or subscriptions.
     const authorityExpiryTimers = new WeakMap<Socket, ReturnType<typeof setTimeout>>();
+    const browserLeases = new Map<
+      Socket,
+      {
+        lease: BrowserAuthorityLease;
+        nextRenew: number;
+        renew: () => void;
+        retire: () => void;
+      }
+    >();
+    // One timer per replica; no per-packet database reads and no per-socket timers.
+    const browserLeaseSweep = setInterval(() => {
+      const now = performance.now();
+      for (const state of browserLeases.values()) {
+        if (!state.lease.current()) {
+          state.retire();
+          continue;
+        }
+        if (now >= state.nextRenew) {
+          state.nextRenew = now + BROWSER_AUTHORITY_RENEW_MS;
+          state.renew();
+        }
+      }
+    }, 1000);
+    browserLeaseSweep.unref();
+    io.engine.once('close', () => {
+      clearInterval(browserLeaseSweep);
+      browserLeases.clear();
+    });
+
     // Feathers emits `disconnect` with its connection projection on explicit
     // logout. Native Socket.IO rooms are not Feathers channels, so close the
     // owning transport rather than leaving cursor/presence capabilities alive
@@ -635,6 +670,17 @@ export function createSocketIOConfig(
         enumerable: false,
         value: async (channel: string, allocation: TerminalAllocatedEvent) => {
           if (!isCurrentAllocation(channel, allocation)) return false;
+          try {
+            await getUserAuthorityCheck(app)(
+              boundTenantId,
+              boundUserId,
+              (connection as { authentication?: { payload?: Record<string, unknown> } })
+                .authentication?.payload
+            );
+          } catch {
+            return false;
+          }
+          if (!isCurrentAllocation(channel, allocation)) return false;
           let queues = terminalJoinQueues.get(socket);
           if (!queues) {
             queues = new Map();
@@ -703,6 +749,7 @@ export function createSocketIOConfig(
     // strategy result to the Feathers connection.
     io.use(async (socket, next) => {
       const fs = socket as FeathersSocket;
+      const authorityCheckStarted = performance.now();
       try {
         const connection = bindServerSocketAuthority(fs);
         const authToken =
@@ -755,6 +802,100 @@ export function createSocketIOConfig(
         }
         if (authority.retireAtExpiry && !scheduleAuthorityExpiry(fs, authority.expiresAt)) {
           throw new Error('Authentication token expired during connection setup');
+        }
+
+        if (authority.principal.kind === 'user') {
+          const lease = new BrowserAuthorityLease(authorityCheckStarted);
+          bindBrowserAuthorityLease(connection, lease);
+          if (!lease.current()) throw new Error('Authentication authority check expired');
+          const userId = authority.principal.userId;
+          const tenantId = authority.tenant?.tenant_id ?? '';
+          const projection = connection as {
+            authentication?: { payload?: Record<string, unknown> };
+          };
+          const metrics = getDaemonMetrics(app);
+          let retired = false;
+          const retire = () => {
+            if (retired) return;
+            retired = true;
+            browserLeases.delete(socket);
+            lease.retire();
+            retireSocketConnectionAuthority(app, connection);
+            metrics.increment('auth.browser_lease.disconnected');
+            socket.disconnect(true);
+          };
+          // Socket.IO's adapter bypasses socket.emit/packet for room broadcasts.
+          // Fence its final client writer as well, including native terminal output.
+          // This is pinned by the real Socket.IO integration test, not a public API.
+          const client = socket.client as unknown as {
+            writeToEngine: (...args: unknown[]) => void;
+          };
+          const write = client.writeToEngine.bind(client);
+          client.writeToEngine = (...args) => {
+            if (lease.current()) write(...args);
+            else retire();
+          };
+          socket.use((packet, proceed) => {
+            if (!lease.current()) {
+              retire();
+              proceed(new Error('Socket authority expired'));
+              return;
+            }
+            // New native subscriptions are protected operations, unlike cursor
+            // packets and terminal keystrokes already covered by the lease.
+            if (
+              packet[0] === 'join' ||
+              packet[0] === PRESENCE_SOCKET_EVENTS.watchBoardCursors ||
+              packet[0] === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations
+            ) {
+              void Promise.resolve()
+                .then(() =>
+                  getUserAuthorityCheck(app)(tenantId, userId, projection.authentication?.payload)
+                )
+                .then((current) => {
+                  if (
+                    lease.current() &&
+                    current.role === (connection as { user?: { role?: string } }).user?.role
+                  )
+                    proceed();
+                  else retire();
+                })
+                .catch(() => {
+                  retire();
+                  proceed(new Error('User authority unavailable'));
+                });
+            } else proceed();
+          });
+          const renew = () => {
+            void lease
+              .renew(async () => {
+                const current = await getUserAuthorityCheck(app)(
+                  tenantId,
+                  userId,
+                  projection.authentication?.payload
+                );
+                // Role changes also invalidate cached room/subscription grants.
+                if (current.role !== (connection as { user?: { role?: string } }).user?.role) {
+                  throw new Error('Role authority changed');
+                }
+              })
+              .then((valid) => {
+                metrics.increment('auth.browser_lease.renewal', 1, {
+                  result: valid ? 'allowed' : 'denied',
+                });
+                if (!valid) retire();
+              });
+          };
+          browserLeases.set(socket, {
+            lease,
+            nextRenew: performance.now() + BROWSER_AUTHORITY_RENEW_MS,
+            renew,
+            retire,
+          });
+          socket.once('disconnect', () => {
+            lease.retire();
+            browserLeases.delete(socket);
+          });
         }
 
         logAuthenticated(
@@ -832,6 +973,23 @@ export function createSocketIOConfig(
         data.tenantId.length === 0 ||
         data.tenantId.length > MAX_TENANT_ID_LENGTH
       ) {
+        return;
+      }
+      if (data.userId !== undefined) {
+        if (typeof data.userId !== 'string' || !data.userId) return;
+        app.emit(LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT, { tenantId: data.tenantId });
+        for (const socket of io.sockets.sockets.values()) {
+          const authority = getAuthenticatedConnectionAuthority(
+            (socket as FeathersSocket).feathers
+          );
+          if (
+            authority?.tenant?.tenant_id === data.tenantId &&
+            authority.principal.kind === 'user' &&
+            authority.principal.userId === data.userId
+          ) {
+            socket.disconnect(true);
+          }
+        }
         return;
       }
       // Additive authorization changes need distributed cache coherence but do

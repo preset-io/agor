@@ -10,6 +10,7 @@ import type {
   CapabilityPolicyFsAccess,
   ExecutorPulse,
   ExecutorTerminationCompleteInput,
+  ExternalUserAuthorityState,
   MCPRuntimeRecovery,
   MCPServerID,
   MCPSlackRecoveryNotice,
@@ -349,7 +350,10 @@ export interface TaskFindPageOptions {
  * Task repository implementation
  */
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private readonly externalAuthority?: Pick<ExternalUserAuthorityState, 'provider' | 'issuer'>
+  ) {}
 
   /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
   private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
@@ -1357,6 +1361,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const access = await resolveSessionRuntimeBranchAccess(txDb, {
         sessionId: row.session_id,
         principalUserId: row.created_by,
+        externalAuthority: this.externalAuthority,
       });
       if (!access?.can_prompt_session) {
         throw new RepositoryError('Authorization to launch this task is unavailable');
@@ -1394,6 +1399,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     const access = await resolveSessionRuntimeBranchAccess(txDb, {
       sessionId: row.session_id,
       principalUserId: row.created_by,
+      externalAuthority: this.externalAuthority,
     });
     if (
       authority.principal_user_id !== row.created_by ||
