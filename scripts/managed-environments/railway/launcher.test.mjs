@@ -120,6 +120,7 @@ test('start configures secrets without replacement/deployment, deploys once and 
     health: `https://${target.domain}/health`,
   });
   assert.equal(lists, 1);
+  assert(!client.calls.some((c) => c.q.includes('deploymentTriggerCreate')));
   assert.equal(client.calls.filter((c) => c.q.includes('mutation Deploy')).length, 1);
 });
 

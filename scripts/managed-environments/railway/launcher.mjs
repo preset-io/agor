@@ -89,9 +89,10 @@ export class RailwayPreview {
       signal,
       wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now = Date.now,
+      report = () => {},
     } = {}
   ) {
-    Object.assign(this, { client, target, env, request, signal, wait, now });
+    Object.assign(this, { client, target, env, request, signal, wait, now, report });
   }
   async inspect() {
     const t = this.target;
@@ -232,12 +233,17 @@ export class RailwayPreview {
       deployment = { id: result.serviceInstanceDeployV2 };
     }
     const deadline = this.now() + 18 * 60_000;
+    let reportedStatus;
     while (this.now() < deadline) {
       this.signal?.throwIfAborted();
       const { deployment: current } = await this.client.query(
         'query Deployment($id:String!) { deployment(id:$id) { status } }',
         { id: deployment.id }
       );
+      if (reportedStatus !== current.status) {
+        this.report(`Railway deployment status: ${current.status}`);
+        reportedStatus = current.status;
+      }
       if (TERMINAL.has(current.status))
         throw new Error(
           'Railway deployment did not become ready. Use Logs or Stop; no automatic retry was made.'
@@ -345,13 +351,18 @@ export async function main() {
   let locked = false;
   try {
     // Fail closed after SIGKILL rather than steal a possibly live provider action.
-    await mkdir(lock, { mode: 0o700 });
-    locked = true;
+    if (action !== 'logs') {
+      await mkdir(lock, { mode: 0o700 });
+      locked = true;
+    }
     // biome-ignore lint/suspicious/noUndeclaredEnvVars: authorized caller's secure runtime environment.
     const client = new RailwayClient(process.env.RAILWAY_API_KEY || process.env.RAILWAY_TOKEN, {
       signal: controller.signal,
     });
-    const preview = new RailwayPreview(client, target, { signal: controller.signal });
+    const preview = new RailwayPreview(client, target, {
+      signal: controller.signal,
+      report: (message) => console.error(message),
+    });
     if (action === 'start')
       console.log(`AGOR_ENVIRONMENT_RESULT=${JSON.stringify(await preview.start())}`);
     if (action === 'stop') {
