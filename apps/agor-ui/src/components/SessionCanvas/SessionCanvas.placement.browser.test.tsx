@@ -14,12 +14,17 @@ afterEach(cleanup);
 
 it('persists two real pointer drags when the first PATCH completes during the second debounce', async () => {
   const user = { user_id: 'placement-owner', role: 'member' } as User;
-  const board = {
-    board_id: 'placement-browser-board',
+  const board: Board = {
+    board_id: 'placement-browser-board' as Board['board_id'],
     name: 'Placement browser fixture',
     objects: {},
     primary_owner_user_id: user.user_id,
-  } as Board;
+    created_by: user.user_id,
+    created_at: '2026-09-01T00:00:00.000Z',
+    last_updated: '2026-09-01T00:00:00.000Z',
+    url: '/ui/b/placement-browser-board/',
+    archived: false,
+  };
   const branch = {
     branch_id: 'placement-browser-branch',
     board_id: board.board_id,
@@ -121,8 +126,8 @@ it('persists two real pointer drags when the first PATCH completes during the se
 
 it('shows skipped-default warnings from an always_new drop response', async () => {
   const user = { user_id: 'trigger-owner', role: 'member' } as User;
-  const board = {
-    board_id: 'trigger-board',
+  const board: Board = {
+    board_id: 'trigger-board' as Board['board_id'],
     name: 'Trigger browser fixture',
     objects: {
       review: {
@@ -136,7 +141,12 @@ it('shows skipped-default warnings from an always_new drop response', async () =
       },
     },
     primary_owner_user_id: user.user_id,
-  } as Board;
+    created_by: user.user_id,
+    created_at: '2026-09-01T00:00:00.000Z',
+    last_updated: '2026-09-01T00:00:00.000Z',
+    url: '/ui/b/trigger-board/',
+    archived: false,
+  };
   const branch = {
     branch_id: 'trigger-branch',
     board_id: board.board_id,
@@ -203,12 +213,22 @@ it('shows skipped-default warnings from an always_new drop response', async () =
   );
   const title = await screen.findByText(branch.name);
   const zone = view.container.querySelector<HTMLElement>('[data-id="review"]')!;
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 350));
+  // Fit-view scales the zone down on phones: a fixed 100px inset lands under
+  // the minimap. Use the exposed upper interior, without bypassing hit testing.
+  const targetPosition = await waitFor(async () => {
+    const bounds = zone.getBoundingClientRect();
+    const position = { x: bounds.width / 2, y: bounds.height / 4 };
+    expect(
+      zone.contains(document.elementFromPoint(bounds.left + position.x, bounds.top + position.y))
+    ).toBe(true);
+    // Observe fit-view completion instead of racing its delay and animation.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(zone.getBoundingClientRect().toJSON()).toEqual(bounds.toJSON());
+    return position;
   });
   await act(async () =>
     userEvent.dragAndDrop(title, zone, {
-      targetPosition: { x: zone.getBoundingClientRect().width / 2, y: 100 },
+      targetPosition,
     })
   );
   await waitFor(() => expect(create).toHaveBeenCalledWith({ zoneId: 'review' }));
