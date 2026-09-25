@@ -137,8 +137,13 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
   }
 
   return (
-    <div style={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ padding: '8px 0' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <section
+        aria-label="Board branches"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need to focus the scrollable list to reach older branches.
+        tabIndex={0}
+        style={{ padding: '8px 0', flex: 1, minHeight: 0, overflowY: 'auto' }}
+      >
         {loading && branches.length === 0 ? (
           <div style={{ padding: 16 }}>
             <Skeleton active paragraph={{ rows: 4 }} title={false} />
@@ -247,18 +252,15 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
             );
           })
         )}
-      </div>
+      </section>
 
       {/* Board Info Footer */}
       <div
         style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
           padding: '16px 24px',
           borderTop: `1px solid ${token.colorBorder}`,
           background: token.colorBgContainer,
+          flexShrink: 0,
         }}
       >
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>

@@ -540,6 +540,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <Button
                 type="text"
                 size="small"
+                aria-label="Collapse panel"
                 icon={<LeftOutlined style={{ fontSize: 11 }} />}
                 onClick={onCollapse}
                 style={{ marginRight: 4 }}
