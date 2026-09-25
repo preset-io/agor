@@ -17,7 +17,7 @@ import {
 import { ThoughtChain } from '@ant-design/x';
 import { Button, Tag, Typography, theme } from 'antd';
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 /** Shared disclosure for both lazy task hydration and already-loaded tool groups.
@@ -107,6 +107,7 @@ export function ToolDisclosureHeader({
 }
 
 export interface ToolBlockProps {
+  retainDetails?: () => (() => void) | undefined;
   /** Tool/block icon (Ant Design icon element) */
   icon: React.ReactNode;
   /** Tool display name (e.g. "Edit", "Bash", "Thinking") */
@@ -131,11 +132,15 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   descriptionNode,
   status,
   expandedByDefault = false,
+  retainDetails,
   children,
 }) => {
   const [expanded, setExpanded] = useState(expandedByDefault);
   const { token } = theme.useToken();
   const hasBody = !!children;
+  useEffect(() => {
+    if (expanded && hasBody) return retainDetails?.();
+  }, [expanded, hasBody, retainDetails]);
 
   const statusColor =
     status === 'error'

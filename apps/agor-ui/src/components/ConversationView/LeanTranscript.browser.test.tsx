@@ -120,6 +120,7 @@ const handle = {
   loadOlderTasks,
   loadTaskMessages,
   unloadTaskMessages: () => {},
+  retainTaskDetails: vi.fn(() => () => {}),
   resync: async () => {},
 } as unknown as ReactiveSessionHandle;
 let currentHandle = handle;
@@ -911,4 +912,33 @@ it('collapses tall low-character history and medium prose with shorter previews'
   expect(articles[0].textContent).toContain('Word49');
   await userEvent.click(screen.getByRole('button', { name: 'show more' }));
   expect(screen.getByText(prose)).toBeInTheDocument();
+});
+
+it('pins expanded tool details and releases them on collapse and reader unmount', async () => {
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const message = {
+    ...messages.get(tasks[0].task_id)![1],
+    content: [
+      { type: 'tool_use', id: 'pinned-tool', name: 'Read', input: { file_path: '/fixture.txt' } },
+      { type: 'tool_result', tool_use_id: 'pinned-tool', content: 'Fixture output' },
+    ],
+  } as Message;
+  const view = render(
+    <TaskBlock
+      task={{ ...tasks[0], recorded_tool_count: 1 }}
+      taskMessages={[message]}
+      taskMessagesLoaded
+      onLoadTaskMessages={() => {}}
+      onRetainTaskDetails={retain}
+    />
+  );
+  expect(retain).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: '1 tool call' }));
+  await waitFor(() => expect(retain).toHaveBeenCalledWith(tasks[0].task_id));
+  await userEvent.click(screen.getByRole('button', { name: '1 tool call' }));
+  await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  await userEvent.click(screen.getByRole('button', { name: '1 tool call' }));
+  view.unmount();
+  expect(release).toHaveBeenCalledTimes(2);
 });

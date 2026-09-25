@@ -10,6 +10,7 @@ export type ResolvedSdkWatchdogConfig = Required<
 >;
 
 export interface ResolvedExecutorHeartbeatConfig {
+  memory_sampling?: boolean;
   enabled: boolean;
   interval_ms: number;
   stale_after_ms: number;
@@ -43,9 +44,10 @@ export function resolveExecutorHeartbeatConfig(
   );
 
   return {
-    // Default enabled: the heartbeat is a lightweight task-row timestamp patch,
-    // and callback execution remains opt-in via command_template.
+    // Default enabled: each heartbeat revalidates task-scoped runtime authority
+    // before stamping liveness. Memory sampling and command callbacks are opt-in.
     enabled: raw?.enabled ?? true,
+    ...(raw?.memory_sampling === true ? { memory_sampling: true } : {}),
     interval_ms: intervalMs,
     stale_after_ms: staleAfterMs,
     callback: {

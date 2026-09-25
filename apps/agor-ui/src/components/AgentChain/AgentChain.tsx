@@ -66,6 +66,7 @@ interface AgentChainProps {
   /** Remove desktop transcript indentation at phone widths. */
   compact?: boolean;
   revealRequested?: boolean;
+  retainDetails?: () => (() => void) | undefined;
   latestActivity?: ToolExecutionState;
   hasFollowingResponse?: boolean;
 }
@@ -84,6 +85,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     isLatest,
     compact = false,
     revealRequested = false,
+    retainDetails,
     latestActivity,
     hasFollowingResponse = false,
   }) => {
@@ -92,6 +94,10 @@ export const AgentChain = React.memo<AgentChainProps>(
     useEffect(() => {
       if (revealRequested) setExpanded(true);
     }, [revealRequested]);
+
+    useEffect(() => {
+      if (expanded) return retainDetails?.();
+    }, [expanded, retainDetails]);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {

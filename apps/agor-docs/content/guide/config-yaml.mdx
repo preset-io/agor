@@ -619,3 +619,44 @@ If `trace_services` is enabled but no tracer resolves, the daemon logs a
 one-time warning at startup and continues with Feathers tracing disabled — it
 never fails closed or blocks requests. This setting carries no credentials; span
 delivery is handled entirely by the ambient Datadog tracer/Agent.
+
+## Optional executor memory sampling
+
+```yaml
+execution:
+  executor_heartbeat:
+    memory_sampling: true # default: false; requires enabled heartbeats
+```
+
+Samples use the existing task-scoped heartbeat and configured daemon DogStatsD
+metrics exporter. No provider call, GC request, heap snapshot, or new background
+pipeline is involved. Older executors omit the optional field; older daemons can
+ignore it. Memory observations are not persisted on Tasks or sent to community
+telemetry. Export requires an accepted runtime authority check.
+
+When a heartbeat callback command is configured, its stdin JSON also carries
+the optional top-level `memory: { current: { ... } }` sample with the same
+validation. Missing or entirely invalid samples omit `memory`, not the heartbeat.
+Callback delivery is deferred and best-effort: an in-flight callback for the same
+task can cause later samples to be skipped. Delivery is neither durable nor
+ordered. Cloud export requires a paired, compatible launcher and receiver; the
+cloud integration PR is pending.
+
+`executor.memory.current.<field>_bytes` distributions have six fixed fields:
+`rss`, `heap_used`, `heap_total`, `heap_limit`, `external`, `array_buffers`.
+They describe the executor's Node wrapper process only, using synchronous
+`process.memoryUsage()` and V8 heap-limit counters. There is no proc/cgroup I/O,
+async sampling promise, child-process enumeration, or retained peak state.
+Cloud infrastructure owns container/node metrics. Missing values are omitted,
+not zero; old/unknown fields (including `sampled_peak`) are ignored.
+
+No tenant, session, task, PID, command, or content labels are added.
+**Array buffers are a subset of external memory**, not an additional category
+to sum. Every heartbeat revalidates runtime authority before stamping liveness;
+it is not merely a timestamp patch. Sampling failures omit diagnostics, not
+heartbeats.
+
+Distributions are heartbeat/time-weighted observations, not a distinct-executor
+distribution or run peaks. Samples miss between-heartbeat spikes and a crash can
+lose the final observation; no terminal peak is synthesized. Do not use these
+alone to infer a leak, OOM cause, fleet concurrency, or required memory sizing.

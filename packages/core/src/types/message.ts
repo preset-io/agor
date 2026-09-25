@@ -356,6 +356,49 @@ export const LEAN_TRANSCRIPT_METADATA_FIELDS = [
   'persistence_omission',
 ] as const;
 
+/** Browser-safe counterpart of MessageRepository's SQL lean projection. No history is deleted. */
+export function leanMessage(message: Message): Message {
+  let content = message.content;
+  const thinking = Array.isArray(content) && content.some((block) => block.type === 'thinking');
+  if (Array.isArray(content)) {
+    content = content.filter(
+      (block) => !['tool_use', 'tool_result', 'thinking'].includes(block.type)
+    );
+  } else if (
+    message.type === 'permission_request' &&
+    content &&
+    typeof content === 'object' &&
+    'tool_name' in content
+  ) {
+    content = {
+      ...content,
+      tool_input:
+        content.status === 'pending' && 'tool_input' in content ? (content.tool_input ?? {}) : {},
+    };
+  }
+  return {
+    message_id: message.message_id,
+    session_id: message.session_id,
+    task_id: message.task_id,
+    type: message.type,
+    role: message.role,
+    index: message.index,
+    timestamp: message.timestamp,
+    parent_tool_use_id: message.parent_tool_use_id,
+    content,
+    content_preview: '',
+    tool_uses: undefined,
+    ...(message.has_deferred_reasoning || thinking ? { has_deferred_reasoning: true } : {}),
+    metadata: Object.fromEntries(
+      Object.entries(message.metadata ?? {}).filter(
+        ([key]) =>
+          LEAN_TRANSCRIPT_METADATA_FIELDS.some((field) => field === key) &&
+          (key !== 'widget' || message.type === 'widget_request')
+      )
+    ),
+  };
+}
+
 /**
  * Message creation input (without generated fields)
  */

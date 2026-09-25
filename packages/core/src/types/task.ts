@@ -49,9 +49,25 @@ export interface ExecutorPulse {
   observed_at: string;
 }
 
+/** Fixed metric names only: no process, tenant or session labels. All values are bytes. */
+export const EXECUTOR_MEMORY_FIELDS = [
+  'rss',
+  'heap_used',
+  'heap_total',
+  'heap_limit',
+  'external',
+  'array_buffers',
+] as const;
+export type ExecutorMemoryValues = Partial<Record<(typeof EXECUTOR_MEMORY_FIELDS)[number], number>>;
+export interface ExecutorMemorySample {
+  current: ExecutorMemoryValues;
+}
+
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
+  /** Optional, content-free observations; never persisted on the Task. */
+  memory?: ExecutorMemorySample;
 }
 
 export const SDK_WATCHDOG_FAILURE_REASONS = [

@@ -860,6 +860,7 @@ function validateConfig(config: AgorConfig): void {
     'sandbox',
   ]);
   only(config.execution?.executor_heartbeat, 'execution.executor_heartbeat', [
+    'memory_sampling',
     'enabled',
     'interval_ms',
     'stale_after_ms',

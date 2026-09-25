@@ -1,10 +1,20 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
-import { isTaskExecuting, MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
+import {
+  isTaskExecuting,
+  isTerminalTaskStatus,
+  leanMessage,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+  TaskStatus,
+} from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
+/** Full-detail turn budget, independent of history pagination (not a byte cap).
+ * Latest/active turns and explicitly expanded consumers are protected exceptions. */
+export const LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT = 10;
 const isLeanActive = isTaskExecuting;
 
 export interface ReactiveSessionOptions {
@@ -195,6 +205,106 @@ export class ReactiveSessionHandle {
   private leanSyncInflight: Promise<void> | null = null;
   private readonly detailInflight = new Map<string, Promise<Message[]>>();
   private readonly leanLiveTaskIds = new Set<string>();
+  private readonly recentDetails = new Set<string>();
+  private readonly detailPins = new Map<string, number>();
+  private readonly projectedMessages = new WeakSet<Message>();
+
+  /** Each expanded consumer owns a pin. Release is idempotent and cannot unpin another reader. */
+  retainTaskDetails(taskId: string): () => void {
+    if (this.disposed) return () => {};
+    this.detailPins.set(taskId, (this.detailPins.get(taskId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released || this.disposed) return;
+      released = true;
+      const count = (this.detailPins.get(taskId) ?? 1) - 1;
+      if (count) this.detailPins.set(taskId, count);
+      else this.detailPins.delete(taskId);
+      // React may replace a disclosure callback in one effect cleanup/setup
+      // pass. Give its replacement pin a chance to acquire before eviction.
+      queueMicrotask(() => {
+        if (!this.disposed) this.updateState((state) => state);
+      });
+    };
+  }
+
+  private touchDetails(taskId: string): void {
+    this.recentDetails.delete(taskId);
+    this.recentDetails.add(taskId);
+    while (this.recentDetails.size > LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT)
+      this.recentDetails.delete(this.recentDetails.values().next().value!);
+  }
+
+  /**
+   * Retain ten recently hydrated/live full turns, plus latest, active streams and
+   * explicitly pinned details. This is a turn bound, not a byte bound. Text,
+   * attachments and widget history remain lean; tools/reasoning rehydrate on demand.
+   * Apply after every update so late events and reconnect snapshots cannot regrow
+   * old full buckets. Active streams survive the persisted-message handoff;
+   * unmatched terminal partial/error displays share the bounded recent-turn cache.
+   */
+  private boundLeanDetails(state: ReactiveSessionState): ReactiveSessionState {
+    const keep = new Set([...this.recentDetails, ...this.detailPins.keys()]);
+    for (const task of state.tasks) if (isLeanActive(task)) keep.add(task.task_id);
+    const latest = state.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
+    if (latest) keep.add(latest.task_id);
+    const tasksById = new Map<string, Task>(state.tasks.map((task) => [task.task_id, task]));
+    const activeStream = (stream: StreamingMessageState) => {
+      const task = stream.task_id ? tasksById.get(stream.task_id) : undefined;
+      return (
+        (stream.isStreaming || stream.isThinking) && (!task || !isTerminalTaskStatus(task.status))
+      );
+    };
+    for (const stream of state.streamingMessages.values())
+      if (stream.task_id && activeStream(stream)) keep.add(stream.task_id);
+    let streamingMessages = state.streamingMessages;
+    // End/error is not persistence. Keep recent unmatched partial displays, but
+    // never let them pin full buckets forever. Unassigned ended streams have a
+    // separate bounded fallback, since there is no turn to charge them to.
+    const unassigned = [...streamingMessages.values()]
+      .filter((stream) => !stream.task_id && !activeStream(stream))
+      .slice(-LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT);
+    const keepUnassigned = new Set(unassigned.map((stream) => stream.message_id));
+    for (const [id, stream] of streamingMessages) {
+      if (activeStream(stream)) continue;
+      if (!(stream.task_id ? keep.has(stream.task_id) : keepUnassigned.has(id))) {
+        if (streamingMessages === state.streamingMessages)
+          streamingMessages = new Map(streamingMessages);
+        streamingMessages.delete(id);
+      } else if (stream.isStreaming || stream.isThinking) {
+        if (streamingMessages === state.streamingMessages)
+          streamingMessages = new Map(streamingMessages);
+        streamingMessages.set(id, { ...stream, isStreaming: false, isThinking: false });
+      }
+    }
+    let messagesByTask = state.messagesByTask;
+    for (const [id, messages] of messagesByTask) {
+      if (keep.has(id) || messages.every((message) => this.projectedMessages.has(message)))
+        continue;
+      if (messagesByTask === state.messagesByTask) messagesByTask = new Map(messagesByTask);
+      messagesByTask.set(
+        id,
+        messages.map((message) => {
+          const lean = leanMessage(message);
+          this.projectedMessages.add(lean);
+          return lean;
+        })
+      );
+    }
+    for (const id of this.leanLiveTaskIds) if (!keep.has(id)) this.leanLiveTaskIds.delete(id);
+    const loadedTaskIds = [...state.loadedTaskIds].some((id) => !keep.has(id))
+      ? new Set([...state.loadedTaskIds].filter((id) => keep.has(id)))
+      : state.loadedTaskIds;
+    const toolsByTask = [...state.toolsByTask.keys()].some((id) => !keep.has(id))
+      ? new Map([...state.toolsByTask].filter(([id]) => keep.has(id)))
+      : state.toolsByTask;
+    return messagesByTask === state.messagesByTask &&
+      loadedTaskIds === state.loadedTaskIds &&
+      toolsByTask === state.toolsByTask &&
+      streamingMessages === state.streamingMessages
+      ? state
+      : { ...state, messagesByTask, loadedTaskIds, toolsByTask, streamingMessages };
+  }
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -359,6 +469,7 @@ export class ReactiveSessionHandle {
 
   loadTaskMessages(taskId: string): Promise<Message[]> {
     if (this.options.taskHydration !== 'lean') return this.loadTaskMessagesOnce(taskId);
+    this.touchDetails(taskId);
     const existing = this.detailInflight.get(taskId);
     if (existing) return existing;
     const promise = this.loadTaskMessagesOnce(taskId).finally(() => {
@@ -575,7 +686,13 @@ export class ReactiveSessionHandle {
 
   unloadTaskMessages(taskId: string): void {
     this.assertNotDisposed();
-    if (this.options.taskHydration === 'lean') return; // Disclosure is not cache eviction.
+    if (this.options.taskHydration === 'lean') {
+      if (this.detailPins.has(taskId)) return;
+      this.recordMessageCacheMutation(taskId);
+      this.recentDetails.delete(taskId);
+      this.updateState((state) => state);
+      return;
+    }
     // Record the intent even when no bucket exists yet. A resync may currently
     // be fetching this Task as its automatic latest-Task hydration target.
     this.recordMessageCacheMutation(taskId);
@@ -629,6 +746,8 @@ export class ReactiveSessionHandle {
     };
     this.queueSnapshot = [];
     this.detailInflight.clear();
+    this.recentDetails.clear();
+    this.detailPins.clear();
     this.leanLiveTaskIds.clear();
     this.messageFetches.clear();
     this.streamingAtMessageFetch.clear();
@@ -648,8 +767,8 @@ export class ReactiveSessionHandle {
           const invalidation = this.queueInvalidation;
           try {
             const result = (await this.client
-              .service(`/sessions/${this.sessionId}/tasks/queue`)
-              .find()) as QueueFindResult;
+              .service('sessions/:id/tasks/queue')
+              .find({ route: { id: this.sessionId } })) as QueueFindResult;
             if (this.disposed || this.stateSnapshot.terminal || !this.stateSnapshot.connected)
               return;
             // A request-order counter alone is insufficient: even the newest
@@ -769,6 +888,7 @@ export class ReactiveSessionHandle {
       };
       for (const id of this.leanLiveTaskIds) if (!keep.has(id)) this.leanLiveTaskIds.delete(id);
     }
+    if (this.options.taskHydration === 'lean') next = this.boundLeanDetails(next);
     this.stateSnapshot = next;
     this.notify();
     return next;
@@ -976,7 +1096,10 @@ export class ReactiveSessionHandle {
           (!older || page.some((item) => item.task_id === task.task_id))
       );
       for (const task of hydrateTasks) {
-        if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+        if (isLeanActive(task)) {
+          if (!this.leanLiveTaskIds.has(task.task_id)) this.touchDetails(task.task_id);
+          this.leanLiveTaskIds.add(task.task_id);
+        }
         if (this.leanLiveTaskIds.has(task.task_id)) fullIds.add(task.task_id);
         sequences.set(task.task_id, this.messageCacheMutationsByTask.get(task.task_id) ?? 0);
         snapshots.set(task.task_id, []);
@@ -1227,7 +1350,10 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(task.session_id)) return;
       this.invalidateQueue(task);
       if (task.status === TaskStatus.QUEUED) return;
-      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+      if (isLeanActive(task)) {
+        if (!this.leanLiveTaskIds.has(task.task_id)) this.touchDetails(task.task_id);
+        this.leanLiveTaskIds.add(task.task_id);
+      }
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
@@ -1244,7 +1370,10 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(task.session_id)) return;
       this.invalidateQueue(task);
       if (task.status === TaskStatus.QUEUED) return;
-      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+      if (isLeanActive(task)) {
+        if (!this.leanLiveTaskIds.has(task.task_id)) this.touchDetails(task.task_id);
+        this.leanLiveTaskIds.add(task.task_id);
+      }
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
@@ -1264,6 +1393,9 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(task.session_id)) return;
       this.invalidateQueue(task, true);
       this.recordTaskMutation('remove', task);
+      this.recentDetails.delete(task.task_id);
+      this.leanLiveTaskIds.delete(task.task_id);
+      this.detailPins.delete(task.task_id);
       this.updateState((prev) => {
         const nextByTask = new Map(prev.messagesByTask);
         nextByTask.delete(task.task_id);
@@ -1302,7 +1434,11 @@ export class ReactiveSessionHandle {
 
     const onToolStart = (event: ToolStartEvent) => {
       if (!this.matchesSession(event.session_id)) return;
-      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
+      if (this.options.taskHydration === 'lean') {
+        const task = this.stateSnapshot.tasks.find((task) => task.task_id === event.task_id);
+        if (!task || isLeanActive(task)) this.touchDetails(event.task_id);
+        this.leanLiveTaskIds.add(event.task_id);
+      }
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.some((t) => t.toolUseId === event.tool_use_id)) return prev;
@@ -1323,7 +1459,11 @@ export class ReactiveSessionHandle {
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
       if (!this.matchesSession(event.session_id)) return;
-      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
+      if (this.options.taskHydration === 'lean') {
+        const task = this.stateSnapshot.tasks.find((task) => task.task_id === event.task_id);
+        if (!task || isLeanActive(task)) this.touchDetails(event.task_id);
+        this.leanLiveTaskIds.add(event.task_id);
+      }
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.length === 0) return prev;
@@ -1351,6 +1491,12 @@ export class ReactiveSessionHandle {
 
     const onMessageCreated = (message: Message) => {
       if (!this.matchesSession(message.session_id)) return;
+      if (
+        this.options.taskHydration === 'lean' &&
+        message.task_id &&
+        !this.stateSnapshot.tasks.some((task) => task.task_id === message.task_id)
+      )
+        this.touchDetails(message.task_id);
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
@@ -1390,6 +1536,12 @@ export class ReactiveSessionHandle {
     const onMessagePatched = (message: Message) => {
       const taskId = message.task_id;
       if (!this.matchesSession(message.session_id) || !taskId) return;
+      if (
+        this.options.taskHydration === 'lean' &&
+        message.task_id &&
+        !this.stateSnapshot.tasks.some((task) => task.task_id === message.task_id)
+      )
+        this.touchDetails(message.task_id);
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const shouldTrackMessages =

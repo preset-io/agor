@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ResolvedExecutorHeartbeatConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
+import type { ExecutorMemorySample } from '@agor/core/types';
 import { buildTrustedLauncherEnvironment } from './trusted-launcher-environment.js';
 
 export interface ExecutorHeartbeatCallbackPayload {
@@ -9,6 +10,7 @@ export interface ExecutorHeartbeatCallbackPayload {
   session_id: string;
   branch_id?: string;
   last_executor_heartbeat_at: string;
+  memory?: ExecutorMemorySample;
 }
 
 export class ExecutorHeartbeatCallbackRunner {

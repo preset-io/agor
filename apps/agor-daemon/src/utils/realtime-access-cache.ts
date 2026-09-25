@@ -41,6 +41,8 @@ export interface RealtimeAccessCacheOptions {
   sessionBranchTtlMs?: number;
   ttlMs?: number;
   now?: () => number;
+  /** Maximum entries per map; eviction only causes an authorized repository reread. */
+  maxEntries?: number;
 }
 
 const DEFAULT_BRANCH_VISIBILITY_TTL_MS = 5 * 60_000;
@@ -83,6 +85,7 @@ export class RealtimeAccessCache {
    * current authority when this generation changes across an await.
    */
   private generation = 0;
+  private readonly maxEntries: number;
 
   constructor(private readonly options: RealtimeAccessCacheOptions) {
     this.branchVisibilityTtlMs =
@@ -90,9 +93,12 @@ export class RealtimeAccessCache {
     this.sessionBranchTtlMs =
       options.sessionBranchTtlMs ?? options.ttlMs ?? DEFAULT_SESSION_BRANCH_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 4096));
+    if (!Number.isFinite(this.maxEntries)) throw new Error('Invalid cache capacity');
   }
 
   async getBranchIdForSession(sessionId: string): Promise<BranchID | null> {
+    this.pruneExpired();
     const cached = this.sessionBranches.get(sessionId);
     const now = this.now();
     if (cached && cached.expiresAt > now) {
@@ -102,6 +108,8 @@ export class RealtimeAccessCache {
     const generation = this.generation;
     const branchId = await this.options.sessionsRepository.findBranchIdBySessionId(sessionId);
     if (generation !== this.generation) return this.getBranchIdForSession(sessionId);
+    this.sessionBranches.delete(sessionId);
+    this.reserveEntry(this.sessionBranches);
     this.sessionBranches.set(sessionId, {
       branchId,
       expiresAt: this.now() + this.sessionBranchTtlMs,
@@ -116,6 +124,7 @@ export class RealtimeAccessCache {
    * the per-session stream channel yet.
    */
   async getSessionOwnerId(sessionId: string): Promise<UserID | null> {
+    this.pruneExpired();
     const cached = this.sessionOwners.get(sessionId);
     const now = this.now();
     if (cached && cached.expiresAt > now) {
@@ -128,6 +137,8 @@ export class RealtimeAccessCache {
         sessionId
       )) as UserID | null) ?? null;
     if (generation !== this.generation) return this.getSessionOwnerId(sessionId);
+    this.sessionOwners.delete(sessionId);
+    this.reserveEntry(this.sessionOwners);
     this.sessionOwners.set(sessionId, {
       ownerId,
       expiresAt: this.now() + this.sessionBranchTtlMs,
@@ -136,6 +147,7 @@ export class RealtimeAccessCache {
   }
 
   async getBranchVisibility(branchId: BranchID): Promise<BranchRealtimeVisibility | null> {
+    this.pruneExpired();
     const cached = this.branchVisibility.get(branchId);
     const now = this.now();
     if (cached && cached.expiresAt > now) {
@@ -153,6 +165,8 @@ export class RealtimeAccessCache {
       return null;
     }
 
+    this.branchVisibility.delete(branchId);
+    this.reserveEntry(this.branchVisibility);
     this.branchVisibility.set(branchId, {
       ...visibility,
       expiresAt: this.now() + this.branchVisibilityTtlMs,
@@ -186,6 +200,23 @@ export class RealtimeAccessCache {
     this.branchVisibility.clear();
     this.sessionBranches.clear();
     this.sessionOwners.clear();
+  }
+
+  // Insertion order is expiry order within each map (fixed TTL, no touch on hit).
+  // Opportunistic expiry needs no timer and also sweeps maps other than the one read.
+  private pruneExpired(): void {
+    const now = this.now();
+    for (const cache of [this.branchVisibility, this.sessionBranches, this.sessionOwners]) {
+      for (const [key, entry] of cache) {
+        if (entry.expiresAt > now) break;
+        cache.delete(key as BranchID);
+      }
+    }
+  }
+
+  private reserveEntry<K, V>(cache: Map<K, V>): void {
+    this.pruneExpired();
+    while (cache.size >= this.maxEntries) cache.delete(cache.keys().next().value!);
   }
 
   private visibilityFromEntry(entry: BranchVisibilityCacheEntry): BranchRealtimeVisibility {

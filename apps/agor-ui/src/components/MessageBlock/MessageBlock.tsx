@@ -85,6 +85,7 @@ interface ThinkingContentBlock {
 }
 
 interface MessageBlockProps {
+  retainDetails?: () => (() => void) | undefined;
   message:
     | Message
     | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
@@ -345,6 +346,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onOpenAgenticToolSettings,
   compact = false,
   defaultTextExpanded = true,
+  retainDetails,
   textChoiceKey,
 }) => {
   const { token } = theme.useToken();
@@ -700,6 +702,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {/* Thinking blocks (collapsed by default) */}
       {hasThinking && (
         <ThinkingBlock
+          retainDetails={retainDetails}
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
           defaultExpanded={false}
@@ -849,6 +852,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
               return (
                 <ToolBlock
+                  retainDetails={retainDetails}
                   key={toolUse.id}
                   icon={icon}
                   name={displayName}

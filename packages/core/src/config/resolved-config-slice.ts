@@ -42,6 +42,7 @@ export const ResolvedConfigSliceSchema = z.object({
         .object({
           enabled: z.boolean(),
           interval_ms: z.number().int().positive(),
+          memory_sampling: z.boolean().optional(),
         })
         .optional(),
       sdk_watchdog: z

@@ -452,6 +452,9 @@ export interface AgorDatabaseSettings {
 export type UnixUserMode = 'simple' | 'delegated' | 'sandbox';
 
 export interface AgorExecutorHeartbeatSettings {
+  /** Opt-in content-free memory samples on the existing heartbeat (default: false). */
+  memory_sampling?: boolean;
+
   /** Enable executor task heartbeats (default: true). */
   enabled?: boolean;
 

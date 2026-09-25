@@ -71,6 +71,7 @@ import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import { findLatestJsonLine } from './rollout-tail.js';
 import {
   CODEX_MCP_UNKNOWN_FAILURE,
   CodexRuntimeDiagnostics,
@@ -279,25 +280,7 @@ async function extractLatestContextUsageFromRollout(
   const rolloutPath = await findCodexRolloutFile(threadId);
   if (!rolloutPath) return undefined;
 
-  let contents: string;
-  try {
-    contents = await fs.readFile(rolloutPath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  let latest: ContextUsageSnapshot | undefined;
-  for (const line of contents.split('\n')) {
-    if (!line.includes('token_count')) continue;
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      latest = extractCodexContextSnapshotFromEvent(parsed) ?? latest;
-    } catch {
-      // Ignore malformed / partially-written JSONL lines.
-    }
-  }
-
-  return latest;
+  return findLatestJsonLine(rolloutPath, extractCodexContextSnapshotFromEvent);
 }
 
 export interface CodexPromptResult {
@@ -1140,7 +1123,8 @@ export class CodexPromptService {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     abortController?: AbortController,
-    onActivity?: SdkActivityCallback
+    onActivity?: SdkActivityCallback,
+    retainCompletedTools = true
   ): AsyncGenerator<CodexStreamEvent> {
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
@@ -1627,38 +1611,42 @@ export class CodexPromptService {
                   event.item.type === 'todo_list' &&
                   todoIdsEmittedViaUpdate.has(toolUseComplete.id);
 
-                // Add to allToolUses for backward compatibility (tool_uses field)
-                allToolUses.push({
-                  id: toolUseComplete.id,
-                  name: toolUseComplete.name,
-                  input: toolUseComplete.input,
-                });
-
-                // Add tool_use block to content array (for UI rendering)
-                currentMessage.push({
-                  type: 'tool_use',
-                  id: toolUseComplete.id,
-                  name: toolUseComplete.name,
-                  input: toolUseComplete.input,
-                });
-
-                // Add tool_result block if we have output OR status (for UI rendering)
-                if (toolUseComplete.output !== undefined || toolUseComplete.status) {
-                  const isError =
-                    toolUseComplete.status === 'failed' || toolUseComplete.status === 'error';
-
-                  // Build content: prefer output, fall back to status message
-                  let content = toolUseComplete.output || '';
-                  if (!content && toolUseComplete.status) {
-                    content = `[${toolUseComplete.status}]`;
-                  }
-
-                  currentMessage.push({
-                    type: 'tool_result',
-                    tool_use_id: toolUseComplete.id,
-                    content,
-                    is_error: isError,
+                // Streaming consumers persist tool_complete before requesting the next
+                // event. Only legacy/nonstreaming consumers need the final copy.
+                if (retainCompletedTools) {
+                  // Add to allToolUses for backward compatibility (tool_uses field)
+                  allToolUses.push({
+                    id: toolUseComplete.id,
+                    name: toolUseComplete.name,
+                    input: toolUseComplete.input,
                   });
+
+                  // Add tool_use block to content array (for UI rendering)
+                  currentMessage.push({
+                    type: 'tool_use',
+                    id: toolUseComplete.id,
+                    name: toolUseComplete.name,
+                    input: toolUseComplete.input,
+                  });
+
+                  // Add tool_result block if we have output OR status (for UI rendering)
+                  if (toolUseComplete.output !== undefined || toolUseComplete.status) {
+                    const isError =
+                      toolUseComplete.status === 'failed' || toolUseComplete.status === 'error';
+
+                    // Build content: prefer output, fall back to status message
+                    let content = toolUseComplete.output || '';
+                    if (!content && toolUseComplete.status) {
+                      content = `[${toolUseComplete.status}]`;
+                    }
+
+                    currentMessage.push({
+                      type: 'tool_result',
+                      tool_use_id: toolUseComplete.id,
+                      content,
+                      is_error: isError,
+                    });
+                  }
                 }
 
                 if (!isDuplicateTodoCompletion) {

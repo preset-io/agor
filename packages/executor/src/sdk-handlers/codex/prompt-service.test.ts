@@ -2011,6 +2011,101 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
+  it('streaming emits exact tool payloads once without retaining final copies; legacy mode keeps them', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const output = 'large tool result '.repeat(10_000);
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      ...Array.from({ length: 50 }, (_, i) => ({
+        type: 'item.completed',
+        item: {
+          id: `cmd-${i}`,
+          type: 'command_execution',
+          command: 'echo test',
+          aggregated_output: output,
+          exit_code: 0,
+          status: 'completed',
+        },
+      })),
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    for (const retain of [false, true]) {
+      let tools = 0;
+      for await (const event of service.promptSessionStreaming(
+        testSessionId,
+        'go',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        retain
+      )) {
+        if (event.type === 'tool_complete') {
+          expect(event.toolUse.output).toBe(output);
+          tools++;
+        }
+        if (event.type === 'complete') {
+          expect(tools).toBe(50); // completion follows every tool event
+          expect(event.content.filter((block) => block.type === 'tool_result')).toHaveLength(
+            retain ? 50 : 0
+          );
+          expect(event.toolUses?.length ?? 0).toBe(retain ? 50 : 0);
+        }
+      }
+      expect(tools).toBe(50);
+    }
+  });
+
+  it('streaming persistence keeps exact tool output once, with no final tool copy', async () => {
+    const { service } = await makeInitializedStreamingService(null);
+    const output = 'output with unicode 猫 and newlines\n'.repeat(1000);
+    const messagesRepo = {
+      findInitialUserMessagesByTaskId: vi.fn(async () => []),
+      getNextIndexBySessionId: vi.fn(async () => 0),
+    };
+    const messagesService = {
+      create: vi.fn(async (message: Partial<Message>) => message as Message),
+      patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+    } satisfies MessagesService;
+    const tool = new CodexTool(
+      messagesRepo as unknown as MessagesRepository,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      undefined,
+      messagesService
+    );
+    Reflect.set(tool, 'promptService', service);
+    mockStreamEvents = [
+      {
+        type: 'item.completed',
+        item: {
+          id: 'exact',
+          type: 'command_execution',
+          command: 'echo fixture',
+          aggregated_output: output,
+          exit_code: 0,
+          status: 'completed',
+        },
+      },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Done' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+      },
+    ];
+    await tool.executePromptWithStreaming(testSessionId, 'go');
+    const results = messagesService.create.mock.calls
+      .flatMap(([message]) => (Array.isArray(message.content) ? message.content : []))
+      .filter((block) => block.type === 'tool_result');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ tool_use_id: 'exact', content: output, is_error: false });
+  });
+
   it('persists a failed MCP result as is_error even when the Codex turn subsequently completes', async () => {
     const { service } = await makeInitializedStreamingService(null);
     const initialRuns = mockRunStreamedInputs.length;

@@ -10,13 +10,14 @@
 
 import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
-import type React from 'react';
+import { type FC, useEffect, useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 import { CollapsibleText } from '../CollapsibleText';
 
 const { Text } = Typography;
 
 interface ThinkingBlockProps {
+  retainDetails?: () => (() => void) | undefined;
   /** Thinking content (markdown) */
   content: string;
   /** Whether content is still streaming */
@@ -32,12 +33,18 @@ interface ThinkingBlockProps {
  * collapsible block. Defaults to collapsed to keep conversation focused
  * on actual responses.
  */
-export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
+export const ThinkingBlock: FC<ThinkingBlockProps> = ({
   content,
   isStreaming = false,
   defaultExpanded = false,
+  retainDetails,
 }) => {
   const { token } = theme.useToken();
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const visible = !!content || isStreaming;
+  useEffect(() => {
+    if (expanded && visible) return retainDetails?.();
+  }, [expanded, visible, retainDetails]);
 
   // Don't render if no content
   if (!content && !isStreaming) {
@@ -56,7 +63,8 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
 
   return (
     <Collapse
-      defaultActiveKey={defaultExpanded ? ['thinking'] : []}
+      activeKey={expanded ? ['thinking'] : []}
+      onChange={(keys) => setExpanded(keys.includes('thinking'))}
       expandIcon={({ isActive }) => (isActive ? <DownOutlined /> : <RightOutlined />)}
       style={{
         background: token.colorWarningBg,

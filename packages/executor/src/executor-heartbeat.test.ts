@@ -159,3 +159,66 @@ describe('startExecutorHeartbeat', () => {
     }
   });
 });
+
+it('samples opt-in memory through the heartbeat and stops the same timer', async () => {
+  const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+  const handle = startExecutorHeartbeat({
+    client: { service: () => ({ reportRuntimeTelemetry }) } as never,
+    taskId: 'task-1',
+    intervalMs: 20,
+    memorySampling: true,
+  });
+  try {
+    await vi.waitFor(() => expect(reportRuntimeTelemetry).toHaveBeenCalled());
+    expect(reportRuntimeTelemetry.mock.calls[0][0]).toMatchObject({
+      task_id: 'task-1',
+      memory: {
+        current: { rss: expect.any(Number), heap_used: expect.any(Number) },
+      },
+    });
+  } finally {
+    handle.stop();
+  }
+  const calls = reportRuntimeTelemetry.mock.calls.length;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(calls);
+});
+
+it('does not sample when disabled and sampling failure cannot delay authority or liveness', async () => {
+  vi.useFakeTimers();
+  const usage = vi.spyOn(process, 'memoryUsage').mockImplementation(() => {
+    throw new Error('unavailable');
+  });
+  const reportRuntimeTelemetry = vi.fn().mockResolvedValue({ status: 'stopping' });
+  const onTask = vi.fn();
+  const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+  const disabled = startExecutorHeartbeat({
+    client,
+    taskId: 'task',
+    memorySampling: true,
+    enabled: false,
+  });
+  const off = startExecutorHeartbeat({ client, taskId: 'task' });
+  expect(usage).not.toHaveBeenCalled();
+  off.stop();
+  const handle = startExecutorHeartbeat({
+    client,
+    taskId: 'task',
+    memorySampling: true,
+    intervalMs: 1000,
+    onTask,
+  });
+  try {
+    // No sampling promise/microtask stands between invocation and the write.
+    expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(2);
+    expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({ task_id: 'task' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(3);
+    expect(onTask).toHaveBeenCalledWith({ status: 'stopping' });
+  } finally {
+    handle.stop();
+    disabled.stop();
+    usage.mockRestore();
+    vi.useRealTimers();
+  }
+});

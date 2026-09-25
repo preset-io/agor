@@ -2059,3 +2059,196 @@ it('retains consecutive tool activity across partial persistence, duplicate even
     handle.dispose();
   }
 });
+
+it('bounds 100 completed live tool payloads, pins independent consumers, and rehydrates evicted history', async () => {
+  const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+  const mock = createMockClient(opts);
+  const handle = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  const second = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const unpinA = handle.retainTaskDetails('live-000');
+  const unpinB = second.retainTaskDetails('live-000');
+  for (let i = 0; i < 100; i++) {
+    const task = makeTask(`live-${String(i).padStart(3, '0')}`, TaskStatus.RUNNING);
+    opts.tasks.push(task);
+    mock.emitServiceEvent('tasks', 'created', task);
+    const message = {
+      ...makeMessage(task.task_id, i),
+      content: [
+        { type: 'text', text: `Answer ${i}` },
+        { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+        { type: 'tool_result', tool_use_id: `tool-${i}`, content: 'x'.repeat(70_000) },
+      ],
+      metadata: { raw: 'x'.repeat(10_000), model: 'test' },
+    } as unknown as Message;
+    opts.messagesByTask[task.task_id] = [message];
+    mock.emitServiceEvent('messages', 'created', message);
+    const completed = { ...task, status: TaskStatus.COMPLETED };
+    opts.tasks[i] = completed;
+    mock.emitServiceEvent('tasks', 'patched', completed);
+  }
+  const fullBuckets = () =>
+    [...handle.state.messagesByTask.values()].filter((messages) =>
+      JSON.stringify(messages).includes('tool_result')
+    );
+  expect(handle.state.messagesByTask.size).toBe(100); // history is not deleted
+  expect(fullBuckets()).toHaveLength(11); // ten recent + one pinned by two consumers
+  expect(JSON.stringify([...handle.state.messagesByTask.values()]).length).toBeLessThan(950_000);
+  handle.unloadTaskMessages('live-000');
+  unpinA();
+  unpinA();
+  expect(fullBuckets()).toHaveLength(11);
+  unpinB();
+  await Promise.resolve();
+  expect(fullBuckets()).toHaveLength(10);
+  const lean = handle.state.messagesByTask.get('live-000')![0];
+  expect(lean.content).toEqual(
+    expect.arrayContaining([
+      { type: 'text', text: 'Answer 0' },
+      { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+    ])
+  );
+  // A late persisted patch is projected, not dropped or retained as a full old turn.
+  mock.emitServiceEvent('messages', 'patched', {
+    ...opts.messagesByTask['live-000'][0],
+    content_preview: 'late',
+  });
+  expect(fullBuckets()).toHaveLength(10);
+  const unpinReloaded = handle.retainTaskDetails('live-000');
+  await handle.loadTaskMessages('live-000');
+  expect(handle.state.messagesByTask.get('live-000')).toEqual(opts.messagesByTask['live-000']);
+  await handle.resync();
+  expect(handle.state.messagesByTask.get('live-000')).toEqual(opts.messagesByTask['live-000']);
+  releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  expect(second.state.messagesByTask.size).toBe(100);
+  unpinReloaded();
+  releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  expect(handle.state.messagesByTask.size).toBe(0);
+});
+
+it('keeps payloads arriving before their active Task and ignores foreign-session payloads', async () => {
+  const mock = createMockClient({ tasks: [], messagesByTask: {} });
+  const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const message = {
+    ...makeMessage('early', 1),
+    content: [{ type: 'tool_result', content: 'early output' }],
+  } as Message;
+  mock.emitServiceEvent('messages', 'created', message);
+  mock.emitServiceEvent('tasks', 'created', makeTask('early', TaskStatus.RUNNING));
+  expect(handle.state.messagesByTask.get('early')).toEqual([message]);
+  mock.emitServiceEvent('messages', 'created', {
+    ...message,
+    session_id: 'foreign',
+    task_id: 'foreign',
+  });
+  expect(handle.state.messagesByTask.has('foreign')).toBe(false);
+  handle.dispose();
+});
+
+it('bounds ended/error/missing-end streams without losing active persistence handoffs', async () => {
+  const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+  const mock = createMockClient(opts);
+  const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const emit = (event: string, payload: object) =>
+    mock.emitServiceEvent('messages', event, {
+      session_id: SESSION_ID,
+      ...payload,
+    });
+  try {
+    for (let i = 0; i < 20; i++) {
+      const task = makeTask(`turn-${String(i).padStart(3, '0')}`, TaskStatus.RUNNING);
+      opts.tasks.push(task);
+      mock.emitServiceEvent('tasks', 'created', task);
+      const message = {
+        ...makeMessage(task.task_id, i),
+        content: [
+          { type: 'text', text: `answer ${i}` },
+          { type: 'tool_result', tool_use_id: `tool-${i}`, content: 'full output' },
+        ],
+      } as Message;
+      opts.messagesByTask[task.task_id] = [message];
+      emit('created', message);
+      emit('streaming:start', {
+        message_id: `stream-${i}`,
+        task_id: task.task_id,
+        role: 'assistant',
+      });
+      emit('streaming:chunk', { message_id: `stream-${i}`, chunk: `partial ${i}` });
+      if (i % 3 !== 2)
+        emit(i % 3 ? 'streaming:end' : 'streaming:error', {
+          message_id: `stream-${i}`,
+          error: 'failed',
+        });
+      opts.tasks[i] = { ...task, status: TaskStatus.FAILED };
+      mock.emitServiceEvent('tasks', 'patched', opts.tasks[i]);
+    }
+    const fullBuckets = () =>
+      [...handle.state.messagesByTask.values()].filter((ms) =>
+        ms.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'tool_result'))
+      );
+    expect(fullBuckets()).toHaveLength(10);
+    expect(handle.state.streamingMessages.size).toBe(10);
+    expect([...handle.state.streamingMessages.values()].every((s) => !s.isStreaming)).toBe(true);
+    expect(handle.state.streamingMessages.get('stream-18')).toMatchObject({
+      content: 'partial 18',
+      error: 'failed',
+    });
+    // A terminal snapshot without matching persistence does not erase recent partials.
+    await handle.resync();
+    expect(handle.state.streamingMessages.get('stream-18')?.content).toBe('partial 18');
+    // Late end/start cannot exempt old terminal history. Persistence still lands as lean text.
+    emit('streaming:start', { message_id: 'late-old', task_id: 'turn-000', role: 'assistant' });
+    expect(handle.state.streamingMessages.has('late-old')).toBe(false);
+    emit('created', { ...opts.messagesByTask['turn-000'][0], message_id: 'late-old' });
+    expect(fullBuckets()).toHaveLength(10);
+    expect(handle.state.messagesByTask.get('turn-000')?.at(-1)?.content).toEqual([
+      { type: 'text', text: 'answer 0' },
+    ]);
+    // Matching persistence replaces, rather than duplicates, the partial/error display.
+    emit('created', { ...opts.messagesByTask['turn-018'][0], message_id: 'stream-18' });
+    expect(handle.state.streamingMessages.has('stream-18')).toBe(false);
+
+    // Old but genuinely active tasks survive the recent-turn budget, including
+    // end-before-persistence while the Task is still running.
+    const active = makeTask('active-old', TaskStatus.RUNNING);
+    mock.emitServiceEvent('tasks', 'created', active);
+    emit('streaming:start', {
+      message_id: 'in-flight',
+      task_id: active.task_id,
+      role: 'assistant',
+    });
+    emit('streaming:chunk', { message_id: 'in-flight', chunk: 'in-flight text' });
+    for (let i = 20; i < 31; i++) {
+      const task = makeTask(`turn-${i}`, TaskStatus.RUNNING);
+      mock.emitServiceEvent('tasks', 'created', task);
+      mock.emitServiceEvent('tasks', 'patched', { ...task, status: TaskStatus.COMPLETED });
+    }
+    emit('streaming:end', { message_id: 'in-flight' });
+    expect(handle.state.streamingMessages.get('in-flight')?.content).toBe('in-flight text');
+    emit('created', {
+      ...makeMessage(active.task_id, 99),
+      message_id: 'in-flight',
+      content: 'persisted answer',
+    });
+    expect(handle.state.streamingMessages.has('in-flight')).toBe(false);
+    expect(handle.state.messagesByTask.get(active.task_id)?.[0].content).toBe('persisted answer');
+  } finally {
+    handle.dispose();
+  }
+});
+
+it('acquires and releases harmless no-op pins after disposal, including late effects', async () => {
+  const mock = createMockClient({ tasks: [], messagesByTask: {} });
+  const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+  await handle.ready();
+  const release = handle.retainTaskDetails('old');
+  handle.dispose();
+  const lateRelease = handle.retainTaskDetails('late-effect');
+  release();
+  release();
+  lateRelease();
+  lateRelease();
+  expect(handle.state.messagesByTask.size).toBe(0);
+});
