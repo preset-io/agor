@@ -109,6 +109,8 @@ interface MessageBlockProps {
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   compact?: boolean;
   defaultTextExpanded?: boolean;
+  /** Stable presentation identity while a confirmed task gains its initial message. */
+  textChoiceKey?: string;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -343,6 +345,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onOpenAgenticToolSettings,
   compact = false,
   defaultTextExpanded = true,
+  textChoiceKey,
 }) => {
   const { token } = theme.useToken();
 
@@ -753,7 +756,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           <div key={`text-${textIndex}`}>
                             {shouldTruncate ? (
                               <HistoryMarkdown
-                                textKey={message.message_id}
+                                textKey={textChoiceKey ?? message.message_id}
                                 defaultExpanded={
                                   isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
                                 }
@@ -898,7 +901,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
                         return shouldTruncate ? (
                           <HistoryMarkdown
-                            textKey={message.message_id}
+                            textKey={textChoiceKey ?? message.message_id}
                             defaultExpanded={
                               isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
                             }
