@@ -47,7 +47,8 @@ Do not use `{{ user.env.RAILWAY_AGOR_ADMIN_PASSWORD }}` in `.agor.yml`: rendered
 commands are persisted branch metadata. Lifecycle scripts should read the
 invoking user's process environment instead. Agor's environment executor already
 resolves user-global environment variables for its authorized execution user.
-The helper is not yet wired into Play, and is not a per-branch provisioning API.
+The standalone helper is for IaC bootstrap; Play's launcher performs its own
+scoped password transfer. Neither path is a per-branch provisioning API.
 
 This is **bootstrap-only**. Updating the Railway variable does not rotate an
 existing user's password. Change an existing password through Agor's authenticated
