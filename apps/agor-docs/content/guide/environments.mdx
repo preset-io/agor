@@ -1,0 +1,169 @@
+---
+title: Run Your App from Agor
+description: Connect branch environment controls to Docker Compose on your own host, or commands that manage a remote provider.
+---
+
+# Run your app from Agor
+
+An Agor environment is a set of commands attached to a branch. You supply the
+commands to start, stop, reset, and inspect your app; Agor runs them when you use
+the branch's environment controls. You choose where the app runs.
+
+Docker Compose on a development machine or shared server is a straightforward
+starting point: the commands and predictable URLs fit entirely in `.agor.yml`.
+A remote provider uses the same interface, sometimes with a small script to
+call its API, wait for startup, or discover the app URL. Agor does not require
+Docker, provision infrastructure on your behalf by default, or supply a native
+integration for every provider.
+
+## Start with Docker Compose
+
+This example assumes a **self-hosted Agor instance** whose environment executor
+can access Docker, Compose, and the branch checkout. On a shared box, the
+operator must deliberately grant that access: control of a Docker engine is
+powerful, not a substitute for filesystem or user isolation.
+
+Suppose your repo already has a `compose.yml` that builds your app, serves HTTP
+on container port 3000, and exposes `/health`. Its port mapping should accept a
+host port rather than hard-code one:
+
+```yaml
+# compose.yml — adapt your existing app service
+services:
+  app:
+    build: .
+    ports:
+      - '${APP_PORT}:3000'
+```
+
+Put this complete environment definition in the repo root:
+
+```yaml
+# .agor.yml
+version: 2
+environment:
+  default: local
+  variants:
+    local:
+      description: Docker Compose on this Agor host
+      start: >-
+        APP_PORT={{add 10000 branch.unique_id}}
+        docker compose -f compose.yml -p agor-{{branch.id}} up -d --build
+      stop: >-
+        APP_PORT={{add 10000 branch.unique_id}}
+        docker compose -f compose.yml -p agor-{{branch.id}} down
+      nuke: >-
+        APP_PORT={{add 10000 branch.unique_id}}
+        docker compose -f compose.yml -p agor-{{branch.id}} down -v
+      logs: >-
+        APP_PORT={{add 10000 branch.unique_id}}
+        docker compose -f compose.yml -p agor-{{branch.id}} logs --tail=100
+      health: http://localhost:{{add 10000 branch.unique_id}}/health
+      app: http://{{host.ip_address}}:{{add 10000 branch.unique_id}}
+```
+
+Each branch gets its own Compose project and deterministic port. Choose a free
+port range on your host and keep the resulting ports below 65536. Avoid fixed
+`container_name` values or shared explicit volume names in your Compose file,
+which would defeat per-project separation.
+
+Here Docker publishes the app on the host's interfaces. Restrict access with
+your network/firewall policy and application authentication. `health` is the
+URL **the Agor daemon** probes; `app` is the URL **your browser** opens. This
+example assumes the daemon can reach the Docker host at localhost. If not,
+use a daemon-reachable host address for health. Set the deployment's
+`host.ip_address` override to an address your browser can reach; it is not
+necessarily a public IP.
+
+There is no URL-discovery script or provider binding to maintain here. The
+Compose project, ports, and links all derive from branch context.
+
+### Connect the controls
+
+1. Have a repo administrator import `.agor.yml` in the repository environment
+   editor.
+2. In the branch's Environment tab, select **local** and **Render** the commands.
+   Review the resolved project name, ports, and URLs.
+3. Select **Start**, inspect the output and health, then open the app link.
+4. Use **Logs** for a bounded log tail and **Stop** when finished.
+5. Use **Nuke** only when you intend to remove the project's Compose-managed
+   volumes as well. External volumes and bind-mounted files are not erased by
+   this command.
+
+Import updates the repo's available variants; Render updates the branch's saved
+command snapshot. Later edits do not silently change existing snapshots.
+See [Environment Configuration](/guide/environment-configuration) for the
+schema, template overrides, permissions, and execution profiles.
+
+### What the controls mean
+
+| Field    | In this example                                                    |
+| -------- | ------------------------------------------------------------------ |
+| `start`  | Build and start the branch's Compose project, then exit.           |
+| `stop`   | Remove its containers/network, retaining named volumes.            |
+| `nuke`   | Also remove its Compose-managed volumes; destructive and optional. |
+| `logs`   | Return recent output and exit; optional.                           |
+| `health` | An HTTP URL, **not a health command**; optional.                   |
+| `app`    | A browser link; optional.                                          |
+
+Start succeeding means the command succeeded, not that the app is ready. With
+a health URL, Agor observes HTTP health separately. Without one, a successful
+Start has unknown health. This example rebuilds from the local checkout,
+including uncommitted changes; live reload additionally requires your own
+Compose mounts and app watch configuration.
+
+## Use the same interface with a remote provider
+
+If you can write a bounded command that triggers your environment and give it
+the required context and credentials, you can generally connect it to Agor.
+The command might call a provider CLI, an API, or your existing deployment
+automation. It should finish rather than host a foreground development server
+inside the executor.
+
+**Remote does not require dynamic URLs.** If your deployment has a predictable
+address, keep using static `app` and `health` templates. When the provider
+assigns the address at startup, a script can return it through the optional
+[Start result](/guide/environment-configuration#runtime-urls-from-start).
+
+- **[Railway reference](/guide/railway-environments):** connect an existing
+  preview with a repository-owned script, ownership checks, and URL reporting.
+- **GitHub Codespaces:** the repo also includes a
+  [launcher and devcontainer example](https://github.com/preset-io/agor/tree/main/scripts/managed-environments/codespaces).
+  It manages a remote workspace rather than just an app deployment; review its
+  actor, port-visibility, retention, and startup requirements before adapting it.
+- **Other providers:** Vercel, a Kubernetes namespace, or your own VM can be
+  candidates for custom commands. These are possibilities, not a list of tested
+  integrations. Define provider-appropriate Stop and Nuke behavior rather than
+  assuming every platform has a resumable server.
+
+Self-hosted machines may run Compose locally. **Agor Cloud does not provide a
+local Docker host for your app**: use remote runtime commands where enabled by
+your deployment, or its configured webhook surface. Executor tools, credentials,
+network access, and time limits still apply. The
+[execution-profile reference](/guide/environment-configuration#bounded-external-commands-in-ha)
+explains those constraints; an app launched inside a Cloud executor does not
+automatically receive public ingress.
+
+## Before sharing a variant
+
+- **Trust the code you execute.** A command that invokes a repo script grants
+  that script access to the command's credentials. Review script changes, not
+  only the YAML, and use `shellQuote` for rendered string arguments.
+- **Keep secrets out of configuration.** YAML, template overrides, and rendered
+  commands are not secret stores. Environment commands use the invoking user's
+  secure user-global variables, not session-selected variables. Do not print
+  secrets in logs or results.
+- **Choose the owner.** On shared branches, establish who supplies provider
+  credentials and pays for resources. A teammate pressing Stop does not
+  automatically borrow the original starter's credentials.
+- **Scope every action to the branch.** Validate exact resource ownership before
+  stopping or deleting. Never use wildcard or project-wide teardown for a
+  shared provider project. Clean up the old environment before switching variants.
+- **Plan for partial success.** A timed-out command may already have allocated
+  resources. Rediscover before retrying; make repeated Start/Stop safe, and keep
+  a recovery path. Stop may retain billable storage. Public URLs need their own
+  access controls.
+
+The configuration reference owns the interface; provider scripts own the
+provider-specific behavior. You or your agent can adapt the examples without
+installing an Agor provider SDK, but those adaptations still need review.
