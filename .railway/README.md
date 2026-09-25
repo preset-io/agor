@@ -1,7 +1,7 @@
 # Railway SQLite bootstrap
 
-This deploys **Agor itself** from this branch. It does not implement Agor Play
-controlling Railway previews. One trusted deployment, one replica, one private
+This deploys **Agor itself** from this branch. The opt-in `railway-sqlite` variant
+now connects Play/Stop/Logs to the explicitly adopted bootstrap preview. One trusted deployment, one replica, one private
 volume at `/home/agor/.agor`; no production data or shared tenant credentials.
 
 The configuration currently targets the bootstrap branch
@@ -135,3 +135,51 @@ volume, not general compose or externally managed configuration.
 The normal installer removes stale versions/unselected packages. Authentication
 is separate: each user connects provider credentials through Agor, never through
 committed config. Existing password and account data are not reset.
+
+## Play/Stop integration (adopted preview MVP)
+
+The repository's opt-in `railway-sqlite` variant calls the dependency-free
+`scripts/managed-environments/railway/launcher.mjs`. The default remains SQLite
+Compose. Import this branch's `.agor.yml` into Agor, then select that variant.
+It uses the merged tiny `AGOR_ENVIRONMENT_RESULT={"app":"...","health":"..."}`
+contract, not the larger unmerged versioned result/Sync design.
+
+The caller needs secure **global** `RAILWAY_API_KEY` (an environment-scoped
+Railway project token, despite the variable name) and
+`RAILWAY_AGOR_ADMIN_PASSWORD`. Values are read from the authorized executor's
+process environment, never interpolated into commands or returned as results.
+Play transfers only the app password and nonsecret app configuration to Railway;
+the provider token never enters the deployed app. Existing passwords are not reset.
+
+`bindings.json` explicitly binds the initial Agor branch UUID and exact repo/ref
+to the existing service, environment, volume and reviewed domain. Every action
+checks project-token scope, provider source, volume, domain and the provider-side
+`AGOR_MANAGED_BRANCH_ID` marker. Initial adoption is an operator action, never
+implicit on Play. Unknown branches fail before API access. This is **not** an
+automatic per-branch provisioner; new branches require separately provisioned,
+reviewed bindings and an appropriately scoped caller token. Never duplicate the
+bootstrap service/volume binding for another branch.
+
+- **Play:** preserve unrelated variables; restore the branch push trigger;
+  adopt a pending/running deployment or deploy the pushed GitHub branch; wait up
+  to 18 minutes for provider success and app health; return App/health URLs.
+- **Stop:** remove that service's matching GitHub push trigger, cancel queued
+  deployments, stop live deployments, and poll until the inventory is inactive.
+  Keep the service, domain, database, config and cache. Storage remains billable.
+- **Logs:** read bounded provider logs without SSH, starts, or variable changes.
+- **Nuke:** deliberately refused for this adopted, data-bearing bootstrap volume.
+  Destructive reprovisioning is not implemented; use Stop, not project deletion.
+
+The local exclusive lifecycle lock is not a distributed provider lease. A hard
+kill can leave a lock under `~/.agor/railway-lifecycle/`; inspect provider state
+and ensure no controller is active before manually removing it. Timeouts or
+interrupted API mutations can leave billable resources: inspect and use Stop,
+never blindly retry Create. Direct Railway changes or a second independent
+controller remain outside this single-trusted-operator MVP's coordination.
+
+Pushes update the preview only while its trigger exists. **IaC apply may restore
+a removed trigger**; do not apply the infrastructure config while intending to
+keep the environment stopped. After Stop, Play recreates the trigger. Runtime
+source remains branch-tip based, not an exact-revision Sync guarantee. The domain
+is discovered and checked against the reviewed binding; recreation with a new
+domain requires an explicit binding update.
