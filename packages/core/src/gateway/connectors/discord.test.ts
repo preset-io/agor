@@ -1114,7 +1114,8 @@ describe('Discord agent channel history', () => {
       }
       throw new Error(`unexpected route ${route}`);
     });
-    return { transport: { rest: { get, post: vi.fn() }, createGateway: vi.fn() }, get };
+    const rest = { get, post: vi.fn() };
+    return { transport: { rest, historyRest: rest, createGateway: vi.fn() }, get };
   }
 
   const messageCalls = (get: ReturnType<typeof historyTransport>['get']) =>
@@ -1241,7 +1242,7 @@ describe('Discord agent channel history', () => {
     ).resolves.toMatchObject({ channelId: parentId, messages: [] });
   });
 
-  it('reads through the dedicated history REST client when the transport provides one', async () => {
+  it('reads through the dedicated history REST client, not the shared one', async () => {
     const shared = historyTransport();
     const history = historyTransport();
     const transport = { ...shared.transport, historyRest: history.transport.rest };

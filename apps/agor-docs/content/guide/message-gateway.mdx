@@ -354,7 +354,8 @@ Agents then call `agor_gateway_discord_channel_history_get`:
 - Results are chronological: 50 messages by default and at most 200. Use
   `before` or `after` message-ID cursors to page. Bot and system messages are
   omitted unless `includeBotMessages` is true. Each call stays within the
-  row's catch-up page, text-size, timeout, and rate-limit bounds. When the page
+  row's catch-up page, text-size, timeout, and rate-limit bounds; the time and
+  rate-limit bounds apply to the whole call, not to each page. When the page
   or text-size bound stops the read early, the result has `has_more: true` and a
   `next_cursor`; running out of time or rate-limit budget is an error.
 - The bot token never reaches the agent. Message text is labeled untrusted.

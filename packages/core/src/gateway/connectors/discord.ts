@@ -107,7 +107,7 @@ interface DiscordTransport {
    * rate limit so the row's rate-limit budget applies; the listener, catch-up,
    * and delivery keep the library's own rate-limit handling on `rest`.
    */
-  historyRest?: DiscordRestTransport;
+  historyRest: DiscordRestTransport;
   createGateway(options: {
     checkpoint: Record<string, unknown> | null | undefined;
     onSessionInfo: (sessionInfo: unknown) => Promise<void>;
@@ -121,9 +121,20 @@ interface VerifiedDiscordThread {
 
 function defaultDiscordTransport(token: string): DiscordTransport {
   const rest = new REST({ version: '10' }).setToken(token);
+  let historyRest: DiscordRestTransport | undefined;
   return {
     rest,
-    historyRest: new REST({ version: '10', rejectOnRateLimit: () => true }).setToken(token),
+    // Built on first history read: most connectors never read history. Agent
+    // reads are one-shot, so the client runs no cache sweeper timers.
+    get historyRest() {
+      historyRest ??= new REST({
+        version: '10',
+        rejectOnRateLimit: () => true,
+        hashSweepInterval: 0,
+        handlerSweepInterval: 0,
+      }).setToken(token);
+      return historyRest;
+    },
     createGateway: ({ onSessionInfo }) =>
       new WebSocketManager({
         token,
@@ -648,10 +659,6 @@ export class DiscordConnector implements GatewayConnector {
   private dispatchChain: Promise<void> = Promise.resolve();
   private stopped = false;
 
-  private get historyRest(): DiscordRestTransport {
-    return this.transport.historyRest ?? this.transport.rest;
-  }
-
   constructor(config: Record<string, unknown>, transport?: DiscordTransport) {
     this.config = config as DiscordGatewayConfig;
     this.transport =
@@ -1018,7 +1025,7 @@ export class DiscordConnector implements GatewayConnector {
     if (!channelId) throw new Error('A Discord channel or session thread is required.');
     await this.requireChannelHistoryAccess(channelId, budget);
     return fetchDiscordChannelHistory(
-      this.historyRest,
+      this.transport.historyRest,
       this.config,
       {
         channelId,
@@ -1044,7 +1051,7 @@ export class DiscordConnector implements GatewayConnector {
     else if (parsed?.kind === 'message') parentChannelId = parsed.channelId;
     else if (parsed?.kind === 'provider_thread') {
       const thread = await getDiscordRecordWithinBudget(
-        this.historyRest,
+        this.transport.historyRest,
         Routes.channel(parsed.channelId),
         budget
       );
@@ -1062,7 +1069,8 @@ export class DiscordConnector implements GatewayConnector {
     channelId: string,
     budget: DiscordReadBudget
   ): Promise<void> {
-    const get = (route: string) => getDiscordRecordWithinBudget(this.historyRest, route, budget);
+    const get = (route: string) =>
+      getDiscordRecordWithinBudget(this.transport.historyRest, route, budget);
     const guildId = configuredString(this.config, 'guild_id');
     const allowedChannelIds = configuredChannelIds(this.config);
     const denied = () =>

@@ -483,8 +483,7 @@ This design does not add:
 
 ## Agent channel-history capability
 
-**Status:** Ready. All decisions are resolved and spec review findings are
-reconciled.
+**Status:** Ready.
 
 ### Problem statement
 
@@ -495,16 +494,16 @@ channel for missing status updates, have no supported path. The only workaround
 is to give the session the bot token and call Discord directly, which exposes
 the credential to the agent. Slack gateways already offer an opt-in,
 token-safe channel-history tool (`agor_gateway_slack_channel_history_get`);
-Discord gateways reject every agent tool (`agent_tools` must be `[]`).
+Discord gateways rejected every agent tool (`agent_tools` had to be `[]`).
 
-### Evidence and current behavior
+### Evidence and behavior before this change
 
-- `validateDiscordConfig` rejects any non-empty `agent_tools`, and the type is
-  `never[]`. The Settings UI and the public guide describe `agent_tools:[]` as
-  the only value.
-- The daemon already reads Discord REST history for catch-up, but only as one
+- `validateDiscordConfig` rejected any non-empty `agent_tools`, and the type
+  was `never[]`. The Settings UI and the public guide described
+  `agent_tools:[]` as the only value.
+- The daemon already read Discord REST history for catch-up, but only as one
   exact `(cursor, live mention]` interval inside a summon thread, failing closed
-  when coverage cannot be proven. It is not a "latest N messages" reader.
+  when coverage could not be proven. It was not a "latest N messages" reader.
 - Discord's `GET /channels/{channel.id}/messages` returns messages newest
   first, accepts one of `before`/`after`/`around` plus `limit` 1–100, needs
   `VIEW_CHANNEL`, returns nothing without `READ_MESSAGE_HISTORY`, and returns
@@ -563,7 +562,11 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   `has_more` is false only when Discord returned a short page in the read
   direction. If the first matching message alone exceeds the byte budget, its
   text is cut to the budget and marked truncated so paging still progresses.
-  A timeout or exhausted rate-limit budget is an error, not a partial result. The tool never advances a catch-up cursor or admits a Task.
+  The timeout and rate-limit budget cover the whole call: parent resolution,
+  access checks, and every page share one deadline and one retry and delay
+  count, whereas catch-up counts rate-limit retries per request. A timeout or
+  exhausted rate-limit budget is an error, not a partial result. The tool
+  never advances a catch-up cursor or admits a Task.
 - **SC-06 Access.** A session may use the tool only through a gateway channel
   whose target branch is the session's branch, including scheduled or
   manually created sessions on that branch. A caller with no session context
@@ -587,7 +590,7 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   caller's trusted tenant scope; another tenant's `gatewayChannelId` is
   indistinguishable from a missing one.
 - **Read boundary.** Reads are limited to the row's `allowed_channel_ids` and
-  public threads under them (Richard, SC-04). A denial does not reveal the
+  public threads under them (SC-04). A denial does not reveal the
   target's branch, name, or content.
 - **No provider-history mirror.** The tool writes no Discord messages to its
   own storage, caches, or logs. Tool results enter the calling session's record
@@ -616,15 +619,15 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
 
 ### Resolved decisions and assumptions
 
-| Decision                 | Resolution                                                                                                                                                                                                                                               | Decided by                                             |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Readable channels        | Allowlisted parent channels plus public threads under them                                                                                                                                                                                               | Richard, 2026-09-24                                    |
-| Config shape             | Slack-style object `agent_tools: { channel_history: true }`; `[]` stays valid as all off                                                                                                                                                                 | Richard, 2026-09-24                                    |
-| Scope                    | Channel history only; DM-on-join and guild search are separate work                                                                                                                                                                                      | Richard, 2026-09-24                                    |
-| Default                  | Off per row; admin opt-in                                                                                                                                                                                                                                | Slack precedent and this design's least-privilege rule |
-| Access                   | Same branch binding and no-session privilege rule as the Slack tools                                                                                                                                                                                     | Existing Slack tool contract                           |
-| Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds                                                                                                                                                                                      | Reversible default; separate budgets deferred          |
-| Session-record retention | Tool results, including Discord messages from people who never mentioned the bot, are stored in the calling session's transcript like any tool result, as summon catch-up prompts already are. "No transcript" means no separate provider-history mirror | Richard, 2026-09-24                                    |
+| Decision                 | Resolution                                                                                                                                                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Readable channels        | Allowlisted parent channels plus public threads under them                                                                                                                                                                                               |
+| Config shape             | Slack-style object `agent_tools: { channel_history: true }`; `[]` stays valid as all off                                                                                                                                                                 |
+| Scope                    | Channel history only; DM-on-join and guild search are separate work                                                                                                                                                                                      |
+| Default                  | Off per row; admin opt-in                                                                                                                                                                                                                                |
+| Access                   | Same branch binding and no-session privilege rule as the Slack tools                                                                                                                                                                                     |
+| Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds                                                                                                                                                                                      |
+| Session-record retention | Tool results, including Discord messages from people who never mentioned the bot, are stored in the calling session's transcript like any tool result, as summon catch-up prompts already are. "No transcript" means no separate provider-history mirror |
 
 ### Success and proof boundary
 
@@ -653,7 +656,7 @@ Message-Content-missing failure, permission-missing versus empty-channel,
 filtered pages, an exactly full final page, `after` paging, and provider-error
 shaping at the smallest existing test seam.
 
-Implementation note (review R4): the capability belongs in the shared Discord
+Implementation note: the capability belongs in the shared Discord
 setup decisions, artifact builder, and validator used by both Settings and
 `agor_gateway_discord_setup`, so the toggle cannot be reset on edit or built
 two ways. The effective-permission check reuses the connector's existing
