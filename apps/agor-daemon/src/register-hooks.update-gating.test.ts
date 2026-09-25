@@ -336,7 +336,6 @@ describe.each(RBAC_MODES)('viewer read access ($name)', () => {
     ['branches', 'create'],
     ['branches', 'patch'],
     ['branches', 'remove'],
-    ['branches', 'updateEnvironment'],
     ['branches', 'ensureTeammateKnowledgeNamespace'],
   ])('keeps %s.%s restricted to members', async (path, method) => {
     await expect(runCapturedHooks(captured, path, method, 'viewer')).rejects.toMatchObject({

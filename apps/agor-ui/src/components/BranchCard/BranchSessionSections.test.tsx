@@ -278,8 +278,10 @@ describe('BranchSessionSections', () => {
     expect(screen.getByText('Remote child')).toBeInTheDocument();
     expect(screen.getAllByText('Team Slack')).toHaveLength(2);
     // The channel is quiet metadata on the title line, not a pill below it.
-    for (const channel of screen.getAllByTitle('Team Slack')) {
+    for (const channel of screen.getAllByText('Team Slack')) {
       expect(channel.closest('.ant-tag')).toBeNull();
+      // Truncated channels get an overflow-only tooltip, never a native title.
+      expect(channel).not.toHaveAttribute('title');
       expect(channel.getAttribute('style')).toContain('white-space: nowrap');
     }
     expect(

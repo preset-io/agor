@@ -589,6 +589,8 @@ export interface BranchEnvironmentInstance {
   process?: {
     /** Process ID */
     pid?: number;
+    /** Opaque ID used to reject a late Start result from an older attempt. */
+    attempt_id?: string;
     /** When process started */
     started_at?: string;
     /** Human-readable uptime */
@@ -616,6 +618,14 @@ export interface BranchEnvironmentInstance {
     name: string;
     url: string;
   }>;
+
+  /**
+   * Runtime health URL reported by the most recent successful Start command.
+   * It overrides the rendered static health URL until the next lifecycle
+   * boundary. Unlike operator-authored static URLs, this value is always
+   * treated as untrusted outbound input by the daemon.
+   */
+  health_url?: string;
 
   /**
    * Process logs (last N lines)
@@ -656,6 +666,8 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_error',
   'last_command',
   'logs',
+  'access_urls',
+  'health_url',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];

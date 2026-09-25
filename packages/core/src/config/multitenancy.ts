@@ -26,11 +26,27 @@ export interface TenantResolutionInput {
   headers?: Record<string, unknown>;
 }
 
+/**
+ * `missing`: no tenant identity was presented at all. `invalid`: an identity
+ * was presented but is malformed or conflicts with another source. Callers
+ * that may supply a fallback tenant source (e.g. personal API-key Host
+ * routing) must only do so for `missing`; `invalid` is always terminal.
+ */
+export type TenantResolutionFailure = 'missing' | 'invalid';
+
 export class TenantResolutionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly reason: TenantResolutionFailure = 'invalid'
+  ) {
     super(message);
     this.name = 'TenantResolutionError';
   }
+}
+
+/** True only when no tenant identity was presented (never for bad or conflicting ones). */
+export function isMissingTenantContextError(error: unknown): error is TenantResolutionError {
+  return error instanceof TenantResolutionError && error.reason === 'missing';
 }
 
 function normalizeTenantId(value: unknown): TenantID | null {
@@ -254,5 +270,8 @@ export function resolveTenantContext(
     return candidates[0];
   }
 
-  throw new TenantResolutionError('Missing tenant context for multi_tenancy.required_from_auth');
+  throw new TenantResolutionError(
+    'Missing tenant context for multi_tenancy.required_from_auth',
+    'missing'
+  );
 }

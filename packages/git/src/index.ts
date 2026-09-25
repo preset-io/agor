@@ -2750,12 +2750,40 @@ export async function removeBranchWorkspace(options: {
   const { branchPath, branchesRoot, repoPath, storageMode } = options;
   const target = await resolveManagedBranchDeletionPath(branchPath, branchesRoot);
   const { realpath } = await import('node:fs/promises');
-  // Require the authoritative repo to be available; canonicalize its root, not
-  // the victim (whose symlink descendants are rejected by the validator).
-  const repository = await realpath(repoPath);
-  if (repository === target || repository.startsWith(`${target}${sep}`))
-    throw new Error('Cannot delete the shared base repository');
+  // A clone is self-contained, so its base checkout may be absent from an
+  // external executor. Worktrees still require it to remove Git registration.
+  // Check both the declared location and a live canonical location before
+  // deleting: neither may point into the victim workspace.
+  const declaredRepository = resolve(repoPath);
+  const assertOutsideTarget = (candidate: string) => {
+    if (candidate === target || candidate.startsWith(`${target}${sep}`))
+      throw new Error('Cannot delete the shared base repository');
+  };
+  assertOutsideTarget(declaredRepository);
+  let repository: string | undefined;
+  try {
+    repository = await realpath(repoPath);
+  } catch (error) {
+    if (storageMode === 'worktree' || (error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error;
+    // The checkout itself can be absent, but an existing ancestor could still
+    // be a symlink into the branch slated for removal.
+    let ancestor = dirname(declaredRepository);
+    for (;;) {
+      try {
+        assertOutsideTarget(await realpath(ancestor));
+        break;
+      } catch (ancestorError) {
+        if ((ancestorError as NodeJS.ErrnoException).code !== 'ENOENT') throw ancestorError;
+        const parent = dirname(ancestor);
+        if (parent === ancestor) throw ancestorError;
+        ancestor = parent;
+      }
+    }
+  }
+  if (repository) assertOutsideTarget(repository);
   if (storageMode === 'worktree') {
+    if (!repository) throw new Error('Shared base repository is unavailable');
     const registrations = await listGitWorktrees(repository);
     if (registrations.some((item) => resolve(item.path) === target)) {
       await removeGitWorktree(repository, target);

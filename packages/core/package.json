@@ -178,6 +178,18 @@
       "import": "./dist/environment/render-snapshot.js",
       "require": "./dist/environment/render-snapshot.cjs"
     },
+    "./environment/lifecycle-result": {
+      "source": "./src/environment/lifecycle-result.ts",
+      "types": "./dist/environment/lifecycle-result.d.ts",
+      "import": "./dist/environment/lifecycle-result.js",
+      "require": "./dist/environment/lifecycle-result.cjs"
+    },
+    "./utils/pinned-fetch": {
+      "source": "./src/utils/pinned-fetch.ts",
+      "types": "./dist/utils/pinned-fetch.d.ts",
+      "import": "./dist/utils/pinned-fetch.js",
+      "require": "./dist/utils/pinned-fetch.cjs"
+    },
     "./utils/errors": {
       "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",

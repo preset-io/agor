@@ -290,14 +290,32 @@ export const getTokenForSession = generateSessionToken;
  *  - bad signature / wrong audience / wrong issuer / expired (`jsonwebtoken.verify`)
  *  - missing `tid`/`jti`/`exp` claims (pre-rollout tokens are rejected outright)
  *
- * Returns `null` on any failure.
+ * Verification returns a safe failure category; compatibility helpers return null.
  */
-export function verifySessionToken(app: Application, token: string): McpTokenContext | null {
+export type McpTokenRejectionReason =
+  | 'secret_missing'
+  | 'expired'
+  | 'not_active'
+  | 'wrong_segment_count'
+  | 'invalid_encoding'
+  | 'invalid_signature'
+  | 'invalid_audience'
+  | 'invalid_issuer'
+  | 'invalid_jwt'
+  | 'verify_error'
+  | 'missing_identity'
+  | 'missing_lifetime';
+
+type McpTokenVerification =
+  | { context: McpTokenContext; reason?: never }
+  | { context: null; reason: McpTokenRejectionReason };
+
+/** Safe categories only: the HTTP owner logs once, never the JWT error text. */
+export function verifySessionTokenDetailed(app: Application, token: string): McpTokenVerification {
   requireState();
   const jwtSecret = app.settings.authentication?.secret;
   if (!jwtSecret) {
-    console.error('[mcp-tokens] JWT secret not configured in app settings');
-    return null;
+    return { context: null, reason: 'secret_missing' };
   }
 
   let payload: McpTokenPayload;
@@ -308,14 +326,22 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
       algorithms: ['HS256'],
     }) as McpTokenPayload;
   } catch (err) {
-    if (err instanceof jwt.TokenExpiredError) {
-      console.warn('[mcp-tokens] token rejected: expired');
-    } else if (err instanceof jwt.JsonWebTokenError) {
-      console.warn(`[mcp-tokens] token rejected: ${err.message}`);
-    } else {
-      console.error('[mcp-tokens] token verify error:', err);
+    let reason: McpTokenRejectionReason = 'verify_error';
+    if (err instanceof jwt.TokenExpiredError) reason = 'expired';
+    else if (err instanceof jwt.NotBeforeError) reason = 'not_active';
+    // jsonwebtoken's JWT payload decoder can throw native JSON.parse errors
+    // before verifying the signature. This is invalid input, not a server fault.
+    else if (err instanceof SyntaxError) reason = 'invalid_encoding';
+    else if (err instanceof jwt.JsonWebTokenError) {
+      // Do not forward library messages: some include claim/configuration values.
+      if (err.message === 'jwt malformed') reason = 'wrong_segment_count';
+      else if (err.message === 'invalid token') reason = 'invalid_encoding';
+      else if (err.message === 'invalid signature') reason = 'invalid_signature';
+      else if (err.message.startsWith('jwt audience invalid.')) reason = 'invalid_audience';
+      else if (err.message.startsWith('jwt issuer invalid.')) reason = 'invalid_issuer';
+      else reason = 'invalid_jwt';
     }
-    return null;
+    return { context: null, reason };
   }
 
   const sessionId = payload.sub;
@@ -329,8 +355,7 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
     typeof tenantId !== 'string' ||
     !tenantId.trim()
   ) {
-    console.warn('[mcp-tokens] token rejected: missing sub/uid/tid');
-    return null;
+    return { context: null, reason: 'missing_identity' };
   }
 
   // `jwt.verify` only enforces `exp` when the claim is present; a token with
@@ -338,11 +363,17 @@ export function verifySessionToken(app: Application, token: string): McpTokenCon
   // `jti` and `exp` explicitly so a forged but signature-valid token without
   // `exp` cannot be minted and replayed indefinitely.
   if (!payload.jti || payload.exp === undefined) {
-    console.warn('[mcp-tokens] token rejected: missing jti or exp');
-    return null;
+    return { context: null, reason: 'missing_lifetime' };
   }
 
-  return { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti };
+  return {
+    context: { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti },
+  };
+}
+
+/** Compatibility helper for callers that only need acceptance, without logging. */
+export function verifySessionToken(app: Application, token: string): McpTokenContext | null {
+  return verifySessionTokenDetailed(app, token).context;
 }
 
 /**
@@ -360,9 +391,6 @@ export async function validateVerifiedSessionToken(
     )
   );
   if (!sessionExists) {
-    console.warn(
-      `[mcp-tokens] token rejected: session ${shortId(context.sessionId)} not found in bound tenant`
-    );
     return null;
   }
 
@@ -382,7 +410,6 @@ export async function validateSessionToken(
   const context = verifySessionToken(app, token);
   if (!context) return null;
   if (expectedTenantId && expectedTenantId !== context.tenantId) {
-    console.warn('[mcp-tokens] token rejected: tenant binding mismatch');
     return null;
   }
   return validateVerifiedSessionToken(context);

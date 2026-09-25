@@ -19,6 +19,7 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
@@ -726,7 +727,7 @@ export class GeminiPromptService {
           undefined, // cwd
           undefined, // url (websocket)
           `${daemonUrl}/mcp`, // httpUrl
-          { Authorization: `Bearer ${mcpToken}` } // headers
+          { Authorization: `Bearer ${mcpToken}`, [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.gemini } // headers
         );
       } else {
         console.warn(

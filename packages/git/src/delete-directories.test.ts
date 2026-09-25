@@ -111,10 +111,22 @@ describe('managed directory deletion roots', () => {
     ).rejects.toThrow('shared base repository');
     await expect(
       removeBranchWorkspace({ ...options, repoPath: path.join(tenantRoot, 'missing-repo') })
+    ).resolves.toBeUndefined();
+    await expect(
+      removeBranchWorkspace({
+        ...options,
+        repoPath: path.join(tenantRoot, 'missing-repo'),
+        storageMode: 'worktree',
+      })
     ).rejects.toThrow();
     await fs.mkdir(path.join(victim, 'base'), { recursive: true });
     await expect(
       removeBranchWorkspace({ ...options, repoPath: path.join(victim, 'base') })
+    ).rejects.toThrow('shared base repository');
+    const alias = path.join(reposRoot, 'alias');
+    await fs.symlink(victim, alias);
+    await expect(
+      removeBranchWorkspace({ ...options, repoPath: path.join(alias, 'missing') })
     ).rejects.toThrow('shared base repository');
   });
 

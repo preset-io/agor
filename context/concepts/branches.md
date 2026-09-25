@@ -55,6 +55,7 @@ empty descendant query as proof of filesystem/process containment.
 - **Never use subprocess for git.** Always `simple-git` via `packages/core/src/git/index.ts`.
 - **Port allocation** uses `branch.unique_id` (monotonic per repo). Templates like `{{add 9000 branch.unique_id}}` resolve in environment configs.
 - **Permanent deletion is executor-owned**: `commands/branch-deletion.ts` drives authenticated `branch-deletion-steps` requests; `BranchDeletionRepository` drains owned data before branch-row-last finalization. The shared maintenance claim fences managed producers. Known activity and best-effort terminal closure are not proof that detached processes stopped. Unknown invocations remain fenced; never retry on heartbeat age alone.
+- Delegated permanent deletion is opt-in through `execution.delegated_branch_deletion`; its executor verifies that tenant worktrees, repos, and branch homes share an external storage device before removal. A missing or inconsistent mount must leave the branch fenced.
 - **Moving a branch** requires branch Manager authority and Editor/Manager access on both boards. Inherited permissions follow the destination defaults; explicit overrides and primary ownership remain unchanged.
 - **Deleting a board** first materializes every inheriting branch as an override, including the shared-session prompt switch.
 - **Sessions reference branches**, not the other way around. Cascading from branch → sessions, not sessions → branch.

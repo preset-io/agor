@@ -110,7 +110,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.path}}`                | Branch                        | `/home/you/agor/feat-new-filter` | Absolute path on disk.                                                                                                                                    |
 | `{{branch.base_ref}}`            | Branch                        | `main`                           | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}`            | Branch                        | `branch`                         | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`.                                                           |
-| `{{repo.slug}}`                  | Repo                          | `preset-io/superset`             | Repository slug.                                                                                                                                          |
+| `{{repo.slug}}`                  | Repo                          | `superset`                       | Agor's local repository slug, used in managed paths and UI. It is not guaranteed to include a provider owner.                                             |
+| `{{repo.github_slug}}`           | Repo                          | `apache/superset`                | Credential-free GitHub `owner/repository` identity derived from the registered `github.com` remote. Empty for non-GitHub or unknown remotes.              |
 | `{{host.ip_address}}`            | Auto-detected                 | `10.0.1.42`                      | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect.                                    |
 | `{{custom.<key>}}`               | Branch custom context         | `{{custom.compose_profile}}`     | Anything you store in `branch.custom_context`.                                                                                                            |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}`   | Repo-wide fallback if the branch doesn't set a key.                                                                                                       |
@@ -168,6 +169,40 @@ always URL templates, not shell commands.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
 `nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+
+### Runtime URLs from Start
+
+Some providers choose a different URL each time they create or resume an
+environment. A successful `start` may therefore return this deliberately tiny,
+optional JSON object:
+
+```json
+{ "app": "https://preview.example.test", "health": "https://preview.example.test/health" }
+```
+
+Both keys are optional, so `{}` is valid. Unknown keys, non-HTTP(S) URLs,
+embedded credentials, query strings, and fragments are rejected. Omitted keys
+fall back to the rendered static `app` or `health` value. Runtime values last
+until the next Start/Stop/Nuke lifecycle boundary; Start is the reconciliation
+point rather than a permanent provider-name lookup.
+
+- A shell Start emits exactly one line:
+  `AGOR_ENVIRONMENT_RESULT={"app":"https://...","health":"https://..."}`.
+  Agor removes that control line from captured command output.
+- A webhook Start returns the same object with an `application/json` (or
+  `application/*+json`) content type. Non-JSON webhook bodies retain their
+  legacy meaning and are ignored as lifecycle results.
+
+`app` is an optimistic browser link and may point to an authenticated/private
+provider page. `health` is different: the daemon polls it continuously. A
+runtime health URL must resolve only to public IP space, is connected through a
+DNS-pinned no-redirect request, and should be returned only when the endpoint is
+actually reachable by the Agor daemon. Static operator-authored health URLs may
+still target localhost or private infrastructure.
+
+When Start completes without either a runtime or static health URL, the
+environment becomes **Started; health unavailable** rather than remaining on a
+spinner or claiming to be healthy. The App link remains available when known.
 
 ### `extends` (single-level only)
 
@@ -550,18 +585,21 @@ environment:
 Each script must finish; do not start a local development server in the executor.
 Remote resource identity and credentials belong to your scripts/provider. Make
 Stop safe to repeat. Agor never automatically retries Start, Stop, or Nuke.
-Commands can optionally return Start access links by writing this small JSON file
-to the supplied `AGOR_ENVIRONMENT_RESULT_FILE` path before exiting:
+Start can optionally return the same tiny runtime result used by ordinary
+managed environments. Emit exactly one stdout line before exiting:
 
-```json
-{ "access_urls": [{ "name": "Preview", "url": "https://preview.example.com" }] }
+```text
+AGOR_ENVIRONMENT_RESULT={"app":"https://preview.example.com","health":"https://preview.example.com/health"}
 ```
 
-The file must be a regular file, at most 16 KiB, with at most eight named absolute
-HTTP(S) URLs and no embedded credentials. Invalid results produce an **unknown**
-outcome, not a claim that nothing happened. Without a result file, the rendered
-`app` URL is used. Reported links appear in the Environment tab; the environment
-pills open the first reported link, falling back to the static `app` URL.
+The JSON is the strict `{app?, health?}` schema described above. Agor parses
+control records from stdout only; stderr remains diagnostic output. Invalid or
+ambiguous results produce an **unknown** outcome, not a claim that nothing
+happened. The former `AGOR_ENVIRONMENT_RESULT_FILE` value containing exactly
+`{"access_urls":[...]}` remains accepted at the executor boundary for upgrades,
+but new bridges should use the stdout contract. Without a result, the rendered
+`app` and `health` values are used. Reported links appear in the Environment tab;
+the environment pill opens the reported App, falling back to the static `app` URL.
 A successful Start waits for configured health checks; without
 one, the command success and **unknown health** are displayed separately.
 An early healthy response never releases a still-running command's admission.
@@ -589,6 +627,211 @@ retrying. Configuration, variant rendering, archiving, and deletion cannot bypas
 an active attempt. HA external repository removal with filesystem `cleanup: true`
 is deliberately unavailable: explicitly stop/inspect and use the existing
 branch-by-branch cleanup workflow instead of a filesystem-first bulk operation.
+
+## Remote development environments
+
+Sometimes Agor can manage the branch but cannot host its development stack. The
+daemon may run in a locked-down container without Docker, the application may
+need more CPU or memory than the Agor host has, or the runtime may need access to
+a cloud-only network. A managed environment does not have to be a local process:
+its lifecycle commands can bridge to a remote development environment such as a
+GitHub Codespace, Coder or Gitpod workspace, DevPod target, Kubernetes namespace,
+or dedicated VM.
+
+Agor does not ship native controllers for all of those providers. Instead, the
+current primitives support two integration shapes:
+
+- In `hybrid` mode, a small repository-owned shell bridge calls the provider API
+  or CLI and prints a structured Start result.
+- In `webhook-only` mode, lifecycle URLs call a trusted external controller. The
+  current webhook contract has the GET-only and authentication limitations
+  described above, so it is not by itself a production-grade provider control
+  plane.
+
+### Provider-neutral lifecycle pattern
+
+A remote bridge should treat **Start as reconciliation**, not as unconditional
+creation:
+
+1. Render a stable binding from trusted context such as `branch.id`, the exact
+   pushed `branch.ref`, and a provider repository identity.
+2. Rediscover provider state on every action. Do not rely on a permanent resource
+   name or forwarded URL: remote workspaces can be stopped, renamed, deleted, or
+   recreated outside Agor.
+3. Validate the provider owner, repository, ref, and binding marker before
+   resuming, stopping, deleting, or reading logs from a resource.
+4. Create or resume the workspace, wait with a bounded timeout, then report the
+   current access URLs.
+5. Make Stop and Nuke idempotent. Stop normally retains remote disk; Nuke deletes
+   only the rediscovered and revalidated resource.
+
+Source transfer is a separate concern. If the remote provider clones from a Git
+host, the branch or commit must be pushed before Start. Do not silently fall back
+to the default branch, and do not make a lifecycle bridge auto-push under an
+ambiguous shared credential.
+
+### Reporting the App and health endpoints
+
+Forwarded hostnames are often assigned only after the remote workspace starts.
+A shell bridge can publish them by emitting one control line on stdout:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"app":"https://preview.example.test","health":"https://preview.example.test/health"}
+```
+
+This is the same [Runtime URLs from Start](#runtime-urls-from-start) contract
+described above. The JSON schema is intentionally only `{app?, health?}`. Either
+key may be omitted:
+
+- `app` is the browser destination. It may require the provider's login.
+- `health` is polled by the Agor daemon and should be returned only if that daemon
+  can reach it. If it is omitted, Agor shows **Started; health unavailable**
+  rather than claiming the environment is healthy.
+
+A static `app` such as the provider dashboard is useful while Start is still
+running. A successful dynamic result replaces that fallback for the current
+lifecycle attempt. Stop, Nuke, or another Start clears/reconciles runtime URLs so
+Agor does not retain an old forwarded hostname.
+
+### GitHub Codespaces reference implementation
+
+Agor's own repository includes an experimental, opt-in Codespaces example:
+
+- [the `codespaces-sqlite` `.agor.yml` variant](https://github.com/preset-io/agor/blob/main/.agor.yml)
+- [`agor-codespace-launcher.mjs`](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/codespaces/agor-codespace-launcher.mjs), a dependency-free Node bridge over the official `gh` CLI
+- [the managed Codespaces devcontainer](https://github.com/preset-io/agor/blob/main/.devcontainer/agor-managed/devcontainer.json) and [SQLite bootstrap](https://github.com/preset-io/agor/blob/main/.devcontainer/agor-managed/start-agor-sqlite.sh)
+
+The essential variant shape is:
+
+```yaml
+environment:
+  variants:
+    codespaces-sqlite:
+      start: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+        --wait-seconds 1200
+        --app-port 5000 --health-port 3000 --health-path /health
+        --port-visibility public
+        --emit-health public-only
+      stop: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      nuke: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      app: https://github.com/codespaces
+```
+
+Use `shellQuote` for every rendered value embedded in a shell command; it quotes
+the value as one POSIX shell argument instead of treating branch text as syntax.
+The reference launcher requires Node, an authenticated `gh` CLI with Codespaces
+access, a registered `github.com` remote, and a pushed branch ref. It derives the
+App URL from live Codespaces port metadata. With `--emit-health public-only`, it
+reports health only when GitHub says that forwarded port is public; private
+Codespaces URLs remain authenticated App links and are not polled by Agor.
+
+The repository's experimental variant explicitly passes `--port-visibility
+public`, so after the SSH readiness probe succeeds the launcher asks GitHub to
+make both 3000 and 5000 public. GitHub may reject that request under an
+organization or repository policy, in which case Start fails with a policy
+diagnostic instead of pretending the preview is reachable. Public forwarded
+ports are available to anyone who knows their URLs, without GitHub
+authentication, and [GitHub resets them to private when a Codespace
+restarts](https://docs.github.com/en/codespaces/reference/security-in-github-codespaces).
+Start therefore re-reads and reapplies the requested visibility every time.
+
+This is safe only as an explicit disposable-preview choice, not merely because
+the source repository is public. Port 3000 exposes the whole Agor daemon, not
+just `/health`. The Codespaces bootstrap avoids the repository-wide
+`admin`/`admin` development credential by generating a different mode-0600
+password per Codespace. Retrieve it from that Codespace, sign in, and change it
+immediately:
+
+```bash
+cat ~/.agor-managed/bootstrap-admin-password
+```
+
+The value never enters `.agor.yml`, launcher output, dynamic URLs, or the Git
+workspace. An older Codespace/SQLite volume created before this behavior still
+has its old credential: rebuilding does not reset an existing user. Change that
+password before public exposure, or Nuke and recreate the disposable Codespace.
+
+Every invocation of the launcher's Start action is a reconcile, not an
+unconditional Create. This matters after a timed-out/failed Agor Start: press
+Start again and the launcher attaches to the still-existing marker-bound
+Codespace. It validates owner/repository ID/ref, resumes it if stopped, waits
+for SSH and `/health`, reapplies port visibility, and returns fresh URLs. A
+deleted resource is recreated and a duplicate or identity drift fails closed.
+Once Agor records the environment as `running`, its Start control is disabled;
+Restart deliberately runs Stop then Start, retaining and resuming the same
+Codespace rather than creating a second one. Neither path pulls newer Git
+commits into an already-running workspace or rebuilds its devcontainer; source
+synchronization remains a separate explicit operation.
+
+The managed devcontainer explicitly installs the
+[Dev Containers `sshd` feature](https://cli.github.com/manual/gh_codespace_ssh).
+This is required for the launcher's authenticated `/health` check and runtime
+logs: the official `gh codespace ssh` command cannot connect to a custom image
+that has no SSH server. If a Codespace was created from an older version of the
+devcontainer, rebuild its container or Nuke it and press Play again.
+
+While a Codespace is building, use **Cmd/Ctrl+Shift+P → Codespaces: View Creation
+Log** in the browser/VS Code client, or follow the same provider log from another
+authenticated machine:
+
+```bash
+gh codespace logs -c <codespace-name> --follow
+```
+
+`gh codespace logs` also relies on the Codespaces SSH transport for a custom
+devcontainer. Agor's Logs action therefore returns a bounded snapshot when that
+transport is ready, reports it as temporarily unavailable earlier in creation,
+and skips all remote log commands for a stopped Codespace so a log read cannot
+resume billable compute. Once the Codespace is available, Logs also retrieves the
+nested Compose log tail. From a Codespace terminal, you can inspect the stack
+directly:
+
+```bash
+docker compose -p agor-codespaces-sqlite ps
+docker compose -p agor-codespaces-sqlite logs --tail=100 --follow
+```
+
+The first Play builds Agor's development image inside the Codespace. Later
+starts of the same Codespace reuse its Docker layers unless dependency inputs
+changed, so this does not require a nightly job for normal stop/start cycles.
+The reference variant gives the cold path a bounded 20 minutes; missing-SSH
+configuration errors fail immediately rather than consuming that deadline.
+Standalone Agor lifecycle execution has a fixed 25-minute safety bound, leaving
+time for launcher setup and result reporting without adding per-variant timeout
+or retry machinery. Delegated HA jobs retain their shorter operator-configured
+execution envelope.
+GitHub Codespaces prebuilds can accelerate the outer devcontainer, but
+[GitHub does not make Docker-in-Docker available during prebuild creation](https://docs.github.com/en/codespaces/reference/allowing-your-codespace-to-access-a-private-registry),
+so a prebuild cannot absorb this nested image build. A future faster cold path
+should publish a dedicated development cache/image only from trusted main and
+consume it by immutable identity; the current production image is not that
+development cache.
+
+This reference is deliberately narrower than a production shared controller: it
+uses the controller's current GitHub actor, a process-local lock/state directory,
+and is not a Cloud/HA credential-sponsorship or distributed-leasing design. Never
+put a GitHub token in `.agor.yml`, template overrides, branch data, URLs, or
+launcher output. A production integration should use a tenant- and actor-scoped
+credential store plus a durable provider binding and lifecycle lease.
+
+Stop preserves the Codespace and its SQLite volume. Before rendering a different
+variant, Nuke the Codespaces variant (or delete the Codespace in GitHub); after a
+variant switch Agor intentionally does not retain the old variant's cleanup
+command.
+
+---
 
 ## See also
 

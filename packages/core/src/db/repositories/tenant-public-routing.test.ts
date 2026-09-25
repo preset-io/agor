@@ -8,8 +8,10 @@ import { dbTest } from '../test-helpers';
 import { AppVariableRepository } from './app-variables';
 import {
   getTenantPublicBaseUrl,
+  publicBaseUrlMatchesRequestHost,
   TENANT_PUBLIC_ROUTING_KEY,
   TENANT_PUBLIC_ROUTING_NAMESPACE,
+  TenantPublicRoutingDiscoveryRepository,
   TenantPublicRoutingRepository,
   validateTenantPublicRouting,
 } from './tenant-public-routing';
@@ -125,6 +127,44 @@ describe('tenant public routing', () => {
     );
     await runWithTenantContext('destination-tenant', () =>
       expect(getTenantPublicBaseUrl(db)).resolves.toBe('https://destination.test')
+    );
+  });
+
+  describe('publicBaseUrlMatchesRequestHost', () => {
+    it.each([
+      ['https://ws.example.test', 'ws.example.test'],
+      ['https://ws.example.test', 'WS.Example.TEST'],
+      ['https://ws.example.test', 'ws.example.test:443'],
+      ['http://localhost:3030', 'localhost:3030'],
+      ['https://ws.example.test:8443', 'ws.example.test:8443'],
+    ])('matches %s for Host %s', (publicBaseUrl, host) => {
+      expect(publicBaseUrlMatchesRequestHost(publicBaseUrl, host)).toBe(true);
+    });
+
+    it.each([
+      ['https://ws.example.test', 'other.example.test'],
+      ['https://ws.example.test', 'evil.ws.example.test'],
+      ['https://ws.example.test', 'ws.example.test.evil.test'],
+      ['https://ws.example.test', 'ws.example.test:8443'],
+      ['https://ws.example.test', 'ws.example.test:80'],
+      ['http://localhost:3030', 'localhost'],
+      ['https://ws.example.test', 'ws.example.test/path'],
+      ['https://ws.example.test', 'user@ws.example.test'],
+      ['https://ws.example.test', 'ws.example.test,other.example.test'],
+      ['https://ws.example.test', 'ws.example.test other.example.test'],
+      ['https://ws.example.test', 'ws.example.test?x=1'],
+      ['https://ws.example.test', 'ws.example.test#x'],
+      ['https://ws.example.test', ''],
+      ['https://ws.example.test/ui', 'ws.example.test'],
+      ['not a url', 'ws.example.test'],
+    ])('rejects %s for Host %s', (publicBaseUrl, host) => {
+      expect(publicBaseUrlMatchesRequestHost(publicBaseUrl, host)).toBe(false);
+    });
+  });
+
+  dbTest('refuses host discovery outside PostgreSQL', async ({ db }) => {
+    expect(() => new TenantPublicRoutingDiscoveryRepository(db as never)).toThrow(
+      'requires PostgreSQL'
     );
   });
 });

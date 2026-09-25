@@ -47,7 +47,7 @@ export default class Version extends Command {
 
     const info = await fetchHealth(target.url);
     if (!info) this.error(`The daemon at ${target.url} is not reachable.`);
-    if (info.deploymentId !== target.deploymentId) {
+    if (target.pinDeployment && info.deploymentId !== target.deploymentId) {
       this.error(
         isLocalTarget
           ? `The local daemon identity at ${target.url} does not match config.yaml.`

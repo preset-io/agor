@@ -181,6 +181,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // Operator surfaces the lanes read. Registered through the tenant-scoped
   // route registrar, so the scope is armed at registration.
   // --------------------------------------------------------------------------
+  'api/v1/user/me': {
+    scopeClass: 'scoped',
+    why: 'Registered through createTenantScopedAuthenticatedRouteRegistrar; returns the authenticated caller projection only.',
+  },
   'mcp-slack-connect/card': {
     scopeClass: 'scoped',
     why: 'Registered through createTenantScopedAuthenticatedRouteRegistrar; reads and writes one app variable in the request scope.',
