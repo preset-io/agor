@@ -1,5 +1,5 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
-import { createHash, createPublicKey, randomBytes } from 'node:crypto';
+import { createPublicKey, randomBytes } from 'node:crypto';
 import {
   type AgorConfig,
   AgorRoleAuthority,
@@ -13,6 +13,7 @@ import {
 import {
   ExternalUserAuthorityRepository,
   eq,
+  externalAuthorityIdentityKey,
   generateId,
   hash,
   insert,
@@ -126,10 +127,6 @@ function assertConfigured(settings: ResolvedExternalLaunchProvider): void {
   }
 }
 
-function identityKey(provider: string, issuer: string, subject: string): string {
-  return createHash('sha256').update(`${provider}\0${issuer}\0${subject}`).digest('hex');
-}
-
 function sanitizeEmailLocalPart(value: string): string {
   return (
     value
@@ -140,7 +137,7 @@ function sanitizeEmailLocalPart(value: string): string {
 }
 
 function derivedEmail(provider: string, issuer: string, subject: string): string {
-  const digest = identityKey(provider, issuer, subject).slice(0, 16);
+  const digest = externalAuthorityIdentityKey(provider, issuer, subject).slice(0, 16);
   return `launch-${digest}@external-launch.local`;
 }
 
@@ -285,7 +282,7 @@ async function projectLaunchUser(
   const settings = options.provider;
   const identityAuthority = resolveIdentityAuthority(config);
   const provider = claims.provider || settings.providerId || issuer;
-  const key = identityKey(provider, issuer, subject);
+  const key = externalAuthorityIdentityKey(provider, issuer, subject);
   const now = new Date();
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
