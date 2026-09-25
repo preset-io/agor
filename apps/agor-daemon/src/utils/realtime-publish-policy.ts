@@ -3,6 +3,7 @@ import {
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   KNOWLEDGE_TRANSFER,
+  MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
   type UserRole,
 } from '@agor/core/types';
@@ -572,6 +573,7 @@ export function isRealtimePublishAllowed(path: string | null | undefined): boole
 export const NON_SERVICE_REGISTERED_PATHS: ReadonlySet<string> = new Set([
   '', // SPA fallback
   'static', // express.static
+  MCP_OAUTH_RELAY.deliveryPath.slice(1), // Signed raw-body Express callback; no service events.
 ]);
 
 export class RealtimePublishPolicyCoverageError extends Error {

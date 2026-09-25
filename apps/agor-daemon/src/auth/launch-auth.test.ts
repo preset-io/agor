@@ -274,6 +274,14 @@ execution:
     );
   });
 
+  it('never exchanges a callback-purpose assertion for a runtime login', async () => {
+    // Even a mistakenly launch-audienced assertion with the correct signing key
+    // cannot turn the relay purpose into a login credential.
+    mockExchange(signClaims({ purpose: 'mcp_oauth_callback' }));
+    await expect(service().create({ launchCode: 'code' })).rejects.toThrow('purpose');
+    expect(await select(db).from(users).all()).toHaveLength(0);
+  });
+
   it('rejects when disabled', async () => {
     await expect(
       service({ external_launch: { ...baseConfig().external_launch, enabled: false } }).create({

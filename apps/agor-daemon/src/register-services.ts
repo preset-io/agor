@@ -69,6 +69,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
+  UserExternalIdentitiesRepository,
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -116,6 +117,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthRelayCallback,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
   MCPServer,
@@ -280,6 +282,7 @@ import {
 } from './services/mcp-marketplace-actions.js';
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
+  configuredCatalogIssuer,
   logMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -310,6 +313,7 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import { MCPOAuthRelay } from './services/mcp-oauth-relay.js';
 import {
   MCP_OAUTH_START_BUDGET_MS,
   mcpOAuthStartPhaseRunner,
@@ -2011,6 +2015,26 @@ export async function registerMCPServices(
   const { db, app } = ctx;
   const sessionsRepository = new SessionRepository(db);
   const postgresOAuthDeployment = isPostgresDatabaseHandle(db);
+  const oauthRelay = ctx.config.mcp_oauth_relay ? new MCPOAuthRelay(ctx.config) : undefined;
+  if (oauthRelay && !postgresOAuthDeployment)
+    throw new Error('MCP callback relay requires durable PostgreSQL OAuth authority');
+  const cloudUserFor = async (tenantId: string, userId: UserID): Promise<string> => {
+    if (!oauthRelay) throw new Error('MCP callback relay is disabled');
+    const identities = await runInOAuthTenantScope(db, tenantId, () =>
+      new UserExternalIdentitiesRepository(db).findForUser(
+        userId,
+        oauthRelay.launch.providerId ?? oauthRelay.launch.issuer!,
+        oauthRelay.launch.issuer!
+      )
+    );
+    if (
+      identities.length !== 1 ||
+      !identities[0].subject.startsWith('user:') ||
+      identities[0].subject.length <= 5
+    )
+      throw new Forbidden('MCP callback relay requires a bound Cloud user');
+    return identities[0].subject.slice(5);
+  };
   const durableOAuthFlows =
     ctx.mcpOAuthPendingFlowAuthority ??
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
@@ -2113,6 +2137,8 @@ export async function registerMCPServices(
       });
 
   type PendingOAuthFlow = {
+    /** Set only after Cloud signature, identity and sealed attempt binding validation. */
+    relayDelivered?: boolean;
     attemptId: MCPOAuthAttemptID;
     context: OAuthFlowContext;
     mcpServerId?: string;
@@ -2464,6 +2490,7 @@ export async function registerMCPServices(
     }
 
     let savedServerAuthority: MCPServer | undefined;
+    let configuredIssuer: string | undefined;
     let effectiveMcpUrl = opts.mcpUrl;
     let effectiveClientId = opts.clientId;
     let effectiveClientSecret = opts.clientSecret;
@@ -2531,6 +2558,7 @@ export async function registerMCPServices(
       // Clone the row so later repository/service mutations cannot change the
       // in-memory authority captured by a standalone pending flow.
       savedServerAuthority = structuredClone(server);
+      configuredIssuer = await configuredCatalogIssuer(server);
       if (durableOAuthFlows) {
         durableBinding = {
           tenantId: opts.tenantId!,
@@ -2540,6 +2568,9 @@ export async function registerMCPServices(
         };
       }
     }
+
+    if (oauthRelay && effectiveOAuthMode === 'shared')
+      throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -2580,8 +2611,23 @@ export async function registerMCPServices(
     opts.onPolicyResolved?.(
       presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
     );
+    // Resolve trusted user mapping before provider registration or authorization.
+    if (oauthRelay && !durableBinding)
+      throw new Forbidden('MCP callback relay requires a saved tenant/user-bound server');
+    const relayBinding =
+      oauthRelay && durableBinding
+        ? {
+            cellId: oauthRelay.cellId,
+            cloudUserId: await cloudUserFor(durableBinding.tenantId, durableBinding.userId),
+          }
+        : undefined;
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
+        resolveRedirectUri: (issuer: string) => {
+          if (configuredIssuer && issuer !== configuredIssuer)
+            throw new Forbidden('Configured app issuer no longer matches its reviewed recipe');
+          return oauthRelay ? oauthRelay.redirectUri(issuer) : redirectUri;
+        },
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
         tokenUrlOverride: effectiveTokenUrlOverride,
         clientSecret: effectiveClientSecret,
@@ -2714,6 +2760,7 @@ export async function registerMCPServices(
       );
     }
 
+    if (relayBinding) context.relay = relayBinding;
     assertFlowAuthority?.();
     const attemptId = durableBinding
       ? await runWithinOAuthAuthority(assertFlowAuthority, () =>
@@ -2772,6 +2819,26 @@ export async function registerMCPServices(
         )
       : localAttemptId!;
 
+    let authorizationUrl = context.authorizationUrl;
+    if (oauthRelay && durableBinding && context.relay) {
+      try {
+        authorizationUrl = await oauthRelay.prepare({
+          workspace_id: durableBinding.tenantId,
+          cloud_user_id: context.relay.cloudUserId,
+          runtime_user_id: durableBinding.userId,
+          server_id: durableBinding.mcpServerId,
+          attempt_id: attemptId,
+          state: context.state,
+          issuer: context.issuer,
+          authorization_url: context.authorizationUrl,
+          redirect_uri: context.redirectUri,
+        });
+      } catch (error) {
+        await durableOAuthFlows!.failPendingCallback(context.state, 'relay_prepare_failed');
+        throw error;
+      }
+    }
+    assertFlowAuthority?.();
     // One line per attempt, after the attempt has a durable id to correlate on.
     // A redirect-URI mismatch is rejected front-channel and never comes back,
     // so this is the only place Agor can state the binding it used.
@@ -2871,7 +2938,7 @@ export async function registerMCPServices(
       // authenticated initiating socket only — never a user/tenant/global
       // room — and keep durable status as the completion authority.
       app.io.local.to(opts.browserReservation.socketId).emit('oauth:open_browser', {
-        authUrl: context.authorizationUrl,
+        authUrl: authorizationUrl,
         attempt_id: attemptId,
         reservation_token: opts.browserReservation.reservationToken,
         caller_user_id: opts.browserReservation.userId,
@@ -2903,8 +2970,8 @@ export async function registerMCPServices(
     const base: StartTwoPhaseOAuthResult = {
       attemptId,
       state: context.state,
-      authorizationUrl: context.authorizationUrl,
-      redirectUri,
+      authorizationUrl,
+      redirectUri: context.redirectUri,
     };
     if (awaitToken) {
       if (durableBinding) {
@@ -3447,6 +3514,11 @@ export async function registerMCPServices(
   ): Promise<void> => {
     const record = pendingFlow.durableRecord;
     try {
+      // Also fence shared attempts admitted before relay mode was enabled.
+      if (oauthRelay && (record?.oauthMode ?? pendingFlow.oauthMode) === 'shared')
+        throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
+      if (pendingFlow.context.relay && !pendingFlow.relayDelivered)
+        throw new Forbidden('Hosted OAuth requires the authenticated Cloud callback');
       await assertFlowInitiatorStillEntitled(
         record?.userId ?? pendingFlow.userId,
         record?.tenantId ?? pendingFlow.tenantId,
@@ -3838,16 +3910,56 @@ export async function registerMCPServices(
   };
 
   // Set the OAuth callback handler
-  const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
+  const handleOAuthCallback = async (
+    req: express.Request,
+    res: express.Response,
+    delivery?: MCPOAuthRelayCallback
+  ) => {
+    const sendResult = (
+      res: express.Response,
+      success: boolean,
+      message: string,
+      status = 200
+    ): void => {
+      if (delivery) {
+        res
+          .status(success ? 200 : status === 500 || status === 409 ? 409 : 200)
+          .json({ outcome: success ? 'connected' : 'failed' });
+      } else sendOAuthResultPage(res, success, message, status);
+    };
+    const claim = (state: string) =>
+      delivery
+        ? durableOAuthFlows!.claimForUser(
+            delivery.workspace_id,
+            delivery.runtime_user_id as UserID,
+            state
+          )
+        : durableOAuthFlows!.claimForCallback(state);
+    const bindDelivery = (pending: PendingOAuthFlow): void => {
+      if (!delivery) return;
+      if (
+        !pending.context.relay ||
+        pending.context.relay.cellId !== oauthRelay?.cellId ||
+        pending.context.relay.cloudUserId !== delivery.cloud_user_id ||
+        pending.attemptId !== delivery.attempt_id ||
+        pending.mcpServerId !== delivery.server_id ||
+        pending.tenantId !== delivery.workspace_id ||
+        pending.userId !== delivery.runtime_user_id ||
+        pending.context.issuer !== delivery.issuer ||
+        pending.context.redirectUri !== delivery.redirect_uri
+      )
+        throw new Forbidden('MCP relay attempt binding changed');
+      pending.relayDelivered = true;
+    };
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     try {
-      const code = req.query.code as string | undefined;
-      const state = req.query.state as string | undefined;
-      const issuer = req.query.iss as string | undefined;
-      const error = req.query.error as string | undefined;
+      const code = (delivery ? delivery.code : req.query.code) as string | undefined;
+      const state = (delivery ? delivery.state : req.query.state) as string | undefined;
+      const issuer = (delivery ? delivery.iss : req.query.iss) as string | undefined;
+      const error = (delivery ? delivery.error : req.query.error) as string | undefined;
 
       if (error) {
         console.warn('[OAuth Callback] Provider authorization was not completed');
@@ -3860,12 +3972,13 @@ export async function registerMCPServices(
             // may therefore consume only this exact state capability; fleet
             // DCR authority is invalidated exclusively from the pinned
             // server-to-server exchange path below.
-            const claimed = await durableOAuthFlows.claimForCallback(state);
+            const claimed = await claim(state);
             if (claimed.outcome === 'claimed') {
               try {
                 const denied = pendingFromDurableClaim(
                   durableOAuthFlows.openClaim(claimed.flow, state)
                 );
+                bindDelivery(denied);
                 await durableOAuthFlows.finish(claimed.flow, 'failed', 'authorization_denied');
                 await preserveCommittedOAuthResult(undefined, [
                   {
@@ -3908,29 +4021,28 @@ export async function registerMCPServices(
             pendingOAuthFlows.delete(state);
           }
         }
-        sendOAuthResultPage(
-          res,
-          false,
-          'Authorization was not completed. Please restart OAuth.',
-          400
-        );
+        sendResult(res, false, 'Authorization was not completed. Please restart OAuth.', 400);
         return;
       }
 
       if (!code || !state) {
-        sendOAuthResultPage(res, false, 'Missing code or state parameter', 400);
+        sendResult(res, false, 'Missing code or state parameter', 400);
         return;
       }
 
       let pendingFlow: PendingOAuthFlow | undefined;
       if (durableOAuthFlows) {
-        const claimed = await durableOAuthFlows.claimForCallback(state);
+        const claimed = await claim(state);
         if (claimed.outcome === 'not_claimed') {
-          if (claimed.flow?.status === 'succeeded') {
-            sendOAuthResultPage(res, true, terminalMessageForStatus('succeeded'));
+          if (delivery) {
+            sendResult(res, false, 'OAuth callback already consumed', 409);
             return;
           }
-          sendOAuthResultPage(
+          if (claimed.flow?.status === 'succeeded') {
+            sendResult(res, true, terminalMessageForStatus('succeeded'));
+            return;
+          }
+          sendResult(
             res,
             false,
             claimed.flow
@@ -3942,9 +4054,10 @@ export async function registerMCPServices(
         }
         try {
           pendingFlow = pendingFromDurableClaim(durableOAuthFlows.openClaim(claimed.flow, state));
+          bindDelivery(pendingFlow);
         } catch {
           await durableOAuthFlows.finish(claimed.flow, 'failed', 'sealed_material_unavailable');
-          sendOAuthResultPage(res, false, 'OAuth flow cannot be resumed. Please start again.', 409);
+          sendResult(res, false, 'OAuth flow cannot be resumed. Please start again.', 409);
           return;
         }
       } else {
@@ -3967,7 +4080,7 @@ export async function registerMCPServices(
         }
       }
       if (!pendingFlow) {
-        sendOAuthResultPage(
+        sendResult(
           res,
           false,
           'OAuth flow expired or not found. Please start the flow again.',
@@ -4042,7 +4155,7 @@ export async function registerMCPServices(
         ]);
 
         console.log('[OAuth Callback] Flow completed successfully');
-        sendOAuthResultPage(
+        sendResult(
           res,
           true,
           pendingFlow.slackRecovery
@@ -4097,7 +4210,7 @@ export async function registerMCPServices(
               : 'OAuth provider rejected the authorization. Start a new OAuth flow.'
           )
         );
-        sendOAuthResultPage(
+        sendResult(
           res,
           false,
           terminalMessageForStatus(ambiguous ? 'ambiguous' : 'failed'),
@@ -4107,12 +4220,43 @@ export async function registerMCPServices(
       }
     } catch (err) {
       externalFailure('OAuth Callback', 'oauth_callback', err);
-      sendOAuthResultPage(
+      sendResult(
         res,
         false,
         'Authentication could not be completed. Please start a new OAuth flow.',
         500
       );
+    }
+  };
+
+  const oauthCallbackHandler = (req: express.Request, res: express.Response) =>
+    handleOAuthCallback(req, res);
+  (app as unknown as Record<string, unknown>).mcpOAuthRelayCallbackHandler = async (
+    req: express.Request,
+    res: express.Response
+  ) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    try {
+      if (!oauthRelay || !durableOAuthFlows || !Buffer.isBuffer(req.body)) throw new Error();
+      const delivery = await oauthRelay.verifyDelivery(req.body, req.headers.authorization);
+      const userId = delivery.runtime_user_id as UserID;
+      if ((await cloudUserFor(delivery.workspace_id, userId)) !== delivery.cloud_user_id)
+        throw new Error();
+      const attempt = await durableOAuthFlows.getForUser(
+        delivery.workspace_id,
+        userId,
+        delivery.attempt_id as MCPOAuthAttemptID
+      );
+      if (
+        !attempt ||
+        attempt.mcpServerId !== delivery.server_id ||
+        attempt.stateHash !== createHash('sha256').update(delivery.state).digest('hex')
+      )
+        throw new Error();
+      await handleOAuthCallback(req, res, delivery);
+    } catch {
+      res.status(401).json({ outcome: 'failed' });
     }
   };
 
@@ -4291,6 +4435,10 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
+      redirectUri: (entry) =>
+        entry.oauth?.configured_client && oauthRelay
+          ? oauthRelay.redirectUri(entry.oauth.configured_client.issuer)
+          : ctx.mcpOAuthCallbackUrl,
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
       // draw a button. Normal configuration writes revoke bound grants; this

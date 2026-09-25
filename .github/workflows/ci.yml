@@ -215,6 +215,7 @@ jobs:
       - run: node scripts/ci-test-matrix.mjs install ui-1
       - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
+      - run: NODE_OPTIONS=--conditions=source pnpm exec tsx scripts/test-mcp-oauth-browser.mts
 
   # Do not rename this job: branch protection currently requires the generated
   # context `CI / Lint, typecheck, build, test (pull_request)`. `always()` makes

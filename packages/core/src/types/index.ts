@@ -24,6 +24,7 @@ export * from './knowledge-transfer';
 export * from './mcp';
 export * from './mcp-catalog';
 export * from './mcp-marketplace';
+export * from './mcp-oauth-relay';
 export * from './message';
 export * from './opencode-auth';
 export * from './opencode-models';

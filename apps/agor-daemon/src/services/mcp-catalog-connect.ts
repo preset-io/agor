@@ -944,6 +944,39 @@ export function createMCPCatalogConnectService(
       }
       const userId = authenticatedUserId as UserID;
       const bearerToken = readBearerToken(data.bearer_token, entry);
+      const configuredClient = data.oauth_client;
+      if (
+        configuredClient !== undefined &&
+        (!configuredClient ||
+          typeof configuredClient !== 'object' ||
+          Array.isArray(configuredClient) ||
+          Object.keys(configuredClient).some(
+            (key) => key !== 'client_id' && key !== 'client_secret'
+          ))
+      ) {
+        throw new BadRequest('Invalid configured OAuth app input');
+      }
+      if (
+        configuredClient !== undefined &&
+        (!entry.oauth?.configured_client || bearerToken !== undefined)
+      ) {
+        throw new BadRequest('This entry does not accept configured OAuth app credentials');
+      }
+      if (
+        entry.oauth?.configured_client &&
+        (!configuredClient ||
+          typeof configuredClient.client_id !== 'string' ||
+          !configuredClient.client_id.trim() ||
+          configuredClient.client_id.length > 4096 ||
+          (configuredClient.client_secret !== undefined &&
+            (typeof configuredClient.client_secret !== 'string' ||
+              configuredClient.client_secret.length > 16384)) ||
+          (entry.oauth.configured_client.secret_required && !configuredClient.client_secret))
+      ) {
+        throw new BadRequest(
+          'Configure your own OAuth app in the secure Catalog form before connecting'
+        );
+      }
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
       // newer concurrent connect has selected it but before that request has
@@ -959,10 +992,24 @@ export function createMCPCatalogConnectService(
           )
         ),
       };
-      const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
+      const connectGeneration =
+        bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
         auth = await resolveAuthRequirement(entry, bearerToken);
+        if (configuredClient) {
+          if (auth.type !== 'oauth')
+            throw new BadRequest(
+              'The endpoint no longer requires OAuth; no app credentials were saved'
+            );
+          auth = {
+            ...auth,
+            oauth_client_id: configuredClient.client_id,
+            ...(configuredClient.client_secret
+              ? { oauth_client_secret: configuredClient.client_secret }
+              : {}),
+          };
+        }
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });

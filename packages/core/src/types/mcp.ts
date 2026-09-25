@@ -257,8 +257,11 @@ export interface MCPOAuthPendingFlowSealedMaterial {
    *
    * v2 → v3 added {@link slackConnect}. A v2 envelope therefore carries no
    * Slack connect binding, so reading one under v3 rules loses nothing.
+   * v3 → v4 added {@link relay}; earlier envelopes must not carry it.
    */
-  version: 2 | 3;
+  version: 2 | 3 | 4;
+  /** Stable callback delivery identity; only present in v4 and later. */
+  relay?: import('./mcp-oauth-relay').MCPOAuthRelayBinding;
   attemptId: MCPOAuthAttemptID;
   tenantId: string;
   userId: UserID;

@@ -21,6 +21,7 @@ export type CatalogHealthReason =
   | 'probe_failed'
   | 'auth_mismatch'
   | 'credential_not_verified'
+  | 'configured_client_not_verified'
   | 'metadata_unavailable'
   | 'metadata_incompatible'
   | 'endpoint_override_mismatch'
@@ -73,6 +74,14 @@ async function assertOAuthMetadataReady(
   const validated = await validateMCPOAuthMetadata(discovery, entry.remote_url, {
     compatibilityMode,
   });
+  if (entry.oauth?.configured_client) {
+    if (validated.issuer !== entry.oauth.configured_client.issuer)
+      throw new OAuthConfigurationError(
+        'issuer_mismatch',
+        'Configured app issuer no longer matches its reviewed recipe'
+      );
+    return; // Customer app input is required; the audit never registers a client.
+  }
   if (entry.oauth?.client_id) return;
   if (entry.oauth?.dcr_mode === 'disabled' || !validated.registrationEndpoint) {
     throw new OAuthConfigurationError(
@@ -178,6 +187,8 @@ export async function auditCatalogHealth(
         };
       }
       if (reviewedBearerOAuth) return { ...base, status: 'oauth-now-available' };
+      if (entry.oauth?.configured_client)
+        return { ...base, status: 'credential-required', reason: 'configured_client_not_verified' };
     }
 
     // The public challenge was checked, but only an authenticated initialize

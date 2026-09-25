@@ -186,3 +186,30 @@ describe('auditCatalogHealth', () => {
     ]);
   });
 });
+
+it.each(['https://issuer.example', 'https://wrong.example'])(
+  'audits configured BYO without DCR or claiming the customer credential works (%s)',
+  async (issuer) => {
+    const configured = {
+      ...entry('oauth'),
+      oauth: {
+        dcr_mode: 'disabled' as const,
+        configured_client: {
+          issuer: 'https://issuer.example',
+          setup_url: 'https://issuer.example/apps',
+          secret_required: true,
+        },
+      },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({ issuer });
+    const [result] = await auditCatalogHealth([configured], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject(
+      issuer === configured.oauth.configured_client.issuer
+        ? { status: 'credential-required', reason: 'configured_client_not_verified' }
+        : { status: 'oauth-metadata-not-ready', reason: 'issuer_mismatch' }
+    );
+  }
+);
