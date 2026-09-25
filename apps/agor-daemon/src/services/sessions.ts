@@ -20,7 +20,11 @@ import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   EntityNotFoundError,
+  eq,
   getCurrentTenantId,
+  lockRowForUpdate,
+  MCPServerRepository,
+  mcpServers,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   SessionEnvSelectionRepository,
@@ -50,6 +54,7 @@ import {
   isResolvedModelConfig,
   lintModelToolMatch,
 } from '@agor/core/models';
+import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
   AgenticToolName,
   AuthenticatedParams,
@@ -489,8 +494,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
       mcpServerIds: _requestedMcpServerIds,
+      mcp_defaults_skipped: _ignoredMcpWarning,
       ...sessionData
-    } = data as CreateSessionInput;
+    } = data as CreateSessionInput & Pick<Session, 'mcp_defaults_skipped'>;
     let createData: Partial<Session> = { ...sessionData };
     if (params?._agenticConfigResolved) {
       createData = {
@@ -558,6 +564,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // the session that caused adoption (or the inverse). The live deployment
     // flag is consulted only here; executor startup reads the immutable stamp.
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const attachedMcpServerIds: MCPServerID[] = [];
+    let skippedMcpDefaults = 0;
     const created = await runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
       const branchRepo = new BranchRepository(scoped);
       const branch = await branchRepo.findById(createData.branch_id as BranchID);
@@ -606,19 +614,49 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         sdk_home_scope: admission.scope,
       });
 
-      // Attach in-transaction: a bad server rolls the create back, not a silent drop (#2629).
-      if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
-        const mcpRepo = new SessionMCPServerRepository(scoped);
+      // Omission preserves provenance: only defaults read here may be skipped.
+      // Never accept a client-supplied "inherited" list or fall through to user
+      // defaults after a configured branch list turns out to be entirely stale.
+      const user =
+        explicitMcpServerIds === undefined && createdSession.created_by
+          ? await new UsersRepository(scoped).findById(createdSession.created_by)
+          : undefined;
+      const serverIds = normalizeCreateMcpServerIds(
+        resolveSessionMcpServerIds({
+          explicit: explicitMcpServerIds,
+          branch,
+          user,
+        })
+      )!;
+      const mcpRepo = new SessionMCPServerRepository(scoped);
+      // Lock in stable order, in this same tenant transaction. A concurrent
+      // delete either wins first (typed missing below) or waits for attachment.
+      // SQLite's IMMEDIATE transaction already serializes writers. Do not catch
+      // FK/storage errors: PostgreSQL would have aborted the transaction.
+      const serverRepo = new MCPServerRepository(scoped);
+      for (const requestedId of [...serverIds].sort()) {
         try {
-          for (const serverId of explicitMcpServerIds) {
-            await mcpRepo.addServer(createdSession.session_id, serverId);
-          }
+          const serverId = await serverRepo.resolveCanonicalId(requestedId);
+          await lockRowForUpdate(
+            scoped,
+            scoped,
+            mcpServers,
+            eq(mcpServers.mcp_server_id, serverId)
+          );
+          await mcpRepo.addServer(createdSession.session_id, serverId);
+          if (!attachedMcpServerIds.includes(serverId)) attachedMcpServerIds.push(serverId);
         } catch (error) {
           if (error instanceof MCPServerNotUsableError) {
             throw new Forbidden('That MCP server is private to another user');
           }
-          if (error instanceof EntityNotFoundError) {
-            throw new NotFound('That MCP server was not found');
+          if (error instanceof EntityNotFoundError && error.entityType === 'MCPServer') {
+            if (explicitMcpServerIds === undefined) {
+              skippedMcpDefaults++;
+              continue;
+            }
+            throw new NotFound(
+              'That MCP server was not found. Remove the unavailable selection from MCP Servers and try again.'
+            );
           }
           throw error;
         }
@@ -629,8 +667,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
     }
-    if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
-      for (const serverId of explicitMcpServerIds) {
+    if (attachedMcpServerIds.length > 0) {
+      for (const serverId of attachedMcpServerIds) {
         emitServiceEvent(this.app, {
           path: 'session-mcp-servers',
           event: 'created',
@@ -645,7 +683,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         });
       }
     }
-    return created;
+    return skippedMcpDefaults > 0
+      ? { ...created, mcp_defaults_skipped: skippedMcpDefaults }
+      : created;
   }
 
   /**
@@ -1009,6 +1049,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const forkedSession = await this.create(
       {
+        mcpServerIds: [], // Fork copies its parent below, not fresh-session defaults.
         agentic_tool: parentTool,
         agentic_tool_preset_id: inherited.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
@@ -1187,6 +1228,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const spawnedSession = await this.create(
       {
+        mcpServerIds: [], // Spawn applies its separate explicit/parent policy below.
         agentic_tool: targetTool,
         agentic_tool_preset_id: resolved.agentic_tool_preset_id,
         status: SessionStatus.IDLE,

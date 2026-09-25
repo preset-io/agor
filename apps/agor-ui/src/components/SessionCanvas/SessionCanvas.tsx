@@ -63,6 +63,7 @@ import {
   useRegisterRecenter,
 } from '../../contexts/CanvasNavigationContext';
 import { useConnectionState, useMutationGate } from '../../contexts/ConnectionContext';
+import { getSessionCreationWarning } from '../../domain/sessionCreation';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { useStableCallback } from '../../hooks/useStableCallback';
@@ -469,7 +470,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const { token } = theme.useToken();
     const mutationGate = useMutationGate();
     const connection = useConnectionState();
-    const { showError } = useThemedMessage();
+    const { showError, showWarning } = useThemedMessage();
 
     // Entity state via narrow store subscriptions. Each whole-map selector is a
     // stable module-level reference, so a slice only re-renders the canvas when
@@ -615,6 +616,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               mcpServerIds,
             });
             targetSessionId = newSession.session_id;
+            const warning = getSessionCreationWarning(newSession);
+            if (warning) showWarning(warning, { duration: 10 });
           }
 
           // Execute action and capture the session the user should land on so

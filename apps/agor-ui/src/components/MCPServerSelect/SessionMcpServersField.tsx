@@ -6,6 +6,7 @@ import { MCPServerSelect } from './MCPServerSelect';
 export interface SessionMcpServersFieldProps {
   mcpServerById: Map<string, MCPServer>;
   showHelpText?: boolean;
+  inheritedMcpServerIds?: string[];
 }
 
 /**
@@ -19,11 +20,13 @@ export interface SessionMcpServersFieldProps {
 export const SessionMcpServersField: React.FC<SessionMcpServersFieldProps> = ({
   mcpServerById,
   showHelpText = false,
+  inheritedMcpServerIds,
 }) => {
   return (
     <Form.Item
       name="mcpServerIds"
       label="MCP Servers"
+      getValueProps={(value) => ({ value: value ?? inheritedMcpServerIds })}
       help={showHelpText ? 'Select MCP servers to make available in this session' : undefined}
     >
       <MCPServerSelect

@@ -1,12 +1,15 @@
-import type { Branch, MCPServer, Repo, User } from '@agor-live/client';
+import type { AgorClient, Branch, MCPServer, Repo, Session, User } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { App, Button, ConfigProvider, Drawer, Grid, Modal, Tabs, theme } from 'antd';
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { getSessionCreationWarning, runSessionCreationStages } from '../../domain/sessionCreation';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { useSessionActions } from '../../hooks/useSessionActions';
 import { agorStore } from '../../store/agorStore';
+import { useThemedMessage } from '../../utils/message';
 import { GeneralTab } from '../BranchModal/tabs/GeneralTab';
 import type { GeneralFormState } from '../BranchModal/useBranchModalForm';
 import { NewSessionModal } from '../NewSessionModal/NewSessionModal';
@@ -53,6 +56,7 @@ function GeneralSurface({ canEdit = true }: { canEdit?: boolean }) {
   const compact = !Grid.useBreakpoint().md;
   const [state, setState] = useState<GeneralFormState>({
     boardId: undefined,
+    cleanupProtected: false,
     issueUrl: '',
     prUrl: '',
     notes: '',
@@ -339,4 +343,141 @@ it('Teammate / General respects read-only capability state', async () => {
   ).toBeNull();
   expect(screen.getByText('Disabled · Paused integration (http)')).toBeInTheDocument();
   expect(screen.getByText(/Unavailable MCP server/)).toBeInTheDocument();
+});
+
+// This is the real modal, picker, request hook, staged-create seam and AntD
+// feedback in Chromium. Only the transport is faked; daemon/DB semantics have
+// separate real-database coverage in sessions.mcp-attach tests.
+const creationUser: User = {
+  ...user,
+  default_agentic_config: { 'claude-code': { permissionMode: 'acceptEdits' } },
+};
+
+function CreationSurface({ client }: { client: AgorClient }) {
+  const [open, setOpen] = useState(true);
+  const [sessionId, setSessionId] = useState<string>();
+  const { createSession } = useSessionActions(client);
+  const { showWarning, showError } = useThemedMessage();
+  return (
+    <>
+      <NewSessionModal
+        open={open}
+        branchId={branch.branch_id}
+        branch={branch}
+        availableAgents={[{ id: 'claude-code', name: 'Claude Code', icon: '🤖' }]}
+        client={null}
+        currentUser={creationUser}
+        onClose={() => setOpen(false)}
+        onCreate={async (config) => {
+          const outcome = await runSessionCreationStages({
+            createSession: () => createSession(config),
+            initialPrompt: '',
+            shouldContinue: () => true,
+            onSessionCreated: (session) => {
+              setSessionId(session.session_id);
+              const warning = getSessionCreationWarning(session);
+              if (warning) showWarning(warning, { duration: 10 });
+            },
+            initializeSession: async () => {},
+          });
+          if (outcome.status === 'create-failed') {
+            showError((outcome.error as Error).message);
+            throw outcome.error;
+          }
+          if (outcome.status !== 'complete') return null;
+          setOpen(false);
+          return { sessionId: outcome.session.session_id };
+        }}
+      />
+      {sessionId && (
+        <div role="status" aria-label="Created session">
+          Opened session {sessionId}
+        </div>
+      )}
+    </>
+  );
+}
+
+it('creates with inherited defaults, displays the nonblocking warning, and opens the session', async () => {
+  __setAuthConfigForTests({ requireAuth: false });
+  agorStore.setState({
+    agenticToolSettingsHydrated: true,
+    mcpServerById: new Map(servers.map((server) => [server.mcp_server_id, server])),
+  });
+  const create = vi.fn(
+    async () => ({ session_id: 'created-with-valid-server', mcp_defaults_skipped: 1 }) as Session
+  );
+  const client = { service: () => ({ create }) } as unknown as AgorClient;
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <App>
+        <CreationSurface client={client} />
+      </App>
+    </ConfigProvider>
+  );
+  await act(() => userEvent.click(screen.getByTestId('mcp-chip')));
+  expect(await screen.findByText(/Using defaults. Missing defaults/)).toBeVisible();
+  expect(await screen.findByText(/Unavailable MCP server/)).toBeVisible();
+  await act(() => userEvent.click(screen.getByText('New Session · Picker validation')));
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Create Session' })));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  expect(create).toHaveBeenCalledWith(expect.objectContaining({ mcpServerIds: undefined }));
+  expect(
+    await screen.findByText(/Session created. 1 unavailable default MCP server/)
+  ).toBeVisible();
+  expect(await screen.findByRole('status', { name: 'Created session' })).toHaveTextContent(
+    'Opened session created-with-valid-server'
+  );
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Create Session' })).toBeNull());
+});
+
+it('keeps an explicit stale selection strict and lets the user remove it and retry', async () => {
+  __setAuthConfigForTests({ requireAuth: false });
+  agorStore.setState({
+    agenticToolSettingsHydrated: true,
+    mcpServerById: new Map(servers.map((server) => [server.mcp_server_id, server])),
+  });
+  const create = vi.fn(async (input: { mcpServerIds?: string[] }) => {
+    if (input.mcpServerIds?.includes(unavailableId)) {
+      throw new Error(
+        'That MCP server was not found. Remove the unavailable selection from MCP Servers and try again.'
+      );
+    }
+    return { session_id: 'corrected-selection' } as Session;
+  });
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <App>
+        <CreationSurface client={{ service: () => ({ create }) } as unknown as AgorClient} />
+      </App>
+    </ConfigProvider>
+  );
+  await act(() => userEvent.click(screen.getByTestId('mcp-chip')));
+  const removeTag = async (label: string) => {
+    const tag = Array.from(document.querySelectorAll('.ant-select-selection-item')).find((tag) =>
+      tag.textContent?.includes(label)
+    )!;
+    await act(() => userEvent.click(tag.querySelector('.ant-select-selection-item-remove')!));
+  };
+  // Editing a single tag makes the WHOLE remaining list an explicit selection.
+  await removeTag('Paused integration');
+  await act(() => userEvent.click(screen.getByText('New Session · Picker validation')));
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Create Session' })));
+  expect(
+    await screen.findByText(/Remove the unavailable selection from MCP Servers/)
+  ).toBeVisible();
+  expect(create).toHaveBeenLastCalledWith(
+    expect.objectContaining({ mcpServerIds: [enabledId, unavailableId] })
+  );
+  expect(screen.queryByRole('status', { name: 'Created session' })).toBeNull();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Create Session' })).toBeEnabled());
+  await act(() => userEvent.click(screen.getByTestId('mcp-chip')));
+  await removeTag('Unavailable');
+  await act(() => userEvent.click(screen.getByText('New Session · Picker validation')));
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Create Session' })));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ mcpServerIds: [enabledId] }));
+  expect(await screen.findByRole('status', { name: 'Created session' })).toHaveTextContent(
+    'Opened session corrected-selection'
+  );
 });

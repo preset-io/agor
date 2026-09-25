@@ -29,6 +29,7 @@ import {
   Form,
   Popover,
   Select,
+  Space,
   Typography,
   theme,
 } from 'antd';
@@ -60,6 +61,8 @@ export interface AgenticConfigChipRowProps {
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
   branchId?: string;
+  /** Display-only defaults. Undefined form value still means inherit on the server. */
+  inheritedMcpServerIds?: string[];
   catalogEnabled?: boolean;
   /** Require integration-owned exact model selection on direct create/edit surfaces. */
   validateModelSelection?: boolean;
@@ -123,6 +126,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   mcpServerById,
   currentUser,
   branchId,
+  inheritedMcpServerIds,
   catalogEnabled = true,
   validateModelSelection = false,
   fieldName = 'agenticToolPresetId',
@@ -155,7 +159,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const formModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const formEffort = Form.useWatch('effort', form) as EffortLevel | undefined;
   const formPermission = Form.useWatch('permissionMode', form) as PermissionMode | undefined;
-  const formMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
+  const selectedMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
+  const formMcp = selectedMcp ?? inheritedMcpServerIds;
 
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
 
@@ -397,13 +402,20 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         width={360}
         testid="mcp-chip"
         renderContent={() => (
-          <MCPServerSelect
-            mcpServers={mapToArray(mcpServerById)}
-            value={formMcp}
-            onChange={onMcpChange}
-            placeholder="No MCP servers attached"
-            style={{ width: '100%' }}
-          />
+          <Space orientation="vertical" style={{ width: '100%' }}>
+            <MCPServerSelect
+              mcpServers={mapToArray(mcpServerById)}
+              value={formMcp}
+              onChange={onMcpChange}
+              placeholder="No MCP servers attached"
+              style={{ width: '100%' }}
+            />
+            <Typography.Text type="secondary">
+              {selectedMcp === undefined && inheritedMcpServerIds !== undefined
+                ? 'Using defaults. Missing defaults will be skipped with a warning.'
+                : 'Custom selection. Remove unavailable servers before saving or creating.'}
+            </Typography.Text>
+          </Space>
         )}
       />
 

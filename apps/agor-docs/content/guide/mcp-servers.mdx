@@ -4,6 +4,30 @@ Agor can attach external MCP servers to individual sessions. Use **Catalog** for
 
 Open **MCP Catalog** from the header’s shop icon or the same icon in the session’s **MCP** popover. Search the session picker to find existing servers; its no-match action also opens the Catalog. Catalog **Connect** adds a server to **My Servers**, without creating a session. Choose **Start new session** afterward to select an eligible teammate and agent tool; its starter prompt opens in the composer as editable, unsent text. To attach a saved server to the current conversation, select it in that picker.
 
+## Defaults when starting a session
+
+New sessions inherit the branch's nonempty **MCP Servers** list, otherwise your
+user defaults. Quick start, the new-session form, mobile, and
+`agor_sessions_create` resolve those defaults on the daemon at creation time.
+If an inherited server has been removed, creation succeeds with the remaining
+servers and a warning. If every server in the branch list is missing, none are
+attached; Agor does **not** substitute user defaults. Permission failures,
+malformed configuration, and database failures still reject creation.
+
+Editing the session's MCP picker makes its whole list an **explicit selection**.
+Explicit selections are atomic: an unavailable or unauthorized server rejects
+creation rather than silently dropping it. Remove the **Unavailable MCP server**
+tag and retry; clearing the picker explicitly selects no servers. API callers
+can pass `mcpServerIds: []` for the same behavior, or omit `mcpServerIds` to inherit.
+The create response reports skipped defaults as `mcp_defaults_skipped` (a count,
+without server identities); this is a response warning, not persisted session state.
+
+Deleted servers can remain in saved branch/user default lists. Review those
+settings to remove stale entries. Agor does not automatically prune these JSON
+lists: pruning the last branch entry would change the list to empty and thereby
+activate user-default inheritance. Creation-time handling also covers existing
+stale lists and a server deleted while a session is being created.
+
 ## Authentication
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:

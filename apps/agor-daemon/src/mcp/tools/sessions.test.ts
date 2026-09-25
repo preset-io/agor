@@ -862,131 +862,71 @@ describe('agor_sessions_create', () => {
     expect(created).not.toHaveProperty('model_config');
   });
 
-  it('attaches explicit mcpServerIds via the /sessions/:id/mcp-servers route (Bug 1)', async () => {
-    // Regression: previously called the flat `session-mcp-servers` service which
-    // is read-only (find-only), so every attach silently failed with
-    // "ctx.app.service(...).create is not a function". The correct surface is
-    // the session-scoped REST route with `{ mcpServerId }` in the body and
-    // `route: { id: <session_id> }` in the params.
-    const attachCalls: Array<{ data: any; params: any }> = [];
+  it.each([[['short-id-1', 'short-id-2']], [[]], [undefined]])(
+    'passes explicit/empty/omitted MCP selection %j to atomic create',
+    async (mcpServerIds) => {
+      const create = vi.fn(async (data: unknown) => ({
+        session_id: 'sess-new',
+        ...(data as object),
+      }));
+      const app = makeFakeApp({
+        users: { get: async () => baseUser },
+        branches: { get: async () => ({ ...baseBranch, mcp_server_ids: ['stale-default'] }) },
+        sessions: { create },
+      });
+      const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+        'agor_sessions_create',
+      ]);
+      await agor_sessions_create({ branchId: 'wt-1', agenticTool: 'claude-code', mcpServerIds });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mcpServerIds: mcpServerIds?.map((id) => `full-${id}`),
+        }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('propagates atomic explicit attachment failure without prompting', async () => {
+    const prompt = vi.fn();
     const app = makeFakeApp({
       users: { get: async () => baseUser },
       branches: { get: async () => baseBranch },
       sessions: {
-        create: async (data: unknown) => ({
-          session_id: 'sess-new',
-          ...(data as Record<string, unknown>),
-        }),
-        get: async (id: string) => ({
-          session_id: id,
-          branch_id: 'wt-1',
-          genealogy: { children: [] },
-        }),
-        patch: async () => ({}),
-      },
-      '/sessions/:id/mcp-servers': {
-        create: async (data: unknown, params: unknown) => {
-          attachCalls.push({ data, params });
-          return data;
+        create: async () => {
+          throw new Error('MCP selection rejected');
         },
       },
+      '/sessions/:id/prompt': { create: prompt },
     });
-
-    const { agor_sessions_create } = await registerAndCaptureHandlers(
-      { app, userId: 'user-1', sessionId: 'sess-caller' },
-      ['agor_sessions_create']
-    );
-
-    const result = await agor_sessions_create({
-      branchId: 'wt-1',
-      agenticTool: 'claude-code',
-      mcpServerIds: ['short-id-1', 'short-id-2'],
-    });
-
-    expect(attachCalls).toHaveLength(2);
-    // resolveMcpServerId mock prefixes with 'full-'
-    expect(attachCalls[0].data.mcpServerId).toBe('full-short-id-1');
-    expect(attachCalls[0].params.route.id).toBe('sess-new');
-    expect(attachCalls[1].data.mcpServerId).toBe('full-short-id-2');
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.mcpAttachFailures).toBeUndefined();
+    const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_create',
+    ]);
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool: 'claude-code',
+        mcpServerIds: ['short-id-1'],
+        initialPrompt: 'hello',
+      })
+    ).rejects.toThrow('MCP selection rejected');
+    expect(prompt).not.toHaveBeenCalled();
   });
 
-  it('surfaces attach failures in the response when caller explicitly requested mcpServerIds', async () => {
+  it('surfaces the service warning for missing inherited defaults without leaking IDs', async () => {
     const app = makeFakeApp({
       users: { get: async () => baseUser },
-      branches: { get: async () => baseBranch },
-      sessions: {
-        create: async () => ({ session_id: 'sess-new' }),
-        get: async (id: string) => ({
-          session_id: id,
-          branch_id: 'wt-1',
-          genealogy: { children: [] },
-        }),
-        patch: async () => ({}),
-      },
-      '/sessions/:id/mcp-servers': {
-        create: async () => {
-          throw new Error('RBAC: forbidden');
-        },
-      },
+      branches: { get: async () => ({ ...baseBranch, mcp_server_ids: ['stale-default'] }) },
+      sessions: { create: async () => ({ session_id: 'sess-new', mcp_defaults_skipped: 1 }) },
     });
-
-    const { agor_sessions_create } = await registerAndCaptureHandlers(
-      { app, userId: 'user-1', sessionId: 'sess-caller' },
-      ['agor_sessions_create']
-    );
-
-    const result = await agor_sessions_create({
-      branchId: 'wt-1',
-      agenticTool: 'claude-code',
-      mcpServerIds: ['short-id-1'],
-    });
-
+    const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_create',
+    ]);
+    const result = await agor_sessions_create({ branchId: 'wt-1', agenticTool: 'claude-code' });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.mcpAttachFailures).toHaveLength(1);
-    expect(parsed.mcpAttachFailures[0].mcp_server_id).toBe('full-short-id-1');
-    expect(parsed.mcpAttachFailures[0].reason).toContain('RBAC');
-  });
-
-  it('silently skips (does not surface) attach failures for inherited mcpServerIds', async () => {
-    const branchWithMcps = {
-      ...baseBranch,
-      mcp_server_ids: ['inherited-1'],
-    };
-    const app = makeFakeApp({
-      users: { get: async () => baseUser },
-      branches: { get: async () => branchWithMcps },
-      sessions: {
-        create: async () => ({ session_id: 'sess-new' }),
-        get: async (id: string) => ({
-          session_id: id,
-          branch_id: 'wt-1',
-          genealogy: { children: [] },
-        }),
-        patch: async () => ({}),
-      },
-      '/sessions/:id/mcp-servers': {
-        create: async () => {
-          throw new Error('boom');
-        },
-      },
-    });
-
-    const { agor_sessions_create } = await registerAndCaptureHandlers(
-      { app, userId: 'user-1', sessionId: 'sess-caller' },
-      ['agor_sessions_create']
-    );
-
-    const result = await agor_sessions_create({
-      branchId: 'wt-1',
-      agenticTool: 'claude-code',
-      // no explicit mcpServerIds → inherits from branch
-    });
-
-    const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.mcpAttachFailures).toBeUndefined();
+    expect(parsed.mcp_defaults_skipped).toBe(1);
+    expect(parsed.note).toContain('Warning: 1 unavailable default MCP server');
+    expect(result.content[0].text).not.toContain('stale-default');
   });
 
   it('auto-links to calling session when ctx.sessionId is set', async () => {
