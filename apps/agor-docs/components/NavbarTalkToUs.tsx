@@ -16,7 +16,7 @@ export function NavbarTalkToUs() {
       <button type="button" className="navbar-talk-to-us" onClick={() => setIsOpen(true)}>
         Talk to Us
       </button>
-      <HubSpotMeetingModal isOpen={isOpen} onClose={() => setIsOpen(false)} />
+      <HubSpotMeetingModal isOpen={isOpen} onClose={() => setIsOpen(false)} title="Talk to Us" />
     </>
   );
 }
