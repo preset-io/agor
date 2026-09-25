@@ -1,3 +1,4 @@
+import { RateLimitError } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v10';
 import type {
   DiscordCatchUpConfig,
@@ -73,6 +74,8 @@ function pageRoute(threadId: string, beforeProviderCursor: string): string {
 }
 
 function rateLimitStatus(error: unknown): boolean {
+  // A REST client built with rejectOnRateLimit throws RateLimitError (retryAfter in ms, no status).
+  if (error instanceof RateLimitError) return true;
   const record = asRecord(error);
   return record?.status === 429 || record?.statusCode === 429 || record?.code === 429;
 }
@@ -146,11 +149,10 @@ export function createDiscordReadBudget(config: DiscordGatewayConfig): DiscordRe
 async function getWithBudget(
   rest: DiscordHistoryRestTransport,
   route: string,
-  config: DiscordCatchUpConfig,
-  deadline: number,
-  counters: { retries: number; totalDelay: number } = { retries: 0, totalDelay: 0 },
+  budget: DiscordReadBudget,
   notFoundAsNull = false
 ): Promise<unknown> {
+  const { limits, deadline } = budget;
   while (true) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw makeError('request_timeout', 'Discord history request timed out');
@@ -165,8 +167,8 @@ async function getWithBudget(
       }
       const delay = retryAfterMs(error);
       if (
-        counters.retries >= config.rate_limit_max_retries ||
-        counters.totalDelay + delay > config.rate_limit_max_total_delay_ms ||
+        budget.retries >= limits.rate_limit_max_retries ||
+        budget.totalDelay + delay > limits.rate_limit_max_total_delay_ms ||
         Date.now() + delay > deadline
       ) {
         throw new DiscordHistoryError(
@@ -175,8 +177,8 @@ async function getWithBudget(
           delay
         );
       }
-      counters.retries += 1;
-      counters.totalDelay += delay;
+      budget.retries += 1;
+      budget.totalDelay += delay;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -191,7 +193,7 @@ export async function getDiscordRecordWithinBudget(
   route: string,
   budget: DiscordReadBudget
 ): Promise<Record<string, unknown> | null> {
-  return asRecord(await getWithBudget(rest, route, budget.limits, budget.deadline, budget, true));
+  return asRecord(await getWithBudget(rest, route, budget, true));
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -338,12 +340,13 @@ export async function fetchDiscordProviderHistory(
 
   const limits = configWithDefaults(config);
   const deadline = Date.now() + limits.request_timeout_ms;
+  // Catch-up shares one deadline but gives each request its own rate-limit retry budget.
+  const requestBudget = (): DiscordReadBudget => ({ limits, deadline, retries: 0, totalDelay: 0 });
   const live = validateBoundary(
     await getWithBudget(
       rest,
       messageRoute(request.threadId, request.throughProviderCursor),
-      limits,
-      deadline
+      requestBudget()
     ),
     request.threadId,
     request.throughProviderCursor,
@@ -366,8 +369,7 @@ export async function fetchDiscordProviderHistory(
       const rawPage = await getWithBudget(
         rest,
         pageRoute(request.threadId, before),
-        limits,
-        deadline
+        requestBudget()
       );
       if (!Array.isArray(rawPage) || rawPage.length > DISCORD_HISTORY_PAGE_SIZE) {
         throw makeError('malformed_response', 'Discord history page was malformed');
@@ -509,7 +511,7 @@ export async function fetchDiscordChannelHistory(
     throw makeError('invalid_request', 'Discord channel history request was invalid');
   }
 
-  const { limits, deadline } = budget;
+  const { limits } = budget;
   const forward = request.after !== undefined;
   const direction = forward ? 'after' : 'before';
   let cursor = forward ? request.after : request.before;
@@ -525,8 +527,6 @@ export async function fetchDiscordChannelHistory(
     const rawPage = await getWithBudget(
       rest,
       `${Routes.channelMessages(request.channelId)}?${params.toString()}`,
-      limits,
-      deadline,
       budget
     );
     if (!Array.isArray(rawPage) || rawPage.length > DISCORD_HISTORY_PAGE_SIZE) {

@@ -1,3 +1,4 @@
+import { RateLimitError } from '@discordjs/rest';
 import { describe, expect, it, vi } from 'vitest';
 import type { DiscordGatewayConfig } from '../../types/gateway';
 import {
@@ -462,6 +463,44 @@ describe('Discord channel history for agents', () => {
     await expect(
       fetchDiscordChannelHistory(ignoresCursor, config, { channelId, before: at(5) })
     ).rejects.toMatchObject({ kind: 'incomplete_coverage' });
+  });
+
+  it('treats a rejected @discordjs/rest RateLimitError as budgeted rate limiting', async () => {
+    const rateLimited = () =>
+      new RateLimitError({
+        timeToReset: 1,
+        limit: 1,
+        method: 'GET',
+        hash: 'hash',
+        url: 'https://discord.com/api/v10/channels/1/messages',
+        route: '/channels/:id/messages',
+        majorParameter: channelId,
+        global: false,
+        retryAfter: 1,
+        sublimitTimeout: 0,
+        scope: 'user',
+      });
+    const pages = [rateLimited(), [channelMessage(1)]];
+    const retried = {
+      get: vi.fn(async () => {
+        const next = pages.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      }),
+    };
+    const result = await fetchDiscordChannelHistory(retried, config, { channelId });
+    expect(result.messages.map((item) => item.id)).toEqual([at(1)]);
+    expect(retried.get).toHaveBeenCalledTimes(2);
+
+    const noRetries = { catch_up: { ...config.catch_up!, rate_limit_max_retries: 0 } };
+    const limited = {
+      get: vi.fn(async () => {
+        throw rateLimited();
+      }),
+    };
+    await expect(
+      fetchDiscordChannelHistory(limited, noRetries, { channelId })
+    ).rejects.toMatchObject({ kind: 'rate_limit' });
   });
 
   it('rejects invalid requests before calling Discord', async () => {

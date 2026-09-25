@@ -1241,6 +1241,17 @@ describe('Discord agent channel history', () => {
     ).resolves.toMatchObject({ channelId: parentId, messages: [] });
   });
 
+  it('reads through the dedicated history REST client when the transport provides one', async () => {
+    const shared = historyTransport();
+    const history = historyTransport();
+    const transport = { ...shared.transport, historyRest: history.transport.rest };
+    await new DiscordConnector(config, transport as never).fetchChannelHistory({
+      channelId: parentId,
+    });
+    expect(shared.get).not.toHaveBeenCalled();
+    expect(messageCalls(history.get)).toHaveLength(1);
+  });
+
   it('applies one deadline and one rate-limit budget across access checks and pages', async () => {
     const tight = {
       ...config,
