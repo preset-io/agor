@@ -393,6 +393,34 @@ code span[style*="--shiki-dark:#6A737D"] {
   color: var(--agor-teal-light, #7fe8df);
 }
 
+/* EXPERIMENTAL: horizontally center the search box in the navbar so the logo
+ * stays pinned far left and the links/CTAs group pins right, giving
+ * [logo] ......... [search] ......... [Docs][Blog][Agor Cloud][Talk to Us][GitHub][Discord][menu].
+ *
+ * Technique: take the search container out of flex flow and absolutely center
+ * it in the (now relatively positioned) nav. The logo already carries
+ * margin-inline-end:auto, so with search removed from flow that auto margin
+ * pushes every remaining item to the right edge. The existing `order` values
+ * (Docs/Blog wrapper 0, CTAs 1, github/discord 3, menu 4) already lay the right
+ * group out in the intended sequence, so nothing else needs to move.
+ *
+ * Gated to >= 960px: below that the centered box would collide with the right
+ * group on narrower desktops, so search keeps its current in-flow slot there.
+ * The whole block is easy to revert if the experiment isn't kept. */
+@media (min-width: 960px) {
+  .nextra-navbar nav {
+    position: relative;
+  }
+
+  .nextra-navbar nav > div:has(input) {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+  }
+}
+
 /* Docs content headings — adopt the marketing display font (Space Grotesk)
  * and a light tint so pages read less like a wall of white. Distinct from
  * the teal link color; scoped away from the landing page (its headings carry
