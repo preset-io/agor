@@ -71,15 +71,14 @@ escape hatch, not a revocation operation.
 
 ## Supported and refused transports
 
-This phase deliberately supports a small, reviewable set:
+The gateway supports the following bounded transport set:
 
 - **Bounded Streamable HTTP:** `POST` and `DELETE`; protocol headers; JSON responses; and
   JSON-only SSE responses that terminate within 30 seconds and 16 MiB. Each
   SSE response is reconstructed from validated JSON `data` fields only. GET,
   unsupported methods, and every redirect are refused before a second send.
 - **All stdio:** refused in both compatibility and enforced modes, before any
-  process spawn or pipe write. Agor does not claim stdio revocation in this
-  phase.
+  process spawn or pipe write. Agor does not claim stdio revocation.
 - **Legacy SSE endpoint handoff and WebSocket:** refused. Current SDK seams do
   not let the daemon own every subsequent send.
 - **Unbounded or non-JSON streaming:** refused. The gateway buffers a bounded
@@ -87,7 +86,7 @@ This phase deliberately supports a small, reviewable set:
   tail.
 - **Servers with an `ask` tool rule:** omitted with the actionable
   `approval_not_mediated` state in compatibility and enforced modes. Live
-  one-shot approval is deferred; the existing interactive approval behavior is
+  one-shot approval is not supported; the existing interactive approval behavior is
   unchanged in off and observe modes. `deny` is independently checked before
   mediated egress.
 - **Indeterminate templates:** omitted with `template_configuration`. Gateway
@@ -188,25 +187,9 @@ rollout mode. Detail is bounded to 100 visible servers per response and reports
 when additional diagnostics were truncated. These status and rollout endpoints
 remain available for operator automation but are not mounted by Settings.
 
-Reprojection rate limits are bounded, process-local, per-tenant availability controls; HA
-nodes do not share one aggregate rate-limit budget. The exact request ID,
-recovery generation, and reprojection claim are persisted and compared under the
-Task row lock. The local key budget leaves headroom above one bounded 500-Task
-hint fanout, and an exact durable claim retry bypasses that availability budget.
-Successful refresh retains a monotonic generation tombstone.
-It also retains the settlement time and bounded keyed hashes of the installed
-per-server authority. A late rejection is suppressed only when its refresh
-identity, captured authority, or observation time proves it predates that
-settlement; a newly stale capability can still recover after a missed hint.
-Claude serializes transport application and calls a durable, capability-free
-validation operation immediately before `setMcpServers`, so a delayed older
-response cannot replace a newer successful transport. A duplicate request after
-restart or on another HA daemon can continue only when current authority matches
-the immutable projection digest first bound to its durable claim; authority drift
-fails closed rather than changing what that request would attest. Executors
-derive a missed hint from durable Task recovery state when their refresh handler
-registers or reconnects. Gateway admission still rechecks current authority, and
-neither recovery handling nor idempotency replays a provider call.
+Reprojection rate limits are process-local and per-tenant; HA nodes do not share
+one aggregate budget. Recovery revalidates current authority and never replays a
+provider call.
 
 `GET /health` reports the rollout mode, database probe, local in-flight count,
 and oldest local request. Useful metrics are:
@@ -215,25 +198,8 @@ and oldest local request. Useful metrics are:
 - rejected gateway requests by stable, secret-free reason in logs;
 - database health/latency from the normal daemon health path.
 
-The target budgets remain `<=5 ms` p95 and `<=25 ms` p99 admission and `<=20 ms` p95
-forwarding overhead. This phase has no measured HA/99.99% availability evidence. It performs one
-initial authority/material load and one final durable authority check per
-physical hop; it does not maintain lease, mutation, quarantine, or outbox rows.
-Run the checked-in SQLite benchmark harness after storage or authorization-path
-changes. PostgreSQL/HA numbers require `AGOR_TEST_POSTGRES_URL` and the managed
-HA environment.
-
-On a quiet, otherwise idle host, the implementation review run on 2026-08-25 measured 200 warmed SQLite
-admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with:
-
-```bash
-AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run src/mcp-egress/gateway.test.ts
-```
-
-These local figures are not a PostgreSQL/HA
-availability measurement. The opt-in harness reports host-sensitive figures and
-does not enforce them as a CI release threshold; run it only on a quiet idle host
-and compare with a recorded baseline.
+These metrics do not establish an HA availability guarantee. Validate latency
+and availability against your own deployment requirements.
 
 A crash loses only best-effort local cancellation state. The next daemon does
 not mass-quarantine servers: enforced admission still fails closed when its
@@ -242,7 +208,7 @@ outside the stronger claim.
 
 ## Migration and rollback
 
-There is no schema migration in this phase. The mode uses existing tenant app
+Enabling the gateway requires no additional schema migration. The mode uses existing tenant app
 variables, authority uses existing MCP `config_version`, and OAuth uses the
 existing grant generation/binding.
 

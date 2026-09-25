@@ -144,8 +144,7 @@ origin on every replica. The checked-in `.agor.yml` `ha` variant honors an inher
 when a public HTTPS proxy fronts the branch ingress), or otherwise renders a development HTTP value
 from Agor's host address and branch port. OAuth on PostgreSQL/HA requires the former to be a safe
 browser-reachable HTTPS origin; the development HTTP default cannot start a provider flow.
-The Agor Cloud rollout therefore remains dependent on `agor-cloud#468` provisioning that public
-origin contract. Until it does, `mcpOAuth` reports false and OAuth start refuses before provider
+Without that public origin, `mcpOAuth` reports false and OAuth start refuses before provider
 discovery. `daemon.public_url` is reserved for internal daemon/executor callbacks and is never an
 OAuth browser redirect origin.
 
@@ -406,15 +405,14 @@ database transaction remains open during the HTTP request.
 > Codex device-attempt, import, and logout writers are generation-fenced, but
 > the Codex provider runtime can still read and rewrite its canonical
 > `.codex/auth.json`. It does not yet have Claude's canonical-file mask plus
-> daemon-issued short-lived-token containment. That runtime-writer parity risk
-> remains a separate follow-up; this change neither fixes it nor changes the
-> existing Codex capability behavior.
+> daemon-issued short-lived-token containment. The Codex runtime remains a
+> credential-file writer; generation fencing does not provide canonical-file
+> containment.
 
 ## Rollout and rollback checklist
 
 1. Quiesce OAuth exchanges/refreshes and stop every daemon, then back up PostgreSQL and any shared-local workspace volume.
-2. Apply all migrations before admitting new-version daemons. Migration `0077_environment_health_ha` adds branch observation leases/generations and the narrow discovery policy. Migration `0078_mcp_oauth_pending_flows` replaces legacy MCP OAuth grant/callback authority, migration `0082_github_install_state` moves one-time GitHub setup state into PostgreSQL, migration `0091_codex_device_auth_attempts` adds Codex poll leases plus completion generations, migration `0100_claude_oauth_attempts` adds Claude paste-back attempt and mutation authority, PostgreSQL migration `0102_mcp_oauth_client_registrations` adds the encrypted fleet-wide DCR lease/CAS authority, and `0103_oauth_authority_watermark_reconciliation` repairs the old `b0585d76` timestamp collision only after matching its complete archived schema fingerprint and exactly one applied migration-ledger row at the legacy watermark with the archived SHA-256 hash (discarding those old registrations so reconnect is fresh). It also verifies the complete final DCR and Claude authority schemas and fails closed on malformed or future shapes. SQLite intentionally has no DCR registration schema and retains process-local standalone registration. These protocol migrations require `agor db migrate --yes --offline-cutover` on an existing database. Use an all-at-once cohort replacement: old daemons lack the registration/attempt and credential-file fencing and must not overlap or advertise the new capabilities. The later `0103` watermark makes pre-final daemons reject the migrated database as ahead. Mixed relay revisions intentionally do not exchange events.
-   Main's `0101_environment_command_discovery` stays unchanged. Both OAuth timestamps follow it. The `0102` bootstrap leaves any existing DCR relation for `0103`'s exact validation in the same offline transaction, preserving already-final rows while retaining the archived legacy repair and malformed-schema refusal. This also permits upgrading the previously reviewed `b058ea35` head without recreating its DCR table.
+2. Apply all migrations before admitting new-version daemons. Migration `0077_environment_health_ha` adds branch observation leases/generations and the narrow discovery policy. Migration `0078_mcp_oauth_pending_flows` replaces legacy MCP OAuth grant/callback authority, migration `0082_github_install_state` moves one-time GitHub setup state into PostgreSQL, migration `0091_codex_device_auth_attempts` adds Codex poll leases plus completion generations, migration `0100_claude_oauth_attempts` adds Claude paste-back attempt and mutation authority, PostgreSQL migration `0102_mcp_oauth_client_registrations` adds the encrypted fleet-wide DCR lease/CAS authority, and `0103_oauth_authority_watermark_reconciliation` repairs a legacy migration timestamp collision only when the archived schema and migration ledger match exactly. Repaired legacy registrations are discarded, so affected connections need fresh registration. It also verifies the complete final DCR and Claude authority schemas and fails closed on malformed or future shapes. SQLite intentionally has no DCR registration schema and retains process-local standalone registration. These protocol migrations require `agor db migrate --yes --offline-cutover` on an existing database. Use an all-at-once cohort replacement: old daemons lack the registration/attempt and credential-file fencing and must not overlap or advertise the new capabilities. The later `0103` watermark makes pre-final daemons reject the migrated database as ahead. Mixed relay revisions intentionally do not exchange events.
 
    Migration `0105_mcp_oauth_grant_attribution` also requires an offline cutover and retires historical shared MCP OAuth grants. Follow the [shared-grant upgrade checklist](/guide/mcp-servers#upgrade-shared-grant-attribution-0105-both-databases): inventory affected servers per tenant, identify reauthorization administrators, quiesce OAuth exchanges/refreshes before backup and migration, and verify each server after cutover. Restoring a backup cannot undo provider-side authorization-code consumption or token rotation.
 
@@ -433,7 +431,11 @@ Retaining additive tables is safe only for a rollback binary whose journal inclu
 
 ## Opt-in integration harness
 
-The repository harness is intentionally not part of the default test run. Against only the checked-in HA Compose project it proves two ready identities and activation of the distributed environment-health loop on both replicas (not occurrence-level fencing), activation of shared Task queue/reconciler loops, REST distribution, JIT login for Acme and Globex through the picker/exchange boundary, cross-tenant board read/watch/event denial, same-tenant private-board denial, cross-replica one-shot GitHub setup callback consumption plus raw-state exclusion from nginx access and upstream-failure logs, an actual `429` from the single-ingress sensitive-route limiter, fail-closed opaque personal API keys in auth-claim-only tenancy, polling upgrade affinity, authorized Feathers and native-room delivery with a bounded duplicate-observation window, anonymous denial, device/Claude-attempt status on both replicas, authenticated daemon reconnect/restart, and Redis readiness/liveness loss and recovery. Both replicas must report an identical capability matrix, including the containment-dependent Claude flags. It writes a simulated Codex auth file through A, inspects it through B's executor route, logs out through B, and observes it absent through A. It also starts, wrong-state submits, and races replacement Claude attempts across replicas; external Claude source and execution-home changes fence the winner, the route change deletes the old canonical credential before publishing the override, and restoring the canonical route leaves cross-replica logout working. It never completes a real provider attempt and asserts the simulated tokens are absent from daemon/ingress logs. PostgreSQL two-pool tests additionally prove refresh-versus-login/logout/route ordering, loser adoption, Claude/Codex claim and replacement, source-change, cross-provider invalidation, removal-first/finalize-first deletion, standalone/HA generation transitions, canonical non-aliasing, generation, and file-lock races; a standalone test exercises actual delegated-home-key reuse through the global queue. Cleanup runs in `finally`, restores stopped branch services, and removes any created auth file, API key, or tenant-owned board after both success and assertion failure.
+The opt-in harness exercises the checked-in HA Compose project: replica readiness,
+REST distribution, Socket.IO affinity and authorized delivery, tenant and private-board
+access denial, credential-attempt coordination, and daemon/Redis loss and recovery.
+It uses simulated credentials, not real provider sign-in. Run it only against the
+disposable development stack, not a production deployment.
 
 ```bash
 export COMPOSE_PROJECT_NAME=agor-ha-integration
@@ -448,4 +450,8 @@ export AGOR_HA_INTEGRATION_FAILURES=1
 pnpm test:ha:docker
 ```
 
-The source image intentionally contains no authenticated provider CLI/runtime, so the live harness does not fake an agent Task. PostgreSQL-gated daemon tests instead construct two queue workers/Task services on independent PostgreSQL clients, elect one dispatch intent for one admitted Task, exercise executor-token authentication/reconnect/revocation/bounded use through two Feathers apps backed by independent PostgreSQL clients, and exercise two reconcilers. Passing this harness is a transport, control-plane, and tenant-boundary smoke result—not a claim that the shared-local container preserves an in-flight executor, matches Cloud's external execution substrate, covers every gateway provider/task permission mode, or makes blocked process-affine features HA-safe.
+Passing this harness is a transport, control-plane, and tenant-boundary smoke
+result, not full product HA certification. It does not exercise real provider
+authentication, prove that an in-flight executor survives daemon loss, validate
+Cloud’s external execution substrate, cover every gateway provider or task
+permission mode, or make blocked process-affine features HA-safe.

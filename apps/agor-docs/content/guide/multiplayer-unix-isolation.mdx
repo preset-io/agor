@@ -179,11 +179,8 @@ MCP exposes `agor_boards_transfer_ownership` and
 soft/hard deletion are not part of these commands.
 
 Upgrade the daemon and apply its normal database migrations before using transfer.
-The migration removes only the old ownership-immutability triggers; it does not
-rewrite existing owners. Authorization, successor eligibility and stale-owner
-checks run in the shared application transaction on SQLite and PostgreSQL.
-Existing database reference protections remain in place (SQLite owner-update
-eligibility is checked by the application, not a replacement trigger).
+Existing owners are preserved. Transfers require authorization, an eligible
+successor, and a matching expected owner on both SQLite and PostgreSQL.
 Branches undergoing maintenance or permanent deletion reject transfer.
 
 A board has two separate settings:

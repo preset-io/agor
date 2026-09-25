@@ -567,7 +567,7 @@ daemon:
   public_url: http://agor-daemon.agor.svc.cluster.local:3030
 ```
 
-At startup, the daemon calls `configureDaemonUrl()` which sets this URL globally. All subsequent executor payloads automatically include the correct `daemonUrl`.
+The daemon includes the configured `daemonUrl` in executor payloads.
 
 ---
 
@@ -581,11 +581,12 @@ surface and runnable Compose smoke topology.
 
 ### Shared Filesystem Simplifies HA
 
-With shared storage (EFS/NFS) for both `AGOR_DATA_HOME` and `/home`, the daemon becomes largely stateless:
-
-- **Executors**: Make fresh connections to daemon - no sticky sessions needed
-- **Database**: SQLite on shared storage, or use Turso/LibSQL for distributed access
-- **Filesystem state**: Consistent across all replicas via shared mount
+Shared storage can provide consistent workspace files across replicas in the
+`shared-local` topology, but does not make the daemon stateless or remove HA
+prerequisites. Active-active mode requires PostgreSQL, Redis, and sticky Engine.IO
+ingress; SQLite on a shared volume is not a supported substitute. External
+execution has a different storage contract. Follow the
+[HA topology requirements](/guide/daemon-ha) for your deployment.
 
 ### What Still Needs Redis
 

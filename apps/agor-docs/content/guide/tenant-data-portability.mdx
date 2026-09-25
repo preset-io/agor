@@ -257,9 +257,8 @@ operator helpers. It is **not** a database lock or fence:
 So the gate does **not** affirmatively freeze every possible writer. Export
 consistency therefore **relies on the mandatory `verify` step**, which re-hashes
 live tenant data against the archive and detects any straggler write — treat
-`verify` as part of the move, not an optional check. DB-level trigger fencing
-(rejecting writes while the gate row exists) is a possible future hardening, not
-current behavior.
+`verify` as part of the move, not an optional check. The gate does not provide
+database-level write fencing.
 
 The filesystem export **fails closed** if a read would resolve outside the
 tenant root. The walk never descends symlinks (it records them as their own

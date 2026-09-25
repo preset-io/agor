@@ -19,18 +19,10 @@ naming the saved server ID) retain their existing security and canonical catalog
 policy checks. Full definitions remain available internally for those checks and
 maintenance, even while hidden.
 
-Vercel, Intercom, Square, Canva, Dropbox, and New Relic are currently hidden based
-on the September 9–10 review, not a new provider certification. The first four had
-documented provider-client or callback approval requirements. Dropbox involved
-trusted-client DCR admission; its observed nonspecific `403` did not prove
-callback rejection. New Relic DCR succeeded, but subsequent authorization failed;
-allowlisting was not confirmed. Figma is also hidden following a September 24
-user report that provider approval is required; this was not independently
-verified. There are seven hidden providers. Asana, incident.io, and Datadog are
-not hidden by this change. Onboarding recommendations remain hardcoded; Figma
-has been removed from the “Build me an app” recommendations so the existing
-eligible choices fill the kit. None of the seven hidden providers is actively
-recommended; recommendations are not dynamically filtered by catalog visibility.
+Catalog availability can change between releases, including when a provider
+requires client approval that Agor cannot complete. A listed entry is not a
+guarantee that every provider account can connect; follow the readiness guidance
+and provider requirements shown before connecting.
 
 ## Authentication
 
@@ -226,4 +218,4 @@ The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` 
 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
 
-The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret. Unit tests inject the network and OAuth discovery seams and never depend on public endpoints.
+The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret.

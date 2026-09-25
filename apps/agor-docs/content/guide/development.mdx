@@ -330,9 +330,9 @@ See the **[Architecture Guide](/guide/architecture#technology-stack)** for the c
 
 **Watch Mode:**
 
-- User runs `pnpm dev` in daemon (watches core + daemon)
-- **DO NOT** run builds unless explicitly asked or you see compilation errors
-- **DO NOT** start background processes
+- Run `pnpm dev` in the daemon directory to watch core and daemon changes.
+- Watch mode handles recompilation during development; you do not need a separate build after each edit.
+- Run the validation commands above before submitting a contribution.
 
 **Type Reuse:**
 

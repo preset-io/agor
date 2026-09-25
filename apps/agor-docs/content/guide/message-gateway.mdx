@@ -40,7 +40,7 @@ Things that still warrant caution:
 
 The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack or Discord bot in a supported channel, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack and Discord channel-like surfaces, every prompt requires an explicit bot mention.
 
-> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams**. WhatsApp and Telegram connectors are planned.
+> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams**.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -106,43 +106,26 @@ Slack DM                    Agor Daemon                    Agent
   │                              │                           │
 ```
 
-The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately, effectively a no-op.
-
 ### Multi-tenant listener lifecycle
 
-Standalone SQLite installations require no new configuration and keep the
-historical process-local listener lifecycle.
+Standalone SQLite installations use process-local listeners.
 
 > **Provider limit in PostgreSQL mode:** Slack, GitHub, Shortcut, and Discord listeners
 > support distributed ownership. Microsoft Teams currently depends on a local
 > Bot Framework port and in-memory conversation references, so Agor fails its
 > listener closed on PostgreSQL. Teams remains available only in standalone
-> SQLite until its ingress and reply-routing contract is redesigned.
+> SQLite.
 
-On PostgreSQL, every daemon performs bounded recurring discovery. A durable,
-database-time lease on each gateway channel chooses one listener owner; daemon
-presence and Redis are not ownership signals. The owner renews a 30-second
-lease. A hard-dead owner becomes claimable after 30 seconds; discovery adds at
-most a 6-second jittered idle wait plus a bounded keyset pass (25 candidates per
-page, at most 250 ms between full pages) and provider connection time.
-Credential/config updates, disable, and delete revoke the old owner
-immediately. Provider callbacks, durable occurrence completion, and polling
-checkpoints are fenced by an opaque claim token. Graceful shutdown stops intake,
-waits up to five seconds for admitted callbacks, and releases only after both
-the transport and callbacks are drained; otherwise the lease expires normally.
+On PostgreSQL, a renewable 30-second lease selects one listener owner per
+channel. After an owner dies, failover also takes discovery and provider
+connection time. Configuration or credential changes, disabling, and deletion
+revoke the old owner. Graceful shutdown allows up to five seconds for admitted
+callbacks to drain; if draining is incomplete, the lease expires normally.
 
-Discovery returns only enabled channel and tenant IDs. The daemon then leaves
-system scope, reloads the full channel (including credentials) under that
-tenant's normal RLS scope, and starts the connector with an immutable tenant
-binding. Provider callbacks re-enter that captured tenant before reading
-mappings or creating sessions.
-
-Listener instances are tenant-qualified. PostgreSQL outbound routing does not
-use listener presence or a process-local channel cache as authority: any daemon
-that handles a durable Message reloads its mapping and fresh channel credentials
-inside the Message's tenant. A channel refresh in a tenant with no enabled
-channels cannot stop or suppress another tenant. Missing, stale, or inconsistent
-discovery metadata is skipped rather than falling back to the static tenant.
+Listeners, callbacks, and outbound replies remain bound to the channel’s tenant.
+Credentials and routing are revalidated in that tenant; missing or inconsistent
+metadata never falls back to a default tenant. A channel change in one tenant
+does not stop another tenant’s listeners.
 
 Stable provider event IDs suppress duplicate Slack, GitHub, Shortcut, and Discord
 deliveries. Slack keys the logical message by workspace, conversation, and
@@ -713,4 +696,4 @@ authoritative mutation transaction.
 - [Branch Scheduler](./scheduler). Automate recurring work on branches (complements gateway for event-driven vs. time-driven automation).
 - [Agor MCP Server](./internal-mcp). Give gateway-spawned agents full self-awareness and orchestration capabilities.
 - [Agent SDK Comparison](./sdk-comparison). Choose the right coding agent for your channel's use case.
-- [Spawned Subsessions](./spawned-subsessions). Gateway-created sessions can themselves spawn child sessions for parallel work.
+- [Spawned Subsessions](/guide/sessions#spawned-subsessions-with-callbacks). Gateway-created sessions can themselves spawn child sessions for parallel work.

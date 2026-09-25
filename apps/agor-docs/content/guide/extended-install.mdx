@@ -447,13 +447,9 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 ## MCP catalog
 
-Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
-on the daemon's first catalog read and then cached for the life of the process, so browsing the
-Catalog requires no external catalog service and there is nothing to configure.
-
-What the catalog offers is therefore a function of the deployed binary: rolling
-back to an older release withdraws entries added since, until you roll forward
-again. That is intended, but it is not something to discover during an incident.
+Agor ships a reviewed catalog of MCP servers with no external catalog service
+to configure. Available entries depend on the deployed release; rolling back
+can remove entries added in newer versions.
 
 Each entry records whether its endpoint needs an account, but Connect checks the live endpoint rather
 than trusting that record. A completed MCP handshake is installed ready to use. An OAuth challenge is
