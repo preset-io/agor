@@ -61,3 +61,26 @@ test('proxy rejects cross-origin WebSocket upgrades before reaching a backend', 
     proxy.close();
   }
 });
+
+test('readiness preserves the daemon configuration contract consumed by the UI', async () => {
+  const payload = { status: 'ok', identity: { mode: 'local' }, config: { login: true } };
+  for (const uiReady of [true, false]) {
+    const proxy = createProxy('https://preview.example', {
+      healthRequest: async (url) => ({
+        ok: url.endsWith('/health') || uiReady,
+        json: async () => payload,
+      }),
+    });
+    await new Promise((resolve) => proxy.server.listen(0, '127.0.0.1', resolve));
+    try {
+      const r = await fetch(`http://127.0.0.1:${proxy.server.address().port}/health`);
+      assert.equal(r.status, uiReady ? 200 : 503);
+      const body = await r.json();
+      assert.deepEqual(body.identity, payload.identity);
+      assert.deepEqual(body.config, payload.config);
+      assert.equal(body.status, uiReady ? 'ok' : 'starting');
+    } finally {
+      proxy.close();
+    }
+  }
+});

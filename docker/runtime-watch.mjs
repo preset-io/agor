@@ -17,7 +17,7 @@ export function requiresRedeploy(paths) {
   );
 }
 
-export function createProxy(origin) {
+export function createProxy(origin, { healthRequest = fetch } = {}) {
   const sockets = new Set();
   const server = http.createServer(async (req, res) => {
     if (req.url === '/') {
@@ -29,14 +29,18 @@ export function createProxy(origin) {
       try {
         const checks = await Promise.all(
           ['/health', '/ui/'].map((path) =>
-            fetch(`http://127.0.0.1:${backendPort(path)}${path}`, {
+            healthRequest(`http://127.0.0.1:${backendPort(path)}${path}`, {
               signal: AbortSignal.timeout(3000),
             })
           )
         );
-        const ready = checks.every((r) => r.ok) && (await checks[0].json()).status === 'ok';
+        const daemonHealth = await checks[0].json();
+        const ready = checks.every((r) => r.ok) && daemonHealth.status === 'ok';
         res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: ready ? 'ok' : 'starting', mode: 'watch' }));
+        // The UI consumes identity/configuration fields from /health, not just status.
+        res.end(
+          JSON.stringify({ ...daemonHealth, status: ready ? 'ok' : 'starting', mode: 'watch' })
+        );
       } catch {
         res.writeHead(503);
         res.end('Starting');

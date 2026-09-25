@@ -216,3 +216,52 @@ test('API uses fixed endpoint/project header, refuses redirects and hides provid
   });
   await assert.rejects(client.query('query {}'), (error) => !error.message.includes(secret));
 });
+
+test('persisted replacement is accepted only with matching seed/branch and ready state', async () => {
+  const s = snapshot();
+  const replacement = '22222222-2222-2222-2222-222222222222';
+  s.environment.volumeInstances.edges[0].node.volumeId = replacement;
+  const state = {
+    version: 1,
+    binding,
+    seedVolumeId: target.volumeId,
+    volumeId: replacement,
+    phase: 'ready',
+  };
+  s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify(state);
+  const preview = new RailwayPreview(
+    fake(() => s),
+    target
+  );
+  assert.equal((await preview.inspect()).volumeId, replacement);
+  for (const change of [
+    { phase: 'creating' },
+    { binding: 'foreign' },
+    { seedVolumeId: replacement },
+  ]) {
+    s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify({ ...state, ...change });
+    await assert.rejects(preview.inspect());
+  }
+});
+
+test('workspace API credential uses Bearer only and is never part of service variables', async () => {
+  const c = new RailwayClient('synthetic-operator-token', {
+    accountToken: true,
+    request: async (_url, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer synthetic-operator-token');
+      assert.equal(options.headers['Project-Access-Token'], undefined);
+      return { ok: true, json: async () => ({ data: {} }) };
+    },
+  });
+  await c.query('query {}');
+  const p = new RailwayPreview(
+    fake((_q, v) => {
+      assert.equal(v.input.variables.RAILWAY_API_TOKEN, undefined);
+      assert.equal(v.input.variables.RAILWAY_API_KEY, undefined);
+      return {};
+    }),
+    target,
+    { env: { ...env, RAILWAY_API_TOKEN: 'synthetic-operator-token' } }
+  );
+  await p.setVariables();
+});
