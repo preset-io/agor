@@ -401,6 +401,36 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
+  it('offers Fellow with discovered OAuth and discloses its permission-gated read/write tools', async () => {
+    const fellow = (await loadCuratedCatalog()).find((entry) => entry.name === 'app.fellow/mcp');
+    expect(fellow).toMatchObject({
+      title: 'Fellow',
+      category: 'productivity',
+      capabilities: ['notes', 'tasks', 'channels'],
+      remote_url: 'https://fellow.app/mcp',
+      website_url: 'https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+    });
+    expect(fellow?.hidden).toBeUndefined();
+    expect(fellow?.oauth).toBeUndefined();
+    expect(fellow?.credentials).toBeUndefined();
+    for (const authority of [
+      'admin to enable MCP',
+      'per-user Fellow permissions',
+      'transcripts',
+      'action items',
+      'calendar events',
+      'channels',
+      'create, replace, edit, and rename agendas',
+      'permanently delete',
+      'agenda templates',
+      "meeting series' default template",
+    ]) {
+      expect(fellow?.permission_disclosure).toContain(authority);
+    }
+  });
+
   it('keeps material destructive, sensitive, and operational authority in disclosures', async () => {
     const entries = await loadCuratedCatalog();
     const disclosure = (name: string): string => {

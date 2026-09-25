@@ -277,6 +277,17 @@ describe('filterCatalog isolation', () => {
 });
 
 describe('catalog visibility', () => {
+  it('discovers Fellow by name and productivity capabilities', async () => {
+    const full = await loadCatalog();
+    const fellow = findCatalogEntry(full, 'app.fellow/mcp');
+    expect(fellow).toBeDefined();
+    for (const capability of ['notes', 'tasks', 'channels']) {
+      expect(
+        filterCatalog(full, { search: 'Fellow', category: 'productivity', capability })
+      ).toEqual([fellow]);
+    }
+  });
+
   it('hides only true, before filtering, sorting, and paging; false re-enables', () => {
     const hidden = entry({ name: 'com.hidden/mcp', hidden: true, popularity_rank: 1 });
     const visible = entry({ name: 'com.visible/mcp', hidden: false });

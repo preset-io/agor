@@ -620,6 +620,18 @@ unpublished:
     transport: sse
     auth_type: oauth
 
+  - name: app.fellow/mcp
+    title: Fellow
+    category: productivity
+    capabilities: [notes, tasks, channels]
+    benefit: Bring meeting decisions and action items into your session, and prepare agendas from that context.
+    starter_prompt: Summarise the decisions and my action items from meetings this week. Do not change any agendas or templates.
+    permission_disclosure: Requires a Fellow workspace admin to enable MCP connections and the tools you use. Acts with your per-user Fellow permissions. Reads meeting notes, summaries, transcripts, participants, action items, calendar events, channels, agendas, and templates. Enabled tools can create, replace, edit, and rename agendas; create, edit, permanently delete, and apply agenda templates; and set a meeting series' default template. Data returned by Fellow is sent to the agent and AI provider running this Agor session.
+    website_url: https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server
+    remote_url: https://fellow.app/mcp
+    transport: streamable-http
+    auth_type: oauth
+
   - name: com.clickup/mcp
     category: productivity
     capabilities: [tasks, docs, notes]
