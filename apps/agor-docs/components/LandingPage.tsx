@@ -811,6 +811,13 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
                 <GitHubIcon />
                 Star us on GitHub
               </Link>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={() => setIsDemoFormOpen(true)}
+              >
+                Book a demo
+              </button>
             </div>
           </div>
         </section>
