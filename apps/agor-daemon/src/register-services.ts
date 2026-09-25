@@ -136,6 +136,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BOARD_LAYOUT_APPLIED_EVENT,
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
@@ -700,6 +701,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }),
     }),
     {
+      events: [BOARD_LAYOUT_APPLIED_EVENT],
       methods: [
         'find',
         'get',

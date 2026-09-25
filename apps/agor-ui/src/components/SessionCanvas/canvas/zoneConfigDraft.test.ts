@@ -30,6 +30,39 @@ describe('zone configuration draft merge', () => {
     expect(applyZoneConfigDraft(empty, draft, draft)).toBeUndefined();
   });
 
+  it('preserves remote layout and binding on an appearance-only edit', () => {
+    const latest: ZoneBoardObject = {
+      ...zone,
+      layout_binding: 'inherit',
+      layout: { mode: 'auto', preset: 'compact_list', gap: 8 },
+    };
+    expect(applyZoneConfigDraft(latest, initial, { ...initial, name: 'Local name' })).toEqual({
+      ...latest,
+      label: 'Local name',
+    });
+  });
+
+  it('applies a layout override without overwriting received placement or automation', () => {
+    const inherited: ZoneBoardObject = { ...zone, layout_binding: 'inherit' };
+    const draft = createZoneConfigDraft(inherited, inherited.label, {
+      mode: 'auto',
+      preset: 'compact_list',
+      gap: 8,
+    });
+    const latest: ZoneBoardObject = { ...inherited, x: 99, trigger: undefined };
+    const edited = {
+      ...draft,
+      layoutBinding: 'override' as const,
+      layout: { ...draft.layout, columnGap: 4 },
+    };
+    expect(applyZoneConfigDraft(latest, draft, edited)).toEqual({
+      ...latest,
+      layout_binding: 'override',
+      layout: edited.layout,
+    });
+    expect(applyZoneConfigDraft(latest, draft, { ...edited, ...draft })).toBeUndefined();
+  });
+
   it('preserves remote fields and trigger subfields while applying a prompt edit', () => {
     const latest: ZoneBoardObject = {
       ...zone,

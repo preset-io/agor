@@ -168,10 +168,15 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   // Re-seed config defaults when the picked tool changes (same helper as NewSessionModal).
   useEffect(() => {
+    // Ant Design does not connect the form instance until the lazy popover
+    // content mounts. Calling form methods while the composer is collapsed
+    // produces an unconnected-useForm warning and has no useful effect: the
+    // open transition below initializes every field authoritatively.
+    if (!open) return;
     form.setFieldsValue(
       getNewSessionToolSwitchValues(currentUser, selectedAgent as AgenticToolName)
     );
-  }, [selectedAgent, form, currentUser]);
+  }, [open, selectedAgent, form, currentUser]);
 
   const closeAndReset = () => {
     setOpen(false);

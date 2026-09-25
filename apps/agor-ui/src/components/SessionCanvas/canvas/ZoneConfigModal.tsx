@@ -2,7 +2,13 @@
  * Modal for configuring zone identity, appearance, placement, and automation.
  */
 
-import type { AgenticToolName, BoardObject } from '@agor-live/client';
+import { normalizeZoneLayoutPolicy } from '@agor/core/layout/zone-layout';
+import type {
+  AgenticToolName,
+  BoardObject,
+  ZoneLayoutBinding,
+  ZoneLayoutPolicy,
+} from '@agor-live/client';
 import { isAgenticToolName } from '@agor-live/client';
 import {
   Alert,
@@ -25,6 +31,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 import { ExpandableAlert } from '../../ExpandableAlert';
+import { ZoneLayoutPolicyEditor } from './ZoneLayoutPolicyEditor';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
 import {
   applyZoneConfigDraft,
@@ -48,6 +55,7 @@ interface ZoneConfigModalProps {
     objectData: BoardObject
   ) => boolean | undefined | Promise<boolean | undefined>;
   zoneData: BoardObject;
+  boardZoneLayoutDefaults?: ZoneLayoutPolicy;
   canEdit?: boolean;
 }
 
@@ -63,6 +71,7 @@ export const ZoneConfigModal = ({
   objectId,
   onUpdate,
   zoneData,
+  boardZoneLayoutDefaults,
   canEdit = true,
 }: ZoneConfigModalProps) => {
   const { token } = theme.useToken();
@@ -72,6 +81,10 @@ export const ZoneConfigModal = ({
   const [backgroundColor, setBackgroundColor] = useState<string | undefined>();
   const [fontSize, setFontSize] = useState<number | undefined>();
   const [clearLegacyColor, setClearLegacyColor] = useState(false);
+  const [layoutPolicy, setLayoutPolicy] = useState<ZoneLayoutPolicy>(() =>
+    normalizeZoneLayoutPolicy(undefined)
+  );
+  const [layoutBinding, setLayoutBinding] = useState<ZoneLayoutBinding>('override');
   const initialDraftRef = useRef<{ objectId: string; draft: ZoneConfigDraft } | null>(null);
   const savingRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -114,18 +127,20 @@ export const ZoneConfigModal = ({
   // turn untouched fields into edits. A different zone/open gets a fresh draft.
   useEffect(() => {
     if (open && zone && initialDraftRef.current?.objectId !== objectId) {
-      const draft = createZoneConfigDraft(zone, zoneName);
+      const draft = createZoneConfigDraft(zone, zoneName, boardZoneLayoutDefaults);
       initialDraftRef.current = { objectId, draft };
       form.setFieldsValue(draft);
       setBorderColor(draft.borderColor);
       setBackgroundColor(draft.backgroundColor);
       setFontSize(draft.fontSize);
       setClearLegacyColor(false);
+      setLayoutPolicy(draft.layout);
+      setLayoutBinding(draft.layoutBinding);
       setTriggerAgent(draft.triggerAgent);
     } else if (!open) {
       initialDraftRef.current = null;
     }
-  }, [open, objectId, zone, zoneName, form]);
+  }, [open, objectId, zone, zoneName, form, boardZoneLayoutDefaults]);
 
   // Validation yields. Re-read props before constructing the replacement so a
   // received patch or permission change during validation is not lost.
@@ -180,7 +195,10 @@ export const ZoneConfigModal = ({
       )
         return;
       const nextZone = applyZoneConfigDraft(latest.zone, initial.draft, {
+        ...initial.draft,
         ...values,
+        layout: layoutPolicy,
+        layoutBinding,
         // Preserve the opening value if a field ever fails to register.
         name: values.name ?? initial.draft.name,
         locked: values.locked ?? initial.draft.locked,
@@ -448,6 +466,38 @@ export const ZoneConfigModal = ({
     </>
   );
 
+  const layoutContent = (
+    <>
+      <Typography.Paragraph>
+        Choose how this zone packs its contents. Geometry and content expansion are independent.
+      </Typography.Paragraph>
+      <Form.Item
+        label="Use board defaults"
+        help={
+          layoutBinding === 'inherit'
+            ? 'This zone follows Zone defaults from Board settings. Turn off to start an independent override from the current values.'
+            : 'This zone keeps its own explicit policy. Turn on to reset it to the board defaults and follow future changes.'
+        }
+      >
+        <Switch
+          aria-label="Use board defaults"
+          checked={layoutBinding === 'inherit'}
+          disabled={!mutationGate.canMutate || !canEdit}
+          onChange={(checked) => {
+            if (checked) setLayoutPolicy(normalizeZoneLayoutPolicy(boardZoneLayoutDefaults));
+            setLayoutBinding(checked ? 'inherit' : 'override');
+          }}
+        />
+      </Form.Item>
+      <ZoneLayoutPolicyEditor
+        value={layoutPolicy}
+        onChange={setLayoutPolicy}
+        disabled={!mutationGate.canMutate || !canEdit || layoutBinding === 'inherit'}
+        idPrefix={`zone-${objectId}`}
+      />
+    </>
+  );
+
   return (
     <Modal
       title="Zone settings"
@@ -486,6 +536,11 @@ export const ZoneConfigModal = ({
               // instance even if the user saves without ever visiting this tab
               // (otherwise validateFields() omits `name` and the save wipes it).
               forceRender: true,
+            },
+            {
+              key: 'layout',
+              label: 'Layout',
+              children: layoutContent,
             },
           ]}
         />
