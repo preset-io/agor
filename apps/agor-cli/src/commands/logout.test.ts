@@ -17,7 +17,10 @@ async function serve(status = 200): Promise<{ url: string; requests: string[] }>
     requests.push(`${request.method} ${request.url} ${request.headers.authorization ?? ''}`);
     response.setHeader('content-type', 'application/json');
     response.statusCode = status;
-    response.end(status === 200 ? JSON.stringify({ id: 'key-123' }) : '{"message":"boom"}');
+    // Feathers error bodies carry the HTTP status as `code`.
+    response.end(
+      JSON.stringify(status === 200 ? { id: 'key-123' } : { message: 'boom', code: status })
+    );
   });
   await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
   cleanups.push(() => new Promise<void>((done) => server.close(() => done())));
@@ -109,14 +112,36 @@ describe('logout command', () => {
     await tokenGone(home);
   }, 20_000);
 
-  it('still removes the local login when the server delete fails', async () => {
+  it('keeps the local login and fails when the server delete fails', async () => {
     const server = await serve(500);
     const home = await homeWithLogin(server.url, 'cli_login');
 
     const result = await runLogout(home);
 
+    expect(result.code, result.output).not.toBe(0);
+    expect(result.output).toContain('You are still logged in');
+    await expect(stat(join(home, '.agor', 'cli-token'))).resolves.toBeTruthy();
+  }, 20_000);
+
+  it('removes the local login anyway with --force', async () => {
+    const server = await serve(500);
+    const home = await homeWithLogin(server.url, 'cli_login');
+
+    const result = await runLogout(home, ['--force']);
+
     expect(result.code, result.output).toBe(0);
-    expect(result.output).toContain('Could not delete');
+    expect(result.output).toContain('It is still valid');
+    await tokenGone(home);
+  }, 20_000);
+
+  it('treats an already revoked key as logged out', async () => {
+    const server = await serve(401);
+    const home = await homeWithLogin(server.url, 'cli_login');
+
+    const result = await runLogout(home);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('already revoked');
     await tokenGone(home);
   }, 20_000);
 });

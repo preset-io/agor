@@ -5,6 +5,7 @@
  */
 
 import { access } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import {
   getConfigPath,
   loadConfig,
@@ -274,14 +275,6 @@ export default class Login extends Command {
   }
 
   /**
-   * Validate a personal API key against the selected deployment and store it.
-   *
-   * The key is never exchanged for browser tokens: it is sent as a bearer on
-   * every request, so deleting it in the UI revokes this CLI immediately. The
-   * server binds the key to the workspace URL it was created in; the tenant
-   * returned here is recorded for display only.
-   */
-  /**
    * Browser step: open the workspace's `/cli-login` page, where the signed-in
    * user explicitly creates a key tagged for this machine (replacing this
    * machine's previous one), then paste it here. Signed-out users go through the
@@ -306,6 +299,14 @@ export default class Login extends Command {
     await this.loginWithApiKey(daemonUrl, deploymentId, await readApiKey());
   }
 
+  /**
+   * Validate a personal API key against the selected deployment and store it.
+   *
+   * The key is never exchanged for browser tokens: it is sent as a bearer on
+   * every request, so deleting it in the UI revokes this CLI immediately. The
+   * server binds the key to the workspace URL it was created in; the tenant
+   * returned here is recorded for display only.
+   */
   private async loginWithApiKey(
     daemonUrl: string,
     deploymentId: string,
@@ -400,7 +401,15 @@ async function readApiKey(): Promise<string> {
     ]);
     return apiKey.trim();
   }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString('utf8').trim();
+  // Piped or non-TTY input: the key is the first non-empty line, so a paste
+  // followed by Enter works without Ctrl-D.
+  const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  try {
+    for await (const line of lines) {
+      if (line.trim()) return line.trim();
+    }
+    return '';
+  } finally {
+    lines.close();
+  }
 }

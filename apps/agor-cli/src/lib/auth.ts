@@ -36,9 +36,10 @@ export interface StoredJwtAuth {
 
 /**
  * Personal API key login. The key is sent on every request and is bound
- * server-side to the workspace URL it was created in, so the pin here is the
- * origin (+ the tenant reported at login), not the Cell-derived deployment ID,
- * which changes when a hosted workspace moves between Cells.
+ * server-side to the workspace URL it was created in, so the CLI pins only the
+ * origin, not the Cell-derived deployment ID, which changes when a hosted
+ * workspace moves between Cells. `tenantId` is the tenant reported at login,
+ * kept for display; the server enforces the binding.
  */
 export interface StoredApiKeyAuth {
   version: 3;

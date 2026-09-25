@@ -51,4 +51,22 @@ describe('UserApiKeysRepository sources', () => {
       expect(await keys.verifyKey(kept.rawKey)).not.toBeNull();
     }
   });
+
+  dbTest('overlapping logins for one machine keep exactly the newer key', async ({ db }) => {
+    const owner = await seedUser(db, 'race');
+    const keys = new UserApiKeysRepository(db);
+    const machine = 'agor-cli-laptop-1a2b';
+
+    // Both logins create before either replaces — the interleaving that used to
+    // let each delete the other's key.
+    const first = await keys.create(owner.user_id, machine, 'cli_login');
+    const second = await keys.create(owner.user_id, machine, 'cli_login');
+    const [newer, older] = second.key.id > first.key.id ? [second, first] : [first, second];
+
+    await expect(keys.deleteReplacedCliKeys(owner.user_id, machine, older.key.id)).resolves.toBe(0);
+    await expect(keys.deleteReplacedCliKeys(owner.user_id, machine, newer.key.id)).resolves.toBe(1);
+
+    expect(await keys.verifyKey(newer.rawKey)).not.toBeNull();
+    expect(await keys.verifyKey(older.rawKey)).toBeNull();
+  });
 });

@@ -78,7 +78,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         db,
         'test host discovery',
         (systemDb) =>
-          new TenantPublicRoutingDiscoveryRepository(systemDb).findTenantIdsByRequestHost(host),
+          new TenantPublicRoutingDiscoveryRepository(systemDb).findTenantIdByRequestHost(host),
         capability ? { capability } : {}
       );
 
@@ -87,28 +87,32 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const host = `ws-${suffix}.cloud.test`;
       await observe(tenant, `https://${host}`, 100);
 
-      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toEqual([tenant]);
+      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toBe(tenant);
       await expect(
         discover(`${host.toUpperCase()}:443`, 'api_key_host_tenant_discovery')
-      ).resolves.toEqual([tenant]);
+      ).resolves.toBe(tenant);
       // Plain system scope has no row visibility for tenant-owned routing rows.
-      await expect(discover(host)).resolves.toEqual([]);
+      await expect(discover(host)).resolves.toBeNull();
       await expect(
         discover(`other-${suffix}.cloud.test`, 'api_key_host_tenant_discovery')
-      ).resolves.toEqual([]);
-      await expect(discover(`evil.${host}`, 'api_key_host_tenant_discovery')).resolves.toEqual([]);
+      ).resolves.toBeNull();
+      await expect(discover(`evil.${host}`, 'api_key_host_tenant_discovery')).resolves.toBeNull();
     });
 
-    it('reports every tenant claiming one host so callers fail closed', async () => {
+    it('fails closed when tenants claim one host with equally new assertions', async () => {
       const host = `shared-${suffix}.cloud.test`;
-      const first = `host-dup-a-${suffix}`;
-      const second = `host-dup-b-${suffix}`;
-      await observe(first, `https://${host}`, 100);
-      await observe(second, `https://${host}`, 100);
-      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toEqual(
-        expect.arrayContaining([first, second])
-      );
-      expect(await discover(host, 'api_key_host_tenant_discovery')).toHaveLength(2);
+      await observe(`host-dup-a-${suffix}`, `https://${host}`, 100);
+      await observe(`host-dup-b-${suffix}`, `https://${host}`, 100);
+      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toBeNull();
+    });
+
+    it('picks the newest signed claim when a host moved between tenants', async () => {
+      const host = `moved-${suffix}.cloud.test`;
+      const previous = `host-prev-${suffix}`;
+      const current = `host-curr-${suffix}`;
+      await observe(current, `https://${host}`, 200);
+      await observe(previous, `https://${host}`, 100);
+      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toBe(current);
     });
 
     it('ignores imported routing rows whose assertion binding names another tenant', async () => {
@@ -126,7 +130,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           content_type: 'application/json',
         })
       );
-      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toEqual([]);
+      await expect(discover(host, 'api_key_host_tenant_discovery')).resolves.toBeNull();
     });
 
     it('exposes no other app variable to the discovery capability', async () => {

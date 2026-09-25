@@ -84,8 +84,8 @@ export function publicBaseUrlMatchesRequestHost(
  * RLS policy exposes nothing but `tenant.routing/public_url` rows. It returns
  * tenant routing IDs, never values, and every candidate must carry the same
  * tenant binding `TenantPublicRoutingRepository.find()` requires. The caller
- * must treat anything other than exactly one tenant as a failed login and must
- * verify the credential under that tenant's ordinary RLS scope.
+ * must treat no tenant as a failed login and must verify the credential under
+ * the returned tenant's ordinary RLS scope.
  */
 export class TenantPublicRoutingDiscoveryRepository {
   constructor(private readonly db: SystemDatabase) {
@@ -94,9 +94,17 @@ export class TenantPublicRoutingDiscoveryRepository {
     }
   }
 
-  async findTenantIdsByRequestHost(requestHost: string): Promise<string[]> {
+  /**
+   * The tenant whose launch-observed public URL is this request host, or null.
+   *
+   * Routing rows are written only from Cloud-signed launch assertions, so when
+   * a hostname moved between workspaces and an old row still names it, the
+   * claim with the newest signed `assertion_issued_at` is the current one.
+   * Several tenants tied at the newest assertion fail closed (null).
+   */
+  async findTenantIdByRequestHost(requestHost: string): Promise<string | null> {
     const probe = parseRequestAuthority(requestHost, 'https:');
-    if (!probe) return [];
+    if (!probe) return null;
     const tenantColumn = (appVariables as unknown as { tenant_id?: typeof appVariables.key })
       .tenant_id;
     if (!tenantColumn) {
@@ -119,7 +127,7 @@ export class TenantPublicRoutingDiscoveryRepository {
       )
       .all();
 
-    const matches = new Set<string>();
+    const newestByTenant = new Map<string, number>();
     for (const row of rows as Array<{
       tenant_id: unknown;
       value_text: unknown;
@@ -137,10 +145,25 @@ export class TenantPublicRoutingDiscoveryRepository {
         continue;
       }
       if (publicBaseUrlMatchesRequestHost(routing.public_base_url, requestHost)) {
-        matches.add(row.tenant_id);
+        const seen = newestByTenant.get(row.tenant_id);
+        if (seen === undefined || routing.assertion_issued_at > seen) {
+          newestByTenant.set(row.tenant_id, routing.assertion_issued_at);
+        }
       }
     }
-    return [...matches];
+    let winner: string | null = null;
+    let newest = Number.NEGATIVE_INFINITY;
+    let tied = false;
+    for (const [tenantId, issuedAt] of newestByTenant) {
+      if (issuedAt > newest) {
+        winner = tenantId;
+        newest = issuedAt;
+        tied = false;
+      } else if (issuedAt === newest) {
+        tied = true;
+      }
+    }
+    return tied ? null : winner;
   }
 }
 

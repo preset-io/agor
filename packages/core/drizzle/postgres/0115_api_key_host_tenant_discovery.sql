@@ -5,6 +5,8 @@
 -- can map Host -> tenant_id before authentication. Key verification then leaves
 -- system scope and runs under the discovered tenant's ordinary RLS policy, so
 -- the capability never exposes key material or any other tenant variable.
+DROP POLICY IF EXISTS "api_key_host_tenant_discovery" ON "app_variables";
+--> statement-breakpoint
 CREATE POLICY "api_key_host_tenant_discovery"
 	ON "app_variables"
 	FOR SELECT

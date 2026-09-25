@@ -28,7 +28,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { HookContext } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTenantDatabaseScopeAroundHook } from '../utils/tenant-db-scope.js';
 import { createApiKeyHostTenantResolver } from './api-key-host-tenant.js';
 
@@ -72,12 +72,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     let keyB: string;
     let keyNoRouting: string;
 
-    async function seedTenant(tenantId: string, publicHost?: string): Promise<string> {
+    async function seedTenant(
+      tenantId: string,
+      publicHost?: string,
+      issuedAt = 100
+    ): Promise<string> {
       if (publicHost) {
         await runWithTenantDatabaseTransaction(db, tenantId, (scoped) =>
           new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
             public_base_url: `https://${publicHost}`,
-            assertion_issued_at: 100,
+            assertion_issued_at: issuedAt,
           })
         );
       }
@@ -175,13 +179,70 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).rejects.toMatchObject({ name: 'NotAuthenticated' });
     });
 
-    it('fails login when two tenants claim the same host', async () => {
+    it('fails login when two tenants claim the same host with equally new assertions', async () => {
       const shared = `shared-${suffix}.cloud.test`;
       const first = await seedTenant(`key-host-dup-a-${suffix}`, shared);
       await seedTenant(`key-host-dup-b-${suffix}`, shared);
       await expect(
         authenticate({ host: shared, authorization: `Bearer ${first}` }, first)
       ).rejects.toMatchObject({ name: 'NotAuthenticated' });
+    });
+
+    it('routes a moved host to the tenant with the newest signed launch assertion', async () => {
+      const moved = `moved-${suffix}.cloud.test`;
+      const previousTenant = `key-host-prev-${suffix}`;
+      const currentTenant = `key-host-curr-${suffix}`;
+      const previousKey = await seedTenant(previousTenant, moved, 100);
+      const currentKey = await seedTenant(currentTenant, moved, 200);
+
+      const current = await authenticate(
+        { host: moved, authorization: `Bearer ${currentKey}` },
+        currentKey
+      );
+      expect(current.observed).toEqual({ tenantId: currentTenant, keyTenant: currentTenant });
+
+      // The stale claim no longer selects its tenant, so its key finds no row.
+      const stale = await authenticate(
+        { host: moved, authorization: `Bearer ${previousKey}` },
+        previousKey
+      );
+      expect(stale.observed).toEqual({ tenantId: currentTenant, keyTenant: null });
+    });
+
+    it('caches Host → tenant answers briefly and bounds the misses', async () => {
+      const { TenantPublicRoutingDiscoveryRepository } = await import('@agor/core/db');
+      const discovery = vi.spyOn(
+        TenantPublicRoutingDiscoveryRepository.prototype,
+        'findTenantIdByRequestHost'
+      );
+      let clock = 1_000_000;
+      const resolve = createApiKeyHostTenantResolver({
+        db,
+        config: hostedConfig,
+        now: () => clock,
+      })!;
+      try {
+        await expect(resolve({ host: hostA })).resolves.toMatchObject({ tenant_id: tenantA });
+        await expect(resolve({ host: hostA.toUpperCase() })).resolves.toMatchObject({
+          tenant_id: tenantA,
+        });
+        expect(discovery).toHaveBeenCalledTimes(1);
+
+        const unknown = `unknown-cache-${suffix}.cloud.test`;
+        await expect(resolve({ host: unknown })).rejects.toThrow('Missing tenant context');
+        await expect(resolve({ host: unknown })).rejects.toThrow('Missing tenant context');
+        expect(discovery).toHaveBeenCalledTimes(2);
+
+        clock += 6_000; // a miss is retried after a few seconds
+        await expect(resolve({ host: unknown })).rejects.toThrow('Missing tenant context');
+        expect(discovery).toHaveBeenCalledTimes(3);
+
+        clock += 30_000; // a hit expires too
+        await expect(resolve({ host: hostA })).resolves.toMatchObject({ tenant_id: tenantA });
+        expect(discovery).toHaveBeenCalledTimes(4);
+      } finally {
+        discovery.mockRestore();
+      }
     });
 
     it('does not route by Host when the request is not a personal API key', async () => {

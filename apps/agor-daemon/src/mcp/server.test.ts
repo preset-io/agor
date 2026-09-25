@@ -919,7 +919,7 @@ describe('POST /mcp with personal API keys', () => {
       const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
       const hostDiscovery = vi.spyOn(
         TenantPublicRoutingDiscoveryRepository.prototype,
-        'findTenantIdsByRequestHost'
+        'findTenantIdByRequestHost'
       );
 
       await withMcpServer(

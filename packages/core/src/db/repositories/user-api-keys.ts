@@ -92,12 +92,17 @@ export class UserApiKeysRepository {
   }
 
   /**
-   * Remove a user's earlier `cli_login` keys carrying exactly this machine
-   * name, keeping `keepId`. Used when `agor login` runs again on the same
-   * machine so each machine has one CLI key. Never touches manual keys.
+   * Remove a user's `cli_login` keys with exactly this machine name that are
+   * OLDER than `keepId`. Used when `agor login` runs again on the same machine
+   * so each machine has one CLI key. Never touches manual keys.
+   *
+   * Only strictly older keys are removed (ids are time-ordered UUIDv7s,
+   * compared bytewise here rather than by database collation), so two
+   * overlapping logins for the same machine can never delete each other's key:
+   * the newer one survives.
    */
   async deleteReplacedCliKeys(userId: string, name: string, keepId: string): Promise<number> {
-    const replaced = await select(this.db, { id: userApiKeys.id })
+    const candidates = await select(this.db, { id: userApiKeys.id })
       .from(userApiKeys)
       .where(
         and(
@@ -108,7 +113,8 @@ export class UserApiKeysRepository {
         )
       )
       .all();
-    for (const row of replaced as Array<{ id: string }>) {
+    const replaced = (candidates as Array<{ id: string }>).filter((row) => row.id < keepId);
+    for (const row of replaced) {
       await this.delete(row.id, userId);
     }
     return replaced.length;
