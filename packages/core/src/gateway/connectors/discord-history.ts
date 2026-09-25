@@ -209,6 +209,9 @@ interface ClassifiedDiscordMessage {
   isSystem: boolean;
   isRich: boolean;
   isMention: boolean;
+  isForwarded: boolean;
+  /** The message whose content and attachments are shown: a forward's snapshot, else the message. */
+  body: Record<string, unknown>;
   actorLabel: string;
 }
 
@@ -240,17 +243,22 @@ function classifyMessage(
   const isSystem =
     author?.system === true || (type !== undefined && !DISCORD_TEXT_MESSAGE_TYPES.has(type));
   const isBot = author?.bot === true;
+  // A forward has empty content of its own; the forwarded message is its first snapshot.
+  const snapshot = Array.isArray(raw.message_snapshots)
+    ? asRecord(asRecord(raw.message_snapshots[0])?.message)
+    : null;
+  const body = snapshot ?? raw;
   const hasRichPayload =
-    (Array.isArray(raw.attachments) && raw.attachments.length > 0) ||
-    (Array.isArray(raw.embeds) && raw.embeds.length > 0) ||
-    (Array.isArray(raw.components) && raw.components.length > 0) ||
-    (Array.isArray(raw.sticker_items) && raw.sticker_items.length > 0) ||
-    (raw.poll !== undefined && raw.poll !== null);
+    (Array.isArray(body.attachments) && body.attachments.length > 0) ||
+    (Array.isArray(body.embeds) && body.embeds.length > 0) ||
+    (Array.isArray(body.components) && body.components.length > 0) ||
+    (Array.isArray(body.sticker_items) && body.sticker_items.length > 0) ||
+    (body.poll !== undefined && body.poll !== null);
   if (
     !isSystem &&
     !isBot &&
     DISCORD_TEXT_MESSAGE_TYPES.has(type ?? -1) &&
-    (typeof raw.content !== 'string' || raw.content.length === 0) &&
+    (typeof body.content !== 'string' || body.content.length === 0) &&
     !hasRichPayload
   ) {
     throw makeError(
@@ -264,11 +272,13 @@ function classifyMessage(
     id,
     timestamp,
     author,
-    text: typeof raw.content === 'string' ? raw.content : '',
+    text: typeof body.content === 'string' ? body.content : '',
     isBot,
     isSystem,
-    isRich: !('content' in raw) || typeof raw.content !== 'string' || hasRichPayload,
+    isRich: !('content' in body) || typeof body.content !== 'string' || hasRichPayload,
     isMention: mentions.length > 0,
+    isForwarded: snapshot !== null,
+    body,
     actorLabel:
       nonEmptyString(author?.global_name) ??
       nonEmptyString(author?.username) ??
@@ -461,7 +471,7 @@ function toChannelHistoryMessage(
   message: ClassifiedDiscordMessage
 ): DiscordChannelHistoryMessage {
   const authorId = nonEmptyString(message.author?.id);
-  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : [])
+  const attachments = (Array.isArray(message.body.attachments) ? message.body.attachments : [])
     .map(asRecord)
     .filter((item): item is Record<string, unknown> => item !== null)
     .map((item) => ({
@@ -479,6 +489,7 @@ function toChannelHistoryMessage(
     is_bot: message.isBot,
     is_system: message.isSystem,
     is_mention: message.isMention,
+    ...(message.isForwarded ? { is_forwarded: true as const } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(threadId && isDiscordSnowflake(threadId) ? { thread_id: threadId } : {}),
   };

@@ -3316,6 +3316,7 @@ describe('Discord channel history agent tool (MCP)', () => {
         is_bot: false,
         is_system: false,
         is_mention: false,
+        is_forwarded: true,
         attachments: [{ filename: 'plan.png', content_type: 'image/png', size: 10 }],
         thread_id: '777777777777777777',
       },
@@ -3392,6 +3393,7 @@ describe('Discord channel history agent tool (MCP)', () => {
     expect(payload.markdown).toContain('# Discord channel 333333333333333333 history');
     expect(payload.markdown).toContain('standup: shipped the gateway fix');
     expect(payload.markdown).toContain('Richard <666666666666666666>');
+    expect(payload.markdown).toContain('(555555555555555555) [forwarded]');
     expect(payload.markdown).toContain('Attached file: plan.png (image/png, 10 bytes)');
     expect(payload.markdown).toContain('Started thread 777777777777777777');
     expect(payload.messages).toBeUndefined();

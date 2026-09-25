@@ -147,6 +147,27 @@ describe('Discord bounded history', () => {
     expect(bootstrap.messages[0].providerMessageId).toBe(id(1n));
   });
 
+  it('includes a forwarded message in catch-up with its snapshot text', async () => {
+    const result = await fetchDiscordProviderHistory(
+      pagedRest([
+        [
+          message(id(1n), {
+            content: '',
+            message_snapshots: [{ message: { content: 'forwarded body' } }],
+          }),
+        ],
+      ]),
+      config,
+      {
+        threadId,
+        afterProviderCursor: cursor,
+        throughProviderCursor: live,
+        triggerProviderCursor: live,
+      }
+    );
+    expect(result.messages.map((item) => item.text)).toContain('forwarded body');
+  });
+
   it('fails closed for redacted human content but counts valid contentless rich history', async () => {
     await expect(
       fetchDiscordProviderHistory(pagedRest([[message(id(1n), { content: '' })]]), config, {
@@ -462,6 +483,37 @@ describe('Discord channel history for agents', () => {
     const ignoresCursor = { get: vi.fn(async () => [channelMessage(5)]) };
     await expect(
       fetchDiscordChannelHistory(ignoresCursor, config, { channelId, before: at(5) })
+    ).rejects.toMatchObject({ kind: 'incomplete_coverage' });
+  });
+
+  it('reads a forward from its snapshot and flags it', async () => {
+    const forward = channelMessage(1, {
+      content: '',
+      message_reference: { type: 1, channel_id: '444444444444444444', message_id: at(0) },
+      message_snapshots: [
+        {
+          message: {
+            content: 'original text',
+            attachments: [{ filename: 'notes.txt', content_type: 'text/plain', size: 3 }],
+          },
+        },
+      ],
+    });
+    const result = await fetchDiscordChannelHistory(channelRest([forward]), config, { channelId });
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        text: 'original text',
+        is_forwarded: true,
+        attachments: [{ filename: 'notes.txt', content_type: 'text/plain', size: 3 }],
+      }),
+    ]);
+
+    const emptyForward = channelMessage(2, {
+      content: '',
+      message_snapshots: [{ message: { content: '' } }],
+    });
+    await expect(
+      fetchDiscordChannelHistory(channelRest([emptyForward]), config, { channelId })
     ).rejects.toMatchObject({ kind: 'incomplete_coverage' });
   });
 

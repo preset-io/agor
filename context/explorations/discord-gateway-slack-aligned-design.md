@@ -547,7 +547,7 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   `before` and `after` cannot be combined. Bot and system messages are omitted
   unless `includeBotMessages` is true; `limit` counts returned messages, not
   scanned ones. Each message carries its ID, ISO time,
-  author ID and display label, text, bot/mention flags, attachment metadata
+  author ID and display label, text, bot/mention/forwarded flags, attachment metadata
   (filename, content type, size; no URLs), and the ID of a thread it started,
   if any. The result carries the untrusted-content warning, the gateway channel
   and target branch, the read channel ID, `has_more`, and the cursor for the
@@ -580,7 +580,11 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   content-free error; an empty channel with both permissions returns an empty
   result. If Discord returns empty content for an ordinary user message with no
   supported rich payload (Message Content unavailable), the read fails rather
-  than returning silently blank messages.
+  than returning silently blank messages. A forwarded message has empty
+  content of its own; it is read from its first `message_snapshots` entry, so
+  its text and attachments are the forwarded message's and it is flagged
+  `is_forwarded`. Only a forward whose snapshot is also empty with no
+  supported rich payload fails.
 
 ### Applicable non-negotiable constraints
 
@@ -597,8 +601,10 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
   like any other tool result (see Resolved decisions).
 - **Untrusted content.** Output is labeled as untrusted external content.
 - **Compatibility.** Existing rows with `agent_tools: []` or no `agent_tools`
-  keep validating and mean all capabilities off. The listener, catch-up,
-  cursor, and delivery behavior are unchanged.
+  keep validating and mean all capabilities off. The listener, cursor, and
+  delivery behavior are unchanged. Catch-up shares the message reader, so the
+  one catch-up change is that a forwarded message no longer fails catch-up;
+  its forwarded text is included like any other message.
 
 ### Externally observable contracts
 
@@ -628,6 +634,7 @@ without ever holding the bot token. Nothing changes for rows that do not opt in.
 | Access                   | Same branch binding and no-session privilege rule as the Slack tools                                                                                                                                                                                     |
 | Read budgets             | Reuse the row's catch-up page, byte, timeout, and rate-limit bounds                                                                                                                                                                                      |
 | Session-record retention | Tool results, including Discord messages from people who never mentioned the bot, are stored in the calling session's transcript like any tool result, as summon catch-up prompts already are. "No transcript" means no separate provider-history mirror |
+| Forwarded messages       | Read from the snapshot and flagged `is_forwarded`; catch-up no longer fails on a forward                                                                                                                                                                 |
 
 ### Success and proof boundary
 
@@ -642,6 +649,7 @@ daemon:
 | ------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | SC-05a       | Read a channel where bot messages fill the scanned pages                                                             | Partial result with `has_more: true` and a working next cursor               |
 | SC-07        | Remove Read Message History from the bot on one allowlisted channel, then read it; read an empty allowlisted channel | Permission error for the first; empty result for the second                  |
+| SC-07        | Forward a message into an allowlisted channel, then read the channel                                                 | Read succeeds; the forward has the original text and `is_forwarded`          |
 | SC-01        | Call the tool on a row with `agent_tools: []`                                                                        | Capability-disabled error; no Discord request                                |
 | SC-02        | Enable the toggle in Settings, reopen the row                                                                        | Stored `{ channel_history: true }` survives edit                             |
 | SC-03, SC-05 | Summon the bot, then call the tool from that session with no target                                                  | Latest parent-channel messages, chronological, bots omitted, warning present |

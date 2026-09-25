@@ -666,6 +666,7 @@ function discordChannelHistoryMarkdown(history: DiscordChannelHistoryResult): st
       message.is_bot ? 'bot' : undefined,
       message.is_system ? 'system' : undefined,
       message.is_mention ? 'mention' : undefined,
+      message.is_forwarded ? 'forwarded' : undefined,
       message.text_truncated ? 'truncated' : undefined,
     ].filter(Boolean);
     lines.push(

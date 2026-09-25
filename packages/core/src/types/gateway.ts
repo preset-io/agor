@@ -425,6 +425,8 @@ export interface DiscordChannelHistoryMessage {
   is_bot: boolean;
   is_system: boolean;
   is_mention: boolean;
+  /** Set for a forward; text and attachments are the forwarded message's. */
+  is_forwarded?: true;
   attachments?: DiscordChannelHistoryAttachment[];
   /** Thread started from this message, readable with the same tool. */
   thread_id?: string;
