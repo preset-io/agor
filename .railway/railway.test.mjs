@@ -18,9 +18,9 @@ test('SQLite bootstrap is one source-built service with private persistent state
   assert.equal(app.variables.AGOR_SOURCE_REPO.value, 'https://github.com/preset-io/agor.git');
   assert.equal(app.deploy.overlapSeconds, 0);
   assert.equal(app.deploy.preDeployCommand, undefined);
-  assert.equal(app.volumeAttachments['agor-data'].volume, data.address);
-  assert.equal(app.volumeAttachments['agor-data'].mountPath, '/home/agor/.agor');
-  assert.equal(data.config.sizeMB, 2048);
+  assert.equal(app.volumeAttachments['agor-preview-data'].volume, data.address);
+  assert.equal(app.volumeAttachments['agor-preview-data'].mountPath, '/home/agor/.agor');
+  assert.equal(data.config.sizeMB, 5000);
   assert.equal(app.variables.PORT.value, app.variables.DAEMON_PORT.value);
   assert.equal(app.variables.CORS_ORIGIN.value, app.variables.AGOR_BASE_URL.value);
   assert.notEqual(app.variables.CORS_ORIGIN.value, '*');

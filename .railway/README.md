@@ -64,7 +64,7 @@ SQLite, configuration, signing/encryption keys, repositories, and branch homes
 survive redeployment on the volume. Stop retains data; deleting the volume or PR
 environment is destructive. Back up before cleanup. Storage can accrue charges
 even when compute is stopped. No automatic PR fan-out is enabled by this config.
-The volume is 2 GB, expanded in place from the initial 500 MB trial volume.
+The replacement `agor-preview-data` volume uses Railway’s 5 GB Hobby default.
 Runtime checkout and Turbo cache share this space with application data; monitor
 usage before adding large repositories or agent runtimes. Paid storage/compute
 usage is billed beyond the plan's included credit.
