@@ -527,6 +527,39 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       );
     };
 
+    // JSX created in a render-scoped map callback lets React's development
+    // _debugStack retain that callback's entire historical session snapshot.
+    const taskBlocks: React.ReactNode[] = [];
+    for (const [taskIndex, task] of tasks.entries()) {
+      taskBlocks.push(
+        <TaskBlock
+          key={task.task_id}
+          task={task}
+          latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
+          agentic_tool={agentic_tool}
+          sessionModel={sessionModel}
+          userById={userById}
+          currentUserId={currentUserId}
+          sessionId={sessionId}
+          onPermissionDecision={onPermissionDecision}
+          branchName={branchName}
+          scheduledFromBranch={scheduledFromBranch}
+          scheduledRunAt={scheduledRunAt}
+          streamingMessages={streamingMessagesByTask.get(task.task_id)}
+          taskMessages={currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES}
+          taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+          onLoadTaskMessages={handleLoadTaskMessages}
+          onRetainTaskDetails={handleRetainTaskDetails}
+          teammateEmoji={teammateEmoji}
+          isLatestTask={taskIndex === tasks.length - 1}
+          client={client}
+          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+          compact={compact}
+          defaultTextExpanded={protectedTurns.has(task.task_id)}
+        />
+      );
+    }
+
     return (
       <div
         ref={setScrollViewport}
@@ -560,35 +593,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               </Button>
             )}
             {/* Task-organized conversation */}
-            {tasks.map((task, taskIndex) => (
-              <TaskBlock
-                key={task.task_id}
-                task={task}
-                latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
-                agentic_tool={agentic_tool}
-                sessionModel={sessionModel}
-                userById={userById}
-                currentUserId={currentUserId}
-                sessionId={sessionId}
-                onPermissionDecision={onPermissionDecision}
-                branchName={branchName}
-                scheduledFromBranch={scheduledFromBranch}
-                scheduledRunAt={scheduledRunAt}
-                streamingMessages={streamingMessagesByTask.get(task.task_id)}
-                taskMessages={
-                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-                }
-                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-                onLoadTaskMessages={handleLoadTaskMessages}
-                onRetainTaskDetails={handleRetainTaskDetails}
-                teammateEmoji={teammateEmoji}
-                isLatestTask={taskIndex === tasks.length - 1}
-                client={client}
-                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                compact={compact}
-                defaultTextExpanded={protectedTurns.has(task.task_id)}
-              />
-            ))}
+            {taskBlocks}
           </div>
         </HistoryTextChoices.Provider>
       </div>

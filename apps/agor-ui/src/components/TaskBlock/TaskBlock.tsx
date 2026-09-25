@@ -661,6 +661,31 @@ function blocksHaveSameComposition(a: Block, b: Block): boolean {
   return aMessages.every((msg, i) => msg === bMessages[i]);
 }
 
+function useRetainTaskDetails(
+  taskId: Task['task_id'],
+  retain: TaskBlockProps['onRetainTaskDetails']
+) {
+  // Keep this closure outside TaskBlock's render scope: V8 can share that
+  // context with other callbacks capturing messages, pinning evicted payloads
+  // for the lifetime of this stable callback even after the UI renders lean data.
+  return useCallback(() => retain?.(taskId), [retain, taskId]);
+}
+
+function useReleaseDetailAlternates(hasDetails: boolean) {
+  const previouslyHadDetails = useRef(hasDetails);
+  const [, setRevision] = useState(0);
+  useEffect(() => {
+    const released = previouslyHadDetails.current && !hasDetails;
+    previouslyHadDetails.current = hasDetails;
+    // Eviction updates the current tree, but memo bailouts can leave old child
+    // props (including Fragment children and StickyTodoRenderer.messages) on
+    // React's alternate Fibers indefinitely. One more commit retires those
+    // props without remounting the turn or disturbing disclosure/prompt state.
+    // loadedTaskIds is not an eviction signal: live turns may never be loaded.
+    if (released) setRevision((revision) => revision + 1);
+  }, [hasDetails]);
+}
+
 export const TaskBlock = React.memo<TaskBlockProps>(
   ({
     task,
@@ -872,10 +897,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       </Flex>
     );
 
-    const retainDetails = useCallback(
-      () => onRetainTaskDetails?.(task.task_id),
-      [onRetainTaskDetails, task.task_id]
-    );
+    const retainDetails = useRetainTaskDetails(task.task_id, onRetainTaskDetails);
     const [detailsError, setDetailsError] = useState<string | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
@@ -939,6 +961,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       (message) =>
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
+    useReleaseDetailAlternates(hasTools || hasReasoning);
     const toolDisclosure = (task.recorded_tool_count !== 0 ||
       hasDeferredReasoning ||
       hasReasoning ||
@@ -991,6 +1014,145 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         ) : null}
       </div>
     );
+    // Do not create JSX inside a render-scoped map callback. React development
+    // Fibers retain its function through _debugStack, keeping the whole render
+    // context (including evicted messages) even after alternate props retire.
+    const renderedBlocks: React.ReactNode[] = [];
+    for (const [blockIndex, block] of displayBlocks.entries()) {
+      if (block.type === 'message') {
+        // Find if this is a permission request and if it's the first pending one
+        const isPermissionRequest = block.message.type === 'permission_request';
+        let isFirstPending = false;
+
+        if (isPermissionRequest) {
+          const content = block.message.content as PermissionRequestContent;
+          if (content.status === PermissionStatus.PENDING) {
+            // Check if this is the first pending permission request
+            isFirstPending = !displayBlocks.slice(0, blockIndex).some((b) => {
+              if (b.type === 'message' && b.message.type === 'permission_request') {
+                const c = b.message.content as PermissionRequestContent;
+                return c.status === PermissionStatus.PENDING;
+              }
+              return false;
+            });
+          }
+        }
+
+        // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
+        if (isSdkStatusMessage(block.message)) {
+          renderedBlocks.push(
+            <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+              <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
+            </div>
+          );
+          continue;
+        }
+
+        // Check if this is the latest agent message (last message block)
+        const isLatestMessage =
+          block.message.role === MessageRole.ASSISTANT && blockIndex === displayBlocks.length - 1;
+
+        const isPrompt = block.message.message_id === promptMessageId;
+        const messageElement = (
+          <MessageBlock
+            retainDetails={retainDetails}
+            key={isPrompt ? promptKey : block.message.message_id}
+            textChoiceKey={isPrompt ? promptKey : undefined}
+            message={block.message}
+            agentic_tool={agentic_tool}
+            userById={userById}
+            currentUserId={task.created_by}
+            isTaskRunning={runtimeLive}
+            sessionId={sessionId}
+            onPermissionDecision={onPermissionDecision}
+            isFirstPendingPermission={isFirstPending}
+            isLatestMessage={isLatestMessage}
+            taskId={task.task_id}
+            teammateEmoji={teammateEmoji}
+            client={client}
+            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+            compact={compact}
+            defaultTextExpanded={defaultTextExpanded}
+          />
+        );
+        renderedBlocks.push(
+          <div
+            key={isPrompt ? promptKey : block.message.message_id}
+            data-conversation-block={getBlockMarker(block)}
+          >
+            {isPrompt ? (
+              <>
+                <LeanTurnMetadata
+                  metadata={metadataPills}
+                  background={taskHeaderGradient}
+                  reserveSpace={hasPendingApproval}
+                >
+                  {messageElement}
+                </LeanTurnMetadata>
+                {toolDisclosure}
+              </>
+            ) : (
+              messageElement
+            )}
+          </div>
+        );
+        continue;
+      }
+      if (block.type === 'agent-chain') {
+        const sourceBlockIndex = blockIndex - (displayBlocks.length - blocks.length);
+        // Use first message ID as key for agent chain
+        const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
+        renderedBlocks.push(
+          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+            <AgentChain
+              retainDetails={retainDetails}
+              messages={block.messages}
+              revealRequested={revealLoadedActivity && sourceBlockIndex === firstAgentChainIndex}
+              latestActivity={
+                sourceBlockIndex === pendingActivityChainIndex ||
+                (sourceBlockIndex === lastAgentChainIndex &&
+                  latestActivity &&
+                  block.messages.some((message) =>
+                    messageHasTool(message, latestActivity.toolUseId)
+                  ))
+                  ? latestActivity
+                  : undefined
+              }
+              isTaskRunning={runtimeLive && !hasPendingApproval}
+              isLatest={isLatestTask && sourceBlockIndex === lastAgentChainIndex}
+              hasFollowingResponse={blocks
+                .slice(sourceBlockIndex + 1)
+                .some(
+                  (next) =>
+                    next.type === 'message' &&
+                    next.message.role === MessageRole.ASSISTANT &&
+                    (typeof next.message.content === 'string'
+                      ? !!next.message.content.trim()
+                      : Array.isArray(next.message.content) &&
+                        next.message.content.some(
+                          (content) =>
+                            content.type === 'text' &&
+                            typeof content.text === 'string' &&
+                            !!content.text.trim()
+                        ))
+                )}
+              compact={compact}
+            />
+          </div>
+        );
+        continue;
+      }
+      if (block.type === 'compaction') {
+        // Render compaction block with aggregated messages
+        const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+        renderedBlocks.push(
+          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+            <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
+          </div>
+        );
+      }
+    }
+
     const taskContent = (
       <div style={{ paddingTop: token.sizeUnit }}>
         {isLatestTask &&
@@ -1011,141 +1173,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       tell structural transcript changes (new message/chain,
                       task hydration, a block settling after streaming) apart
                       from per-frame streaming churn inside a block. */}
-        {displayBlocks.map((block, blockIndex) => {
-          if (block.type === 'message') {
-            // Find if this is a permission request and if it's the first pending one
-            const isPermissionRequest = block.message.type === 'permission_request';
-            let isFirstPending = false;
-
-            if (isPermissionRequest) {
-              const content = block.message.content as PermissionRequestContent;
-              if (content.status === PermissionStatus.PENDING) {
-                // Check if this is the first pending permission request
-                isFirstPending = !displayBlocks.slice(0, blockIndex).some((b) => {
-                  if (b.type === 'message' && b.message.type === 'permission_request') {
-                    const c = b.message.content as PermissionRequestContent;
-                    return c.status === PermissionStatus.PENDING;
-                  }
-                  return false;
-                });
-              }
-            }
-
-            // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
-            if (isSdkStatusMessage(block.message)) {
-              return (
-                <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
-                  <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
-                </div>
-              );
-            }
-
-            // Check if this is the latest agent message (last message block)
-            const isLatestMessage =
-              block.message.role === MessageRole.ASSISTANT &&
-              blockIndex === displayBlocks.length - 1;
-
-            const isPrompt = block.message.message_id === promptMessageId;
-            const messageElement = (
-              <MessageBlock
-                retainDetails={retainDetails}
-                key={isPrompt ? promptKey : block.message.message_id}
-                textChoiceKey={isPrompt ? promptKey : undefined}
-                message={block.message}
-                agentic_tool={agentic_tool}
-                userById={userById}
-                currentUserId={task.created_by}
-                isTaskRunning={runtimeLive}
-                sessionId={sessionId}
-                onPermissionDecision={onPermissionDecision}
-                isFirstPendingPermission={isFirstPending}
-                isLatestMessage={isLatestMessage}
-                taskId={task.task_id}
-                teammateEmoji={teammateEmoji}
-                client={client}
-                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                compact={compact}
-                defaultTextExpanded={defaultTextExpanded}
-              />
-            );
-            return (
-              <div
-                key={isPrompt ? promptKey : block.message.message_id}
-                data-conversation-block={getBlockMarker(block)}
-              >
-                {isPrompt ? (
-                  <>
-                    <LeanTurnMetadata
-                      metadata={metadataPills}
-                      background={taskHeaderGradient}
-                      reserveSpace={hasPendingApproval}
-                    >
-                      {messageElement}
-                    </LeanTurnMetadata>
-                    {toolDisclosure}
-                  </>
-                ) : (
-                  messageElement
-                )}
-              </div>
-            );
-          }
-          if (block.type === 'agent-chain') {
-            const sourceBlockIndex = blockIndex - (displayBlocks.length - blocks.length);
-            // Use first message ID as key for agent chain
-            const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
-            return (
-              <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                <AgentChain
-                  retainDetails={retainDetails}
-                  messages={block.messages}
-                  revealRequested={
-                    revealLoadedActivity && sourceBlockIndex === firstAgentChainIndex
-                  }
-                  latestActivity={
-                    sourceBlockIndex === pendingActivityChainIndex ||
-                    (sourceBlockIndex === lastAgentChainIndex &&
-                      latestActivity &&
-                      block.messages.some((message) =>
-                        messageHasTool(message, latestActivity.toolUseId)
-                      ))
-                      ? latestActivity
-                      : undefined
-                  }
-                  isTaskRunning={runtimeLive && !hasPendingApproval}
-                  isLatest={isLatestTask && sourceBlockIndex === lastAgentChainIndex}
-                  hasFollowingResponse={blocks
-                    .slice(sourceBlockIndex + 1)
-                    .some(
-                      (next) =>
-                        next.type === 'message' &&
-                        next.message.role === MessageRole.ASSISTANT &&
-                        (typeof next.message.content === 'string'
-                          ? !!next.message.content.trim()
-                          : Array.isArray(next.message.content) &&
-                            next.message.content.some(
-                              (content) =>
-                                content.type === 'text' &&
-                                typeof content.text === 'string' &&
-                                !!content.text.trim()
-                            ))
-                    )}
-                  compact={compact}
-                />
-              </div>
-            );
-          }
-          if (block.type === 'compaction') {
-            // Render compaction block with aggregated messages
-            const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
-            return (
-              <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
-                <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
-              </div>
-            );
-          }
-          return null;
-        })}
+        {renderedBlocks}
 
         {/* Before the first chain (or after a real boundary), an unrecorded
             event still needs its own disclosure. Contiguous tail activity is

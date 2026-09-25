@@ -28,7 +28,8 @@ export default defineConfig({
     testTimeout: 30_000,
     browser: {
       enabled: true,
-      provider: playwright(),
+      // Retention regressions must observe collection, not just cache bucket counts.
+      provider: playwright({ launchOptions: { args: ['--js-flags=--expose-gc'] } }),
       headless: true,
       instances: [
         {

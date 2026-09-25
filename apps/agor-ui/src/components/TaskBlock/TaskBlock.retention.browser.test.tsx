@@ -119,7 +119,7 @@ function fixture() {
   return { handle, io, addTurn };
 }
 
-it.each(['tool', 'thinking'] as const)(
+it.each(['tool', 'thinking', 'mixed'] as const)(
   'mixed %s consumers survive eviction/reconnect and release on collapse/unmount',
   async (kind) => {
     const { handle, io, addTurn } = fixture();
@@ -147,31 +147,33 @@ it.each(['tool', 'thinking'] as const)(
     }
     const first = render(<Reader name="first" />);
     const second = render(<Reader name="second" />);
-    const label = kind === 'tool' ? /Read.*fixture/ : /Extended Thinking/;
-    const text = kind === 'tool' ? 'output 0' : 'reasoning 0';
+    const label = kind !== 'thinking' ? /Read.*fixture/ : /Extended Thinking/;
+    const text = kind !== 'thinking' ? 'output 0' : 'reasoning 0';
+    const secondLabel = kind === 'mixed' ? /Extended Thinking/ : label;
+    const secondText = kind === 'mixed' ? 'reasoning 0' : text;
     const reader = (name: string) => within(screen.getByRole('region', { name }));
     try {
       await act(async () => {
         await userEvent.click(reader('first').getByRole('button', { name: label }));
       });
       await act(async () => {
-        await userEvent.click(reader('second').getByRole('button', { name: label }));
+        await userEvent.click(reader('second').getByRole('button', { name: secondLabel }));
       });
       await act(async () => {
         for (let i = 1; i <= 10; i++) addTurn(i);
       });
       await waitFor(() => expect(reader('first').getByText(text)).toBeVisible());
-      await waitFor(() => expect(reader('second').getByText(text)).toBeVisible());
+      await waitFor(() => expect(reader('second').getByText(secondText)).toBeVisible());
       await act(async () => {
         io.emit('disconnect');
         io.emit('connect');
         await handle.resync();
       });
-      await waitFor(() => expect(reader('second').getByText(text)).toBeVisible());
+      await waitFor(() => expect(reader('second').getByText(secondText)).toBeVisible());
       await act(async () => {
         await userEvent.click(reader('first').getByRole('button', { name: label }));
       });
-      await waitFor(() => expect(reader('second').getByText(text)).toBeVisible());
+      await waitFor(() => expect(reader('second').getByText(secondText)).toBeVisible());
       second.unmount();
       await waitFor(() =>
         expect(JSON.stringify(handle.state.messagesByTask.get('t000'))).not.toContain('tool_result')
