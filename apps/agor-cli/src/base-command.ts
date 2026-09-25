@@ -57,14 +57,20 @@ export abstract class BaseCommand extends Command {
       this.exit(1);
     }
 
-    // Check for API key auth (takes precedence over stored JWT)
-    if (probe.deploymentId !== target.deploymentId) {
+    if (target.pinDeployment && probe.deploymentId !== target.deploymentId) {
       this.error(
         `The daemon identity at ${daemonUrl} changed. Run agor login --url ${daemonUrl} again.`
       );
     }
-    if (apiKey) {
-      return await createRestClient(daemonUrl, apiKey ?? undefined);
+    // API key auth (environment, then a stored `login --api-key`) is sent as a
+    // bearer on every request and takes precedence over a stored JWT.
+    const effectiveApiKey = apiKey ?? target.apiKey;
+    if (effectiveApiKey) {
+      return await createRestClient(daemonUrl, effectiveApiKey);
+    }
+
+    if (storedAuth?.version !== 2) {
+      this.error(`${chalk.red('✗ Not authenticated')}\n\nRun:\n  ${chalk.cyan('agor login')}`);
     }
 
     // Create REST-only client (prevents hanging processes)
@@ -74,7 +80,7 @@ export abstract class BaseCommand extends Command {
     try {
       await client.authenticate({
         strategy: 'jwt',
-        accessToken: storedAuth!.accessToken,
+        accessToken: storedAuth.accessToken,
       });
     } catch (_error) {
       // Token invalid or expired - clear it and show login prompt

@@ -189,6 +189,96 @@ describe('POST /mcp token source', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects malformed credentials before any tenant lookup, logging only one bounded diagnostic', async () => {
+    initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+    const exists = vi.spyOn(SessionRepository.prototype, 'exists');
+    const handler = captureMcpHandler({
+      multi_tenancy: { mode: 'required_from_auth', trusted_header: 'x-agor-tenant-id' },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const method of ['POST', 'GET', 'DELETE']) {
+      for (const tenant of ['tenant-a', 'tenant-b']) {
+        const res = buildRes();
+        await handler(
+          {
+            method,
+            query: {},
+            headers: {
+              authorization: 'Bearer synthetic-non-jwt-secret',
+              'x-agor-tenant-id': tenant,
+              'x-agor-mcp-client': 'codex',
+            },
+            body: {
+              id: 1,
+              method: 'synthetic-private-method',
+              params: { private: 'private-body' },
+            },
+          } as unknown as Request,
+          res as unknown as Response
+        );
+        expect(res.statusCode).toBe(401);
+      }
+    }
+    expect(exists).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      [
+        '[mcp.auth] rejected reason=wrong_segment_count sample_method=POST sample_source=authorization sample_rpc=other client_hint=codex suppressed=0',
+      ],
+    ]);
+  });
+
+  it.each([
+    { headers: { authorization: 'Basic synthetic-secret' }, status: 400, reason: undefined },
+    {
+      headers: { 'x-api-key': 'synthetic-opaque-key' },
+      status: 401,
+      reason: 'wrong_segment_count',
+    },
+    {
+      headers: {
+        authorization: `Bearer ${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from('not-json').toString('base64url')}.dummy`,
+      },
+      status: 401,
+      reason: 'invalid_encoding',
+    },
+    {
+      // A signed browser/login JWT is not an MCP session token.
+      headers: { authorization: `Bearer ${jwt.sign({ sub: 'user' }, 'mcp-server-test-secret')}` },
+      status: 401,
+      reason: 'invalid_audience',
+    },
+  ])(
+    'preserves credential routing and rejection status ($status, $reason)',
+    async ({ headers, status, reason }) => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      const handler = captureMcpHandler();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = buildRes();
+      await handler(
+        {
+          method: 'POST',
+          query: {},
+          headers,
+          body: { id: 1, method: 'initialize' },
+        } as unknown as Request,
+        res as unknown as Response
+      );
+      expect(res.statusCode).toBe(status);
+      expect(error).not.toHaveBeenCalled();
+      if (reason) {
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.lastCall?.[0]).toContain(`reason=${reason}`);
+        expect(warn.mock.lastCall?.[0]).toContain('sample_rpc=initialize');
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('synthetic');
+    }
+  );
+
   it('attributes admission failures without recording the credential or arbitrary method', async () => {
     const { resolveTracerModule } = await import('../tracing/datadog.js');
     const tracingModule = await import('../tracing/datadog.js');
@@ -240,23 +330,29 @@ describe('POST /mcp token source', () => {
     warn.mockRestore();
   });
 
-  it('rejects requests with no Authorization header (401)', async () => {
-    const handler = captureMcpHandler();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const req = {
-      method: 'POST',
-      query: {},
-      headers: {},
-      body: { id: 8 },
-      ip: '127.0.0.1',
-      socket: { remoteAddress: '127.0.0.1' },
-    } as unknown as Request;
-    const res = buildRes();
-    await handler(req, res as unknown as Response);
-    expect(res.statusCode).toBe(401);
-    const body = res.body as { error?: { message?: string } };
-    expect(body?.error?.message).toMatch(/authorization: bearer/i);
-  });
+  it.each(['POST', 'GET', 'DELETE'])(
+    'rejects credential-free %s without warning (401)',
+    async (method) => {
+      const handler = captureMcpHandler();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const exists = vi.spyOn(SessionRepository.prototype, 'exists');
+      const req = {
+        method,
+        query: {},
+        headers: {},
+        body: { id: 8 },
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+      } as unknown as Request;
+      const res = buildRes();
+      await handler(req, res as unknown as Response);
+      expect(res.statusCode).toBe(401);
+      expect(warn).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+      const body = res.body as { error?: { message?: string } };
+      expect(body?.error?.message).toMatch(/authorization: bearer/i);
+    }
+  );
 
   it('rejects an invalid personal API key from X-API-Key (401)', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
@@ -280,6 +376,7 @@ describe('POST /mcp token source', () => {
   });
 
   it('rejects an internal MCP token replayed under a conflicting trusted tenant', async () => {
+    const exists = vi.spyOn(SessionRepository.prototype, 'exists');
     initMcpTokens({
       db: testSqliteDb(),
       multiTenancy: resolveMultiTenancyConfig({}),
@@ -323,6 +420,7 @@ describe('POST /mcp token source', () => {
     expect(res.statusCode).toBe(403);
     const body = res.body as { error?: { message?: string } };
     expect(body.error?.message).toMatch(/tenant identity mismatch/i);
+    expect(exists).not.toHaveBeenCalled();
   });
 
   it('rejects even when query has both ?sessionToken= and an Authorization header (query wins → 400)', async () => {
@@ -378,6 +476,19 @@ describe('POST /mcp token source', () => {
     warn.mockRestore();
   });
 });
+
+/** Launch config under which personal keys may be routed by the trusted Host. */
+const HOST_ROUTING_LAUNCH_CONFIG = {
+  enabled: true,
+  exchange_url: 'https://issuer.example.test/exchange',
+  issuer: 'https://issuer.example.test',
+  audience: 'runtime:test',
+  instance_id: 'instance-1',
+  dev_shared_secret: 'launch-test-secret-0123456789abcdef',
+  service_credential: 'exchange-credential',
+  forward_request_host: true,
+  trusted_host_header: 'host',
+};
 
 describe('POST /mcp with personal API keys', () => {
   afterEach(() => {
@@ -802,8 +913,14 @@ describe('POST /mcp with personal API keys', () => {
   ])(
     'rejects $label duplicate on-wire trusted tenant headers before API-key lookup',
     async ({ tenantHeaders, errorMessage }) => {
-      const { UserApiKeysRepository } = await import('@agor/core/db');
+      const { TenantPublicRoutingDiscoveryRepository, UserApiKeysRepository } = await import(
+        '@agor/core/db'
+      );
       const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+      const hostDiscovery = vi.spyOn(
+        TenantPublicRoutingDiscoveryRepository.prototype,
+        'findTenantIdByRequestHost'
+      );
 
       await withMcpServer(
         {},
@@ -847,12 +964,16 @@ describe('POST /mcp with personal API keys', () => {
             error: { message: errorMessage },
           });
           expect(verifyKey).not.toHaveBeenCalled();
+          // A malformed/conflicting identity is terminal: never rescued by Host routing.
+          expect(hostDiscovery).not.toHaveBeenCalled();
         },
         {
           multi_tenancy: {
             mode: 'required_from_auth',
             trusted_header: 'x-agor-tenant-id',
           },
+          // Host routing is available here, so the test proves it is not used.
+          external_launch: HOST_ROUTING_LAUNCH_CONFIG,
         }
       );
     }

@@ -752,7 +752,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'update',
       'patch',
       'remove',
-      'updateEnvironment',
       'ensureTeammateKnowledgeNamespace',
       'clean',
     ],

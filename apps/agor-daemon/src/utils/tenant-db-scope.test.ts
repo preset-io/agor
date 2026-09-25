@@ -523,3 +523,54 @@ describe('deferWithTenantContext', () => {
     ]);
   });
 });
+
+describe('personal API-key Host routing in the tenant scope hook', () => {
+  const hostedConfig = {
+    database: { dialect: 'postgresql' },
+    multi_tenancy: {
+      mode: 'required_from_auth',
+      auth_claim: 'tenant_id',
+      trusted_header: 'x-agor-tenant-id',
+    },
+    external_launch: {
+      enabled: true,
+      exchange_url: 'https://issuer.example.test/exchange',
+      issuer: 'https://issuer.example.test',
+      audience: 'runtime:test',
+      instance_id: 'instance-1',
+      dev_shared_secret: 'launch-test-secret-0123456789abcdef',
+      service_credential: 'exchange-credential',
+      forward_request_host: true,
+      trusted_host_header: 'host',
+    },
+  } as never;
+
+  it.each([
+    ['conflicting trusted tenant headers', { 'x-agor-tenant-id': ['tenant-a', 'tenant-b'] }],
+    ['a comma-joined trusted tenant header', { 'x-agor-tenant-id': 'tenant-a,tenant-b' }],
+  ])('never falls back to Host routing for %s', async (_label, tenantHeaders) => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      config: hostedConfig,
+      jwtSecret: 'test-secret',
+    });
+    const next = vi.fn(async () => undefined);
+    const context = {
+      method: 'find',
+      params: {
+        provider: 'rest',
+        headers: {
+          host: 'ws-a.cloud.test',
+          authorization: 'Bearer agor_sk_personal-key',
+          ...tenantHeaders,
+        },
+      },
+    } as never;
+
+    await expect(hook(context, next)).rejects.toBeInstanceOf(NotAuthenticated);
+    // Neither Host discovery nor any tenant scope was opened.
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+});

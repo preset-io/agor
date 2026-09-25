@@ -6,9 +6,45 @@ import type { SessionRepository } from '@agor/core/db/repositories/sessions';
 import type { SessionID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const capturedConfig = vi.hoisted(() => vi.fn());
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  writeFile: vi.fn(),
+}));
+vi.mock('@agor/core/mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp')>()),
+  getMcpServersForSession: vi.fn(async () => [
+    {
+      server: {
+        name: 'external',
+        transport: 'http',
+        url: 'https://example.com/mcp',
+      },
+    },
+  ]),
+  resolveScopedMCPAuthHeaders: vi.fn(async () => ({ Authorization: 'Bearer external-token' })),
+}));
 vi.mock('@google/gemini-cli-core', () => ({
   ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
   GeminiEventType: { Error: 'error' },
+  AuthType: { USE_GEMINI: 'gemini' },
+  MCPServerConfig: class {
+    constructor(...args: unknown[]) {
+      Object.assign(this, { headers: args[6] });
+    }
+  },
+  Config: class {
+    constructor(options: unknown) {
+      capturedConfig(options);
+      // Stop at the config boundary: never initialize/authenticate a provider.
+      throw new Error('config captured');
+    }
+  },
 }));
 vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(() => import('@google/gemini-cli-core')),
@@ -91,6 +127,39 @@ describe('GeminiPromptService', () => {
         expect.any(String)
       );
     }
+  });
+
+  it('adds the Gemini hint only to the built-in connection and preserves both credentials', async () => {
+    vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
+      mcp_token: 'test-token',
+      model_config: null,
+    } as never);
+    const configured = new GeminiPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      'test-api-key',
+      undefined,
+      undefined,
+      mockMCPServerRepo,
+      mockSessionMCPRepo,
+      true
+    );
+    await expect(
+      (
+        configured as unknown as {
+          getOrCreateClient(id: SessionID): Promise<unknown>;
+        }
+      ).getOrCreateClient('test-session' as SessionID)
+    ).rejects.toThrow('config captured');
+    expect(capturedConfig.mock.lastCall?.[0]).toMatchObject({
+      mcpServers: {
+        agor: { headers: { Authorization: 'Bearer test-token', 'x-agor-mcp-client': 'gemini' } },
+        external: { headers: { Authorization: 'Bearer external-token' } },
+      },
+    });
+    expect(capturedConfig.mock.lastCall?.[0].mcpServers.external.headers).not.toHaveProperty(
+      'x-agor-mcp-client'
+    );
   });
 
   describe('Constructor', () => {

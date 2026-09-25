@@ -38,8 +38,8 @@ async function fixture(command: string) {
     reports.push(JSON.parse(options.body as string));
     return new Response(
       JSON.stringify({
-        command_deadline: payload.params.attempt!.commandDeadline,
-        result_deadline: payload.params.attempt!.resultDeadline,
+        command_deadline: payload.params.attempt.commandDeadline,
+        result_deadline: payload.params.attempt.resultDeadline,
       }),
       { status: 200 }
     );
@@ -92,7 +92,7 @@ describe('executor-owned attempt protocol', () => {
     expect(results[0]).toMatchObject({
       outcome: 'succeeded',
       truncated: true,
-      access_urls: [{ name: 'Preview', url: 'https://preview.example.test' }],
+      lifecycle_result: { app: 'https://preview.example.test/' },
     });
     expect(Buffer.byteLength(results[0]!.output as string)).toBeLessThanOrEqual(32768);
   });
@@ -107,4 +107,34 @@ describe('executor-owned attempt protocol', () => {
       expect(h.reports.at(-1)).not.toHaveProperty('access_urls');
     }
   );
+
+  it('parses chunk-split stdout control independently from unterminated stderr', async () => {
+    const script = [
+      "process.stderr.write('warning without newline')",
+      "process.stdout.write('AGOR_ENVIRON')",
+      'setTimeout(() => process.stdout.write(\'MENT_RESULT={\\"app\\":\\"https://preview.example.test\\",\\"health\\":\\"https://preview.example.test/health\\"}\\n\'), 5)',
+    ].join(';');
+    const h = await fixture(`node -e ${JSON.stringify(script)}`);
+
+    expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({ success: true });
+    expect(h.reports.at(-1)).toMatchObject({
+      kind: 'result',
+      outcome: 'succeeded',
+      output: 'warning without newline',
+      lifecycle_result: {
+        app: 'https://preview.example.test/',
+        health: 'https://preview.example.test/health',
+      },
+    });
+  });
+
+  it('never accepts a control-looking stderr line as a result', async () => {
+    const script =
+      'process.stderr.write(\'AGOR_ENVIRONMENT_RESULT={\\"app\\":\\"https://stderr.example.test\\"}\\n\')';
+    const h = await fixture(`node -e ${JSON.stringify(script)}`);
+
+    expect(await handleEnvironmentAttempt(h.payload)).toMatchObject({ success: true });
+    expect(h.reports.at(-1)).not.toHaveProperty('lifecycle_result');
+    expect(h.reports.at(-1)?.output).toContain('stderr.example.test');
+  });
 });

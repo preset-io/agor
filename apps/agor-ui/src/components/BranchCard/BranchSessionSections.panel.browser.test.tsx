@@ -123,7 +123,7 @@ function mount(
 const row = (title: string) =>
   screen.getByRole('button', { name: new RegExp(`^Open session ${title}`) });
 
-it('renders borderless single-line rows with status carried by a trailing dot', async () => {
+it('renders single-line rows with a selected inset border and trailing status mark', async () => {
   const { onCreateSession } = mount();
   const expectedHeight = isMobileViewport()
     ? MOBILE_TOUCH_TARGET
@@ -133,7 +133,7 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     const element = row(session.title!);
     const style = getComputedStyle(element);
     expect(style.borderTopWidth).toBe('0px');
-    expect(style.boxShadow).toBe('none');
+    expect(style.boxShadow === 'none').toBe(session.session_id !== 'review');
     expect(style.outlineStyle).toBe('none');
     expect(element.getBoundingClientRect().height).toBeCloseTo(expectedHeight, 0);
     const caret = element.closest('.ant-tree-treenode')!.querySelector('.ant-tree-switcher svg');
@@ -187,7 +187,7 @@ it('renders borderless single-line rows with status carried by a trailing dot', 
     within(row('Astra recheck — Abuse')).queryByRole('img', { name: /Ready|Running|failed/ })
   ).toBeNull();
 
-  // Selection is a fill, not the card-mode dashed outline.
+  // Selection retains its fill alongside the inset border.
   expect(getComputedStyle(row('Independent availability')).backgroundColor).not.toBe(TRANSPARENT);
   expect(getComputedStyle(row('Astra recheck — Abuse')).backgroundColor).toBe(TRANSPARENT);
 

@@ -868,6 +868,9 @@ describe('CodexPromptService - forked sessions', () => {
             'agor_sessions_get_current_context'
           );
           expect(config.mcp_servers.agor.url).toBe('http://localhost:3030/mcp');
+          expect(config.mcp_servers.agor).toMatchObject({
+            http_headers: { 'x-agor-mcp-client': 'codex' },
+          });
           expect(process.env[config.mcp_servers.agor.bearer_token_env_var]).toBe(
             'child-test-token'
           );

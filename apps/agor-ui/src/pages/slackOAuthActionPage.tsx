@@ -30,13 +30,14 @@
  */
 
 import type { AgorClient, MCPOAuthStartFailure } from '@agor-live/client';
-import { Button, Card, Flex, Typography, theme } from 'antd';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type MarketplaceOAuthPopup,
   openMarketplaceOAuthPopup,
 } from '@/components/Marketplace/marketplaceOAuthPopup';
 import { waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
+import { ActionPageShell, type ActionPageShellProps } from './ActionPageShell';
 
 export type SlackOAuthActionState =
   | 'checking'
@@ -292,82 +293,22 @@ export function useSlackOAuthAction<TPreflight>(
   return { state, preflight, start, finish };
 }
 
-export interface SlackOAuthActionShellProps {
-  titleId: string;
-  title: string;
-  subtitle: string;
-  status: ReactNode;
-  /** Rendered only when the action is startable. */
-  primaryAction?: ReactNode;
+export interface SlackOAuthActionShellProps extends Omit<ActionPageShellProps, 'secondaryAction'> {
   returnToSlackUrl?: string;
-  footnote: ReactNode;
 }
 
-/**
- * One card, one heading, one status region, one action row.
- *
- * The heading takes focus on mount and the body is `aria-live="polite"`, so a
- * screen-reader user who arrives from Slack is told where they are and then
- * hears each state change without having to hunt for it.
- */
-export function SlackOAuthActionShell({
-  titleId,
-  title,
-  subtitle,
-  status,
-  primaryAction,
-  returnToSlackUrl,
-  footnote,
-}: SlackOAuthActionShellProps) {
-  const titleRef = useRef<HTMLHeadingElement | null>(null);
-  const { token: designToken } = theme.useToken();
-
-  useEffect(() => {
-    titleRef.current?.focus();
-  }, []);
-
+/** {@link ActionPageShell} with the Slack flows' "Return to Slack" secondary action. */
+export function SlackOAuthActionShell({ returnToSlackUrl, ...props }: SlackOAuthActionShellProps) {
   return (
-    <main
-      style={{
-        minHeight: '100dvh',
-        width: '100%',
-        padding: `max(${designToken.padding}px, env(safe-area-inset-top)) max(${designToken.padding}px, env(safe-area-inset-right)) max(${designToken.padding}px, env(safe-area-inset-bottom)) max(${designToken.padding}px, env(safe-area-inset-left))`,
-        boxSizing: 'border-box',
-        overflowX: 'hidden',
-        display: 'grid',
-        placeItems: 'center',
-        background: designToken.colorBgLayout,
-      }}
-      aria-labelledby={titleId}
-    >
-      <Card style={{ width: '100%', maxWidth: 560, overflowWrap: 'anywhere' }}>
-        <Flex vertical gap={20} aria-live="polite">
-          <div>
-            <Typography.Title
-              ref={titleRef}
-              id={titleId}
-              level={2}
-              tabIndex={-1}
-              style={{ marginBottom: designToken.marginXS, outline: 'none' }}
-            >
-              {title}
-            </Typography.Title>
-            <Typography.Text type="secondary">{subtitle}</Typography.Text>
-          </div>
-          {status}
-          <Flex gap={12} wrap>
-            {primaryAction}
-            {returnToSlackUrl && (
-              <Button size="large" href={returnToSlackUrl}>
-                Return to Slack
-              </Button>
-            )}
-          </Flex>
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            {footnote}
-          </Typography.Paragraph>
-        </Flex>
-      </Card>
-    </main>
+    <ActionPageShell
+      {...props}
+      secondaryAction={
+        returnToSlackUrl ? (
+          <Button size="large" href={returnToSlackUrl}>
+            Return to Slack
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }

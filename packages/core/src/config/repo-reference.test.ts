@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BranchName, RepoSlug } from '../types';
 import {
+  extractGitHubSlugFromUrl,
   extractSlugFromUrl,
   formatRepoReference,
   isValidGitUrl,
@@ -337,6 +338,41 @@ describe('extractSlugFromUrl', () => {
       const result = extractSlugFromUrl('https://github.com/org.git/repo.git');
       expect(result).toBe('org.git/repo');
     });
+  });
+});
+
+describe('extractGitHubSlugFromUrl', () => {
+  it.each([
+    ['https://github.com/preset-io/agor.git', 'preset-io/agor'],
+    ['http://github.com/preset-io/agor', 'preset-io/agor'],
+    ['git://github.com/preset-io/agor.git', 'preset-io/agor'],
+    ['ssh://git@github.com/preset-io/agor.git', 'preset-io/agor'],
+    ['ssh://git@github.com:22/preset-io/agor.git', 'preset-io/agor'],
+    ['git@github.com:preset-io/agor.git', 'preset-io/agor'],
+  ])('derives a credential-free slug from %s', (remoteUrl, expected) => {
+    expect(extractGitHubSlugFromUrl(remoteUrl)).toBe(expected);
+  });
+
+  it('never includes HTTP credentials in the derived identity', () => {
+    const credential = 'github_pat_secret-that-must-not-render';
+    const slug = extractGitHubSlugFromUrl(
+      `https://x-access-token:${credential}@github.com/preset-io/agor.git`
+    );
+    expect(slug).toBe('preset-io/agor');
+    expect(slug).not.toContain(credential);
+  });
+
+  it.each([
+    'https://gitlab.com/preset-io/agor.git',
+    'git@github.com.evil.example:preset-io/agor.git',
+    'https://github.com.evil.example/preset-io/agor.git',
+    'file:///github.com/preset-io/agor.git',
+    'https://github.com/preset-io/agor/extra.git',
+    'https://github.com/preset-io/agor.git?token=secret',
+    'agor',
+    '',
+  ])('rejects a non-canonical GitHub remote: %s', (remoteUrl) => {
+    expect(extractGitHubSlugFromUrl(remoteUrl)).toBeUndefined();
   });
 });
 

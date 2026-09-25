@@ -864,9 +864,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   );
 
   const sessionRowStyle = (session: Session): React.CSSProperties => ({
-    // Borderless rows: status lives in the trailing mark, selection and failure in the fill.
     border: 0,
     borderRadius: token.borderRadiusSM,
+    // Inset selection border keeps row geometry unchanged and leaves the native
+    // keyboard focus outline independent. Shared by tree, search and scheduled rows.
+    // Use the neutral foreground for near-white in dark themes and contrast in light themes.
+    boxShadow:
+      session.session_id === selectedSessionId
+        ? `inset 0 0 0 ${token.lineWidth}px ${token.colorText}`
+        : undefined,
     paddingBlock: 0,
     // Equal insets: the logo and the status mark sit one small step inside a
     // selected, hovered or failed fill instead of hugging its edges.

@@ -657,7 +657,7 @@ export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPaylo
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Environment lifecycle payload - run shell-based start/stop/restart/nuke
+ * Environment lifecycle payload - run shell-based start/stop/nuke
  * commands from the executor. Webhook lifecycle commands stay daemon-owned.
  */
 export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
@@ -672,46 +672,34 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       branchId: z.string().uuid(),
 
       /** Branch checkout path. Executor refetches the branch but this avoids ambiguity. */
-      branchPath: z.string().optional(),
+      branchPath: z.string(),
 
       /** Lifecycle action */
-      action: z.enum(['start', 'stop', 'restart', 'nuke']),
-      /** Only the asynchronous delegated path carries durable attempt authority. */
-      attempt: z
-        .object({
-          id: z.string().uuid(),
-          claimDeadline: z.string().datetime(),
-          commandDeadline: z.string().datetime(),
-          resultDeadline: z.string().datetime(),
-          externalJobDeadlineMs: z.number().int().min(305000).max(365000),
-        })
-        .optional(),
+      action: z.enum(['start', 'stop', 'nuke']),
+      /** Durable, daemon-issued attempt authority for every execution mode. */
+      attempt: z.object({
+        id: z.string().uuid(),
+        claimDeadline: z.string().datetime(),
+        commandDeadline: z.string().datetime(),
+        resultDeadline: z.string().datetime(),
+        externalJobDeadlineMs: z.number().int().min(305000).max(365000),
+      }),
 
-      /** Shell start command. Required for start/restart. */
+      /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
 
-      /** Shell stop command. Required for stop and used before restart when present. */
+      /** Shell stop command. Required for stop. */
       stopCommand: z.string().optional(),
 
       /** Shell nuke command. Required for nuke. */
       nukeCommand: z.string().optional(),
-
-      /** Static app URL rendered by the daemon/branch snapshot. */
-      appUrl: z.string().optional(),
     })
     .superRefine((params, ctx) => {
-      if (params.attempt && (!params.branchPath || params.action === 'restart')) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['attempt'],
-          message: 'Asynchronous commands require branchPath and support only Start, Stop, or Nuke',
-        });
-      }
-      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
+      if (params.action === 'start' && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
-          message: 'startCommand is required for start/restart',
+          message: 'startCommand is required for start',
         });
       }
       if (params.action === 'stop' && !params.stopCommand) {
