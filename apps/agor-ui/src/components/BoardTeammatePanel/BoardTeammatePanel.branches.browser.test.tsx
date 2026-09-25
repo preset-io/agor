@@ -70,18 +70,19 @@ it('scrolls older branches independently of the teammate drawer tabs and count f
   await act(async () => {
     list.scrollTop = list.scrollHeight;
   });
+  expect(list.scrollTop).toBeGreaterThan(0);
+  expect(firstRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    list.getBoundingClientRect().top
+  );
+  expect(lastRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    list.getBoundingClientRect().top
+  );
   expect(lastRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(
     footer.getBoundingClientRect().top
   );
   expect(footer).toBeVisible();
   expect(tab).toBeVisible();
 
-  await act(async () => {
-    list.scrollTop = 0;
-  });
-  expect(firstRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-    list.getBoundingClientRect().top
-  );
   fireEvent.click(screen.getByRole('button', { name: 'Collapse panel' }));
   expect(onCollapse).toHaveBeenCalledOnce();
 });
