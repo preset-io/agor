@@ -609,10 +609,10 @@ describe('SessionPanel archive feedback', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Archive', exact: true }));
       const expected =
         outcome === 'read-failure'
-          ? 'Session and same-branch children archived; refresh required to update the session list.'
+          ? 'Session and descendants archived; refresh required to update the session list.'
           : outcome === 'mutation-failure'
             ? 'Failed to archive session'
-            : 'Session and same-branch children archived';
+            : 'Session and descendants archived';
       expect(await screen.findByText(expected)).toBeVisible();
       expect(create).toHaveBeenCalledTimes(1);
       expect(get).toHaveBeenCalledTimes(outcome === 'mutation-failure' ? 0 : 1);
@@ -620,9 +620,7 @@ describe('SessionPanel archive feedback', () => {
       else expect(onClose).not.toHaveBeenCalled();
       if (outcome === 'read-failure') {
         expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
-        expect(
-          screen.queryByText('Session and same-branch children archived')
-        ).not.toBeInTheDocument();
+        expect(screen.queryByText('Session and descendants archived')).not.toBeInTheDocument();
         expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
       }
     }

@@ -182,12 +182,13 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
           session?: Session;
           affectedSessions?: Session[];
         };
-        const affectedSessions =
+        const affectedSessions = (
           result.affectedSessions && result.affectedSessions.length > 0
             ? result.affectedSessions
             : result.session
               ? [result.session]
-              : [];
+              : []
+        ).filter((session) => session.branch_id === branch.branch_id);
 
         // Keep local archived cache in sync for this modal view. Realtime
         // events will converge other views; this prevents stale descendants in
@@ -216,7 +217,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
 
         showSuccess(
           archive
-            ? 'Session and same-branch children archived'
+            ? 'Session and descendants archived'
             : 'Session and same-branch children unarchived'
         );
       } catch (err) {
@@ -229,7 +230,15 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         });
       }
     },
-    [loadActiveSessions, loadArchivedSessions, showArchived, showSuccess, showError, upsertSession]
+    [
+      branch.branch_id,
+      loadActiveSessions,
+      loadArchivedSessions,
+      showArchived,
+      showSuccess,
+      showError,
+      upsertSession,
+    ]
   );
 
   const combinedSessions = useMemo(() => {
@@ -358,10 +367,10 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         const nextArchived = !session.archived;
         const actionLabel = nextArchived ? 'archive' : 'unarchive';
         const title = nextArchived
-          ? 'Archive session and same-branch children?'
+          ? 'Archive session and descendants?'
           : 'Unarchive session and same-branch children?';
         const description = nextArchived
-          ? 'This will archive this session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.'
+          ? 'This will archive this session and its descendants, including sessions created on other branches. Running tasks are not stopped.'
           : 'This will restore this session and same-branch descendants archived because of their parent. Remote-created sessions are unchanged.';
         const tooltip = nextArchived
           ? 'Archive session and child sessions'

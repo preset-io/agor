@@ -24,9 +24,9 @@ function needsArchiveWrite(
 }
 
 /**
- * Plan one branch-local tree transition while preserving independently-owned
- * archive causes. Remote relationships are intentionally absent from the
- * input: they are provenance, not canonical genealogy.
+ * Plan an archive transition for the collected descendants while preserving
+ * independent archive causes. Restore callers supply only branch-local
+ * genealogy; archiving may also include remote-created descendants.
  */
 export function planSessionTreeArchiveTransition(input: {
   root: Session;

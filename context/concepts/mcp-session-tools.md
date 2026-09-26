@@ -39,13 +39,20 @@ into SDK-private registration state.
 
 1. **`agor_sessions_prompt`** — continue, fork, or spawn from an existing session. `mode: 'continue' | 'fork' | 'subsession'`.
 2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt`, agent override, permission mode.
-3. **`agor_sessions_update`** — rename, change status, refresh description. Archive state is rejected here; use `agor_sessions_archive` or `agor_sessions_unarchive` so branch-local descendant and permission rules are applied.
+3. **`agor_sessions_update`** — rename, change status, refresh description. Archive state is rejected here; use `agor_sessions_archive` or `agor_sessions_unarchive` so descendant and permission rules are applied.
 
 `agor_sessions_bulk_archive` is dry-run-first. Its filters select roots; callers
 must choose `includeChildren: true` or `false` before execution when active
-same-branch fork/spawn descendants would be added. Cross-branch
-`remote_create` relationships are provenance and retain an independent
-lifecycle.
+same-branch fork/spawn descendants would be added. Bulk archive does not follow cross-branch `remote_create` relationships.
+
+Dedicated session archive follows local genealogy and outgoing `remote_create`
+descendants across branches by default; `includeChildren: false` archives only
+the root. Explicit branch archive (including teammate retirement) also includes
+remote descendants. Every visited session requires archive permission on its
+own branch, including already-archived intermediates; denial changes no archive
+state. Archive hides running sessions without stopping their tasks. Unarchive
+remains branch-local, so remote descendants must be restored separately.
+Automatic BTW cleanup remains branch-local.
 
 Prompting an archived Session restores only that explicit Session; archived
 local ancestors and descendants remain archived. Board archival changes Board

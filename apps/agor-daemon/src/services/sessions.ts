@@ -98,6 +98,7 @@ import { deploymentAgenticToolUnavailableMessage } from './agentic-tool-deployme
 import {
   BTW_ARCHIVED_REASON,
   MANUAL_ARCHIVED_REASON,
+  PARENT_ARCHIVED_REASON,
   planBranchArchiveTransition,
   planBranchLocalArchiveRoots,
   planBranchUnarchiveTransition,
@@ -1363,10 +1364,49 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     };
   }
 
-  private async collectBranchLocalDescendants(root: Session): Promise<Session[]> {
-    // Session archive cascades follow the branch-local genealogy tree only.
-    // Remote relationships are modeled separately and must not be affected.
-    return this.sessionRepo.findBranchLocalDescendants(root.session_id, root.branch_id);
+  /** Expand a complete local seed through outgoing creation links, never callbacks. */
+  private async collectRemoteArchiveDescendants(seeds: Session[]): Promise<Session[]> {
+    const visited = new Map(seeds.map((session) => [session.session_id, session]));
+    let frontier = seeds;
+    while (frontier.length > 0) {
+      const remoteRoots = new Map<BranchID, Session[]>();
+      // Bound query parameters, not the accepted tree size.
+      for (let offset = 0; offset < frontier.length; offset += 200) {
+        const sourceIds = frontier.slice(offset, offset + 200).map((session) => session.session_id);
+        const sources = new Set(sourceIds);
+        const relationships = await this.sessionRelationshipRepo.findForSessions(sourceIds);
+        for (const link of relationships) {
+          if (
+            link.relationship_type !== 'remote_create' ||
+            !sources.has(link.source_session_id) ||
+            visited.has(link.target_session_id)
+          )
+            continue;
+          const child = await this.sessionRepo.findById(link.target_session_id);
+          if (!child) throw new Forbidden('Cannot archive the complete session tree');
+          visited.set(child.session_id, child);
+          const roots = remoteRoots.get(child.branch_id) ?? [];
+          roots.push(child);
+          remoteRoots.set(child.branch_id, roots);
+        }
+      }
+      frontier = [];
+      for (const [branchId, roots] of remoteRoots) {
+        frontier.push(...roots);
+        const descendantsByRoot = await this.sessionRepo.findBranchLocalDescendantsForRoots(
+          roots.map((session) => session.session_id),
+          branchId
+        );
+        for (const descendants of descendantsByRoot.values()) {
+          for (const child of descendants) {
+            if (visited.has(child.session_id)) continue;
+            visited.set(child.session_id, child);
+            frontier.push(child);
+          }
+        }
+      }
+    }
+    return [...visited.values()];
   }
 
   private getRuntimeExecutionConfig():
@@ -1428,7 +1468,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       if (!branch) {
         const loadedBranch = await this.branchRepo.findById(session.branch_id);
         if (!loadedBranch) {
-          throw new Forbidden(`Branch not found for session: ${session.session_id}`);
+          throw new Forbidden('Cannot archive the complete session tree');
         }
         branch = loadedBranch;
         branchCache.set(session.branch_id, branch);
@@ -1462,7 +1502,14 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   ): Promise<SessionArchiveResult> {
     const root = await this.get(id, params);
     const includeChildren = options?.includeChildren !== false;
-    const descendants = includeChildren ? await this.collectBranchLocalDescendants(root) : [];
+    const localDescendants = includeChildren
+      ? await this.sessionRepo.findBranchLocalDescendants(root.session_id, root.branch_id)
+      : [];
+    const sessions =
+      archived && includeChildren && rootReason === MANUAL_ARCHIVED_REASON
+        ? await this.collectRemoteArchiveDescendants([root, ...localDescendants])
+        : [root, ...localDescendants];
+    const descendants = sessions.filter((session) => session.session_id !== root.session_id);
     const targets = planSessionTreeArchiveTransition({
       root,
       descendants,
@@ -1471,7 +1518,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     });
 
     await this.assertCanArchiveSessions(
-      targets.map((target) => target.session),
+      // No-op intermediates must not bridge an inaccessible branch.
+      archived ? sessions : targets.map((target) => target.session),
       archived,
       params
     );
@@ -1533,7 +1581,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   /**
-   * Archive a session and, by default, its branch-local descendants.
+   * Archive a session and, by default, its local and remote-created descendants.
    */
   async archive(
     id: string,
@@ -1559,16 +1607,35 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     return this.setArchiveStateForTree(id, true, undefined, params, BTW_ARCHIVED_REASON);
   }
 
-  /** Archive every active session in a branch without rewriting prior causes. */
+  /** Preflight the entire branch cascade before branch maintenance changes metadata. */
+  async prepareBranchArchive(
+    branchId: BranchID,
+    params?: SessionParams
+  ): Promise<SessionArchiveTarget[]> {
+    const localSessions = await this.sessionRepo.findAll({ branchId });
+    const sessions = await this.collectRemoteArchiveDescendants(localSessions);
+    await this.assertCanArchiveSessions(sessions, true, params);
+    return [
+      ...planBranchArchiveTransition(localSessions),
+      ...sessions
+        .filter((session) => session.branch_id !== branchId && !session.archived)
+        .map(
+          (session): SessionArchiveTarget => ({
+            session,
+            archived: true,
+            archivedReason: PARENT_ARCHIVED_REASON,
+          })
+        ),
+    ];
+  }
+
+  /** Archive a branch's sessions and their remote descendants without rewriting causes. */
   async archiveBranchSessions(
     branchId: BranchID,
     params?: SessionParams
   ): Promise<SessionArchiveBatchResult> {
-    const sessions = await this.sessionRepo.findAll({ branchId });
-    const affectedSessions = await this.applyArchiveTargets(
-      planBranchArchiveTransition(sessions),
-      params
-    );
+    const targets = await this.prepareBranchArchive(branchId, params);
+    const affectedSessions = await this.applyArchiveTargets(targets, params);
     return { affectedSessions, count: affectedSessions.length };
   }
 

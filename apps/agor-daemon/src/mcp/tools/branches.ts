@@ -1649,7 +1649,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_archive',
     {
       description:
-        'Archive a branch (soft delete). Requires idle tasks and a stopped environment; optionally cleans or deletes the filesystem, archives the branch metadata and all its sessions, and removes it from the board. Use agor_branches_unarchive to restore.',
+        'Archive a branch (soft delete). Requires idle tasks and a stopped environment; optionally cleans or deletes the filesystem, archives the branch metadata, all its sessions and their remote-created descendants, and removes it from the board. Remote descendants require archive permission on their own branches and are not stopped. Use agor_branches_unarchive to restore.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to archive (UUIDv7 or short ID)'),

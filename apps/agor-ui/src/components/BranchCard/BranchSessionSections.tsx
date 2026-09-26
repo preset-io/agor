@@ -652,9 +652,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       e.stopPropagation();
 
       modal.confirm({
-        title: 'Archive session and same-branch children?',
+        title: 'Archive session and descendants?',
         content:
-          'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
+          'This archives the session and its descendants, including sessions created on other branches. Running tasks are not stopped.',
         okText: 'Archive',
         cancelText: 'Cancel',
         onOk: async () => {
@@ -664,7 +664,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             if (result?.reconciliation === 'refresh-required') {
               showWarning(ARCHIVE_REFRESH_WARNING);
             } else if (result) {
-              showSuccess('Session and same-branch children archived');
+              showSuccess('Session and descendants archived');
             } else {
               showError('Failed to archive session');
             }
