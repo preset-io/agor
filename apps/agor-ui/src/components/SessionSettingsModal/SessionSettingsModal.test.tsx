@@ -71,7 +71,13 @@ vi.mock('../SessionIds', () => ({ SessionIdsList: () => <div data-testid="ids" /
 vi.mock('../CodexSettingsForm', () => ({ CodexSettingsForm: () => null }));
 vi.mock('../CallbackConfigForm', () => ({ CallbackConfigForm: () => null }));
 vi.mock('../CallbackToggleButton', () => ({ CallbackTargetDisplay: () => null }));
-vi.mock('../AdvancedSettingsForm', () => ({ AdvancedSettingsForm: () => null }));
+vi.mock('../AdvancedSettingsForm', () => ({
+  AdvancedSettingsForm: ({ disabled }: { disabled?: boolean }) => (
+    <Form.Item name="custom_context">
+      <textarea data-testid="custom-context" readOnly={disabled} />
+    </Form.Item>
+  ),
+}));
 vi.mock('../SessionEnvVarsSelector', () => ({ SessionEnvVarsSelector: () => null }));
 
 const claudeSession = {
@@ -186,5 +192,100 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(2));
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
+  });
+
+  describe('custom_context from a lean session row', () => {
+    const fullContext = {
+      teamName: 'Backend',
+      scheduled_run: { schedule_id: 'sched-1' },
+      slash_commands: ['/review'],
+    };
+    const leanSession = {
+      ...claudeSession,
+      custom_context: { teamName: 'Backend' },
+    } as unknown as Session;
+
+    function clientReturning(session: Partial<Session>) {
+      const get = vi.fn().mockResolvedValue({ ...leanSession, ...session });
+      return { client: { service: () => ({ get }) } as unknown as AgorClient, get };
+    }
+
+    it('does not send custom_context on a save that did not edit it', async () => {
+      const onUpdate = vi.fn();
+      const { client, get } = clientReturning({ custom_context: fullContext });
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={leanSession}
+          client={client}
+          currentUser={null}
+          onUpdate={onUpdate}
+        />
+      );
+      await waitFor(() => expect(get).toHaveBeenCalledWith('s1'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('custom_context');
+    });
+
+    it('unlocks the field with the row context when the full record cannot load', async () => {
+      const get = vi.fn().mockRejectedValue(new Error('offline'));
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={leanSession}
+          client={{ service: () => ({ get }) } as unknown as AgorClient}
+          currentUser={null}
+        />
+      );
+      fireEvent.click(screen.getByText('Advanced'));
+      const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+
+      await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(JSON.parse(field.value)).toEqual({ teamName: 'Backend' });
+    });
+
+    it('edits the full record, read-only until it loads', async () => {
+      const onUpdate = vi.fn();
+      let resolve: (session: Session) => void = () => {};
+      const get = vi.fn(
+        () =>
+          new Promise<Session>((done) => {
+            resolve = done;
+          })
+      );
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={leanSession}
+          client={{ service: () => ({ get }) } as unknown as AgorClient}
+          currentUser={null}
+          onUpdate={onUpdate}
+        />
+      );
+      fireEvent.click(screen.getByText('Advanced'));
+      const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+      expect(field.readOnly).toBe(true);
+
+      resolve({ ...leanSession, custom_context: fullContext } as Session);
+      await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(JSON.parse(field.value)).toEqual(fullContext);
+
+      fireEvent.change(field, {
+        target: { value: JSON.stringify({ ...fullContext, teamName: 'Frontend' }) },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1].custom_context).toEqual({
+        ...fullContext,
+        teamName: 'Frontend',
+      });
+    });
   });
 });

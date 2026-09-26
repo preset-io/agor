@@ -193,6 +193,39 @@ describe('ZoneTriggerModal action snapshot', () => {
     expect(renderTemplateMock).toHaveBeenCalledTimes(2);
   });
 
+  it('renders the template against the full session, not the lean store row', async () => {
+    renderTemplateMock.mockResolvedValue('rendered');
+    const row = {
+      ...makeSession('s-1', 'completed', '2026-06-01T00:00:00.000Z', 'Session'),
+      custom_context: { teamName: 'Backend' },
+    } as Session;
+    const fullContext = { teamName: 'Backend', slash_commands: ['/review'] };
+    const get = vi.fn().mockResolvedValue({ ...row, custom_context: fullContext });
+
+    render(
+      <ZoneTriggerModal
+        actionId={1}
+        open
+        onCancel={() => {}}
+        client={{ service: () => ({ get }) } as unknown as AgorClient}
+        branch={undefined}
+        sessions={[row]}
+        zoneName="Review"
+        trigger={{ template: 'Template', behavior: 'show_picker' }}
+        availableAgents={[]}
+        mcpServerById={new Map()}
+        onExecute={async () => {}}
+      />
+    );
+
+    await waitFor(() => expect(renderTemplateMock).toHaveBeenCalledTimes(1));
+    expect(get).toHaveBeenCalledWith('s-1');
+    const context = renderTemplateMock.mock.calls[0][2] as {
+      session?: { custom_context?: unknown };
+    };
+    expect(context.session?.custom_context).toEqual(fullContext);
+  });
+
   it('starts a clean render exactly once for a new zone action or reopened action', async () => {
     const zoneA = deferred<string>();
     const zoneB = deferred<string>();

@@ -187,12 +187,22 @@ export const resetHydrationRevisions = (): void => {
   lastAppliedRevision = makeZeroCounters();
 };
 
+// Monotonic epoch for hydrations that are SCHEDULED but not yet started (the
+// global full-set hydration deferred behind the opened session's transcript).
+// Every cancellation path bumps it, so a deferred start that outlives its load
+// (unmount, authority change, logout) is skipped instead of starting loops.
+let cancellationEpoch = 0;
+
+/** Current cancellation epoch; capture before deferring a hydration start. */
+export const getHydrationCancellationEpoch = (): number => cancellationEpoch;
+
 /**
  * Cancel every in-flight hydration loop by bumping all generation tokens. Used
  * on unmount (and defensively on mount) so a loop stops retrying and never
  * applies a snapshot or schedules another timer after teardown.
  */
 export const cancelAllHydrations = (): void => {
+  cancellationEpoch += 1;
   for (const c of Object.keys(hydrationGeneration) as HydratedCollection[]) {
     hydrationGeneration[c] += 1;
   }
@@ -207,6 +217,7 @@ export const cancelAllHydrations = (): void => {
  * eventually apply into freshly-cleared Maps.
  */
 export const cancelAndFailAllHydrations = (): void => {
+  cancellationEpoch += 1;
   for (const c of Object.keys(hydrationGeneration) as HydratedCollection[]) {
     hydrationGeneration[c] += 1;
     liveRevisions[c] += 1;

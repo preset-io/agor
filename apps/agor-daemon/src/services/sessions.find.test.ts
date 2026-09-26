@@ -467,3 +467,78 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
     expect(ids(result)).toEqual([s1, s3].sort());
   });
 });
+
+describe('SessionsService.find — lean list projection', () => {
+  const heavyContext = {
+    teamName: 'Backend',
+    gateway_source: { channel_id: 'c', channel_name: 'n', channel_type: 'slack', thread_id: 't' },
+    scheduled_run: { rendered_prompt: 'x'.repeat(2_000) },
+    slash_commands: ['/review', '/compact'],
+    skills: [{ name: 'skill' }],
+  };
+  const leanContext = {
+    teamName: 'Backend',
+    gateway_source: heavyContext.gateway_source,
+  };
+
+  function contextsById(result: Awaited<ReturnType<SessionsService['find']>>) {
+    const data = Array.isArray(result) ? result : result.data;
+    return new Map(data.map((s) => [s.session_id, s.custom_context]));
+  }
+
+  dbTest(
+    'omits single-session context through transport validation without widening visibility',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        user_id: generateId(),
+        email: `lean-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+      const hiddenBranch = await createBranchOnBoard(db, null);
+      const visible = await createSession(db, visibleBranch, { custom_context: heavyContext });
+      const plain = await createSession(db, visibleBranch);
+      await createSession(db, hiddenBranch, { custom_context: heavyContext });
+      const app = feathers<{ sessions: SessionsService }>();
+      app.use('sessions', createService(db));
+      app.service('sessions').hooks({
+        before: {
+          all: [typedValidateQuery(sessionQueryValidator)],
+          find: [scopeFindToAccessibleSessionsSql()],
+        },
+      });
+
+      for (const provider of ['socketio', 'rest']) {
+        const query = { archived: false, $limit: 10, $sort: { updated_at: -1 } };
+        const full = await app.service('sessions').find({ provider, user, query });
+        const lean = await app.service('sessions').find({
+          provider,
+          user,
+          query: { ...query, lean: provider === 'rest' ? 'true' : true },
+        });
+        expect(ids(lean)).toEqual(ids(full));
+        expect(ids(lean)).toEqual([visible, plain].sort());
+        expect(contextsById(full).get(visible)).toEqual(heavyContext);
+        expect(contextsById(lean).get(visible)).toEqual(leanContext);
+        expect(contextsById(lean).get(plain)).toEqual(contextsById(full).get(plain));
+      }
+    }
+  );
+
+  dbTest('applies to the generic find path and never to get', async ({ db }) => {
+    const service = createService(db);
+    const board = await createBoard(db);
+    const branch = await createBranchOnBoard(db, board);
+    const session = await createSession(db, branch, { custom_context: heavyContext });
+
+    // board_id + $in routes through the operator-capable generic pipeline.
+    const lean = await service.find({
+      query: { board_id: board, session_id: { $in: [session] }, lean: true, $limit: 10 },
+    });
+    expect(contextsById(lean).get(session)).toEqual(leanContext);
+    expect(
+      contextsById(await service.find({ query: { lean: false, $limit: 10 } })).get(session)
+    ).toEqual(heavyContext);
+    expect((await service.get(session)).custom_context).toEqual(heavyContext);
+  });
+});

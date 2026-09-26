@@ -42,6 +42,7 @@ import {
   bumpRevision,
   cancelAllHydrations,
   cancelAndFailAllHydrations,
+  getHydrationCancellationEpoch,
   resetHydrationRevisions,
   runHydration,
 } from '../store/agorHydration';
@@ -53,6 +54,10 @@ import {
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
+import {
+  type OpenedTranscriptPrefetch,
+  prefetchOpenedTranscript,
+} from '../store/openedTranscriptPrefetch';
 import {
   discardRealtimeNow,
   enqueueSessionPatch,
@@ -103,6 +108,11 @@ export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 // genealogy / GlobalSearch / per-board counts converge without blocking the
 // gate. Sessions are the unbounded-with-activity collection, so this is the
 // single most important cap for first-paint latency on a busy workspace.
+//
+// Every session list read that feeds the store is `lean: true`: rows omit the
+// bulky single-session `custom_context` keys (LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS),
+// so `sessionById` must never be the source for those. The open session reads
+// them from its full `sessions.get` (the reactive session / settings modal).
 const RECENT_SESSIONS_LIMIT = 50;
 
 // One row in the loading checklist. `count` is captured atomically with
@@ -413,6 +423,14 @@ export function useAgorData(
   const lastSilentFetchFailedRef = useRef(false);
   const oauthStatusRequestGenerationRef = useRef(0);
 
+  // The opened session's transcript prefetch (see `openedTranscriptPrefetch`).
+  // Released early whenever hydrations are cancelled wholesale.
+  const openedTranscriptPrefetchRef = useRef<OpenedTranscriptPrefetch | null>(null);
+  const releaseOpenedTranscriptPrefetch = useCallback(() => {
+    openedTranscriptPrefetchRef.current?.release();
+    openedTranscriptPrefetchRef.current = null;
+  }, []);
+
   /**
    * One latest-request-wins coordinator for initial hydration and
    * realtime OAuth hints. A later request invalidates every earlier response,
@@ -609,6 +627,7 @@ export function useAgorData(
                 client.service('sessions').findAll({
                   query: {
                     archived: false,
+                    lean: true,
                     $limit: PAGINATION.DEFAULT_LIMIT,
                     $sort: { updated_at: -1 },
                   },
@@ -623,6 +642,7 @@ export function useAgorData(
                   .find({
                     query: {
                       archived: false,
+                      lean: true,
                       $limit: RECENT_SESSIONS_LIMIT,
                       $count: false,
                       $sort: { updated_at: -1 },
@@ -745,6 +765,24 @@ export function useAgorData(
         }
         const interimSessionById = buildSessionMaps(sessionsList).sessionById;
 
+        // A session route: start its transcript now, concurrently with the
+        // board-scoped batch, and hold the global hydration below until its
+        // first page lands so multi-megabyte snapshots don't queue ahead of it.
+        const openedSessionId =
+          !silent && directSessionId
+            ? resolveSessionFromShortIdPure(directSessionId, interimSessionById)
+            : null;
+        let openedTranscriptReady: Promise<void> | null = null;
+        if (openedSessionId) {
+          // Retain before releasing any earlier prefetch: for the same session
+          // the shared handle stays warm instead of dropping to zero refs.
+          const previous = openedTranscriptPrefetchRef.current;
+          const prefetch = prefetchOpenedTranscript(client, openedSessionId);
+          openedTranscriptPrefetchRef.current = prefetch;
+          previous?.release();
+          openedTranscriptReady = prefetch.ready;
+        }
+
         const boardScope = silent
           ? undefined
           : (resolveDisplayedBoardId(pathname, boardsMap, interimBranchById, interimSessionById) ??
@@ -789,6 +827,7 @@ export function useAgorData(
                 query: {
                   archived: false,
                   board_id: boardScope,
+                  lean: true,
                   $limit: PAGINATION.DEFAULT_LIMIT,
                   $sort: { updated_at: -1 },
                 },
@@ -967,147 +1006,167 @@ export function useAgorData(
         // would have bumped the counter → no apply). If a write raced, the
         // snapshot is discarded and refetched; we never overlay a racy snapshot.
 
-        // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
-        // board-scoped), so hydrate them on every non-silent load (silent
-        // reconnect already fetched them full above). repos / users / boards /
-        // card-types stay global at first paint, so they need no top-up.
-        //
-        // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
-        // separate revision guards, separate generation tokens). Coupling them
-        // in a single runHydration would let high-frequency session-write churn
-        // (common when agents stream) starve the branch apply indefinitely — and
-        // on Home, branches start empty and are filled ONLY by this hydration, so
-        // coupling could leave the board empty forever. On independent loops,
-        // branches apply on their own quiet window (almost immediately)
-        // regardless of session churn.
-        if (!silent) {
-          void runAuthorityHydration(
-            'sessions',
-            ['sessions'],
-            () =>
-              client.service('sessions').findAll({
-                query: {
-                  archived: false,
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                  $sort: { updated_at: -1 },
-                },
-              }),
-            (allSessions) =>
-              agorStore.getState().applyMaps((prev) => {
-                // The hydration fetches active sessions only. Deep-link-healed
-                // archived sessions (added to `sessionById` so a direct /s/<id>
-                // archived link can open the drawer) are OUT of that query's
-                // domain — never in branch buckets, so they don't affect board
-                // rendering — so carry them over rather than dropping them. This
-                // is domain-completion, NOT race reconciliation: the race
-                // correctness comes entirely from the quiet-window guarantee.
-                const sessions = new Map<string, Session>();
-                for (const session of allSessions) sessions.set(session.session_id, session);
-                for (const [id, session] of prev.sessionById) {
-                  if (session.archived && !sessions.has(id)) sessions.set(id, session);
-                }
-                // Reconcile against the current maps so a wholesale apply of
-                // already-loaded sessions reuses prior refs (no board-wide
-                // re-render). This is the hot path on a busy workspace: the
-                // full-session hydration lands right as the user enters a board.
-                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()], {
-                  sessionById: prev.sessionById,
-                  sessionsByBranch: prev.sessionsByBranch,
-                });
-                return { ...prev, sessionById, sessionsByBranch };
-              })
-          );
-          void runAuthorityHydration(
-            'branches',
-            ['branches'],
-            () =>
-              client
-                .service('branches')
-                .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allBranches) =>
-              // Quiet window proven by runHydration → apply wholesale. Branches
-              // are active-only (the snapshot query is archived:false and the
-              // handlers never keep an archived branch), so a wholesale replace
-              // is complete.
-              agorStore.getState().applyMaps((prev) => ({
-                ...prev,
-                branchById: buildById(allBranches, 'branch_id', prev.branchById),
-              }))
-          );
-        }
-
-        // Board objects / cards / comments: only board-scoped at first paint when
-        // a board was resolved (`boardScope` set, non-silent only — silent
-        // reconnect already refetches everything global). Top up to the global set.
-        //
-        // Board objects / cards / comments also hydrate on INDEPENDENT loops so
-        // churn in one (e.g. rapid card moves) can't starve another's apply. Each
-        // global snapshot is a superset of its board-scoped first-paint slice, so
-        // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
-        if (boardScope) {
-          if (canUseMemberWorkspaceServices) {
+        const hydrateGlobalSets = () => {
+          // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
+          // board-scoped), so hydrate them on every non-silent load (silent
+          // reconnect already fetched them full above). repos / users / boards /
+          // card-types stay global at first paint, so they need no top-up.
+          //
+          // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
+          // separate revision guards, separate generation tokens). Coupling them
+          // in a single runHydration would let high-frequency session-write churn
+          // (common when agents stream) starve the branch apply indefinitely — and
+          // on Home, branches start empty and are filled ONLY by this hydration, so
+          // coupling could leave the board empty forever. On independent loops,
+          // branches apply on their own quiet window (almost immediately)
+          // regardless of session churn.
+          if (!silent) {
             void runAuthorityHydration(
-              'board-objects',
-              ['boardObjects'],
+              'sessions',
+              ['sessions'],
               () =>
-                client
-                  .service('board-objects')
-                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-              (allBoardObjects) =>
+                client.service('sessions').findAll({
+                  query: {
+                    archived: false,
+                    lean: true,
+                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    $sort: { updated_at: -1 },
+                  },
+                }),
+              (allSessions) =>
                 agorStore.getState().applyMaps((prev) => {
-                  const base = buildBoardObjectMaps(allBoardObjects);
-                  return {
-                    ...prev,
-                    boardObjectById: base.boardObjectById,
-                    boardObjectsByBoardId: base.boardObjectsByBoardId,
-                    boardObjectByBranchId: base.boardObjectByBranchId,
-                    boardObjectByCardId: base.boardObjectByCardId,
-                  };
+                  // The hydration fetches active sessions only. Deep-link-healed
+                  // archived sessions (added to `sessionById` so a direct /s/<id>
+                  // archived link can open the drawer) are OUT of that query's
+                  // domain — never in branch buckets, so they don't affect board
+                  // rendering — so carry them over rather than dropping them. This
+                  // is domain-completion, NOT race reconciliation: the race
+                  // correctness comes entirely from the quiet-window guarantee.
+                  const sessions = new Map<string, Session>();
+                  for (const session of allSessions) sessions.set(session.session_id, session);
+                  for (const [id, session] of prev.sessionById) {
+                    if (session.archived && !sessions.has(id)) sessions.set(id, session);
+                  }
+                  // Reconcile against the current maps so a wholesale apply of
+                  // already-loaded sessions reuses prior refs (no board-wide
+                  // re-render). This is the hot path on a busy workspace: the
+                  // full-session hydration lands right as the user enters a board.
+                  const { sessionById, sessionsByBranch } = buildSessionMaps(
+                    [...sessions.values()],
+                    {
+                      sessionById: prev.sessionById,
+                      sessionsByBranch: prev.sessionsByBranch,
+                    }
+                  );
+                  return { ...prev, sessionById, sessionsByBranch };
                 })
             );
+            void runAuthorityHydration(
+              'branches',
+              ['branches'],
+              () =>
+                client
+                  .service('branches')
+                  .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allBranches) =>
+                // Quiet window proven by runHydration → apply wholesale. Branches
+                // are active-only (the snapshot query is archived:false and the
+                // handlers never keep an archived branch), so a wholesale replace
+                // is complete.
+                agorStore.getState().applyMaps((prev) => ({
+                  ...prev,
+                  branchById: buildById(allBranches, 'branch_id', prev.branchById),
+                }))
+            );
           }
-          void runAuthorityHydration(
-            'cards',
-            ['cards'],
-            () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allCards) =>
-              agorStore.getState().applyMaps((prev) => ({
-                ...prev,
-                cardById: buildById(allCards, 'card_id', prev.cardById),
-              }))
-          );
-          void runAuthorityHydration(
-            'board-comments',
-            ['comments'],
-            () =>
-              client
-                .service('board-comments')
-                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allComments) =>
-              agorStore.getState().applyMaps((prev) => ({
-                ...prev,
-                commentById: buildById(allComments, 'comment_id', prev.commentById),
-              }))
-          );
-        }
 
-        // Boards: the gated first-paint list is LEAN (no objects/custom_css) and
-        // board switching never refetches — so every OTHER board's annotations
-        // must be backfilled here, exactly like sessions/branches. Only on the
-        // non-silent first load: silent reconnect already refetched boards FULL
-        // above. The displayed board already carries its objects from the
-        // targeted get; the full set is a superset of it.
-        if (!silent) {
-          void runAuthorityHydration(
-            'boards',
-            ['boards'],
-            () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allBoards) =>
-              agorStore.getState().applyMaps((prev) => ({
-                ...prev,
-                boardById: buildById(allBoards, 'board_id', prev.boardById),
-              }))
-          );
+          // Board objects / cards / comments: only board-scoped at first paint when
+          // a board was resolved (`boardScope` set, non-silent only — silent
+          // reconnect already refetches everything global). Top up to the global set.
+          //
+          // Board objects / cards / comments also hydrate on INDEPENDENT loops so
+          // churn in one (e.g. rapid card moves) can't starve another's apply. Each
+          // global snapshot is a superset of its board-scoped first-paint slice, so
+          // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
+          if (boardScope) {
+            if (canUseMemberWorkspaceServices) {
+              void runAuthorityHydration(
+                'board-objects',
+                ['boardObjects'],
+                () =>
+                  client
+                    .service('board-objects')
+                    .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+                (allBoardObjects) =>
+                  agorStore.getState().applyMaps((prev) => {
+                    const base = buildBoardObjectMaps(allBoardObjects);
+                    return {
+                      ...prev,
+                      boardObjectById: base.boardObjectById,
+                      boardObjectsByBoardId: base.boardObjectsByBoardId,
+                      boardObjectByBranchId: base.boardObjectByBranchId,
+                      boardObjectByCardId: base.boardObjectByCardId,
+                    };
+                  })
+              );
+            }
+            void runAuthorityHydration(
+              'cards',
+              ['cards'],
+              () =>
+                client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allCards) =>
+                agorStore.getState().applyMaps((prev) => ({
+                  ...prev,
+                  cardById: buildById(allCards, 'card_id', prev.cardById),
+                }))
+            );
+            void runAuthorityHydration(
+              'board-comments',
+              ['comments'],
+              () =>
+                client
+                  .service('board-comments')
+                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allComments) =>
+                agorStore.getState().applyMaps((prev) => ({
+                  ...prev,
+                  commentById: buildById(allComments, 'comment_id', prev.commentById),
+                }))
+            );
+          }
+
+          // Boards: the gated first-paint list is LEAN (no objects/custom_css) and
+          // board switching never refetches — so every OTHER board's annotations
+          // must be backfilled here, exactly like sessions/branches. Only on the
+          // non-silent first load: silent reconnect already refetched boards FULL
+          // above. The displayed board already carries its objects from the
+          // targeted get; the full set is a superset of it.
+          if (!silent) {
+            void runAuthorityHydration(
+              'boards',
+              ['boards'],
+              () =>
+                client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allBoards) =>
+                agorStore.getState().applyMaps((prev) => ({
+                  ...prev,
+                  boardById: buildById(allBoards, 'board_id', prev.boardById),
+                }))
+            );
+          }
+        };
+        // On a session route, the global sets wait for the opened transcript
+        // (bounded by the prefetch timeout). A cancellation in the meantime
+        // (unmount, authority change, logout) skips the deferred start.
+        if (openedTranscriptReady) {
+          const epoch = getHydrationCancellationEpoch();
+          void openedTranscriptReady.then(() => {
+            if (epoch !== getHydrationCancellationEpoch() || !authorityIsCurrent()) return;
+            hydrateGlobalSets();
+          });
+        } else {
+          hydrateGlobalSets();
         }
 
         // Silent refetch succeeded — clear the retry flag so future token
@@ -1179,6 +1238,7 @@ export function useAgorData(
     if (!identityChanged && !privilegeChanged && !scopeChanged) return;
 
     cancelAllHydrations();
+    releaseOpenedTranscriptPrefetch();
     refetchInflightRef.current = null;
     lastSilentFetchFailedRef.current = false;
 
@@ -1210,6 +1270,7 @@ export function useAgorData(
     enabled,
     fetchData,
     hasInitiallyFetched,
+    releaseOpenedTranscriptPrefetch,
   ]);
 
   // Clear all data when client goes away (logout / token revocation).
@@ -1236,14 +1297,21 @@ export function useAgorData(
     // can't repopulate the maps `resetMaps()` is about to clear.
     discardRealtimeNow();
     cancelAndFailAllHydrations();
+    releaseOpenedTranscriptPrefetch();
     agorStore.getState().resetMaps();
     setHasInitiallyFetched(false);
-  }, [client]);
+  }, [client, releaseOpenedTranscriptPrefetch]);
 
   // On unmount, supersede every in-flight per-collection hydration loop so it
   // stops retrying and never applies a snapshot (or schedules another timer)
   // after teardown. Generation bump = cancellation; see `runHydration`.
-  useEffect(() => () => cancelAllHydrations(), []);
+  useEffect(
+    () => () => {
+      cancelAllHydrations();
+      releaseOpenedTranscriptPrefetch();
+    },
+    [releaseOpenedTranscriptPrefetch]
+  );
 
   // Auth badges reflect the last durable observation. Refresh on bootstrap,
   // reconnect and explicit OAuth events, not on an idle-tab timer. Execution

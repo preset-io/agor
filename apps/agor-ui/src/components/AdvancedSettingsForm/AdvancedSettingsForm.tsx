@@ -14,6 +14,8 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 export interface AdvancedSettingsFormProps {
   /** Whether to show help text under each field */
   showHelpText?: boolean;
+  /** Read-only while the full custom context is loading */
+  disabled?: boolean;
 }
 
 /**
@@ -24,6 +26,7 @@ export interface AdvancedSettingsFormProps {
  */
 export const AdvancedSettingsForm: React.FC<AdvancedSettingsFormProps> = ({
   showHelpText = true,
+  disabled = false,
 }) => {
   return (
     <Form.Item
@@ -36,7 +39,11 @@ export const AdvancedSettingsForm: React.FC<AdvancedSettingsFormProps> = ({
       }
       rules={[{ validator: validateJSON }]}
     >
-      <JSONEditor placeholder='{"teamName": "Backend", "sprintNumber": 42}' rows={4} />
+      <JSONEditor
+        placeholder='{"teamName": "Backend", "sprintNumber": 42}'
+        rows={4}
+        disabled={disabled}
+      />
     </Form.Item>
   );
 };

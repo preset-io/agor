@@ -20,8 +20,10 @@ import {
   getDefaultPermissionMode,
   isSessionExecuting,
   isSessionPromptable,
+  type Session,
   type SessionUpdate,
   sessionCanStartTask,
+  toLeanSessionListRow,
 } from './session';
 
 describe('session promptability helpers', () => {
@@ -175,4 +177,45 @@ describe('getDefaultPermissionMode', () => {
 it('keeps the computed usage summary out of session mutation inputs', () => {
   expectTypeOf<'usage_summary'>().not.toExtend<keyof CreateSessionInput>();
   expectTypeOf<'usage_summary'>().not.toExtend<keyof SessionUpdate>();
+});
+
+describe('toLeanSessionListRow', () => {
+  const row = () => {
+    const session = {
+      session_id: 's-1',
+      custom_context: {
+        teamName: 'Backend',
+        scheduled_run: { schedule_id: 'sched-1' },
+        slash_commands: ['/review'],
+        skills: ['pdf'],
+      },
+    } as unknown as Session;
+    // Mirrors attachHiddenTenant: the daemon's tenant after-hook reads it.
+    Object.defineProperty(session, 'tenant_id', { value: 'tenant-a', enumerable: false });
+    return session;
+  };
+
+  it('omits single-session context keys without mutating the input', () => {
+    const input = row();
+    const lean = toLeanSessionListRow(input);
+
+    expect(lean.custom_context).toEqual({ teamName: 'Backend' });
+    expect(input.custom_context).toHaveProperty('scheduled_run');
+    expect(lean).not.toBe(input);
+  });
+
+  it('keeps hidden (non-enumerable) properties such as tenant_id', () => {
+    const lean = toLeanSessionListRow(row());
+
+    expect(Object.getOwnPropertyDescriptor(lean, 'tenant_id')).toMatchObject({
+      value: 'tenant-a',
+      enumerable: false,
+    });
+    expect(Object.keys(lean)).not.toContain('tenant_id');
+  });
+
+  it('returns the same row when there is nothing to omit', () => {
+    const session = { session_id: 's-2', custom_context: { teamName: 'x' } } as unknown as Session;
+    expect(toLeanSessionListRow(session)).toBe(session);
+  });
 });

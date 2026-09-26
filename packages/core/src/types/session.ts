@@ -767,6 +767,42 @@ export function getGatewaySource(session: Pick<Session, 'custom_context'>): Gate
 }
 
 /**
+ * Bulky, single-session `custom_context` keys that a lean session list omits.
+ *
+ * `scheduled_run` (the scheduler's run snapshot) and the SDK-reported
+ * `slash_commands` / `skills` inventories are read only for one open session,
+ * yet they make up most of every session row. `sessions.find({ lean: true })`
+ * drops them from each row; `sessions.get` always returns them. Everything
+ * else in `custom_context` (e.g. `gateway_source`, user template fields) stays.
+ */
+export const LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS = [
+  'scheduled_run',
+  'slash_commands',
+  'skills',
+] as const;
+
+/**
+ * Project a session row for a lean list. Returns the same row when there is
+ * nothing to omit; otherwise a shallow copy with a trimmed `custom_context`.
+ * The copy keeps every own property descriptor, including non-enumerable ones
+ * such as the hidden `tenant_id` the daemon's tenant after-hook checks.
+ */
+export function toLeanSessionListRow<T extends Pick<Session, 'custom_context'>>(session: T): T {
+  const context = session.custom_context;
+  if (!context || !LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS.some((key) => key in context)) {
+    return session;
+  }
+  const lean: Record<string, unknown> = { ...context };
+  for (const key of LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS) delete lean[key];
+  const copy = Object.create(
+    Object.getPrototypeOf(session),
+    Object.getOwnPropertyDescriptors(session)
+  ) as T;
+  copy.custom_context = lean;
+  return copy;
+}
+
+/**
  * Session type categories matching UI rendering in BranchCard
  */
 export type SessionType = 'gateway' | 'scheduled' | 'agent';

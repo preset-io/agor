@@ -259,21 +259,25 @@ const ZoneTriggerModalAction = ({
       mode === 'reuse_existing' && selectedSessionId
         ? branchSessions.find((s) => s.session_id === selectedSessionId)
         : undefined;
-    const context = buildZoneTriggerContext({
-      branch: initial.branch,
-      board: {
-        name: initial.boardName,
-        description: initial.boardDescription,
-        custom_context: initial.boardCustomContext,
-      },
-      zone: { label: initial.zoneName },
-      session: selectedSessionForCtx
-        ? {
-            description: selectedSessionForCtx.description,
-            custom_context: selectedSessionForCtx.custom_context,
-          }
-        : undefined,
-    });
+    const client = initial.client;
+    const renderForSession = (session: Session | undefined) =>
+      renderTemplate(
+        client,
+        initial.trigger.template,
+        buildZoneTriggerContext({
+          branch: initial.branch,
+          board: {
+            name: initial.boardName,
+            description: initial.boardDescription,
+            custom_context: initial.boardCustomContext,
+          },
+          zone: { label: initial.zoneName },
+          session: session
+            ? { description: session.description, custom_context: session.custom_context }
+            : undefined,
+        }),
+        'raw'
+      );
 
     let request = templateRenderRequestRef.current;
     if (!request || request.target !== templateTarget) {
@@ -281,7 +285,19 @@ const ZoneTriggerModalAction = ({
       request = {
         target: templateTarget,
         editRevision: templateEditRevisionRef.current,
-        promise: renderTemplate(initial.client, initial.trigger.template, context, 'raw'),
+        // Store rows are lean (bulky custom_context keys omitted); render the
+        // template against the full session record, falling back to the row.
+        promise: selectedSessionForCtx
+          ? Promise.resolve()
+              .then(
+                () =>
+                  client
+                    .service('sessions')
+                    .get(selectedSessionForCtx.session_id) as Promise<Session>
+              )
+              .catch(() => selectedSessionForCtx)
+              .then(renderForSession)
+          : renderForSession(undefined),
       };
       templateRenderRequestRef.current = request;
       setTemplateState({ target: templateTarget, value: '', isRendering: true });

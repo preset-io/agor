@@ -25,6 +25,14 @@ import { agorStore } from '../store/agorStore';
 import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
+// The opened-transcript prefetch retains a real reactive session; the mock
+// client doesn't model one. Default: ready at once (no deferral). Tests below
+// drive `ready` explicitly to pin the ordering.
+const transcriptPrefetch = vi.hoisted(() => ({
+  prefetchOpenedTranscript: vi.fn(() => ({ ready: Promise.resolve(), release: vi.fn() })),
+}));
+vi.mock('../store/openedTranscriptPrefetch', () => transcriptPrefetch);
+
 const STANDALONE_AUTHORITY_SCOPE = '__standalone__:__standalone__:0';
 
 /**
@@ -850,6 +858,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     expect(fetchArguments('sessions', 'find')).toContainEqual({
       query: {
         archived: false,
+        lean: true,
         $limit: 50,
         $count: false,
         $sort: { updated_at: -1 },
@@ -857,6 +866,8 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     });
     for (const args of fetchArguments('sessions', 'findAll')) {
       expect((args as { query: Record<string, unknown> }).query.$count).toBeUndefined();
+      // Store-feeding session lists never carry the bulky single-session context.
+      expect((args as { query: Record<string, unknown> }).query.lean).toBe(true);
     }
 
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
@@ -1362,4 +1373,64 @@ describe('session MCP initialization events', () => {
       expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
     }
   );
+});
+
+describe('useAgorData — opened session transcript priority', () => {
+  const OPEN_ID = '01a0dc28-31f3-71d9-bee6-d301b0524806';
+  const OPEN_SHORT = '01a0dc28';
+
+  function deferredPrefetch() {
+    let resolve!: () => void;
+    const ready = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const release = vi.fn();
+    transcriptPrefetch.prefetchOpenedTranscript.mockReturnValueOnce({ ready, release });
+    return { resolve, release };
+  }
+
+  it('holds the global hydration until the opened transcript is ready', async () => {
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const prefetch = deferredPrefetch();
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: OPEN_SHORT }));
+    await waitForInitialLoad(result);
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenLastCalledWith(client, OPEN_ID);
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+    expect(fetchCount('boards', 'findAll')).toBe(1); // the gated lean list only
+
+    await act(async () => prefetch.resolve());
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+    expect(fetchCount('branches', 'findAll')).toBe(1);
+    expect(fetchCount('boards', 'findAll')).toBe(2);
+  });
+
+  it('skips the deferred hydration and releases the prefetch on unmount', async () => {
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const prefetch = deferredPrefetch();
+
+    const { result, unmount } = renderHook(() => useAgorData(client, { directSessionId: OPEN_ID }));
+    await waitForInitialLoad(result);
+    unmount();
+    expect(prefetch.release).toHaveBeenCalled();
+
+    await act(async () => prefetch.resolve());
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+  });
+
+  it('does not prefetch or defer without a session route', async () => {
+    transcriptPrefetch.prefetchOpenedTranscript.mockClear();
+    const { client, fetchCount } = makeMockClient({ sessions: [makeSession()] });
+
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).not.toHaveBeenCalled();
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+  });
 });

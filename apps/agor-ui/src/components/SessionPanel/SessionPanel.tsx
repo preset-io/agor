@@ -827,7 +827,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // The composer subtree only depends on composer/draft state — memoize it so
   // ordinary SessionPanel re-renders (reactive-session notifies, store
   // patches) hand the memoized SessionFooter a reference-stable slot.
-  const sessionCustomContext = session?.custom_context as Record<string, unknown> | undefined;
+  // Store rows come from lean session lists that omit the SDK-reported
+  // slash_commands / skills inventories; the reactive session holds the full
+  // record from `sessions.get` (kept current by realtime patches).
+  const fullSession =
+    reactiveSessionState?.session?.session_id === session?.session_id
+      ? reactiveSessionState?.session
+      : null;
+  const sessionCustomContext = (fullSession ?? session)?.custom_context as
+    | Record<string, unknown>
+    | undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (

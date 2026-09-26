@@ -12,8 +12,12 @@ import SessionPanel from './SessionPanel';
 
 // Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
 
+const autocomplete = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 vi.mock('../AutocompleteTextarea', () => ({
-  AutocompleteTextarea: () => <textarea aria-label="Prompt" />,
+  AutocompleteTextarea: (props: Record<string, unknown>) => {
+    autocomplete.props = props;
+    return <textarea aria-label="Prompt" />;
+  },
 }));
 
 vi.mock('../FileUpload', () => ({
@@ -282,6 +286,33 @@ describe('SessionPanel search control', () => {
     expect(service.mock.calls.flat().some((name) => String(name).includes('/tasks/queue'))).toBe(
       false
     );
+  });
+
+  it('takes composer slash commands and skills from the full reactive session', () => {
+    const leanRow = {
+      ...session,
+      agentic_tool: 'claude-code',
+      custom_context: { teamName: 'Backend' },
+    } as unknown as Session;
+    reactive.useSharedReactiveSession.mockReturnValue({
+      state: {
+        tasks: [],
+        session: {
+          ...leanRow,
+          custom_context: { teamName: 'Backend', slash_commands: ['/review'], skills: ['pdf'] },
+        },
+      },
+    } as never);
+    try {
+      renderPanel({ activeSession: leanRow });
+
+      expect(autocomplete.props?.slashCommands).toEqual(['/review']);
+      expect(autocomplete.props?.skills).toEqual(['pdf']);
+    } finally {
+      reactive.useSharedReactiveSession.mockImplementation(() => ({
+        state: { tasks: reactive.tasks },
+      }));
+    }
   });
 
   it('retains the same lean reactive-session cache key as ConversationView', () => {
