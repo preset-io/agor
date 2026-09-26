@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { SessionID, TaskID } from '@agor/core/types';
+import { readCodexErrorInfo } from './error-info.js';
 
 // Codex SDK 0.156.1 forwards native spawn/filesystem errors. Do not log their
 // path, syscall, spawnargs, or message. These codes describe a runtime failure,
@@ -81,12 +82,18 @@ export class CodexRuntimeDiagnostics {
         : code || status !== undefined
           ? safe.category
           : 'unknown');
+    // Closed CodexErrorInfo discriminator, when the producer forwards it
+    // (openai/codex#22570). Never derived from prose.
+    const errorInfo = readCodexErrorInfo(error);
+    const httpStatus = status ?? errorInfo?.httpStatus;
+    const structured = Boolean(code || httpStatus !== undefined || errorInfo);
     const message =
       `[codex.runtime] event=${event} reference=${reference} session_id=${this.sessionId}` +
       `${this.taskId ? ` task_id=${this.taskId}` : ''}` +
       ` category=${classification} type=${runtimeFailure ? 'SystemError' : type}` +
-      `${code ? ` code=${code}` : ''}${status !== undefined ? ` status=${status}` : ''}` +
-      ` metadata=${code || status !== undefined ? 'structured' : 'unavailable'}`;
+      `${errorInfo ? ` error_info=${errorInfo.variant}` : ''}` +
+      `${code ? ` code=${code}` : ''}${httpStatus !== undefined ? ` status=${httpStatus}` : ''}` +
+      ` metadata=${structured ? 'structured' : 'unavailable'}`;
     if (terminal) console.error(message);
     else console.warn(`${message} outcome=awaiting_terminal_event`);
   }
