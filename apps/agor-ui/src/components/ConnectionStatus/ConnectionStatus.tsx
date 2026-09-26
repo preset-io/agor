@@ -17,20 +17,11 @@ export interface ConnectionStatusProps {
   onRetry?: () => void;
 }
 
-/**
- * Threshold for escalating a stuck "Reconnecting" tag to the terminal
- * "Can't reconnect" red tag. Socket.io's `reconnectionDelayMax` is 5s
- * (packages/core/src/api/index.ts) and a healthy reconnect (daemon restart,
- * wifi flap, etc.) finishes well under 10s. Once we've spent 20s spinning,
- * the user is almost certainly looking at the stuck-reconnect bug pattern
- * (token expired, refresh failed transiently, no auto-recovery path), and
- * telling them "click to reload" is more honest than continuing to imply
- * recovery is imminent.
- */
+/** Offer a non-destructive retry after a prolonged reconnect. */
 const STUCK_RECONNECT_MS = 20_000;
 
 /**
- * Disconnect duration above which we surface the "Reconnected — refresh?"
+ * Disconnect duration above which we surface the "Reconnected — sync again?"
  * cue on the next successful reconnect. Below this, the user almost
  * certainly didn't miss anything material (real-time events that fire in a
  * 1–10s gap are rare enough not to warrant nagging). At 10s we start to
@@ -40,7 +31,7 @@ const STUCK_RECONNECT_MS = 20_000;
 const STALE_THRESHOLD_MS = 10_000;
 
 /**
- * How long the "Reconnected — refresh?" cue stays in the navbar before
+ * How long the "Reconnected — sync again?" cue stays in the navbar before
  * auto-dismissing. The cue is a *suggestion*, not a requirement — the
  * around-hook + per-conversation resync listeners catch the common cases;
  * this nudges the user only when the gap was long enough that something
@@ -104,7 +95,7 @@ const StatusTag: React.FC<StatusTagProps> = ({ tooltip, icon, color, onClick, ch
  * 4. **Reconnecting** (warning, click → retry) — the normal transient
  *    reconnect window. Click is a manual escape hatch in case socket.io's
  *    own retry is on a slow cycle.
- * 5. **Reconnected — refresh?** (warning info, click → reload, × dismiss) —
+ * 5. **Reconnected — sync again?** (warning info, click → reload, × dismiss) —
  *    just reconnected after a gap ≥ STALE_THRESHOLD_MS. The byId caches
  *    and reactive sessions auto-resync for the common cases, but a long
  *    gap can drop subtle updates (sessions removed/added, comments,
@@ -142,7 +133,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // Brief green "Connected" flash after a short reconnect (< stale threshold)
   // so the user gets a quick "we noticed and fixed it" confirmation when
   // there's no other cue to render. Long reconnects show the actionable
-  // "Reconnected — refresh?" cue instead, so the two never compete.
+  // "Reconnected — sync again?" cue instead, so the two never compete.
   const [showConnected, setShowConnected] = useState(false);
 
   // Forces re-render every second while `connecting`, so the stuck-reconnect
@@ -228,18 +219,16 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     Date.now() - disconnectStartedAt >= STUCK_RECONNECT_MS;
 
   // --- 2. Can't reconnect (escalated stuck state) ---
-  // Honest message: we tried for STUCK_RECONNECT_MS, it isn't working,
-  // here's the button that actually fixes it. Page reload is the same
-  // thing the user would do manually; making it one click is the point.
+  // Retry the existing client; routine network recovery must not discard drafts.
   if (stuckTooLong) {
     return (
       <StatusTag
-        tooltip="Can't reconnect to the daemon. Click to reload the page — anything unsaved will be lost."
+        tooltip="Still reconnecting to the daemon. Retry without discarding unsaved work."
         icon={<ReloadOutlined />}
         color="error"
-        onClick={() => window.location.reload()}
+        onClick={onRetry}
       >
-        <span>Can't reconnect — reload</span>
+        <span>Can't reconnect — retry</span>
       </StatusTag>
     );
   }
@@ -277,22 +266,25 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     );
   }
 
-  // --- 5. Reconnected — refresh? (post-long-gap cue) ---
+  // --- 5. Reconnected — sync again? (post-long-gap cue) ---
   // Suggested, not required. The around-hook + per-conversation resync
   // listeners already pick up the common cases; this nudges the user only
   // when the gap was long enough that something subtle (a removed session,
   // a comment, a permission change) might have slipped through. Reload is
-  // the simplest universal "rehydrate everything" — same action the user
-  // would take manually.
+  // no longer necessary here: retry the authenticated client and its resync
+  // listeners without losing unsaved state.
   if (staleSince !== null) {
     return (
       <StatusTag
-        tooltip="You were disconnected long enough that some data may be stale. Click to reload, or × to dismiss."
+        tooltip="Some data may be stale after a longer disconnect. Click to reconnect and sync again without discarding unsaved work, or × to dismiss."
         icon={<ReloadOutlined />}
         color="warning"
-        onClick={() => window.location.reload()}
+        onClick={() => {
+          setStaleSince(null);
+          onRetry?.();
+        }}
       >
-        <span>Reconnected — refresh?</span>
+        <span>Reconnected — sync again?</span>
         <CloseOutlined
           aria-label="Dismiss"
           onClick={(e) => {
@@ -307,7 +299,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
   // --- 6. Connected (ephemeral success flash for short reconnects) ---
   // Only set when the gap was below STALE_THRESHOLD_MS — long-gap
-  // reconnects route to "Reconnected — refresh?" above instead, so the
+  // reconnects route to "Reconnected — sync again?" above instead, so the
   // two cues never compete.
   if (showConnected) {
     return (

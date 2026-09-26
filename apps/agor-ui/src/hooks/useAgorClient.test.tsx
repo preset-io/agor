@@ -51,12 +51,12 @@ function makeSeamClient() {
   };
   const nextConnectErrors: Error[] = [];
 
-  const permissive = (target: Record<string, unknown>) =>
+  const permissive = <T extends Record<string, unknown>>(target: T): T =>
     new Proxy(target, {
       get(current, prop: string) {
         if (prop in current) return current[prop];
         const fn = vi.fn();
-        current[prop] = fn;
+        (current as Record<string, unknown>)[prop] = fn;
         return fn;
       },
     });
@@ -72,7 +72,7 @@ function makeSeamClient() {
     off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       removeHandler(event, handler);
     }),
-    connect: vi.fn(() => {
+    connect: vi.fn((): void => {
       if (io.connected) return;
       queueMicrotask(() => {
         const error = nextConnectErrors.shift();
@@ -84,12 +84,12 @@ function makeSeamClient() {
         fireIo('connect');
       });
     }),
-    disconnect: vi.fn(() => {
+    disconnect: vi.fn((): void => {
       if (!io.connected) return;
       io.connected = false;
       fireIo('disconnect', 'io client disconnect');
     }),
-    close: vi.fn(() => {
+    close: vi.fn((): void => {
       io.connected = false;
     }),
     removeAllListeners: vi.fn(() => ioHandlers.clear()),
@@ -141,8 +141,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     await waitFor(() => expect(result.current.connecting).toBe(false));
     expect(result.current.connected).toBe(false);
     expect(result.current.error).toBe('Failed to connect to Agor daemon');
-    // This second event exercises the persistent listener without the initial
-    // promise's catch overwriting its copy.
+    // Repeated transport failures retain the same neutral copy.
     act(() => fireIo('connect_error', transportError));
     expect(result.current.error).toBe('Failed to connect to Agor daemon');
     expect(result.current.error).not.toMatch(/3030|pnpm dev|cd apps|internal.test|secret/);
@@ -165,7 +164,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     await waitFor(() => expect(result.current.connected).toBe(true));
   });
 
-  it('uses the same neutral copy on initial timeout and accepts a later connection', async () => {
+  it('uses neutral copy on a transport timeout and accepts a later connection', async () => {
     vi.useFakeTimers();
     const { client, io, fireIo } = makeSeamClient();
     vi.mocked(io.connect).mockImplementation(() => {});
@@ -174,7 +173,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
       useAgorClient({ accessToken: 'access-token', authorityGeneration: 1 })
     );
 
-    await act(() => vi.advanceTimersByTimeAsync(5000));
+    act(() => fireIo('connect_error', new Error('timeout')));
     expect(result.current.error).toBe('Failed to connect to Agor daemon');
     expect(result.current.connecting).toBe(false);
     expect(result.current.connected).toBe(false);
@@ -381,5 +380,141 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     } finally {
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
     }
+  });
+});
+
+describe('weak-network recovery', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  async function connectedSeam() {
+    const seam = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(seam.client as never);
+    const hook = renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'token',
+        authorityGeneration: 1,
+      })
+    );
+    await act(async () => {});
+    return { ...seam, ...hook };
+  }
+
+  it('does not fail a slow initial handshake after an unrelated five-second deadline', async () => {
+    vi.useFakeTimers();
+    const seam = makeSeamClient();
+    vi.mocked(seam.io.connect).mockImplementation(() => {});
+    vi.mocked(createClient).mockReturnValue(seam.client as never);
+    const { result } = renderHook(() =>
+      useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'token',
+        authorityGeneration: 1,
+      })
+    );
+    await act(() => vi.advanceTimersByTimeAsync(6000));
+    expect(result.current.error).toBeNull();
+    expect(result.current.connecting).toBe(true);
+    act(() => {
+      seam.io.connected = true;
+      seam.fireIo('connect');
+    });
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('keeps the same client and honors disconnect grace through a failed retry', async () => {
+    vi.useFakeTimers();
+    const { result, io, fireIo } = await connectedSeam();
+    const client = result.current.client;
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', new Error('transport error'));
+    });
+    expect(result.current.connected).toBe(true);
+    expect(result.current.connecting).toBe(true); // mutation gate stays CLOSED
+    await act(() => vi.advanceTimersByTimeAsync(1499));
+    expect(result.current.connected).toBe(true);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.connected).toBe(false);
+    expect(result.current.client).toBe(client);
+    expect(result.current.error).toBeNull();
+    act(() => {
+      io.connected = true;
+      fireIo('connect');
+    });
+    expect(result.current.connected).toBe(true);
+    expect(result.current.client).toBe(client);
+  });
+
+  it('backs off repeated server kicks with jitter, and resets only after stability', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0); // lower jitter bound: 50%
+    const { io, fireIo, unmount } = await connectedSeam();
+    const kick = () =>
+      act(() => {
+        io.connected = false;
+        fireIo('disconnect', 'io server disconnect');
+      });
+    for (const delay of [250, 500, 1000]) {
+      const count = vi.mocked(io.connect).mock.calls.length;
+      kick();
+      await act(() => vi.advanceTimersByTimeAsync(delay - 1));
+      expect(io.connect).toHaveBeenCalledTimes(count);
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(io.connect).toHaveBeenCalledTimes(count + 1);
+    }
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    kick();
+    const count = vi.mocked(io.connect).mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    expect(io.connect).toHaveBeenCalledTimes(count + 1);
+    kick();
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(io.connect).toHaveBeenCalledTimes(count + 1);
+  });
+  it('pauses manual retries offline and resumes without replacing the client', async () => {
+    vi.useFakeTimers();
+    const { io, fireIo, result } = await connectedSeam();
+    const client = result.current.client;
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'io server disconnect');
+    });
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(io.connect).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeNull();
+    online.mockReturnValue(true);
+    act(() => window.dispatchEvent(new Event('online')));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(io.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.client).toBe(client);
+  });
+
+  it('retries a transient REST refresh failure after namespace authentication rejection', async () => {
+    vi.useFakeTimers();
+    const { io, fireIo, result } = await connectedSeam();
+    localStorage.setItem('agor-refresh-token', 'refresh');
+    vi.mocked(createRestClient).mockResolvedValue({} as never);
+    refreshTokensMock.mockRejectedValueOnce(new Error('network error'));
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+    });
+    await act(async () => {});
+    expect(result.current.error).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(io.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.connected).toBe(true);
+    localStorage.clear();
+    refreshTokensMock.mockReset();
   });
 });

@@ -8,7 +8,7 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient, createRestClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isDefiniteAuthFailure } from '../utils/authErrors';
+import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
 import {
   markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
@@ -88,14 +88,22 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
     let client: AgorClient | null = null;
     const connectionAccessTokenRef = { current: accessToken };
     let binding: BoundAgorClient | null = null;
+    let resumeManualReconnect: (() => void) | null = null;
+    const handleOnline = () => resumeManualReconnect?.();
+    window.addEventListener('online', handleOnline);
     let hasConnectedOnce = false; // Track if we've ever connected successfully
 
     // Bookkeeping for the manual reconnect path used on 'io server disconnect'.
     // socket.io does NOT auto-reconnect for that reason, so we kick it
     // ourselves — but without backoff+cap the loop can run at network speed
     // if the server keeps closing the socket (e.g. auth failures, crash loop,
-    // config mismatch). Reset on any successful connect.
+    // config mismatch). Reset only after a stable connection.
     let manualReconnectAttempts = 0;
+    let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStableConnectionTimer = () => {
+      if (stableConnectionTimer !== null) clearTimeout(stableConnectionTimer);
+      stableConnectionTimer = null;
+    };
     let manualReconnectTimer: ReturnType<typeof setTimeout> | null = null;
     const MAX_MANUAL_RECONNECT_ATTEMPTS = 10;
     const clearManualReconnectTimer = () => {
@@ -105,14 +113,9 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       }
     };
 
-    // Grace period before flipping `connected` to false on a disconnect.
-    // Most reconnects (tsx watch reload, brief network blip, or recovered
-    // rejected handshake) finish well under 1s. Flipping `connected` immediately makes
-    // every `useConnectionDisabled` consumer disable — buttons, forms,
-    // inline inputs — producing a UI flicker. Instead, fire `connecting:true`
-    // immediately for the navbar status tag, and only flip `connected` if
-    // the reconnect hasn't finished within DISCONNECT_GRACE_MS. If we
-    // reconnect inside the window, consumers never see a disabled frame.
+    // Presentation grace only: preserve the connected indicator across brief
+    // dips. `connecting` closes mutation/authority gates immediately, so no
+    // disconnected writes are queued during this window.
     const DISCONNECT_GRACE_MS = 1500;
     let disconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
     const clearDisconnectGrace = () => {
@@ -178,6 +181,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       handshakeAuthRecovery = createRestClient(url)
         .then((restClient) => refreshTokensSingleFlight(restClient, refreshToken))
         .then(async (result) => {
+          if (!mounted) return;
           try {
             await reconnectWithAuthenticatedHandshake(result.accessToken);
           } catch (error) {
@@ -193,7 +197,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       return handshakeAuthRecovery;
     };
 
-    async function connect() {
+    function connect() {
       // Don't create client if no access token. `hasToken` is the effect-level
       // snapshot (also a dep, so a later login rebuilds the effect); we still
       // read the value from the ref below in case it rotated during the async
@@ -230,11 +234,58 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         (window as unknown as { __agorClient: AgorClient }).__agorClient = socketClient;
       }
 
+      const scheduleManualReconnect = () => {
+        if (manualReconnectTimer !== null) return;
+        setConnecting(true);
+        if (!navigator.onLine) {
+          // Do not exhaust the bounded retry budget while the browser knows it
+          // is offline. Resume this same client on the next online signal.
+          resumeManualReconnect = scheduleManualReconnect;
+          return;
+        }
+        resumeManualReconnect = null;
+        // Server disconnects and rejected namespaces do not auto-reconnect.
+        // Bound this explicit retry path and retain attempts across flapping.
+        if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
+          setConnecting(false);
+          // Give-up path — flip connected immediately; the grace period
+          // is only for quick reconnects we expect to recover from.
+          clearDisconnectGrace();
+          setConnected(false);
+          setError(
+            'Lost connection to daemon after multiple attempts. Please retry the connection.'
+          );
+          return;
+        }
+        setConnecting(true);
+        const attempt = manualReconnectAttempts++;
+        // Exponential ceilings: 500ms → 30s; jitter in [50%, 100%) spreads retries.
+        const delay = Math.min(500 * 2 ** attempt, 30_000) * (0.5 + Math.random() * 0.5);
+        clearManualReconnectTimer();
+        manualReconnectTimer = setTimeout(() => {
+          manualReconnectTimer = null;
+          if (!mounted) return;
+          if (!navigator.onLine) {
+            manualReconnectAttempts -= 1;
+            resumeManualReconnect = scheduleManualReconnect;
+            return;
+          }
+          socketClient.io.connect();
+        }, delay);
+      };
+
       // Setup socket event listeners BEFORE connecting
       socketClient.io.on('connect', () => {
         if (!mounted) return;
         hasConnectedOnce = true;
-        manualReconnectAttempts = 0;
+        resumeManualReconnect = null;
+        // A brief handshake followed by another server kick is not recovery.
+        // Reset backoff only after a sustained connection, not every connect.
+        clearStableConnectionTimer();
+        stableConnectionTimer = setTimeout(() => {
+          manualReconnectAttempts = 0;
+          stableConnectionTimer = null;
+        }, 30_000);
         clearManualReconnectTimer();
         clearDisconnectGrace();
         // Socket.IO emits `connect` only after the daemon has verified the
@@ -251,6 +302,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
       socketClient.io.on('disconnect', (reason) => {
         if (!mounted) return;
+        clearStableConnectionTimer();
         // If we've never been connected (initial-load failure), flip
         // immediately — no "reconnect" to wait for. Otherwise defer the
         // flip via the grace timer so quick reconnects don't flicker the
@@ -275,30 +327,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         // "Reconnecting" immediately rather than flashing "Disconnected" for
         // the gap before the first connect_error fires.
         if (reason === 'io server disconnect') {
-          // Manual reconnect with exponential backoff + cap. Previously we
-          // called `client.io.connect()` immediately on every disconnect;
-          // when the server repeatedly closed the socket (auth rejection,
-          // crash loop, server-side kick) this created a tight reconnect
-          // loop at network speed and a page refresh was the only way out.
-          if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
-            setConnecting(false);
-            // Give-up path — flip connected immediately; the grace period
-            // is only for quick reconnects we expect to recover from.
-            clearDisconnectGrace();
-            setConnected(false);
-            setError('Lost connection to daemon after multiple attempts. Please reload the page.');
-            return;
-          }
-          setConnecting(true);
-          const attempt = manualReconnectAttempts++;
-          // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
-          const delay = Math.min(500 * 2 ** attempt, 30_000);
-          clearManualReconnectTimer();
-          manualReconnectTimer = setTimeout(() => {
-            manualReconnectTimer = null;
-            if (!mounted) return;
-            socketClient.io.connect();
-          }, delay);
+          scheduleManualReconnect();
         } else if (
           reason === 'transport close' ||
           reason === 'transport error' ||
@@ -314,6 +343,12 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
               if (!mounted) return;
+              if (isTransientConnectionError(recoveryError)) {
+                // Namespace rejection disables Socket.IO's automatic retries.
+                // A failed REST refresh must therefore schedule its own retry.
+                scheduleManualReconnect();
+                return;
+              }
               if (recoveryError instanceof RefreshUnrecoverableError) {
                 setError('Authentication could not be restored. Please sign in again.');
               } else {
@@ -335,7 +370,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           } else {
             // During reconnection, keep connecting=true so UI shows reconnecting indicator
             setConnecting(true);
-            setConnected(false);
+            scheduleDisconnectedFlip();
             // Don't set error - socket.io will keep trying
           }
         }
@@ -343,46 +378,6 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
       // Now manually connect the socket
       socketClient.io.connect();
-
-      // A successful `connect` means the handshake has already authenticated.
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('Connection timeout'));
-          }, 5000);
-
-          if (socketClient.io.connected) {
-            clearTimeout(timeout);
-            resolve();
-            return;
-          }
-
-          socketClient.io.once('connect', () => {
-            clearTimeout(timeout);
-            resolve();
-          });
-
-          socketClient.io.once('connect_error', (err) => {
-            clearTimeout(timeout);
-            if (isDefiniteAuthFailure(err)) {
-              recoverRejectedHandshake(err).then(resolve, reject);
-            } else {
-              reject(err);
-            }
-          });
-        });
-      } catch (connectError) {
-        if (mounted) {
-          setError(
-            connectError instanceof RefreshUnrecoverableError
-              ? 'Authentication could not be restored. Please sign in again.'
-              : 'Failed to connect to Agor daemon'
-          );
-          setConnecting(false);
-          setConnected(false);
-        }
-        return;
-      }
     }
 
     connect();
@@ -390,7 +385,10 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
     // Cleanup on unmount
     return () => {
       mounted = false;
+      window.removeEventListener('online', handleOnline);
+      resumeManualReconnect = null;
       clearManualReconnectTimer();
+      clearStableConnectionTimer();
       clearDisconnectGrace();
       if (client?.io) {
         // Remove all listeners to prevent memory leaks
