@@ -67,6 +67,7 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  gatewayInboundEvents,
   type SessionRow,
   sessionMcpServers,
   sessions,
@@ -76,6 +77,7 @@ import {
   users,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
+import { assertTenantExecutionAdmission } from '../tenant-restriction';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -414,7 +416,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
-          if (admission) await lockSessionBranchForAdmission(txDb, routing.session_id);
+          if (admission) {
+            await assertTenantExecutionAdmission(txDb);
+            await lockSessionBranchForAdmission(txDb, routing.session_id);
+          }
           await lockRowForUpdate(
             txDb,
             this.db,
@@ -588,6 +593,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         sdk_failure: task.sdk_failure,
         termination_request: storedTerminationRequest,
         sdk_watchdog_mode: task.sdk_watchdog_mode,
+        tenant_restriction_hold: task.tenant_restriction_hold,
       },
     };
   }
@@ -606,6 +612,37 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  private async assertPromptCreationAdmission(tx: Database, task: Partial<Task>): Promise<void> {
+    const { resumeAfter } = await assertTenantExecutionAdmission(tx);
+    if (resumeAfter === undefined) return;
+    const session = await select(tx)
+      .from(sessions)
+      .where(eq(sessions.session_id, task.session_id!))
+      .one();
+    const initial = session?.data.custom_context?.scheduled_run;
+    if (
+      session?.scheduled_from_branch &&
+      (initial?.initial_task_id ?? session.session_id) === task.task_id
+    ) {
+      const occurredAt = initial?.triggered_manually
+        ? new Date(session.created_at).getTime()
+        : session.scheduled_run_at;
+      if (occurredAt == null || !Number.isFinite(occurredAt) || occurredAt <= resumeAfter) {
+        throw new RepositoryError('Scheduled occurrence predates tenant reactivation');
+      }
+    }
+    const eventId = task.metadata?.gateway_inbound_event_id;
+    if (eventId) {
+      const event = await select(tx, { received_at: gatewayInboundEvents.received_at })
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, eventId))
+        .one();
+      if (!event || new Date(event.received_at).getTime() <= resumeAfter) {
+        throw new RepositoryError('Gateway occurrence predates tenant reactivation');
+      }
+    }
+  }
+
   /**
    * Create a new task
    */
@@ -615,6 +652,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          await this.assertPromptCreationAdmission(tx, data);
           await lockSessionBranchForAdmission(tx, insertData.session_id);
           await insert(tx, tasks).values(insertData).run();
         },
@@ -1119,6 +1157,39 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     return sql`CURRENT_TIMESTAMP`;
   }
 
+  /** Live task routing only; tenant restriction authority is checked after discovery. */
+  async findRestrictionRuntimeRefs(
+    options: TaskRuntimeDiscoveryOptions = {}
+  ): Promise<TaskRuntimeDiscoveryRef[]> {
+    const limit = this.validateRuntimeDiscovery(options.limit);
+    const afterAt = this.runtimeCursorDate(options.after, 'Restriction');
+    const rows = await select(this.db, {
+      ...this.runtimeDiscoveryColumns(),
+      runtime_order_at: tasks.created_at,
+    })
+      .from(tasks)
+      .where(
+        and(
+          inArray(tasks.status, [
+            TaskStatus.DISPATCHING,
+            TaskStatus.RUNNING,
+            TaskStatus.AWAITING_PERMISSION,
+            TaskStatus.AWAITING_INPUT,
+          ]),
+          afterAt
+            ? or(
+                gt(tasks.created_at, afterAt),
+                and(eq(tasks.created_at, afterAt), gt(tasks.task_id, options.after!.task_id))
+              )
+            : undefined
+        )
+      )
+      .orderBy(asc(tasks.created_at), asc(tasks.task_id))
+      .limit(limit)
+      .all();
+    return this.runtimeDiscoveryRefs(rows as Array<Record<string, unknown>>);
+  }
+
   /** Bounded routing-only discovery for dispatches whose executor never connected. */
   async findExpiredDispatchRefs(
     timeoutMs: number,
@@ -1617,12 +1688,22 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
       const existing = current.termination_request;
-      const cause = input.cause === 'user_stop' || !existing ? input.cause : existing.cause;
+      // A later genuine credential withdrawal must not inherit a suspension's
+      // benign Stopped classification. Other existing-cause precedence is unchanged.
+      const replacesSuspension =
+        existing?.cause === 'tenant_suspension' && input.cause === 'authorization_revoked';
+      const cause =
+        input.cause === 'user_stop' || !existing || replacesSuspension
+          ? input.cause
+          : existing.cause;
       if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
         return { outcome: 'unchanged', task: current };
       }
       const incomingWins =
-        !existing || input.cause === 'user_stop' || existing.cause === input.cause;
+        !existing ||
+        input.cause === 'user_stop' ||
+        replacesSuspension ||
+        existing.cause === input.cause;
       const mutationAt = await this.mutationNow(txDb, fullId, input.now);
       const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
       const request = {
@@ -1816,7 +1897,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? TaskStatus.STOPPED
         : input.outcome === 'forced_unverified'
           ? TaskStatus.FAILED
-          : current.termination_request!.cause === 'user_stop'
+          : current.termination_request!.cause === 'user_stop' ||
+              current.termination_request!.cause === 'tenant_suspension'
             ? TaskStatus.STOPPED
             : TaskStatus.FAILED;
       const settlementAt = await this.mutationNow(txDb, fullId, input.now);
@@ -1966,8 +2048,18 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           );
         }
 
+        if (
+          current.tenant_restriction_hold &&
+          updates.status !== undefined &&
+          ![TaskStatus.QUEUED, TaskStatus.CREATED, TaskStatus.STOPPED, TaskStatus.FAILED].includes(
+            updates.status as never
+          )
+        ) {
+          throw new RepositoryError('Held prompt requires explicit resubmission');
+        }
         const merged = {
           ...deepMerge(current, withTerminalTiming(current, updates)),
+          tenant_restriction_hold: current.tenant_restriction_hold,
           recorded_tool_count:
             updates.status !== undefined &&
             isTerminalTaskStatus(updates.status) &&
@@ -2629,6 +2721,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          await this.assertPromptCreationAdmission(tx, taskBase);
           await lockSessionBranchForAdmission(tx, insertData.session_id);
           await insert(tx, tasks).values(insertData).onConflictDoNothing().run();
         },
@@ -2655,6 +2748,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
+          await this.assertPromptCreationAdmission(txDb, taskBase);
           await lockSessionBranchForAdmission(txDb, input.session_id);
           const sessionRow = await select(txDb)
             .from(sessions)
@@ -2804,6 +2898,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       id,
       async (txDb, currentRow, sessionRow, fullId) => {
         const current = this.rowToTask(currentRow);
+        if (current.tenant_restriction_hold) return { outcome: 'condition_changed', task: current };
         if (current.status !== expectedStatus) {
           return {
             outcome:
@@ -2822,7 +2917,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         // same Session lock that serializes enqueue position assignment.
         const queuedHead = await select(txDb, { task_id: tasks.task_id })
           .from(tasks)
-          .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+          .where(
+            and(
+              eq(tasks.session_id, current.session_id),
+              eq(tasks.status, TaskStatus.QUEUED),
+              this.runnablePromptPredicate()
+            )
+          )
           .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
           .limit(1)
           .one();
@@ -2940,7 +3041,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
       const queuedHead = await select(txDb, { task_id: tasks.task_id })
         .from(tasks)
-        .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+        .where(
+          and(
+            eq(tasks.session_id, current.session_id),
+            eq(tasks.status, TaskStatus.QUEUED),
+            this.runnablePromptPredicate()
+          )
+        )
         .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
@@ -2993,7 +3100,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const rows = await select(this.db)
         .from(tasks)
-        .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
+        .where(and(eq(tasks.session_id, sessionId), eq(tasks.status, TaskStatus.QUEUED)))
         .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .all();
 
@@ -3006,15 +3113,25 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
-  /**
-   * Return the next QUEUED task to drain (lowest queue_position) for a session,
-   * or null if none.
-   */
+  /** Exclude prompts held by a tenant restriction from runnable queue selection. */
+  private runnablePromptPredicate(): SQL {
+    return isSQLiteDatabase(this.db)
+      ? sql`json_extract(${tasks.data}, '$.tenant_restriction_hold') IS NULL`
+      : sql`${tasks.data}->'tenant_restriction_hold' IS NULL`;
+  }
+
+  /** Return the next runnable QUEUED task by queue position, or null if none. */
   async getNextQueued(sessionId: string): Promise<Task | null> {
     try {
       const row = await select(this.db)
         .from(tasks)
-        .where(sql`${tasks.session_id} = ${sessionId} AND ${tasks.status} = 'queued'`)
+        .where(
+          and(
+            eq(tasks.session_id, sessionId),
+            eq(tasks.status, TaskStatus.QUEUED),
+            this.runnablePromptPredicate()
+          )
+        )
         .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
         .limit(1)
         .one();
@@ -3063,7 +3180,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     };
     const grouped = select(this.db, columns)
       .from(tasks)
-      .where(and(eq(tasks.status, TaskStatus.QUEUED), afterCondition))
+      .where(
+        and(eq(tasks.status, TaskStatus.QUEUED), this.runnablePromptPredicate(), afterCondition)
+      )
       .groupBy(
         ...(postgresTenantColumn ? [postgresTenantColumn, tasks.session_id] : [tasks.session_id])
       );

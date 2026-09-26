@@ -17,11 +17,15 @@ const mocks = vi.hoisted(() => {
   const state = {
     branch,
     tenantId: 'tenant-x' as string | undefined,
-    tenantDb: { scope: 'tenant-x' },
+    // Model the standalone SQLite handle used by these unit tests. The
+    // terminal admission helpers are mocked below, but the credential-epoch
+    // guard still needs to classify the handle before it can no-op on SQLite.
+    tenantDb: { scope: 'tenant-x', run: vi.fn() },
     databaseScopeDepth: 0,
     transactionCalls: 0,
     failTransactionCall: undefined as number | undefined,
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
+    assertTenantExecutionAdmission: vi.fn(async () => ({})),
     spawnExecutorFireAndForget: vi.fn(),
     generateTerminalExecutorToken: vi.fn(() => 'terminal-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
@@ -55,6 +59,9 @@ vi.mock('@agor/core/config', () => ({
 }));
 
 vi.mock('@agor/core/db', () => ({
+  assertTenantExecutionAdmission: mocks.assertTenantExecutionAdmission,
+  isPostgresDatabaseHandle: (db: unknown) =>
+    typeof db === 'object' && db !== null && !('run' in db),
   BranchRepository: class {
     async findById(branchId: string) {
       return mocks.branchesById.get(branchId) ?? null;
@@ -207,7 +214,7 @@ describe('branch-scoped terminal identity', () => {
   });
 
   it('requires a branch and rejects REST creation so create and I/O share an owner', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await expect(service.create({}, params as never)).rejects.toThrow('branchId is required');
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, { ...params, provider: 'rest' } as never)
@@ -218,7 +225,7 @@ describe('branch-scoped terminal identity', () => {
   });
 
   it('rejects a missing or inaccessible branch without enumeration', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await expect(
       service.create({ branchId: 'missing' as BranchID }, params as never)
     ).rejects.toThrow('Branch not found');
@@ -226,7 +233,7 @@ describe('branch-scoped terminal identity', () => {
 
   it('rejects an archived branch even while its filesystem is preserved', async () => {
     mocks.branchesById.set('branch-1', { ...mocks.branch, archived: true });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, params as never)
     ).rejects.toThrow('Branch is archived');
@@ -248,7 +255,7 @@ describe('process-affine attachment creation', () => {
       delegatedHomeKey: 'alice',
     });
     mocks.branchesById.set('branch-1', { ...mocks.branch, sdk_home: 'per_branch' });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
 
     await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
@@ -278,7 +285,7 @@ describe('process-affine attachment creation', () => {
       order.push('executor-started');
     });
 
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     expect(mocks.joinRequestingSocket).toHaveBeenCalledWith(
@@ -292,9 +299,23 @@ describe('process-affine attachment creation', () => {
     expect(order).toEqual(['browser-joined', 'executor-started']);
   });
 
+  it('refuses a terminal when restriction wins before final admission', async () => {
+    mocks.assertTenantExecutionAdmission.mockRejectedValueOnce(new Error('Tenant restricted'));
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('Tenant restricted');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+    expect(mocks.assertTenantExecutionAdmission).toHaveBeenCalledWith(mocks.tenantDb);
+    // A rejected allocation leaves no attachment/reservation preventing a fresh attempt.
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).resolves.toMatchObject({ branchId: 'branch-1' });
+  });
+
   it('does not spawn or retain an attachment when the requesting socket disconnects', async () => {
     mocks.joinRequestingSocket.mockResolvedValue(false);
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
 
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, params as never)
@@ -316,7 +337,7 @@ describe('process-affine attachment creation', () => {
     mocks.spawnExecutorFireAndForget.mockImplementation(() => {
       expect(mocks.databaseScopeDepth).toBe(0);
     });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const result = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     expect(result).toMatchObject({
@@ -336,7 +357,8 @@ describe('process-affine attachment creation', () => {
         terminal_branch_id: 'branch-1',
         terminal_owner_boot_id: 'daemon-a-boot',
       },
-      '30d'
+      '30d',
+      undefined
     );
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -360,7 +382,7 @@ describe('process-affine attachment creation', () => {
           release = () => resolve(true);
         })
     );
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     await vi.waitFor(() => expect(mocks.joinRequestingSocket).toHaveBeenCalledOnce());
@@ -371,7 +393,7 @@ describe('process-affine attachment creation', () => {
 
   it('retains no attachment or process when the final admission commit fails', async () => {
     mocks.failTransactionCall = 2;
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
 
     await expect(
       service.create({ branchId: 'branch-1' as BranchID }, params as never)
@@ -387,7 +409,7 @@ describe('process-affine attachment creation', () => {
   });
 
   it('cancels a committed reservation before spawn when authorization invalidates', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     mocks.joinRequestingSocket.mockImplementation(async () => {
       service.closeTenant('tenant-x');
       return true;
@@ -413,7 +435,7 @@ describe('process-affine attachment creation', () => {
       };
     });
     mocks.createUserProcessEnvironment.mockResolvedValue({ CREDENTIAL: 'old' });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
     await vi.waitFor(() =>
       expect(mocks.resolveCurrentTenantAuthorityActor).toHaveBeenCalledTimes(2)
@@ -434,7 +456,7 @@ describe('process-affine attachment creation', () => {
     mocks.createUserProcessEnvironment.mockImplementation(
       () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
     );
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const first = service.create({ branchId: 'branch-1' as BranchID }, params as never);
     await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
     const second = service.create({ branchId: 'branch-1' as BranchID }, params as never);
@@ -454,7 +476,7 @@ describe('process-affine attachment creation', () => {
     mocks.createUserProcessEnvironment.mockImplementation(
       () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
     );
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
     await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
 
@@ -481,7 +503,7 @@ describe('process-affine attachment creation', () => {
         service: false,
       };
     });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
     await vi.waitFor(() =>
       expect(mocks.resolveCurrentTenantAuthorityActor).toHaveBeenCalledTimes(2)
@@ -505,7 +527,7 @@ describe('process-affine attachment creation', () => {
       name: 'other',
       path: '/worktrees/other',
     });
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const a = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     const b = await service.create({ branchId: 'branch-2' as BranchID }, params as never);
     expect(a.terminalId).not.toBe(b.terminalId);
@@ -519,7 +541,7 @@ describe('process-affine attachment creation', () => {
       daemon: { port: 3030 },
       execution: { unix_user_mode: 'simple' },
     };
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const inaccessible = service.create({ branchId: 'branch-1' as BranchID }, params as never);
     const missing = service.create({ branchId: 'missing' as BranchID }, params as never);
     await expect(inaccessible).rejects.toMatchObject({
@@ -541,14 +563,14 @@ describe('process-affine attachment creation', () => {
       execution: { unix_user_mode: 'simple' },
     };
     mocks.fsAccess = 'none';
-    const denied = new TerminalsService(makeApp() as never, {} as never);
+    const denied = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await expect(
       denied.create({ branchId: 'branch-1' as BranchID }, params as never)
     ).rejects.toThrow('Filesystem access is required');
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
 
     mocks.fsAccess = 'read';
-    const allowed = new TerminalsService(makeApp() as never, {} as never);
+    const allowed = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await allowed.create({ branchId: 'branch-1' as BranchID }, params as never);
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -562,7 +584,7 @@ describe('process-affine attachment creation', () => {
 describe('attachment lifecycle', () => {
   it('routes ready/error only to the matching terminal channel', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     service.handleExecutorReady(terminal.terminalId, 'user-1');
     expect(app.io.local.to).toHaveBeenCalledWith(terminal.channel);
@@ -580,7 +602,7 @@ describe('attachment lifecycle', () => {
 
   it('explicit remove shuts down only the caller-owned local attachment', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     await expect(service.remove(terminal.terminalId, params as never)).resolves.toEqual({
       closed: true,
@@ -603,7 +625,7 @@ describe('attachment lifecycle', () => {
   });
 
   it('fences executor capabilities against the live local attachment registry', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     const identity = {
       terminalId: terminal.terminalId,
@@ -622,7 +644,7 @@ describe('attachment lifecycle', () => {
 
   it('notifies browsers and fences the attachment when the executor process exits', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     service.handleExecutorExit(terminal.terminalId, 'user-1', 17, 9);
@@ -650,7 +672,7 @@ describe('attachment lifecycle', () => {
 
   it('branch lifecycle cleanup is tenant-qualified', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     service.closeBranch('tenant-b', 'branch-1');
     expect(app.emit).not.toHaveBeenCalledWith('terminal:shutdown-local', expect.anything());
@@ -663,7 +685,7 @@ describe('attachment lifecycle', () => {
 
   it('tenant authorization invalidation retires every stale terminal capability', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
 
     service.closeTenant('tenant-x');
@@ -685,7 +707,7 @@ describe('attachment lifecycle', () => {
 
   it('a replica-wide realtime outage retires terminal capabilities for every tenant', async () => {
     const app = makeApp();
-    const service = new TerminalsService(app as never, {} as never);
+    const service = new TerminalsService(app as never, mocks.tenantDb as never);
     const tenantX = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
     mocks.tenantId = 'tenant-y';
     const tenantY = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
@@ -717,7 +739,7 @@ describe('attachment lifecycle', () => {
   });
 
   it('fails closed without tenant context and rejects removed CLI compatibility input', async () => {
-    const service = new TerminalsService(makeApp() as never, {} as never);
+    const service = new TerminalsService(makeApp() as never, mocks.tenantDb as never);
     await expect(
       service.create(
         { branchId: 'branch-1' as BranchID, ensureCliSessionId: 'legacy' },

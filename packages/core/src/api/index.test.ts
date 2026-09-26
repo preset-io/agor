@@ -788,6 +788,7 @@ describe('createClient', () => {
       expect(tasksService.methods).toHaveBeenCalledWith(
         'connectExecutor',
         'reportTerminationComplete',
+        'getTerminationState',
         'reportRuntimeTelemetry',
         'reportSdkHealthFailure',
         'cancelQueued',

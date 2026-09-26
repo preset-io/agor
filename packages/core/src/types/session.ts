@@ -621,6 +621,7 @@ export const SCHEDULER_INITIALIZATION_STAGES = [
 export type SchedulerInitializationStage = (typeof SCHEDULER_INITIALIZATION_STAGES)[number];
 
 export const SCHEDULER_INITIALIZATION_FAILURE_CODES = [
+  'tenant_restricted',
   'initialization_transient',
   'creator_unavailable',
   'schedule_identity_unavailable',

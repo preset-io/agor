@@ -1,5 +1,11 @@
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { Params, User, UserID } from '@agor/core/types';
+import {
+  type Params,
+  TENANT_RESTRICTED_ERROR_CODE,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import {
   issueRuntimeTokenPair,
@@ -8,6 +14,11 @@ import {
   readRuntimeTenantClaim,
   runtimeTenantClaims,
 } from './runtime-tokens.js';
+import { isTenantRestrictedRejection } from './tenant-access.js';
+import {
+  assertTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
 import {
   assertUserTokenNotInvalidated,
   authCredentialGenerationClaim,
@@ -17,6 +28,7 @@ import {
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 interface RefreshTokenServiceOptions {
+  db?: TenantScopeAwareDatabase;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
@@ -40,6 +52,10 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
         }
 
         const tenantId = readRuntimeTenantClaim(decoded, options.tenantClaim);
+        const epoch =
+          options.db && tenantId
+            ? await assertTenantCredentialEpoch(options.db, tenantId, decoded)
+            : undefined;
         const user = await options.usersService.get(
           decoded.sub as UserID,
           tenantId
@@ -60,6 +76,7 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           options.accessTokenTtl,
           options.refreshTokenTtl,
           {
+            ...tenantCredentialEpochClaims(epoch),
             ...authCredentialGenerationClaim(user),
             ...authTokenIssuedAtClaim(Date.now(), user),
             ...runtimeTenantClaims(
@@ -75,7 +92,19 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           refreshToken: tokens.refreshToken,
           user: redactUserAuthMetadata(user),
         };
-      } catch (_error) {
+      } catch (error) {
+        // The generic rejection stays generic: a bad signature, a wrong token
+        // type, a missing user and a stale generation are all "invalid or
+        // expired" and nothing more. The one exception is the closed-tenant
+        // code raised by the credential-epoch read, which the holder of this
+        // signed refresh token is already entitled to (it is the same tenant
+        // the 403 would name) and which the browser needs to tell a suspended
+        // workspace from a dead session. The refresh is refused either way.
+        if (isTenantRestrictedRejection(error)) {
+          throw new NotAuthenticated('Invalid or expired refresh token', {
+            code: TENANT_RESTRICTED_ERROR_CODE,
+          });
+        }
         throw new NotAuthenticated('Invalid or expired refresh token');
       }
     },

@@ -22,7 +22,15 @@
  */
 
 import { getBaseUrl } from '@agor/core/config';
-import { generateId, MessagesRepository } from '@agor/core/db';
+import {
+  assertTenantExecutionAdmission,
+  generateId,
+  isPostgresDatabaseHandle,
+  MessagesRepository,
+  readTenantRestrictionGeneration,
+  runWithTenantDatabaseTransaction,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   ChannelType,
@@ -205,7 +213,7 @@ async function mintWidgetMessage(
   const hostTaskId = hostTask?.task_id as TaskID | undefined;
   const widgetId = generateId() as MessageID;
 
-  const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+  const create = (db: TenantScopeAwareDatabase, tenantRestrictionGeneration?: string | null) =>
     appendSystemMessage({
       app: ctx.app,
       db,
@@ -223,6 +231,9 @@ async function mintWidgetMessage(
           params,
           status: input.status,
           requested_at: requestedAt,
+          ...(tenantRestrictionGeneration !== undefined
+            ? { tenant_restriction_generation: tenantRestrictionGeneration }
+            : {}),
           ...(terminal ? { resolved_at: requestedAt } : {}),
           ...(terminal && input.resultMeta !== undefined ? { result_meta: input.resultMeta } : {}),
           auto_resume: input.autoResume,
@@ -236,8 +247,26 @@ async function mintWidgetMessage(
           ...(input.gatewayCard && !terminal ? { slack_connect_due_at: requestedAt } : {}),
         } satisfies WidgetMessageMetadata,
       },
-    })
-  );
+    });
+  const created = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
+    if (
+      input.widgetType !== 'oauth' ||
+      !input.gatewayCard ||
+      !tenantId ||
+      !isPostgresDatabaseHandle(db)
+    ) {
+      return create(db);
+    }
+    // Mint and stamp within the same short tenant-fenced transaction. No
+    // daemon timestamp (nor the link's rounded iat) can establish ordering
+    // against the PostgreSQL restriction writer.
+    return runWithTenantDatabaseTransaction(db, tenantId, async (scopedDb) => {
+      await assertTenantExecutionAdmission(scopedDb);
+      const generation = await readTenantRestrictionGeneration(scopedDb, tenantId);
+      return create(db, generation);
+    });
+  });
 
   if (hostTask?.message_range) {
     try {

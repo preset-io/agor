@@ -20,6 +20,7 @@ import {
   update,
 } from '../database-wrapper';
 import { branches } from '../schema';
+import { assertTenantExecutionAdmission, TenantRestrictedError } from '../tenant-restriction';
 import { EntityNotFoundError, RepositoryError } from './base';
 
 type Environment = BranchEnvironmentInstance;
@@ -33,12 +34,15 @@ export class EnvironmentCommandRepository {
     work: (
       environment: Environment,
       now: Date,
-      row: typeof branches.$inferSelect
-    ) => { value: T; environment?: Environment }
+      row: typeof branches.$inferSelect,
+      resumeAfter?: number
+    ) => { value: T; environment?: Environment },
+    requireExecutionAdmission = false
   ): Promise<T> {
     return runDatabaseTransaction(
       this.db,
       async (tx) => {
+        const boundary = requireExecutionAdmission ? await assertTenantExecutionAdmission(tx) : {};
         await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
         const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
         if (!row) throw new EntityNotFoundError('Branch', id);
@@ -50,7 +54,12 @@ export class EnvironmentCommandRepository {
           : undefined;
         const now = nowRow ? new Date(nowRow.now) : new Date();
         const data = row.data as { environment_instance?: Environment };
-        const result = work(data.environment_instance ?? { status: 'stopped' }, now, row);
+        const result = work(
+          data.environment_instance ?? { status: 'stopped' },
+          now,
+          row,
+          boundary.resumeAfter
+        );
         if (result.environment) {
           await update(tx, branches)
             .set({
@@ -78,173 +87,184 @@ export class EnvironmentCommandRepository {
     commandBudgetMs?: number;
     confirmationOf?: string;
   }): Promise<Environment> {
-    return this.mutate(input.branch.branch_id, (previous, now, row) => {
-      assertBranchActivityAllowed(row, { requireRecoveryReady: true });
-      if (row.archived || (row.filesystem_status && row.filesystem_status !== 'ready')) {
-        throw new RepositoryError('Environment commands require a ready, non-archived branch');
-      }
-      for (const field of [
-        'start_command',
-        'stop_command',
-        'nuke_command',
-        'health_check_url',
-        'app_url',
-        'path',
-      ] as const) {
-        if (
-          ((field === 'path' ? row.data.path : row[field]) ?? undefined) !== input.branch[field]
-        ) {
-          throw new RepositoryError('Environment configuration changed; refresh before retrying');
+    return this.mutate(
+      input.branch.branch_id,
+      (previous, now, row) => {
+        assertBranchActivityAllowed(row, { requireRecoveryReady: true });
+        if (row.archived || (row.filesystem_status && row.filesystem_status !== 'ready')) {
+          throw new RepositoryError('Environment commands require a ready, non-archived branch');
         }
-      }
-      const environment = expireEnvironmentCommand(previous, now);
-      if (hasActiveEnvironmentCommand(environment)) {
-        throw new RepositoryError(
-          'An environment command is still active; wait for its result or deadline'
-        );
-      }
-      const confirmation = environmentStartConfirmation(environment);
-      if (input.action === 'start') {
-        if (environment.status === 'running' || environment.status === 'starting') {
+        for (const field of [
+          'start_command',
+          'stop_command',
+          'nuke_command',
+          'health_check_url',
+          'app_url',
+          'path',
+        ] as const) {
+          if (
+            ((field === 'path' ? row.data.path : row[field]) ?? undefined) !== input.branch[field]
+          ) {
+            throw new RepositoryError('Environment configuration changed; refresh before retrying');
+          }
+        }
+        const environment = expireEnvironmentCommand(previous, now);
+        if (hasActiveEnvironmentCommand(environment)) {
           throw new RepositoryError(
-            'Environment is already running or waiting for health; Stop it first'
+            'An environment command is still active; wait for its result or deadline'
           );
         }
-        if (
-          (confirmation && confirmation !== input.confirmationOf) ||
-          (input.confirmationOf && input.confirmationOf !== confirmation)
-        ) {
-          throw new RepositoryError(
-            'Previous environment cleanup is unconfirmed. Refresh and explicitly confirm Start anyway for the current attempt.'
-          );
+        const confirmation = environmentStartConfirmation(environment);
+        if (input.action === 'start') {
+          if (environment.status === 'running' || environment.status === 'starting') {
+            throw new RepositoryError(
+              'Environment is already running or waiting for health; Stop it first'
+            );
+          }
+          if (
+            (confirmation && confirmation !== input.confirmationOf) ||
+            (input.confirmationOf && input.confirmationOf !== confirmation)
+          ) {
+            throw new RepositoryError(
+              'Previous environment cleanup is unconfirmed. Refresh and explicitly confirm Start anyway for the current attempt.'
+            );
+          }
+        } else if (input.confirmationOf) {
+          throw new RepositoryError('Start confirmation is only valid for Start');
         }
-      } else if (input.confirmationOf) {
-        throw new RepositoryError('Start confirmation is only valid for Start');
-      }
-      const commandBudgetMs = input.commandBudgetMs ?? BUDGET.commandMs;
-      if (
-        !Number.isSafeInteger(commandBudgetMs) ||
-        commandBudgetMs < 1 ||
-        commandBudgetMs > BUDGET.standaloneCommandMs
-      ) {
-        throw new RepositoryError('Invalid environment command budget');
-      }
-      const commandDeadline = now.getTime() + BUDGET.claimMs + commandBudgetMs;
-      const next: Environment = {
-        ...environment,
-        status: input.action === 'start' ? 'starting' : 'stopping',
-        command_attempt: {
-          id: input.attemptId,
-          action: input.action,
-          requested_by: input.userId,
-          requested_at: now.toISOString(),
-          command_budget_ms: commandBudgetMs,
-          claim_deadline: new Date(now.getTime() + BUDGET.claimMs).toISOString(),
-          command_deadline: new Date(commandDeadline).toISOString(),
-          result_deadline: new Date(
-            commandDeadline + BUDGET.cleanupMs + BUDGET.reportMs
-          ).toISOString(),
-          ...(input.confirmationOf ? { confirmation_of: input.confirmationOf } : {}),
-        },
-        command_history: [
-          ...(environment.command_history ?? []),
-          ...(environment.command_attempt
-            ? [{ attempt: environment.command_attempt, result: environment.last_command }]
-            : []),
-        ].slice(-BUDGET.history),
-      };
-      delete next.last_health_check;
-      delete next.last_command;
-      delete next.last_error;
-      if (input.action === 'start') {
-        delete next.health_url;
-        next.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
-      }
-      return { value: next, environment: next };
-    });
+        const commandBudgetMs = input.commandBudgetMs ?? BUDGET.commandMs;
+        if (
+          !Number.isSafeInteger(commandBudgetMs) ||
+          commandBudgetMs < 1 ||
+          commandBudgetMs > BUDGET.standaloneCommandMs
+        ) {
+          throw new RepositoryError('Invalid environment command budget');
+        }
+        const commandDeadline = now.getTime() + BUDGET.claimMs + commandBudgetMs;
+        const next: Environment = {
+          ...environment,
+          status: input.action === 'start' ? 'starting' : 'stopping',
+          command_attempt: {
+            id: input.attemptId,
+            action: input.action,
+            requested_by: input.userId,
+            requested_at: now.toISOString(),
+            command_budget_ms: commandBudgetMs,
+            claim_deadline: new Date(now.getTime() + BUDGET.claimMs).toISOString(),
+            command_deadline: new Date(commandDeadline).toISOString(),
+            result_deadline: new Date(
+              commandDeadline + BUDGET.cleanupMs + BUDGET.reportMs
+            ).toISOString(),
+            ...(input.confirmationOf ? { confirmation_of: input.confirmationOf } : {}),
+          },
+          command_history: [
+            ...(environment.command_history ?? []),
+            ...(environment.command_attempt
+              ? [{ attempt: environment.command_attempt, result: environment.last_command }]
+              : []),
+          ].slice(-BUDGET.history),
+        };
+        delete next.last_health_check;
+        delete next.last_command;
+        delete next.last_error;
+        if (input.action === 'start') {
+          delete next.health_url;
+          next.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
+        }
+        return { value: next, environment: next };
+      },
+      input.action !== 'stop'
+    );
   }
 
   async report(
     report: EnvironmentCommandReport,
     options?: { expectedRequester?: UserID }
   ): Promise<Environment> {
-    return this.mutate(report.branch_id, (environment, now, row) => {
-      const attempt = environment.command_attempt;
-      if (
-        row.archived ||
-        !attempt ||
-        attempt.id !== report.attempt_id ||
-        attempt.action !== report.action
-      ) {
-        throw new RepositoryError('Stale environment command report');
-      }
-      if (options?.expectedRequester && attempt.requested_by !== options.expectedRequester) {
-        throw new RepositoryError('Environment command actor changed');
-      }
-      if (report.kind === 'result' && attempt.finished_at) {
-        // Duplicate delivery is harmless; it never overwrites the first settlement.
-        return { value: environment };
-      }
-      if (attempt.finished_at || expireEnvironmentCommand(environment, now) !== environment) {
-        throw new RepositoryError('Environment command attempt expired or already completed');
-      }
-      const next: Environment = { ...environment, command_attempt: { ...attempt } };
-      if (report.kind === 'claim') {
-        if (attempt.claimed_at) throw new RepositoryError('Environment command already claimed');
-        next.command_attempt!.claimed_at = now.toISOString();
-        // The command receives a full budget from claim, never past the hard admission deadline.
-        next.command_attempt!.command_deadline = new Date(
-          Math.min(
-            Date.parse(attempt.command_deadline),
-            now.getTime() + (attempt.command_budget_ms ?? BUDGET.commandMs)
-          )
-        ).toISOString();
-      } else {
-        if (!attempt.claimed_at)
-          throw new RepositoryError('Environment command must be claimed first');
-        if (report.kind === 'output') {
-          if (report.sequence <= (attempt.output_sequence ?? 0)) return { value: environment };
-          next.command_attempt!.output = report.output;
-          next.command_attempt!.output_truncated = report.truncated;
-          next.command_attempt!.output_sequence = report.sequence;
-        } else {
-          const settled = settleEnvironmentCommand(
-            next,
-            report.outcome,
-            report.message,
-            now,
-            report.output,
-            report.truncated
-          );
-          if (report.outcome === 'succeeded' && report.action === 'start') {
-            const effectiveHealthUrl = report.lifecycle_result?.health ?? row.health_check_url;
-            settled.status = effectiveHealthUrl ? 'starting' : 'running';
-            settled.last_health_check = {
-              timestamp: now.toISOString(),
-              status: 'unknown',
-              message: effectiveHealthUrl
-                ? 'Start command succeeded; waiting for health observation'
-                : 'Start command reported success; no health check configured',
-            };
-            if (report.lifecycle_result?.health) {
-              settled.health_url = report.lifecycle_result.health;
-            } else {
-              delete settled.health_url;
-            }
-            settled.access_urls = report.lifecycle_result?.app
-              ? [{ name: 'App', url: report.lifecycle_result.app }]
-              : row.app_url
-                ? [{ name: 'App', url: row.app_url }]
-                : [];
-          } else if (report.outcome === 'succeeded') {
-            delete settled.health_url;
-            settled.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
-          }
-          return { value: settled, environment: settled };
+    return this.mutate(
+      report.branch_id,
+      (environment, now, row, resumeAfter) => {
+        const attempt = environment.command_attempt;
+        if (
+          row.archived ||
+          !attempt ||
+          attempt.id !== report.attempt_id ||
+          attempt.action !== report.action
+        ) {
+          throw new RepositoryError('Stale environment command report');
         }
-      }
-      return { value: next, environment: next };
-    });
+        if (options?.expectedRequester && attempt.requested_by !== options.expectedRequester) {
+          throw new RepositoryError('Environment command actor changed');
+        }
+        if (report.kind === 'result' && attempt.finished_at) {
+          // Duplicate delivery is harmless; it never overwrites the first settlement.
+          return { value: environment };
+        }
+        if (attempt.finished_at || expireEnvironmentCommand(environment, now) !== environment) {
+          throw new RepositoryError('Environment command attempt expired or already completed');
+        }
+        const next: Environment = { ...environment, command_attempt: { ...attempt } };
+        if (report.kind === 'claim') {
+          if (resumeAfter !== undefined && !(Date.parse(attempt.requested_at) > resumeAfter)) {
+            throw new TenantRestrictedError();
+          }
+          if (attempt.claimed_at) throw new RepositoryError('Environment command already claimed');
+          next.command_attempt!.claimed_at = now.toISOString();
+          // The command receives a full budget from claim, never past the hard admission deadline.
+          next.command_attempt!.command_deadline = new Date(
+            Math.min(
+              Date.parse(attempt.command_deadline),
+              now.getTime() + (attempt.command_budget_ms ?? BUDGET.commandMs)
+            )
+          ).toISOString();
+        } else {
+          if (!attempt.claimed_at)
+            throw new RepositoryError('Environment command must be claimed first');
+          if (report.kind === 'output') {
+            if (report.sequence <= (attempt.output_sequence ?? 0)) return { value: environment };
+            next.command_attempt!.output = report.output;
+            next.command_attempt!.output_truncated = report.truncated;
+            next.command_attempt!.output_sequence = report.sequence;
+          } else {
+            const settled = settleEnvironmentCommand(
+              next,
+              report.outcome,
+              report.message,
+              now,
+              report.output,
+              report.truncated
+            );
+            if (report.outcome === 'succeeded' && report.action === 'start') {
+              const effectiveHealthUrl = report.lifecycle_result?.health ?? row.health_check_url;
+              settled.status = effectiveHealthUrl ? 'starting' : 'running';
+              settled.last_health_check = {
+                timestamp: now.toISOString(),
+                status: 'unknown',
+                message: effectiveHealthUrl
+                  ? 'Start command succeeded; waiting for health observation'
+                  : 'Start command reported success; no health check configured',
+              };
+              if (report.lifecycle_result?.health) {
+                settled.health_url = report.lifecycle_result.health;
+              } else {
+                delete settled.health_url;
+              }
+              settled.access_urls = report.lifecycle_result?.app
+                ? [{ name: 'App', url: report.lifecycle_result.app }]
+                : row.app_url
+                  ? [{ name: 'App', url: row.app_url }]
+                  : [];
+            } else if (report.outcome === 'succeeded') {
+              delete settled.health_url;
+              settled.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];
+            }
+            return { value: settled, environment: settled };
+          }
+        }
+        return { value: next, environment: next };
+      },
+      report.kind === 'claim' && report.action !== 'stop'
+    );
   }
 
   /** Discovery and admission call this independently; no initiating result waiter. */

@@ -6,11 +6,28 @@ import { TaskStatus } from '../../types/task';
 import { createDatabase, type Database } from '../client';
 import { isPostgresDatabase } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
+import { runWithTenantDatabaseScope } from '../tenant-scope';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
+
+// Each operation uses its own explicit tenant transaction, preserving the two
+// independent connections used by the concurrency tests below.
+function scopedTasks(db: Database): TaskRepository {
+  return new Proxy(new TaskRepository(db), {
+    get(target, property) {
+      const member = Reflect.get(target, property);
+      if (typeof member !== 'function') return member;
+      return (...args: unknown[]) =>
+        runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+          const repository = new TaskRepository(scoped);
+          return Reflect.apply(Reflect.get(repository, property), repository, args);
+        });
+    },
+  });
+}
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -72,7 +89,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
       agentic_tool: 'claude-code',
       created_by: ownerId,
     });
-    const tasks = new TaskRepository(db);
+    const tasks = scopedTasks(db);
     const task = await tasks.create({
       task_id: generateId(),
       session_id: session.session_id,
@@ -180,8 +197,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
       created_by: owner.user_id,
     });
     const sessions = new SessionRepository(db);
-    const tasksA = new TaskRepository(db);
-    const tasksB = new TaskRepository(dbB);
+    const tasksA = scopedTasks(db);
+    const tasksB = scopedTasks(dbB);
 
     const deletedActor = await new UsersRepository(db).create({
       email: `postgres-deleted-queue-actor-${generateId()}@example.invalid`,
@@ -274,7 +291,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
       agentic_tool: 'claude-code',
       created_by: owner.user_id,
     });
-    const tasks = new TaskRepository(db);
+    const tasks = scopedTasks(db);
     const taskId = generateId();
     await tasks.create({
       task_id: taskId,

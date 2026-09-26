@@ -7,7 +7,7 @@
 import { Forbidden } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { createRequireAuthHook } from './require-auth';
+import { createRequireAuthHook, createTenantRestrictedAuthHook } from './require-auth';
 
 const multiTenancy = { mode: 'static' as const, static_tenant_id: 'tenant-default' as never };
 
@@ -16,6 +16,35 @@ function ctxWithUser(user: unknown): HookContext {
 }
 
 describe('createRequireAuthHook composition', () => {
+  it.each(['member', 'admin', 'service'])(
+    'denies restricted %s without a role exemption',
+    async (role) => {
+      const authenticate = vi.fn(async (ctx: HookContext) => ctx);
+      const access = vi.fn(async () => {
+        throw new Forbidden('Tenant access is restricted');
+      });
+      const hook = createTenantRestrictedAuthHook(authenticate, multiTenancy, access);
+      await expect(
+        hook(ctxWithUser({ user_id: 'u1', role, _isServiceAccount: role === 'service' }))
+      ).rejects.toMatchObject({ code: 403 });
+      expect(access).toHaveBeenCalledExactlyOnceWith('tenant-default', expect.any(Object));
+      expect(authenticate).toHaveBeenCalledBefore(access);
+    }
+  );
+
+  it('does not read restriction state before authentication succeeds', async () => {
+    const access = vi.fn(async () => undefined);
+    const hook = createTenantRestrictedAuthHook(
+      async () => {
+        throw new Error('invalid credential');
+      },
+      multiTenancy,
+      access
+    );
+    await expect(hook(ctxWithUser(undefined))).rejects.toThrow('invalid credential');
+    expect(access).not.toHaveBeenCalled();
+  });
+
   it('rejects a terminal-executor identity that passed the auth strategy', async () => {
     // The strategy authenticated the token (that part must work for socket
     // reconnect); requireAuth must still reject it for REST/Feathers.

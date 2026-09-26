@@ -1,3 +1,4 @@
+import { readTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
 /**
  * Process-affine web terminal service.
  *
@@ -11,6 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
 import {
+  assertTenantExecutionAdmission,
   BranchRepository,
   getCurrentTenantId,
   lockBranchForAdmission,
@@ -364,13 +366,15 @@ export class TerminalsService {
           terminal_branch_id: branch.branch_id,
           terminal_owner_boot_id: identity.bootId,
         },
-        TERMINAL_EXECUTOR_TOKEN_TTL
+        TERMINAL_EXECUTOR_TOKEN_TTL,
+        await readTenantCredentialEpoch(this.db, tenantId)
       );
       if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
         throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
 
       await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
+        await assertTenantExecutionAdmission(db);
         await lockBranchForAdmission(db, branch.branch_id, { requireRecoveryReady: true });
       });
       if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {

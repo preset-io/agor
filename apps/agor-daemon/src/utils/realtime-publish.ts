@@ -36,6 +36,11 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
+import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
+import {
+  assertTenantCredentialEpochValue,
+  readTenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
@@ -347,6 +352,19 @@ function safeRelayData(data: unknown): unknown | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Feathers may publish an internal message without any dispatch projection. */
+function projectWidgetMessagePayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(projectWidgetMessagePayload);
+  if (!value || typeof value !== 'object') return value;
+  if ('metadata' in value && (value as Message).metadata?.widget) {
+    return stripWidgetSlackConnectDelivery(value as Message);
+  }
+  if ('data' in value && Array.isArray(value.data)) {
+    return { ...value, data: value.data.map(projectWidgetMessagePayload) };
+  }
+  return value;
 }
 
 // High-frequency per-chunk events emitted on the `messages` service during a
@@ -959,6 +977,34 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
     }
 
+    // The exact task termination signal is a safety channel, not ordinary
+    // tenant access. All other publications (including relayed events and
+    // permission/MCP refresh signals) must revalidate durable admission.
+    let credentialAdmitted = (_connection: unknown) => true;
+    if (
+      db &&
+      tenantId &&
+      !(context.path === 'tasks' && context.event === 'termination_requested')
+    ) {
+      try {
+        const epoch = await readTenantCredentialEpoch(db, tenantId);
+        credentialAdmitted = (connection: unknown) => {
+          try {
+            assertTenantCredentialEpochValue(
+              epoch,
+              getAuthenticatedConnectionCredentialPayload(connection)
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        tenantScoped = tenantScoped.filter(credentialAdmitted);
+      } catch {
+        return { delivery: [] as PublishChannel[], tenantId };
+      }
+    }
+
     // Authentication/tenant channels are deliberately broad. Narrow them to
     // the declared service read floor before ANY audience resolution so the
     // global, branch, knowledge, streaming, and Redis-relay paths cannot
@@ -973,7 +1019,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       const taskId = extractTaskId(data);
       if (!tenantId || !taskId) return { delivery: [] as PublishChannel[], tenantId };
       const room = existingChannel(app, executorTaskChannelName(tenantId, taskId));
-      return { delivery: room ? [room] : ([] as PublishChannel[]), tenantId };
+      return {
+        delivery: room ? [room.filter(credentialAdmitted)] : ([] as PublishChannel[]),
+        tenantId,
+      };
     }
 
     const resolveDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {
@@ -1110,14 +1159,18 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       db && tenantId
         ? await runWithTenantDatabaseScope(db, tenantId, resolveDelivery)
         : await resolveDelivery();
-    // Widget messages carry the connect lane's daemon-owned delivery state.
-    // Subscribers get the widget; they do not get its Slack delivery record.
-    const messageData = data as Message | undefined;
-    if (context.path === 'messages' && messageData?.metadata?.widget?.slack_connect) {
-      const channels = Array.isArray(delivery) ? delivery : [delivery];
-      delivery = channels.map((channel) =>
-        channel.send(stripWidgetSlackConnectDelivery(messageData))
-      );
+    // The first internally minted widget already carries a private restriction
+    // generation and Slack queue marker, before any delivery record exists or
+    // a service after-hook sets context.dispatch. Always project widget
+    // messages, using the caller dispatch when present so other redactions
+    // are not undone by this audience-specific override.
+    if (context.path === 'messages') {
+      const messagePayload = context.dispatch !== undefined ? context.dispatch : data;
+      const publicMessage = projectWidgetMessagePayload(messagePayload);
+      if (publicMessage !== messagePayload) {
+        const channels = Array.isArray(delivery) ? delivery : [delivery];
+        delivery = channels.map((channel) => channel.send(publicMessage));
+      }
     }
     const taskData = data as Task | undefined;
     if (
@@ -1194,7 +1247,12 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
           : context.dispatch !== undefined
             ? context.dispatch
             : data;
-      const relayData = safeRelayData(dispatchedData);
+      // Internal widget creates have no dispatch. The local channel override
+      // above is not the relay payload: project again before serializing, so
+      // neither the first queue marker nor a later delivery/epoch enters Redis.
+      const relayData = safeRelayData(
+        context.path === 'messages' ? projectWidgetMessagePayload(dispatchedData) : dispatchedData
+      );
       if (relayData !== undefined) {
         const removedBranchId = extractBranchId(relayData, context) as BranchID | undefined;
         const removalVisibility = removedBranchId
@@ -1239,6 +1297,11 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     // Never trust the Redis namespace as authorization. Re-run the exact local
     // tenant/RBAC publisher against this replica's own authenticated channels.
     if (!mayEnterRedisRelay(envelope.path, envelope.event)) return;
+    // A replica on the previous publisher version can still hand us a raw
+    // internally minted widget. Sanitize the receive-side event argument too,
+    // not merely the channel override, before the transport emit boundary.
+    const publicRelayData =
+      envelope.path === 'messages' ? projectWidgetMessagePayload(envelope.data) : envelope.data;
     const params: HookContext['params'] & Record<string, unknown> = {
       provider: 'socketio-redis-relay',
       tenant: { tenant_id: envelope.tenantId, source: 'explicit' },
@@ -1256,10 +1319,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       method: envelope.method,
       id: envelope.id,
       params,
-      result: envelope.data,
-      dispatch: envelope.data,
+      result: publicRelayData,
+      dispatch: publicRelayData,
     } as unknown as HookContext;
-    const resolved = await resolveLocalDelivery(envelope.data, context);
+    const resolved = await resolveLocalDelivery(publicRelayData, context);
     if (resolved.tenantId !== envelope.tenantId) return;
     const combined = combinePublishChannels(resolved.delivery);
     if (process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1') {
@@ -1275,7 +1338,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       envelope.event,
       combined,
       context,
-      envelope.data
+      publicRelayData
     );
   });
 }

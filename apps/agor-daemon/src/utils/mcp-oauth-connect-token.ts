@@ -154,6 +154,7 @@ export function mcpOAuthConnectClaimsMatchDelivery(
 ): boolean {
   return (
     !!delivery &&
+    !delivery.binding_invalidated_at &&
     claims.tid === tenantId &&
     claims.delivery_id === delivery.delivery_id &&
     claims.delivery_generation === delivery.delivery_generation &&

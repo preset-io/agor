@@ -264,6 +264,12 @@ export function getAuthenticatedConnectionAuthority(
     : undefined;
 }
 
+/** Credential claims come only from the immutable server-authenticated projection. */
+export function getAuthenticatedConnectionCredentialPayload(connection: unknown): unknown {
+  if (!getAuthenticatedConnectionAuthority(connection)) return undefined;
+  return (connection as AuthenticatedConnection).authentication?.payload;
+}
+
 /** Retire connection-scoped tenant/executor authority on logout or disconnect. */
 export function retireAuthenticatedConnectionAuthority(connection: unknown): void {
   if (!connection || typeof connection !== 'object') return;

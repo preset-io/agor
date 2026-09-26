@@ -23,18 +23,19 @@ cheat sheet or code comment before adding another document.
 
 Tight, code-pointer-heavy notes on internals.
 
-| File                                                                      | What it's for                                                             |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`core.md`](concepts/core.md)                                             | The five primitives (Branch, Board, Session, Task, Report). Mental model. |
-| [`architecture.md`](concepts/architecture.md)                             | System shape: services / repos / executor / storage. Where to look first. |
-| [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                |
-| [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
-| [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.   |
-| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.       |
-| [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |
-| [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                               |
-| [`task-runtime-state.md`](concepts/task-runtime-state.md)                 | Task states, executor liveness, SDK pulses, watchdogs, and containment.   |
-| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                   | `agor_sessions_*` MCP tool surface and override semantics.                |
+| File                                                                      | What it's for                                                                      |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [`core.md`](concepts/core.md)                                             | The five primitives (Branch, Board, Session, Task, Report). Mental model.          |
+| [`architecture.md`](concepts/architecture.md)                             | System shape: services / repos / executor / storage. Where to look first.          |
+| [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                         |
+| [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                                |
+| [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.            |
+| [`tenant-restrictions.md`](concepts/tenant-restrictions.md)               | Signed restriction intent, runtime admission, and explicit non-containment limits. |
+| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.                |
+| [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                                     |
+| [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                                        |
+| [`task-runtime-state.md`](concepts/task-runtime-state.md)                 | Task states, executor liveness, SDK pulses, watchdogs, and containment.            |
+| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                   | `agor_sessions_*` MCP tool surface and override semantics.                         |
 
 ### `guides/` — how-tos
 

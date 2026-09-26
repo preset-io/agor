@@ -88,7 +88,10 @@ test('deletion steps require exact authenticated command, tenant and invocation,
     expect(generateCommandToken).toHaveBeenCalledWith(
       branchDeletionCommandId(invocation),
       user.user_id,
-      branch.branch_id
+      branch.branch_id,
+      undefined,
+      undefined,
+      'safety-recovery'
     );
     await expect(
       service.create({ ...input, action: 'heartbeat', generation: claim.generation + 1 }, expiring)

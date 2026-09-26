@@ -5,6 +5,7 @@ import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
+import { Forbidden, Unavailable } from '@agor/core/feathers';
 import {
   type Branch,
   type Session,
@@ -13,12 +14,16 @@ import {
   type User,
   type UUID,
 } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as tenantAccess from './auth/tenant-access.js';
 import {
   appendResponseHeaderValue,
+  createExecutorUploadContentHandler,
   createUploadAuthMiddleware,
   resolveUploadPromptAccess,
 } from './register-routes.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('browser upload route boundary ordering', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -91,6 +96,7 @@ describe('browser upload route boundary ordering', () => {
       }),
     };
     const middleware = createUploadAuthMiddleware({
+      db: { run: vi.fn() } as never,
       authentication,
       multiTenancy: {
         mode: 'required_from_auth',
@@ -115,6 +121,43 @@ describe('browser upload route boundary ordering', () => {
     expect(rawDb.select).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    new Forbidden('Tenant access is restricted'),
+    new Unavailable('Tenant access cannot be verified'),
+  ])('denies upload before parsing when tenant admission fails: %s', async (error) => {
+    const admission = vi.spyOn(tenantAccess, 'assertRuntimeTenantAccess').mockRejectedValue(error);
+    const middleware = createUploadAuthMiddleware({
+      db: { run: vi.fn() } as never,
+      authentication: { create: vi.fn(async () => ({ user: { user_id: 'user' } as User })) },
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const next = vi.fn();
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    await middleware({ headers: { authorization: 'Bearer token' } }, { status }, next);
+    expect(status).toHaveBeenCalledWith(error.code);
+    expect(json).toHaveBeenCalledWith({ error: error.message });
+    expect(next).not.toHaveBeenCalled();
+    expect(admission).toHaveBeenCalledWith(expect.anything(), 'tenant-a');
+  });
+
+  it.each([
+    new Forbidden('Tenant access is restricted'),
+    new Unavailable('Tenant access cannot be verified'),
+  ])('preserves admission status in executor content route: %s', async (error) => {
+    vi.spyOn(tenantAccess, 'assertRuntimeTenantAccess').mockRejectedValue(error);
+    const handler = createExecutorUploadContentHandler({
+      db: { run: vi.fn() } as never,
+      authentication: { create: vi.fn(async () => ({ user: { user_id: 'user' } as User })) },
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    await handler({ headers: { authorization: 'Bearer token' } }, { status });
+    expect(status).toHaveBeenCalledWith(error.code);
+    expect(json).toHaveBeenCalledWith({ error: 'Upload transfer unavailable' });
+  });
+
   it('fails closed when hosted authentication establishes no tenant identity', async () => {
     const authentication = {
       create: vi.fn(async () => ({
@@ -123,6 +166,7 @@ describe('browser upload route boundary ordering', () => {
       })),
     };
     const middleware = createUploadAuthMiddleware({
+      db: { run: vi.fn() } as never,
       authentication,
       multiTenancy: {
         mode: 'required_from_auth',
@@ -160,6 +204,7 @@ describe('browser upload route boundary ordering', () => {
       data: { name: 'TokenExpiredError' },
     });
     const middleware = createUploadAuthMiddleware({
+      db: { run: vi.fn() } as never,
       authentication: { create: vi.fn(async () => Promise.reject(expired)) },
       multiTenancy: undefined as never,
     });
@@ -182,6 +227,7 @@ describe('browser upload route boundary ordering', () => {
 
   it('records a missing bearer as its own upload auth failure reason', async () => {
     const middleware = createUploadAuthMiddleware({
+      db: { run: vi.fn() } as never,
       authentication: { create: vi.fn() },
       multiTenancy: undefined as never,
     });
@@ -222,7 +268,8 @@ describe('browser upload route boundary ordering', () => {
     expect(helper).toContain('const authParams: AuthenticatedParams');
     expect(helper).toMatch(/authentication\.create\([\s\S]*authParams\s*\)/);
     expect(helper).toContain('authParams.tenant ??');
-    expect(executorRoutes.match(/authenticateBearerHttpRequest\(/g)).toHaveLength(2);
+    expect(executorRoutes).toContain('createExecutorUploadContentHandler');
+    expect(executorRoutes.match(/authenticateBearerHttpRequest\(/g)).toHaveLength(1);
   });
 });
 

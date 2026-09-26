@@ -1,3 +1,5 @@
+import { assertTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
+import { readTerminationEntity } from '../auth/termination-read-authority.js';
 /**
  * Tasks Service
  *
@@ -38,7 +40,13 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
-import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+} from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
@@ -72,7 +80,15 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
+import {
+  authenticatedTaskExecutorRuntimeAuthority,
+  authenticatedTaskExecutorRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
+import {
+  assertRuntimeTenantAccess,
+  isCurrentTenantRuntimeActive,
+  isTenantRestrictedRejection,
+} from '../auth/tenant-access.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -173,6 +189,7 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'cancelQueued',
   'reorderQueued',
   'connectExecutor',
+  'getTerminationState',
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
@@ -606,9 +623,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         params,
       });
       if (claimed) {
-        const session = await this.app
-          .service('sessions')
-          .get(result.task.session_id, { ...(params ?? {}), provider: undefined });
+        const session = await readTerminationEntity(
+          this.app,
+          'sessions',
+          result.task.session_id,
+          params,
+          result.task.task_id
+        );
         emitServiceEvent(this.app, {
           path: 'sessions',
           event: 'patched',
@@ -702,6 +723,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
+    if (!(await isCurrentTenantRuntimeActive(this.db))) return;
     const payload: ExecutorHeartbeatCallbackPayload = {
       event: 'executor_heartbeat',
       task_id: task.task_id,
@@ -719,7 +741,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
 
-    this.heartbeatCallbackRunner.run(payload);
+    if (await isCurrentTenantRuntimeActive(this.db)) this.heartbeatCallbackRunner.run(payload);
   }
 
   /**
@@ -815,6 +837,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
+      // Durable task/session settlement already committed. Do not convert it
+      // into callbacks, repo alignment, title generation or queue replay while
+      // restricted. Skipped completion automation is not replayed on release.
+      if (!(await isCurrentTenantRuntimeActive(this.db))) return true;
       const session = await this.app.service('sessions').get(task.session_id, params);
 
       if (session.branch_id) {
@@ -1549,6 +1575,34 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.findById(taskId);
   }
 
+  async getTerminationState(
+    data: { task_id: string },
+    params?: TaskParams
+  ): Promise<import('@agor/core/types').ExecutorTerminationState> {
+    const authority = authenticatedTaskExecutorRuntimeScope(params);
+    if (!authority || authority.taskId !== data.task_id)
+      throw new Forbidden('A token scoped to this executor task is required');
+    const task = await this.taskRepo.findById(data.task_id);
+    if (!task || task.session_id !== authority.sessionId)
+      throw new Forbidden('Executor task is unavailable');
+    const request = task.termination_request;
+    return {
+      task_id: task.task_id,
+      status: task.status,
+      ...(request
+        ? {
+            termination_request: {
+              cause: request.cause,
+              requested_at: request.requested_at,
+              ...(request.executor_quiesced_at
+                ? { executor_quiesced_at: request.executor_quiesced_at }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
   async connectExecutor(data: { task_id: string }, params?: TaskParams): Promise<Task> {
     const connection = await this.taskRepo.connectExecutor(data.task_id);
     if (!connection) {
@@ -1728,6 +1782,34 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Do not let a wrong-scope credential stop somebody else's runtime.
       throw new Forbidden('Executor task authority does not match this runtime');
     }
+    // Restricted telemetry is control traffic, never callback automation. Install
+    // the durable Stop even if the restriction observer has not reached this task.
+    try {
+      await assertRuntimeTenantAccess(this.db, authority.tenantId);
+      if (params?.authentication?.strategy === 'jwt') {
+        await assertTenantCredentialEpoch(
+          this.db,
+          authority.tenantId,
+          params.authentication.payload
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
+      const suspended =
+        report.outcome !== 'authorization_revoked' && isTenantRestrictedRejection(error);
+      return beginExecutorTermination({
+        app: this.app,
+        taskId: data.task_id,
+        cause: suspended ? 'tenant_suspension' : 'authorization_revoked',
+        errorMessage: suspended
+          ? 'Tenant access is restricted.'
+          : AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+        params,
+        runInFreshTenantWriteDatabase: (work) =>
+          withFreshTenantWrite(this.db, authority.tenantId, work),
+      });
+    }
+
     if (report.outcome === 'authorization_revoked') {
       console.warn(
         `[task.authorization] event=runtime_revoked task_id=${shortId(data.task_id)} ` +
@@ -1806,7 +1888,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
       withFreshTenantWrite(this.db, terminationTenantId, work);
 
-    const current = await this.get(data.task_id, params);
+    const current = await readTerminationEntity(
+      this.app,
+      'tasks',
+      data.task_id,
+      params,
+      data.task_id
+    );
     const mode = current.sdk_watchdog_mode ?? 'observe';
     if (mode === 'disabled') throw new Conflict('SDK watchdog is disabled for this Task');
     const action =
@@ -1829,7 +1917,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
-    const session = await this.app.service('sessions').get(current.session_id, params);
+    const session = await readTerminationEntity(
+      this.app,
+      'sessions',
+      current.session_id,
+      params,
+      current.task_id
+    );
     const failure: SdkFailure = {
       reason: data.reason,
       detected_at: new Date().toISOString(),

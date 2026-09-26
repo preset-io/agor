@@ -4,6 +4,7 @@
 
 import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
 import {
+  applyTenantRestrictionIntent,
   boards,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -16,6 +17,7 @@ import {
   select,
   sql,
   type TenantScopeAwareDatabase,
+  users,
 } from '@agor/core/db';
 import type { Params, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -46,7 +48,12 @@ function config(): AgorConfig {
   };
 }
 
-function signClaims(input: { subject: string; email: string; tenantId: string }): string {
+function signClaims(input: {
+  subject: string;
+  email: string;
+  tenantId: string;
+  restriction?: { controllerId: string; revision: number };
+}): string {
   return jwt.sign(
     {
       sub: input.subject,
@@ -54,6 +61,7 @@ function signClaims(input: { subject: string; email: string; tenantId: string })
       role: 'member',
       tenant_id: input.tenantId,
       instance_id: 'instance-1',
+      ...(input.restriction ? { tenant_restriction: input.restriction } : {}),
     },
     ASSERTION_SECRET,
     {
@@ -116,8 +124,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       };
     }
 
-    function service(db: TenantScopeAwareDatabase) {
+    function service(db: TenantScopeAwareDatabase, controllerId?: string) {
       const launchConfig = config();
+      if (controllerId) launchConfig.external_launch!.restriction_controller_id = controllerId;
       const { settings } = resolveExternalLaunchSettings(launchConfig);
       return createLaunchAuthService({
         db,
@@ -129,6 +138,138 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         usersService: usersService(db),
       });
     }
+
+    it('rejects a restricted launch before user or default-board projection and leaves the neighbor usable', async () => {
+      const tenantId = `launch-restricted-${generateId()}`;
+      const neighborId = `launch-neighbor-${generateId()}`;
+      const assertions = new Map(
+        [tenantId, neighborId].map((id) => [
+          id,
+          signClaims({ subject: id, email: `${id}@example.invalid`, tenantId: id }),
+        ])
+      );
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { launch_code: string };
+          return Response.json({ assertion: assertions.get(body.launch_code) });
+        })
+      );
+      await applyTenantRestrictionIntent(dbB, tenantId, {
+        version: 1,
+        controllerId: 'launch-test',
+        placementId: 'placement-one',
+        operationId: 'suspend-one',
+        revision: 1,
+        action: 'restrict',
+      });
+      await expect(service(dbA).create({ launchCode: tenantId })).rejects.toThrow(
+        'Invalid one-time launch assertion'
+      );
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        expect(await select(scoped).from(users).all()).toHaveLength(0);
+        expect(await select(scoped).from(boards).all()).toHaveLength(0);
+      });
+      await expect(service(dbA).create({ launchCode: neighborId })).resolves.toMatchObject({
+        user: { email: `${neighborId}@example.invalid` },
+      });
+    });
+
+    it('rejects delayed pre-suspension assertions after activation before projection, but accepts a fresh exact generation', async () => {
+      const tenantId = `launch-epoch-${generateId()}`;
+      const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
+      let assertion = signClaims(identity);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      for (const [revision, action] of [
+        [1, 'restrict'],
+        [2, 'prepare_release'],
+        [2, 'activate'],
+      ] as const) {
+        await applyTenantRestrictionIntent(dbB, tenantId, {
+          version: 1,
+          controllerId: 'launch-test',
+          placementId: 'placement-one',
+          operationId: revision === 1 ? 'suspend' : 'reactivate',
+          revision,
+          action,
+        });
+      }
+      for (const restriction of [
+        undefined,
+        { controllerId: 'launch-test', revision: 0 },
+        { controllerId: 'other', revision: 2 },
+      ]) {
+        assertion = signClaims({ ...identity, restriction });
+        await expect(
+          service(dbA, 'launch-test').create({ launchCode: 'delayed' })
+        ).rejects.toMatchObject({ code: 401 });
+      }
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        expect(await select(scoped).from(users).all()).toHaveLength(0);
+        expect(await select(scoped).from(boards).all()).toHaveLength(0);
+      });
+      assertion = signClaims({
+        ...identity,
+        restriction: { controllerId: 'launch-test', revision: 2 },
+      });
+      await expect(
+        service(dbA).create({ launchCode: 'missing-provider-binding' })
+      ).rejects.toMatchObject({ code: 401 });
+      const fresh = await service(dbA, 'launch-test').create({ launchCode: 'fresh' });
+      expect(jwt.verify(fresh.accessToken, RUNTIME_SECRET)).toMatchObject({
+        tenant_id: tenantId,
+        tenant_credential_epoch: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    });
+
+    it('accepts a launch at the watermark a re-home seeded on a fresh destination runtime', async () => {
+      // Plan D2: `tenant_restrictions` is deployment-bound and never travels with a
+      // tenant, so a Workspace re-homed while its Team is active arrives with an empty
+      // history that the launch fence reads as a missing watermark. The seed restates
+      // the revision the Team already carries; nothing else about the fence changes.
+      const tenantId = `launch-seeded-${generateId()}`;
+      const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
+      let assertion = signClaims(identity);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      // Before the seed the destination holds nothing, so the positive claim is refused.
+      assertion = signClaims({
+        ...identity,
+        restriction: { controllerId: 'launch-test', revision: 5 },
+      });
+      await expect(
+        service(dbA, 'launch-test').create({ launchCode: 'unseeded' })
+      ).rejects.toMatchObject({ code: 401 });
+      await applyTenantRestrictionIntent(dbB, tenantId, {
+        version: 1,
+        controllerId: 'launch-test',
+        placementId: 'placement-destination',
+        operationId: 'reactivate-five',
+        revision: 5,
+        action: 'seed_active',
+      });
+      const launched = await service(dbA, 'launch-test').create({ launchCode: 'seeded' });
+      expect(jwt.verify(launched.accessToken, RUNTIME_SECRET)).toMatchObject({
+        tenant_id: tenantId,
+      });
+      // The seeded row is an exact watermark, not a blanket opening.
+      for (const restriction of [
+        undefined,
+        { controllerId: 'launch-test', revision: 0 },
+        { controllerId: 'launch-test', revision: 4 },
+        { controllerId: 'other', revision: 5 },
+      ]) {
+        assertion = signClaims({ ...identity, restriction });
+        await expect(
+          service(dbA, 'launch-test').create({ launchCode: 'stale' })
+        ).rejects.toMatchObject({ code: 401 });
+      }
+    });
 
     it('keeps first-user projection and immutable default-board ownership in one fence', async () => {
       const tenantId = `launch-owner-${generateId()}`;

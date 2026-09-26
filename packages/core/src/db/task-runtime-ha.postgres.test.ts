@@ -427,6 +427,103 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     });
   });
 
+  it.each([
+    ['tenant_suspension', 'verified_absent', TaskStatus.STOPPED],
+    ['authorization_revoked', 'verified_absent', TaskStatus.FAILED],
+    ['tenant_suspension', 'forced_unverified', TaskStatus.FAILED],
+  ] as const)(
+    'settles %s / %s precisely without relabeling auth or unverified containment',
+    async (cause, outcome, expected) => {
+      const seed = await seedTenant(db, `suspension-${cause}-${outcome}`);
+      await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        const task = await tasks.create(taskInput(seed, TaskStatus.RUNNING));
+        const request = await tasks.claimTermination({
+          taskId: task.task_id,
+          cause,
+          errorMessage: 'Scoped test stop',
+        });
+        const requestedAt = request.task.termination_request!.requested_at;
+        const claim = async (token: string) =>
+          tasks.claimTerminationCoordination({
+            taskId: task.task_id,
+            claimToken: token,
+            leaseDurationMs: 30_000,
+            instanceId: 'test-daemon',
+            bootId: 'test-boot',
+          });
+        await claim('first');
+        if (outcome === 'forced_unverified') {
+          const unverified = await tasks.settleTermination({
+            taskId: task.task_id,
+            outcome: 'unverified',
+            coordinationToken: 'first',
+            errorMessage: 'Executor quiescence not verified',
+            sdkFailure: {
+              reason: 'termination_unverified',
+              detected_at: new Date().toISOString(),
+              tool: 'codex',
+              termination: 'unverified',
+            },
+          });
+          expect(unverified.task.status).toBe(TaskStatus.STOPPING);
+        }
+        const result = await tasks.settleTermination({
+          taskId: task.task_id,
+          ...(outcome === 'forced_unverified'
+            ? { outcome, expectedTerminationRequestedAt: requestedAt }
+            : { outcome, coordinationToken: 'first' }),
+        });
+        expect(result).toMatchObject({
+          outcome: 'transitioned',
+          task: { status: expected, termination_request: { cause } },
+        });
+        expect((await tasks.findById(task.task_id))?.status).toBe(expected);
+      });
+    }
+  );
+
+  it.each([
+    ['tenant_suspension', 'authorization_revoked'],
+    ['authorization_revoked', 'tenant_suspension'],
+  ] as const)('keeps real revocation authoritative when %s races %s', async (first, second) => {
+    const seed = await seedTenant(db, 'suspension-revocation-race');
+    await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      const task = await tasks.create(taskInput(seed, TaskStatus.RUNNING));
+      await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: first,
+        errorMessage: 'First stop',
+      });
+      await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: second,
+        errorMessage: 'Second stop',
+      });
+      await tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'race-stop',
+        leaseDurationMs: 30_000,
+        instanceId: 'test-daemon',
+        bootId: 'test-boot',
+      });
+      expect(
+        await tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'race-stop',
+        })
+      ).toMatchObject({
+        outcome: 'transitioned',
+        task: {
+          status: TaskStatus.FAILED,
+          termination_request: { cause: 'authorization_revoked' },
+        },
+      });
+    });
+  });
+
   it('reconciles late executor quiescence through RLS without exposing it cross-tenant', async () => {
     const owner = await seedTenant(db, 'late-quiescence-owner');
     const other = await seedTenant(db, 'late-quiescence-other');

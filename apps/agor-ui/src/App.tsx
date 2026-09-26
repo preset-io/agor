@@ -50,6 +50,7 @@ import { type OnboardingCompletionResult, OnboardingWizard } from './components/
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
+import { WorkspaceSuspended } from './components/WorkspaceSuspended/WorkspaceSuspended';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -352,6 +353,7 @@ function AppContent() {
     loading: authLoading,
     error: authError,
     accessToken,
+    tenantRestricted: authTenantRestricted,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
@@ -372,6 +374,7 @@ function AppContent() {
     connected,
     connecting,
     authGeneration,
+    tenantRestricted,
     error: connectionError,
     retryConnection,
   } = useAgorClient({
@@ -446,8 +449,16 @@ function AppContent() {
   // Referentially stable context value: without the memo, every App render
   // hands consumers a fresh object and defeats their own memoization.
   const connectionContextValue = useMemo(
-    () => ({ connected, connecting, authGeneration, outOfSync, capturedSha, currentSha }),
-    [connected, connecting, authGeneration, outOfSync, capturedSha, currentSha]
+    () => ({
+      connected,
+      connecting,
+      authGeneration,
+      tenantRestricted,
+      outOfSync,
+      capturedSha,
+      currentSha,
+    }),
+    [connected, connecting, authGeneration, tenantRestricted, outOfSync, capturedSha, currentSha]
   );
 
   const directSessionIdFromPath =
@@ -1141,6 +1152,18 @@ function AppContent() {
   const hasTokens =
     typeof window !== 'undefined' &&
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
+
+  // The daemon has closed this tenant. Replace the whole shell before any
+  // sign-in, connection or loading state can render: the socket is
+  // deliberately closed, so "Reconnecting to daemon…" would be both wrong and
+  // never-ending, a mounted workspace would offer prompts, terminals and
+  // uploads that all fail, and a sign-in form would invite a member to fix a
+  // credential that is not the problem. Either half of the app can be the one
+  // that saw the code — the socket handshake, or the authentication attempt
+  // that runs before a socket exists.
+  if (tenantRestricted || authTenantRestricted) {
+    return <WorkspaceSuspended />;
+  }
 
   if (!authLoading && !authenticated && !hasTokens) {
     return (

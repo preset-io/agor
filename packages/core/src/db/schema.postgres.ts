@@ -404,6 +404,7 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        tenant_restriction_hold?: Task['tenant_restriction_hold'];
         /**
          * Immutable filesystem authority projected when this executor was
          * launched. Internal repository fact; deliberately omitted from the
@@ -1660,6 +1661,25 @@ export const boardGroupGrants = pgTable(
     tenantIdx: index('board_group_grants_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.board_id, table.group_id] }),
     groupIdx: index('board_group_grants_group_idx').on(table.group_id),
+  })
+);
+
+// Controller-owned runtime intent. No application CRUD service is registered.
+// Release keeps the revision watermark; re-home must reassert destination intent.
+export const tenantRestrictions = pgTable(
+  'tenant_restrictions',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    controller_id: text('controller_id').notNull(),
+    placement_id: text('placement_id').notNull(),
+    operation_id: text('operation_id').notNull(),
+    revision: bigint('revision', { mode: 'number' }).notNull(),
+    phase: text('phase').notNull(),
+    protocol_version: integer('protocol_version').notNull().default(1),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.controller_id] }),
   })
 );
 

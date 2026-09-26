@@ -30,6 +30,7 @@ import {
   type BranchID,
   MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
   PRESENCE_SOCKET_EVENTS,
+  TENANT_RESTRICTED_ERROR_CODE,
   type UserID,
 } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1122,6 +1123,74 @@ describe('Socket.IO handshake credential extraction', () => {
       data: { code: 401, className: 'not-authenticated' },
     });
     expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+  });
+
+  it('gives a closed tenant the stable code instead of a refreshable credential rejection', async () => {
+    // The credential-generation check runs inside the handshake, ahead of
+    // tenant admission, so on a suspended workspace it — not the 403 — is what
+    // a browser socket actually receives. Socket.IO preserves a middleware
+    // error's `data` on connect_error, which is the whole client contract.
+    const { io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+      assertTenantAccess: vi.fn(async () => {}),
+      assertTenantCredential: vi.fn(async () => {
+        const closed = new Error('Tenant credential cannot be verified') as Error & {
+          code: number;
+          className: string;
+          data: { code: string };
+        };
+        closed.code = 401;
+        closed.className = 'not-authenticated';
+        closed.data = { code: TENANT_RESTRICTED_ERROR_CODE };
+        throw closed;
+      }),
+    });
+    const socket = makeSocket('closed-tenant-credential', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+      },
+    };
+
+    const error = (await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    )) as (Error & { data: Record<string, unknown> }) | undefined;
+
+    expect(error?.data).toEqual({ code: TENANT_RESTRICTED_ERROR_CODE });
+    // No 401/not-authenticated signal rides along: that is the client's cue to
+    // rotate a token that is fine, and the reconnect storm packet 05 removed.
+    expect(error?.data).not.toHaveProperty('className');
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+  });
+
+  it('keeps an unverifiable credential read on the generic refreshable rejection', async () => {
+    // A failed observation is not a statement that the tenant is closed.
+    const { io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+      assertTenantAccess: vi.fn(async () => {}),
+      assertTenantCredential: vi.fn(async () => {
+        throw Object.assign(new Error('Tenant credential cannot be verified'), { code: 401 });
+      }),
+    });
+    const socket = makeSocket('unverifiable-tenant-credential', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toMatchObject({
+      message: 'Invalid or expired authentication token',
+      data: { code: 401, className: 'not-authenticated' },
+    });
   });
 
   it('keeps ordinary user authority across routine access-token expiry', async () => {

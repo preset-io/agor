@@ -18,11 +18,12 @@
 import { getBaseUrl } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { loadCatalog } from '@agor/core/mcp-catalog';
-import type { MCPCatalogEntry, MessageID, SessionID } from '@agor/core/types';
+import type { MCPCatalogEntry, Message, MessageID, SessionID } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const postgresMint = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
   loadCatalog: vi.fn(),
@@ -48,26 +49,57 @@ const superseded = {
   scans: [] as Array<{ type: string; options?: { limit?: number; newestFirst?: boolean } }>,
 };
 
-vi.mock('@agor/core/db', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@agor/core/db')>()),
-  // The supersede sweep is best-effort and its repository has no business
-  // touching a real handle here; stub it so it is observable but inert.
-  MessagesRepository: class {
-    async findBySessionIdAndType(
-      _sessionId: string,
-      type: string,
-      options?: { limit?: number; newestFirst?: boolean }
-    ) {
-      superseded.scans.push({ type, options });
-      return superseded.rows;
-    }
-    async mutateMetadataLocked() {
-      throw new Error(
-        'widget lifecycle state must be written through WidgetResolutionStore, not the repository'
-      );
-    }
-  },
-}));
+vi.mock('@agor/core/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/db')>();
+  return {
+    ...actual,
+    isPostgresDatabaseHandle: (db: Parameters<typeof actual.isPostgresDatabaseHandle>[0]) =>
+      postgresMint.enabled || actual.isPostgresDatabaseHandle(db),
+    runWithTenantDatabaseScope: (
+      db: Parameters<typeof actual.runWithTenantDatabaseScope>[0],
+      tenantId: string,
+      work: (db: never) => Promise<unknown>
+    ) =>
+      postgresMint.enabled
+        ? work(db as never)
+        : actual.runWithTenantDatabaseScope(db, tenantId, work),
+    runWithTenantDatabaseTransaction: (
+      db: Parameters<typeof actual.runWithTenantDatabaseTransaction>[0],
+      tenantId: string,
+      work: (db: never) => Promise<unknown>
+    ) =>
+      postgresMint.enabled
+        ? work(db as never)
+        : actual.runWithTenantDatabaseTransaction(db, tenantId, work),
+    assertTenantExecutionAdmission: (
+      db: Parameters<typeof actual.assertTenantExecutionAdmission>[0]
+    ) => (postgresMint.enabled ? Promise.resolve({}) : actual.assertTenantExecutionAdmission(db)),
+    readTenantRestrictionGeneration: (
+      db: Parameters<typeof actual.readTenantRestrictionGeneration>[0],
+      tenantId: string
+    ) =>
+      postgresMint.enabled
+        ? Promise.resolve('private-generation')
+        : actual.readTenantRestrictionGeneration(db, tenantId),
+    // The supersede sweep is best-effort and its repository has no business
+    // touching a real handle here; stub it so it is observable but inert.
+    MessagesRepository: class {
+      async findBySessionIdAndType(
+        _sessionId: string,
+        type: string,
+        options?: { limit?: number; newestFirst?: boolean }
+      ) {
+        superseded.scans.push({ type, options });
+        return superseded.rows;
+      }
+      async mutateMetadataLocked() {
+        throw new Error(
+          'widget lifecycle state must be written through WidgetResolutionStore, not the repository'
+        );
+      }
+    },
+  };
+});
 
 import { hostedTenantRouting } from '../../../test/hosted-tenant-routing-fixture.js';
 import { MCPCatalogService } from '../../services/mcp-catalog.js';
@@ -77,6 +109,8 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { stripWidgetSlackConnectDelivery } from '../../utils/mcp-recovery-redaction.js';
+import { configureRealtimePublish } from '../../utils/realtime-publish.js';
 import { registerAllWidgets } from '../../widgets/index.js';
 import { _resetWidgetRegistryForTests } from '../../widgets/registry.js';
 import { summarizeMcpServer } from './mcp-servers.js';
@@ -266,6 +300,7 @@ function payload(result: { content: Array<{ text: string }> }) {
 }
 
 beforeEach(() => {
+  postgresMint.enabled = false;
   appendStub.mockReset();
   appendStub.mockImplementation(
     async (input: { messageId?: MessageID; metadata?: Record<string, unknown> }) => ({
@@ -1092,6 +1127,188 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     expect(appendStub.mock.calls[0][0].metadata.widget.slack_connect_due_at).toEqual(
       expect.any(String)
     );
+  });
+
+  it('publishes the initial minted widget without daemon lifecycle fields locally or through relay', async () => {
+    postgresMint.enabled = true;
+    const { app } = makeApp({
+      ...gatewaySession('slack'),
+      gatewayChannel: { channel_type: 'slack', config: { align_slack_users: true } },
+    });
+    class Channel {
+      constructor(
+        public connections: unknown[],
+        public data?: unknown
+      ) {}
+      get length() {
+        return this.connections.length;
+      }
+      filter(keep: (connection: unknown) => boolean) {
+        return new Channel(this.connections.filter(keep), this.data);
+      }
+      send(data: unknown) {
+        return new Channel(this.connections, data);
+      }
+    }
+    const viewer = { user: { user_id: 'user-actor', role: 'member' } };
+    let publisher!: (data: unknown, context: unknown) => Promise<Channel | Channel[]>;
+    let relayReceiver!: (envelope: unknown) => Promise<void>;
+    const relay = {
+      relay: vi.fn(),
+      setRelayHandler: (handler: typeof relayReceiver) => {
+        relayReceiver = handler;
+      },
+    };
+    const eventApp = Object.assign(app, {
+      channel: () => new Channel([viewer]),
+      publish: (handler: typeof publisher) => {
+        publisher = handler;
+      },
+      emit: vi.fn(),
+    });
+    configureRealtimePublish({
+      app: eventApp as never,
+      branchRepository: {
+        findRealtimeVisibilityBranch: async (id: string) => ({ branch_id: id, others_can: 'view' }),
+        findRealtimeViewUserIds: async () => ['user-actor'],
+      } as never,
+      sessionsRepository: {
+        findBranchIdBySessionId: async () => 'branch-1',
+        findCreatedByBySessionId: async () => 'user-actor',
+      } as never,
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+      realtimeRelay: relay,
+    });
+    let initial!: Message;
+    let firstLocal!: Channel | Channel[];
+    appendStub.mockImplementationOnce(
+      async (input: { messageId: MessageID; metadata: Message['metadata'] }) => {
+        initial = {
+          message_id: input.messageId,
+          session_id: 'sess-1' as SessionID,
+          type: 'widget_request',
+          role: 'system',
+          metadata: input.metadata,
+        } as Message;
+        firstLocal = await publisher(initial, {
+          app: eventApp,
+          path: 'messages',
+          event: 'created',
+          method: 'create',
+          params: {},
+          result: initial,
+          // Internal appendSystemMessage has no context.dispatch.
+        });
+        return { ...initial, index: 7 };
+      }
+    );
+    try {
+      const tools = registerAndCapture({
+        app: eventApp,
+        sessionId: 'sess-1',
+        tenantId: 'tenant-a',
+      });
+      await tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' });
+      expect(initial.metadata?.widget).toMatchObject({
+        widget_type: 'oauth',
+        status: 'pending',
+        tenant_restriction_generation: 'private-generation',
+        slack_connect_due_at: expect.any(String),
+      });
+
+      const assertPublic = (value: unknown) => {
+        const widget = (value as Message).metadata?.widget;
+        expect(widget).toMatchObject({ widget_type: 'oauth', status: 'pending' });
+        expect(widget?.params).toMatchObject({ mcpServerId: 'srv-notion', serverName: 'Notion' });
+        expect(widget?.slack_connect).toBeUndefined();
+        expect(widget?.slack_connect_due_at).toBeUndefined();
+        expect(widget?.tenant_restriction_generation).toBeUndefined();
+      };
+      const localData = (delivery: Channel | Channel[]) =>
+        (Array.isArray(delivery) ? delivery[0] : delivery).data;
+      const emittedDataForViewer = () => {
+        const channel = eventApp.emit.mock.lastCall?.[2] as
+          | { dataFor: (viewer: unknown) => unknown }
+          | undefined;
+        expect(channel).toBeDefined();
+        const context = eventApp.emit.mock.lastCall?.[3] as { dispatch?: unknown } | undefined;
+        return channel?.dataFor(viewer) ?? context?.dispatch;
+      };
+      assertPublic(localData(firstLocal));
+      const firstEnvelope = relay.relay.mock.calls[0]?.[0] as { data: unknown };
+      assertPublic(firstEnvelope.data);
+      await relayReceiver(firstEnvelope);
+      assertPublic(emittedDataForViewer());
+      assertPublic(eventApp.emit.mock.calls[0]?.[4]);
+      // Mixed-version relays can still deliver an old raw envelope. The
+      // receiving replica must sanitize its transport event argument too.
+      await relayReceiver({ ...firstEnvelope, data: initial });
+      assertPublic(emittedDataForViewer());
+      assertPublic(eventApp.emit.mock.lastCall?.[4]);
+
+      // The provider-facing after-hook normally supplies dispatch; the
+      // publisher must not undo it when it installs its channel override.
+      const initialWithDispatch = await publisher(initial, {
+        app: eventApp,
+        path: 'messages',
+        event: 'created',
+        method: 'create',
+        params: { provider: 'socketio' },
+        result: initial,
+        dispatch: initial,
+      });
+      assertPublic(localData(initialWithDispatch));
+      const initialDispatchEnvelope = relay.relay.mock.lastCall?.[0] as { data: unknown };
+      assertPublic(initialDispatchEnvelope.data);
+      await relayReceiver(initialDispatchEnvelope);
+      assertPublic(emittedDataForViewer());
+      assertPublic(eventApp.emit.mock.lastCall?.[4]);
+
+      const postCard = {
+        ...initial,
+        metadata: {
+          ...initial.metadata,
+          widget: {
+            ...initial.metadata!.widget!,
+            slack_connect: { delivery_id: 'internal-delivery', token_jti: 'internal-token' },
+          },
+        },
+      } as Message;
+      for (const dispatch of [undefined, postCard]) {
+        const context = {
+          app: eventApp,
+          path: 'messages',
+          event: 'patched',
+          method: 'patch',
+          params: dispatch ? { provider: 'socketio' } : {},
+          result: postCard,
+          ...(dispatch ? { dispatch } : {}),
+        };
+        const local = await publisher(postCard, context);
+        assertPublic(localData(local));
+        const envelope = relay.relay.mock.lastCall?.[0] as { data: unknown };
+        assertPublic(envelope.data);
+        await relayReceiver(envelope);
+        assertPublic(emittedDataForViewer());
+        assertPublic(eventApp.emit.mock.lastCall?.[4]);
+      }
+      const hookDispatch = stripWidgetSlackConnectDelivery(postCard);
+      const projected = await publisher(postCard, {
+        app: eventApp,
+        path: 'messages',
+        event: 'patched',
+        method: 'patch',
+        params: { provider: 'socketio' },
+        result: postCard,
+        dispatch: hookDispatch,
+      });
+      assertPublic(localData(projected) ?? hookDispatch);
+      const projectedEnvelope = relay.relay.mock.lastCall?.[0] as { data: unknown } | undefined;
+      assertPublic(projectedEnvelope?.data);
+      expect(initial.metadata?.widget?.tenant_restriction_generation).toBe('private-generation');
+    } finally {
+      postgresMint.enabled = false;
+    }
   });
 
   it('leaves a canvas mint off the sweep entirely', async () => {

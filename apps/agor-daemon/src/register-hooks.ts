@@ -3564,6 +3564,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       cancelQueued: manageTaskQueueGuards,
       reorderQueued: manageTaskQueueGuards,
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
+      getTerminationState: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireTaskScopedExecutorRuntimeToken()],

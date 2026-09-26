@@ -1,5 +1,5 @@
 import { shortId } from '@agor/core/db';
-import type { Task } from '@agor/core/types';
+import type { ExecutorTerminationState } from '@agor/core/types';
 import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 
 const RETRY_WINDOW_MS = 15_000;
@@ -34,7 +34,7 @@ export interface ExecutorQuiescenceReportOptions {
   taskId: string;
   requestedAt: string;
   report: () => Promise<unknown>;
-  readTask: () => Promise<Task>;
+  readTask: () => Promise<ExecutorTerminationState>;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }

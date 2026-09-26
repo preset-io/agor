@@ -1711,6 +1711,73 @@ describe('Slack MCP connect authenticated route', () => {
     expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
   });
 
+  it('refuses a retired connect binding at both entry and provider start', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const messages = new MessagesRepository(harness.rawDb);
+    await messages.mutateMetadataLocked(seeded.widgetId as MessageID, (metadata) => ({
+      ...metadata,
+      widget: {
+        ...metadata!.widget!,
+        slack_connect: {
+          ...metadata!.widget!.slack_connect!,
+          binding_invalidated_at: new Date().toISOString(),
+        },
+      },
+    }));
+
+    await expect(
+      harness.app.service('mcp-oauth-connect').create({ token: seeded.token }, paramsFor(harness))
+    ).rejects.toMatchObject({ code: 403 });
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+    expect(started.success).toBe(false);
+    expect(provider.requests).toHaveLength(0);
+    expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+  });
+
+  it('refuses an invalidation that lands after entry but before the locked consume', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createSlackLaneHarness(provider);
+    databases.push(harness.rawDb);
+    const seeded = await seedConnect(harness);
+    const original = MessagesRepository.prototype.mutateMetadataLocked;
+    let injected = false;
+    const spy = vi.spyOn(MessagesRepository.prototype, 'mutateMetadataLocked');
+    spy.mockImplementation(async function (id, mutation) {
+      if (id === seeded.widgetId && !injected) {
+        injected = true;
+        await original.call(this, id, (metadata) => ({
+          ...metadata,
+          widget: {
+            ...metadata!.widget!,
+            slack_connect: {
+              ...metadata!.widget!.slack_connect!,
+              binding_invalidated_at: new Date().toISOString(),
+            },
+          },
+        }));
+      }
+      return original.call(this, id, mutation);
+    });
+    try {
+      const started = (await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ connect_token: seeded.token }, paramsFor(harness))) as { success: boolean };
+      expect(started.success).toBe(false);
+      expect(injected).toBe(true);
+      expect(provider.requests).toHaveLength(0);
+      expect((await seeded.delivery())?.token_consumed_at).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   /**
    * B1 — what the page is told when the sign-in already succeeded.
    *
@@ -2802,7 +2869,9 @@ describe('SQLite saved-row OAuth authority', () => {
           harness.user.user_id as UserID,
           harness.server.mcp_server_id as MCPServerID
         );
-        if (committed && lookupCalls === 4) {
+        // The provider-dispatch fence adds one pre-exchange authority read.
+        // Keep the injected failure on the first post-commit hint lookup.
+        if (committed && lookupCalls === 5) {
           throw new Error('SECRET_POST_COMMIT_LOOKUP_FAILURE');
         }
         return originalFindById.call(this, id);
@@ -2822,7 +2891,7 @@ describe('SQLite saved-row OAuth authority', () => {
           '[MCP Runtime] event=hint_failed code=oauth_authority_changed'
         )
       );
-      expect(lookupCalls).toBe(4);
+      expect(lookupCalls).toBe(5);
       expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET_POST_COMMIT_LOOKUP_FAILURE');
     } finally {
       lookup.mockRestore();

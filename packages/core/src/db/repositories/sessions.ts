@@ -1238,6 +1238,28 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     return row?.completedAt != null;
   }
 
+  /** Stop recovery without asserting that an existing task/process is terminal. */
+  async holdScheduledInitialization(sessionId: SessionID): Promise<void> {
+    await update(this.db, sessions)
+      .set({
+        scheduler_init_failure_code: 'tenant_restricted',
+        scheduler_init_failure_stage: 'recovery_load',
+        scheduler_init_retry_at: null,
+      })
+      .where(
+        and(
+          eq(sessions.session_id, sessionId),
+          eq(sessions.scheduled_from_branch, true),
+          isNull(sessions.scheduler_init_completed_at),
+          or(
+            isNull(sessions.scheduler_init_failure_code),
+            isNotNull(sessions.scheduler_init_retry_at)
+          )
+        )
+      )
+      .run();
+  }
+
   /** Conditional/idempotent completion marker written after schedule finalization. */
   async markScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
     const result = await update(this.db, sessions)

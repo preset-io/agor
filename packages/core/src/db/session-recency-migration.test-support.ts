@@ -3,15 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
-import { TaskStatus } from '../types/task';
 import type { Database } from './client';
-import { executeRaw, rawRows } from './database-wrapper';
+import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
 import { BoardRepository } from './repositories/boards';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
-import { TaskRepository } from './repositories/tasks';
 import { UsersRepository } from './repositories/users';
+import { getCurrentTenantId } from './tenant-scope';
 
 export const SESSION_RECENCY_MIGRATION = '0113_session_recency_not_null';
 
@@ -92,12 +91,28 @@ export async function seedHistoricalSessionRecency(db: Database) {
       children: [],
     },
   });
-  const task = await new TaskRepository(db).create({
-    session_id: parent.session_id,
-    created_by: owner.user_id,
-    status: TaskStatus.CREATED,
+  // This fixture deliberately stops before the restriction schema exists. Use
+  // historical SQL rather than current repository admission, which must keep
+  // checking tenant_restrictions for production prompt creation.
+  const task = { task_id: generateId() };
+  const taskData = JSON.stringify({
     full_prompt: 'Preserved child task',
+    message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+    git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
   });
+  if (isPostgresDatabase(db)) {
+    await executeRaw(
+      db,
+      sql`INSERT INTO tasks (tenant_id, task_id, session_id, created_at, status, created_by, data)
+          VALUES (${getCurrentTenantId() ?? 'default'}, ${task.task_id}, ${parent.session_id}, ${new Date().toISOString()}, 'created', ${owner.user_id}, ${taskData}::jsonb)`
+    );
+  } else {
+    await executeRaw(
+      db,
+      sql`INSERT INTO tasks (task_id, session_id, created_at, status, created_by, data)
+          VALUES (${task.task_id}, ${parent.session_id}, ${Date.now()}, 'created', ${owner.user_id}, ${taskData})`
+    );
+  }
   await executeRaw(
     db,
     sql`UPDATE sessions SET updated_at = NULL WHERE session_id = ${parent.session_id}`
