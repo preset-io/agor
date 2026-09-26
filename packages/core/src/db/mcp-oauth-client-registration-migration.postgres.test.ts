@@ -1,4 +1,8 @@
-/** Exact b0585d76 OAuth authority history -> final reconciliation proof. */
+/**
+ * Exact b0585d76 OAuth authority history -> final reconciliation proof.
+ * The disposable PostgreSQL runner supplies both app and admin URLs; admin is
+ * used only to provision the isolated preservation fixture, never for migration.
+ */
 
 import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -7,6 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
+import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { createDatabase, type Database } from './client';
@@ -57,25 +62,6 @@ async function recreateHistoricalClaudeAuthority(
   for (const statement of source.split('--> statement-breakpoint')) {
     if (statement.trim()) await transaction.unsafe(statement);
   }
-}
-
-/** Rewind 0111 as well as its ledger: the historical head still had these guards. */
-async function restoreHistoricalOwnerImmutability(
-  transaction: PostgresTestTransaction
-): Promise<void> {
-  const source = await readFile(
-    join(migrationsFolder, '0095_board_branch_capability_policies.sql'),
-    'utf8'
-  );
-  const statements = source
-    .split('--> statement-breakpoint')
-    .filter((statement) =>
-      /^\s*CREATE (?:FUNCTION agor_reject_primary_owner_change\(|TRIGGER (?:boards|branches)_primary_owner_immutable\b)/.test(
-        statement
-      )
-    );
-  expect(statements).toHaveLength(3);
-  for (const statement of statements) await transaction.unsafe(statement);
 }
 
 async function executeReconciliationTransaction(
@@ -335,34 +321,67 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     it('preserves an exact final DCR schema and rows when upgrading the pre-rebase watermark', async () => {
-      if (!db || !isPostgresDatabase(db))
-        throw new Error('PostgreSQL test database was not initialized');
-      const registrationId = generateId();
-      const relationOid = rawRows(
-        await executeRaw(
-          db,
-          sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
-        )
-      )[0]?.relation_oid;
-      await runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) => {
-        const owner = await new UsersRepository(scoped).create({
-          email: `${generateId()}@example.test`,
-          name: 'Final preservation owner',
-          role: 'admin',
-        });
-        const server = await new MCPServerRepository(scoped).create({
-          name: `final-preservation-${generateId()}`,
-          transport: 'http',
-          url: 'https://provider.example.test/mcp',
-          scope: 'global',
-          enabled: true,
-          source: 'user',
-          owner_user_id: owner.user_id,
-          auth: { type: 'oauth', oauth_mode: 'per_user' },
-        });
-        await executeRaw(
-          scoped,
-          sql`INSERT INTO mcp_oauth_client_registrations (
+      // Isolate the historical schema instead of rewinding the ledger on the
+      // latest database and manually undoing every future migration's DDL.
+      const adminUrl = process.env.AGOR_TEST_POSTGRES_ADMIN_URL;
+      if (!adminUrl || !postgresUrl) throw new Error('Disposable PostgreSQL runner URLs required');
+      const admin = postgres(adminUrl, { max: 1 });
+      const databaseName = `dcr_preservation_${generateId().replaceAll('-', '')}`;
+      const appUrl = new URL(postgresUrl);
+      const ownerRole = decodeURIComponent(appUrl.username).replaceAll('"', '""');
+      const folder = await mkdtemp(join(tmpdir(), 'agor-dcr-preservation-'));
+      let isolatedDb: Database | undefined;
+      try {
+        await admin.unsafe(`CREATE DATABASE "${databaseName}" OWNER "${ownerRole}"`);
+        const bootstrapUrl = new URL(adminUrl);
+        bootstrapUrl.pathname = `/${databaseName}`;
+        const bootstrap = postgres(bootstrapUrl.toString(), { max: 1 });
+        try {
+          await bootstrap.unsafe('CREATE EXTENSION IF NOT EXISTS vector');
+        } finally {
+          await bootstrap.end();
+        }
+        appUrl.pathname = `/${databaseName}`;
+        isolatedDb = createDatabase({ dialect: 'postgresql', url: appUrl.toString() });
+        const db = isolatedDb;
+        await cp(migrationsFolder, folder, { recursive: true });
+        const journalPath = join(folder, 'meta', '_journal.json');
+        const journal = JSON.parse(await readFile(journalPath, 'utf8')) as {
+          entries: Array<{ tag: string; when: number }>;
+        };
+        const boundary = journal.entries.findIndex(
+          ({ tag }) => tag === '0103_oauth_authority_watermark_reconciliation'
+        );
+        expect(boundary).toBeGreaterThan(0);
+        journal.entries = journal.entries.slice(0, boundary + 1);
+        await writeFile(journalPath, JSON.stringify(journal));
+        await migratePostgres(db as never, { migrationsFolder: folder });
+        const registrationId = generateId();
+        const relationOid = rawRows(
+          await executeRaw(
+            db,
+            sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
+          )
+        )[0]?.relation_oid;
+        await runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) => {
+          const owner = await new UsersRepository(scoped).create({
+            email: `${generateId()}@example.test`,
+            name: 'Final preservation owner',
+            role: 'admin',
+          });
+          const server = await new MCPServerRepository(scoped).create({
+            name: `final-preservation-${generateId()}`,
+            transport: 'http',
+            url: 'https://provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: owner.user_id,
+            auth: { type: 'oauth', oauth_mode: 'per_user' },
+          });
+          await executeRaw(
+            scoped,
+            sql`INSERT INTO mcp_oauth_client_registrations (
                 tenant_id, registration_id, mcp_server_id, binding_version,
                 binding_fingerprint, server_config_version, envelope_version,
                 is_current, status, claim_generation, failure_code,
@@ -372,74 +391,57 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
                 ${'b'.repeat(64)}, 1, 1, false, 'failed', 0, 'fixture_failure',
                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
               )`
+          );
+        });
+
+        // The prefix contains the exact final DCR relation and historical Claude
+        // authority. No later columns/tables exist yet; the full production upgrade
+        // below must create them normally, including Teams.
+        // Reproduce the previous reviewed head's timestamp-only final watermark.
+        // Its authority schema is identical; the rebased bootstrap must not try
+        // to CREATE it again or discard its rows before exact reconciliation.
+        await executeRaw(
+          db,
+          sql`DELETE FROM drizzle.__drizzle_migrations WHERE created_at >= 1788379200000`
         );
-      });
-
-      // This fixture reuses the database upgraded by the preceding test. Remove
-      // later Slack recovery, Slack connect, consent-attribution, and cleanup policy
-      // additions as well as rewinding the ledger: the old head did not have these
-      // future columns. Every migration landing after OLD_HEAD_WATERMARK that adds a
-      // column has to be undone here, or its replay collides with the column the
-      // upgraded database already carries.
-      await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
-      await executeRaw(db, sql`ALTER TABLE messages DROP COLUMN mcp_slack_connect_due_at`);
-      await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
-      await executeRaw(db, sql`DROP POLICY IF EXISTS branch_maintenance_discovery ON branches`);
-      await executeRaw(
-        db,
-        sql`DROP POLICY IF EXISTS api_key_host_tenant_discovery ON app_variables`
-      );
-      await executeRaw(db, sql`ALTER TABLE user_api_keys DROP COLUMN source`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_status`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_error`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN deletion_updated_at`);
-      await executeRaw(db, sql`ALTER TABLE repos DROP COLUMN cleanup_policy`);
-      await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN cleanup_protected`);
-      // Rewind 0112's schema too: replaying its ledger must recreate the table.
-      await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
-
-      await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
-      await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
-      await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
-
-      // Reproduce the previous reviewed head's timestamp-only final watermark.
-      // Its authority schema is identical; the rebased bootstrap must not try
-      // to CREATE it again or discard its rows before exact reconciliation.
-      await executeRaw(
-        db,
-        sql`DELETE FROM drizzle.__drizzle_migrations WHERE created_at >= 1788379200000`
-      );
-      await executeRaw(
-        db,
-        sql`INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
+        await executeRaw(
+          db,
+          sql`INSERT INTO drizzle.__drizzle_migrations (hash, created_at)
             VALUES ('pre-rebase-final-watermark', 1788379200000)`
-      );
-      await expect(checkMigrationStatus(db)).resolves.toMatchObject({
-        pending: pendingMigrations,
-        dbAheadOfBinary: false,
-      });
-      await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
-      await runMigrations(db, { allowOfflineCutover: true });
-      await expect(checkMigrationStatus(db)).resolves.toMatchObject({ hasPending: false });
-      expect(
-        rawRows(
-          await executeRaw(
-            db,
-            sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
-          )
-        )[0]?.relation_oid
-      ).toBe(relationOid);
-      await expect(
-        runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) =>
+        );
+        await expect(checkMigrationStatus(db)).resolves.toMatchObject({
+          pending: pendingMigrations,
+          dbAheadOfBinary: false,
+        });
+        await expect(runMigrations(db)).rejects.toThrow('Offline migration cutover required');
+        await runMigrations(db, { allowOfflineCutover: true });
+        await expect(checkMigrationStatus(db)).resolves.toMatchObject({ hasPending: false });
+        expect(
           rawRows(
             await executeRaw(
-              scoped,
-              sql`SELECT registration_id FROM mcp_oauth_client_registrations
+              db,
+              sql`SELECT 'public.mcp_oauth_client_registrations'::regclass::oid AS relation_oid`
+            )
+          )[0]?.relation_oid
+        ).toBe(relationOid);
+        await expect(
+          runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) =>
+            rawRows(
+              await executeRaw(
+                scoped,
+                sql`SELECT registration_id FROM mcp_oauth_client_registrations
                   WHERE registration_id = ${registrationId}`
+              )
             )
           )
-        )
-      ).resolves.toEqual([expect.objectContaining({ registration_id: registrationId })]);
+        ).resolves.toEqual([expect.objectContaining({ registration_id: registrationId })]);
+      } finally {
+        if (isolatedDb)
+          await (isolatedDb as Database & { $client: { end: () => Promise<void> } }).$client.end();
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`);
+        await admin.end();
+        await rm(folder, { recursive: true, force: true });
+      }
     });
 
     it('accepts the exact historical fixture before applying adversarial mutations', async () => {
