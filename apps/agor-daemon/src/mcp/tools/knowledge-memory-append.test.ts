@@ -33,6 +33,9 @@ vi.mock('../../utils/branch-workspace-path.js', () => ({
   resolveBranchWorkspacePath: vi.fn(),
   ensureBranchWorkspaceAccess: vi.fn(),
 }));
+vi.mock('../../utils/branch-executor-sandbox.js', () => ({
+  resolveBranchExecutorSandboxMounts: vi.fn(async () => ({})),
+}));
 vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));

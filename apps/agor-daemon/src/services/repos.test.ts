@@ -108,6 +108,10 @@ const tenantScopeMocks = vi.hoisted(() => {
   );
   return { withFreshTenantWrite };
 });
+const sandboxMountMocks = vi.hoisted(() => ({ resolve: vi.fn(async () => ({})) }));
+vi.mock('../utils/branch-executor-sandbox.js', () => ({
+  resolveBranchExecutorSandboxMounts: sandboxMountMocks.resolve,
+}));
 vi.mock('../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: delegatedHomeMocks.resolve,
 }));
@@ -132,6 +136,7 @@ beforeEach(() => {
   executorMocks.requestExecutor.mockReset();
   executorMocks.spawnExecutorFireAndForget.mockReset();
   delegatedHomeMocks.resolve.mockReset().mockResolvedValue(undefined);
+  sandboxMountMocks.resolve.mockReset().mockResolvedValue({});
   repositoryMocks.resolveBranchUserAccess.mockReset().mockResolvedValue({
     can: 'all',
     fs_access: 'write',
@@ -219,6 +224,12 @@ describe('ReposService .agor.yml normalized branch access', () => {
       source: 'direct',
     });
     executorMocks.requestExecutor.mockResolvedValue({ success: true, data: {} });
+    const sandboxMounts = {
+      sandboxHomeStore: `/data/tenants/default/homes/${user.user_id}`,
+      sandboxWorktreesRoot: '/data/worktrees',
+      sandboxBaseRepoPath: '/data/repos/preset-io/agor',
+    };
+    sandboxMountMocks.resolve.mockResolvedValue(sandboxMounts);
     const instance = service();
 
     await runWithTenantContext('default', () =>
@@ -241,6 +252,8 @@ describe('ReposService .agor.yml normalized branch access', () => {
         params: expect.objectContaining({
           cwd: branch.path,
           principalBranchAccess: access.fs_access,
+          // A per-user sandbox refuses to launch without the caller's home store.
+          ...sandboxMounts,
         }),
       }),
       expect.objectContaining({
@@ -250,6 +263,9 @@ describe('ReposService .agor.yml normalized branch access', () => {
           branch_fs_access: access.fs_access,
         },
       })
+    );
+    expect(sandboxMountMocks.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 'default', executionUserId: user.user_id, branch })
     );
   });
 

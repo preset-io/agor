@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
+import { BranchRepository, getCurrentTenantId, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type {
   Branch,
@@ -52,6 +52,7 @@ import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
+import { resolveBranchExecutorSandboxMounts } from '../../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
@@ -735,6 +736,23 @@ async function runBranchKnowledgeCommand(
     );
     return { branch, fsAccess };
   });
+  // The caller is the execution principal, so a per-user sandbox mounts the
+  // caller's home store rather than refusing the launch for lack of one.
+  const config = ctx.app.get('config');
+  const sandboxMounts =
+    config.execution?.sandbox?.enabled === true
+      ? await runWithMcpTenantDatabaseScope(ctx, (db) => {
+          const tenantId = ctx.baseServiceParams.tenant?.tenant_id ?? getCurrentTenantId();
+          if (!tenantId) throw new Error('Trusted tenant context is required');
+          return resolveBranchExecutorSandboxMounts({
+            config,
+            tenantId,
+            executionUserId: ctx.userId,
+            branch: workspace.branch,
+            db,
+          });
+        })
+      : {};
   const result = await requestExecutor(
     {
       command,
@@ -744,6 +762,7 @@ async function runBranchKnowledgeCommand(
         ...params,
         cwd: workspace.branch.path,
         principalBranchAccess: workspace.fsAccess,
+        ...sandboxMounts,
       },
     },
     {

@@ -73,6 +73,7 @@ import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -1551,6 +1552,17 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       userId,
       this.app.get('config')
     );
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
+    // The caller is the execution principal for this stateless request, so a
+    // per-user sandbox mounts the caller's home store (not the branch owner's).
+    const sandboxMounts = await resolveBranchExecutorSandboxMounts({
+      config: this.app.get('config'),
+      tenantId,
+      executionUserId: userId,
+      branch,
+      db: this.db,
+    });
 
     const payload = {
       command,
@@ -1562,6 +1574,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ...params,
         cwd: branch.path,
         principalBranchAccess: branchFsAccess,
+        ...sandboxMounts,
       },
     };
     const options = {
@@ -1574,8 +1587,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
     };
     if (command !== 'branch.agor-yml.export') return requestExecutor(payload, options);
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
     const scoped = <T>(work: (repository: BranchMaintenanceRepository) => Promise<T>) =>
       withFreshTenantWrite(this.db, tenantId, () => work(new BranchMaintenanceRepository(this.db)));
     const admitted = await scoped((repository) =>

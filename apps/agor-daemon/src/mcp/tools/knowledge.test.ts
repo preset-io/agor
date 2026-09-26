@@ -1,8 +1,17 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
 
+const branchCommandMocks = vi.hoisted(() => ({
+  findBranch: vi.fn(),
+  ensureAccess: vi.fn(async () => 'read'),
+  resolveSandboxMounts: vi.fn(async () => ({})),
+}));
+
 vi.mock('@agor/core/db', () => ({
-  BranchRepository: class FakeBranchRepository {},
+  BranchRepository: class FakeBranchRepository {
+    findById = branchCommandMocks.findBranch;
+  },
+  getCurrentTenantId: () => 'default',
 }));
 
 vi.mock('@agor/core/feathers', () => ({
@@ -11,6 +20,10 @@ vi.mock('@agor/core/feathers', () => ({
 
 vi.mock('../../utils/branch-workspace-path.js', () => ({
   resolveBranchWorkspacePath: vi.fn(),
+  ensureBranchWorkspaceAccess: branchCommandMocks.ensureAccess,
+}));
+vi.mock('../../utils/branch-executor-sandbox.js', () => ({
+  resolveBranchExecutorSandboxMounts: branchCommandMocks.resolveSandboxMounts,
 }));
 vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
@@ -1057,5 +1070,45 @@ describe('Knowledge MCP input schemas', () => {
     );
     expect(result[0].current_version).not.toHaveProperty('content_text');
     expect(result[0].snippet).toBe('knowledge body');
+  });
+});
+
+describe('Knowledge MCP branch executor commands', () => {
+  it('mounts the caller home store when a per-user sandbox is enabled', async () => {
+    const branch = {
+      branch_id: 'branch-1',
+      repo_id: 'repo-1',
+      path: '/data/worktrees/org/repo/branch-1',
+    };
+    const sandboxMounts = {
+      sandboxHomeStore: '/data/tenants/default/homes/user-1',
+      sandboxWorktreesRoot: '/data/worktrees',
+    };
+    branchCommandMocks.findBranch.mockResolvedValue(branch);
+    branchCommandMocks.resolveSandboxMounts.mockResolvedValue(sandboxMounts);
+    const { resolveBranchId } = await import('../resolve-ids.js');
+    vi.mocked(resolveBranchId).mockResolvedValue('branch-1' as never);
+    const { requestExecutor } = await import('../../utils/spawn-executor.js');
+    vi.mocked(requestExecutor).mockResolvedValue({ success: false, error: { message: 'stop' } });
+    const config = { execution: { sandbox: { enabled: true, home_mode: 'per_user' } } };
+    const tools = await captureKnowledgeTools(
+      {},
+      { app: { services: {}, service: () => ({}), get: () => config } }
+    );
+
+    await expect(
+      tools.agor_kb_publish_from_worktree.handler?.({ branchId: 'branch-1', subpath: 'doc.md' })
+    ).rejects.toThrow('branch.knowledge.read failed: stop');
+
+    expect(branchCommandMocks.resolveSandboxMounts).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 'default', executionUserId: 'user-1', branch })
+    );
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.knowledge.read',
+        params: expect.objectContaining({ cwd: branch.path, ...sandboxMounts }),
+      }),
+      expect.any(Object)
+    );
   });
 });
