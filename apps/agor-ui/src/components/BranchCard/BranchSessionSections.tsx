@@ -661,12 +661,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
           try {
             const result = await archiveSession(sessionId as SessionID);
-            if (result?.reconciliation === 'refresh-required') {
+            if (result.reconciliation === 'failed') {
+              showError(result.error);
+            } else if (result.reconciliation === 'refresh-required') {
               showWarning(ARCHIVE_REFRESH_WARNING);
-            } else if (result) {
-              showSuccess('Session and same-branch children archived');
             } else {
-              showError('Failed to archive session');
+              showSuccess('Session and same-branch children archived');
             }
           } finally {
             setArchivingSessionIds((prev) => {

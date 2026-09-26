@@ -828,6 +828,35 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /**
+   * Which of these Sessions still own unfinished Task work.
+   *
+   * One indexed query for the whole set so an archive tree does not fan out
+   * into per-Session reads. Like the Branch-level check this is a
+   * known-activity proxy over durable Task status, not proof that a detached
+   * process is absent.
+   */
+  async findSessionIdsWithNonterminalTasks(sessionIds: string[]): Promise<Set<string>> {
+    if (sessionIds.length === 0) return new Set();
+    try {
+      const rows = await select(this.db, { session_id: tasks.session_id })
+        .from(tasks)
+        .where(
+          and(
+            inArray(tasks.session_id, sessionIds),
+            inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+          )
+        )
+        .all();
+      return new Set(rows.map((row: { session_id: string }) => row.session_id));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to inspect unfinished session tasks: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /** Whether deleting this Branch would cascade any unfinished Task. */
   async hasNonterminalForBranch(branchId: string): Promise<boolean> {
     try {

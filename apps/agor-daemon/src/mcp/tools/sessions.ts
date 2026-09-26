@@ -1453,7 +1453,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_archive',
     {
       description:
-        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, same-branch forked and spawned descendants are also archived. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to archive only the target session.',
+        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, same-branch forked and spawned descendants are also archived. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to archive only the target session. Archiving is a visibility change, not a stop: it is refused while any session being archived still owns unfinished tasks, so use agor_sessions_stop first.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(
@@ -1529,7 +1529,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_bulk_archive',
     {
       description:
-        'Archive multiple sessions matching filter criteria. Filters select roots only. Dry-run is the default and reports additional same-branch fork/spawn descendants, including executing descendants. Before execution, set includeChildren explicitly when descendants exist. Archiving hides sessions but does not stop their execution. Remote-created sessions have an independent lifecycle.',
+        'Archive multiple sessions matching filter criteria. Filters select roots only. Dry-run is the default and reports additional same-branch fork/spawn descendants, including executing descendants. Before execution, set includeChildren explicitly when descendants exist. Archiving is a visibility change, not a stop: trees that still own unfinished tasks are skipped and reported in errors rather than hidden, so use agor_sessions_stop first. Remote-created sessions have an independent lifecycle.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionType: z
@@ -1688,7 +1688,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
               : `Would archive ${authorizedSessionCount} session(s). Set dryRun=false to proceed.`,
           warning:
             executingDescendantCount > 0
-              ? `${executingDescendantCount} descendant session(s) are executing. Archiving hides sessions but does not stop execution.`
+              ? `${executingDescendantCount} descendant session(s) are executing. Archive refuses to hide a tree that still owns unfinished tasks; stop them first with agor_sessions_stop.`
               : undefined,
         });
       }
@@ -1727,7 +1727,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         errors: errors.length > 0 ? errors : undefined,
         warning:
           includeChildren && executingDescendantCount > 0
-            ? `${executingDescendantCount} descendant session(s) were executing. They were hidden but their execution was not stopped.`
+            ? `${executingDescendantCount} descendant session(s) were executing. Any tree still owning unfinished tasks was skipped rather than hidden; stop it with agor_sessions_stop and retry.`
             : undefined,
         message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} tree(s) were skipped.` : ''}`,
       });

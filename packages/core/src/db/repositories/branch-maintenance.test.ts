@@ -74,9 +74,13 @@ test('known unfinished tasks prevent claiming maintenance without changing branc
     created_by: user.user_id,
     status: 'queued',
   });
-  await expect(
-    new BranchMaintenanceRepository(db).claim(branch.branch_id, 'delete')
-  ).rejects.toThrow('unfinished tasks');
+  // Branch archive claims 'cleanup' and permanent deletion claims 'delete';
+  // both must refuse rather than hide a workspace an executor still holds.
+  for (const kind of ['cleanup', 'delete'] as const) {
+    await expect(new BranchMaintenanceRepository(db).claim(branch.branch_id, kind)).rejects.toThrow(
+      'unfinished tasks'
+    );
+  }
   expect(
     (await new BranchRepository(db).findById(branch.branch_id))?.deletion_status
   ).toBeUndefined();

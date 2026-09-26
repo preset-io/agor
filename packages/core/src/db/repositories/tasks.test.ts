@@ -1490,6 +1490,38 @@ describe('TaskRepository nonterminal cascade guards', () => {
     expect(await taskRepo.hasNonterminalForBranch(activeSession!.branch_id)).toBe(true);
     expect(await taskRepo.hasNonterminalForBranch(otherSession!.branch_id)).toBe(false);
   });
+
+  dbTest('resolves the unfinished subset of a session set in one read', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const runningSessionId = await createSessionWithDeps(db);
+    const queuedSessionId = await createSessionWithDeps(db);
+    const settledSessionId = await createSessionWithDeps(db);
+    const idleSessionId = await createSessionWithDeps(db);
+
+    await taskRepo.create(
+      createTaskData({ session_id: runningSessionId, status: TaskStatus.RUNNING })
+    );
+    await taskRepo.create(
+      createTaskData({ session_id: queuedSessionId, status: TaskStatus.QUEUED })
+    );
+    await taskRepo.create(
+      createTaskData({ session_id: settledSessionId, status: TaskStatus.STOPPED })
+    );
+
+    expect(await taskRepo.findSessionIdsWithNonterminalTasks([])).toEqual(new Set());
+    expect(
+      await taskRepo.findSessionIdsWithNonterminalTasks([
+        runningSessionId,
+        queuedSessionId,
+        settledSessionId,
+        idleSessionId,
+      ])
+    ).toEqual(new Set([runningSessionId, queuedSessionId]));
+    // Narrowing the set never reports a session the caller did not ask about.
+    expect(await taskRepo.findSessionIdsWithNonterminalTasks([settledSessionId])).toEqual(
+      new Set()
+    );
+  });
 });
 
 // ============================================================================

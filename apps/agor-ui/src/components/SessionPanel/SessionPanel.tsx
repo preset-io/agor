@@ -945,13 +945,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       cancelText: 'Cancel',
       onOk: async () => {
         const archived = await archiveSession(session.session_id);
-        if (archived?.reconciliation === 'refresh-required') {
+        if (archived.reconciliation === 'failed') {
+          showError(archived.error);
+        } else if (archived.reconciliation === 'refresh-required') {
           showWarning(ARCHIVE_REFRESH_WARNING);
-        } else if (archived) {
+        } else {
           showSuccess('Session and same-branch children archived');
           onClose();
-        } else {
-          showError('Failed to archive session');
         }
       },
     });

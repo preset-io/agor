@@ -1453,6 +1453,40 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     }
   }
 
+  /**
+   * Archiving is a visibility decision, never a containment decision.
+   *
+   * Hiding a Session does not reach the termination coordinator, so an
+   * archived-while-running Session leaves an executor holding the workspace
+   * with nothing left on the board pointing at it. Branch maintenance already
+   * refuses for exactly this reason (`BranchMaintenanceRepository.claim`), and
+   * Session deletion already refuses in `removeOne`; user-initiated Session
+   * archive was the remaining path that silently succeeded.
+   *
+   * This is the same durable-Task-status proxy those guards use: it proves
+   * known unfinished work, not the absence of a detached process. Stop
+   * (`POST /sessions/:id/stop`, `agor_sessions_stop`) is the only thing that
+   * owns containment, so the guard points there instead of trying to release
+   * an executor from the archive path.
+   */
+  private async findArchiveBlockedSessionIds(sessions: Session[]): Promise<SessionID[]> {
+    const blocked = await this.taskRepo.findSessionIdsWithNonterminalTasks(
+      sessions.map((session) => session.session_id)
+    );
+    return sessions
+      .map((session) => session.session_id)
+      .filter((sessionId) => blocked.has(sessionId));
+  }
+
+  private archiveBlockedError(root: Session, blockedIds: SessionID[]): Conflict {
+    const onlyRoot = blockedIds.length === 1 && blockedIds[0] === root.session_id;
+    return new Conflict(
+      onlyRoot
+        ? `Cannot archive session ${root.session_id} while it has unfinished tasks. Stop it first.`
+        : `Cannot archive session ${root.session_id}: ${blockedIds.length} session(s) in its tree have unfinished tasks. Stop them first: ${blockedIds.join(', ')}`
+    );
+  }
+
   private async setArchiveStateForTree(
     id: string,
     archived: boolean,
@@ -1475,6 +1509,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       archived,
       params
     );
+
+    if (archived && rootReason !== BTW_ARCHIVED_REASON) {
+      // Read as late as possible so a turn that settles while the tree is
+      // being planned simply archives, and so a repeat archive of an already
+      // hidden tree stays a no-op (it plans no targets at all).
+      const blockedIds = await this.findArchiveBlockedSessionIds(
+        targets.map((target) => target.session)
+      );
+      if (blockedIds.length > 0) throw this.archiveBlockedError(root, blockedIds);
+    }
 
     const affectedSessions = await this.applyArchiveTargets(targets, params);
 
@@ -1616,14 +1660,24 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     for (const unit of plan.units) {
       try {
         await this.assertCanArchiveSessions(unit.sessions, true, params);
-        authorizedTargets.push(...unit.targets);
       } catch (error) {
         if (!(error instanceof Forbidden)) throw error;
+        skipped.push({ session_id: unit.root.session_id, error: error.message });
+        continue;
+      }
+      // A tree that still owns unfinished work is skipped rather than fatal,
+      // matching how this bulk path already reports trees the caller may not
+      // archive. Dry-run reports the same skips, so a preview tells the truth
+      // about which executing work the batch would have left behind.
+      const blockedIds = await this.findArchiveBlockedSessionIds(unit.sessions);
+      if (blockedIds.length > 0) {
         skipped.push({
           session_id: unit.root.session_id,
-          error: error.message,
+          error: this.archiveBlockedError(unit.root, blockedIds).message,
         });
+        continue;
       }
+      authorizedTargets.push(...unit.targets);
     }
 
     if (

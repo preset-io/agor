@@ -222,7 +222,7 @@ Gateway Sessions are retained until someone archives them. Agor does not current
 
 For branch-wide cleanup today, use a [scheduled prompt](/guide/scheduler) for an explicit, workspace-specific policy. Have the scheduled teammate call `agor_sessions_bulk_archive` with `sessionType: "gateway"`, its `branchId`, and the desired `olderThanDays`; test the filter with `dryRun: true` before changing the schedule to `dryRun: false`.
 
-Filters select root Sessions. The dry run reports additional active same-branch forked or spawned descendants and how many of them are still executing. If descendants exist, execution requires an explicit choice: `includeChildren: true` archives the complete local trees, while `includeChildren: false` intentionally archives only the matching roots. Archiving hides Sessions but does not stop their execution.
+Filters select root Sessions. The dry run reports additional active same-branch forked or spawned descendants and how many of them are still executing. If descendants exist, execution requires an explicit choice: `includeChildren: true` archives the complete local trees, while `includeChildren: false` intentionally archives only the matching roots. Archiving is a visibility change, not a stop: a tree that still owns unfinished Tasks is skipped and reported rather than hidden, so stop it with `agor_sessions_stop` first.
 
 Remote-created Sessions live on another branch and retain an independent lifecycle. Bulk archive never follows those cross-branch provenance links.
 
