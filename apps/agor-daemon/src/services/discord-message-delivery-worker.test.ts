@@ -4,6 +4,7 @@ import {
   type DiscordMessageDeliveryDiscoveryRef,
 } from '@agor/core/db';
 import type { GatewayConnector, GatewaySendReceipt } from '@agor/core/gateway';
+import { DiscordDirectMessageError } from '@agor/core/gateway';
 import type {
   DiscordMessageDelivery,
   DiscordMessageDeliveryChunkReceipt,
@@ -811,3 +812,33 @@ describe('DiscordMessageDeliveryWorker', () => {
     });
   });
 });
+
+it('cancels queued DM deliveries when DMs are disabled', async () => {
+  const h = makeHarness();
+  h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+  await h.makeWorker().checkOnce();
+  expect(h.repository.row).toMatchObject({
+    status: 'canceled',
+    last_error_code: 'direct_messages_disabled',
+  });
+  expect(h.sendMessage).not.toHaveBeenCalled();
+  expect(h.recoverMessageByNonce).not.toHaveBeenCalled();
+});
+
+it.each(['discord_dm_channel_mismatch', 'discord_dm_unreachable'] as const)(
+  'dead-letters %s on its first attempt without recovery retry',
+  async (code) => {
+    const h = makeHarness({ channel: { config: { direct_messages_enabled: true } } });
+    h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+    h.sendMessage.mockRejectedValue(new DiscordDirectMessageError(code));
+    await h.makeWorker().checkOnce();
+    await h.makeWorker().checkOnce();
+    expect(h.repository.row).toMatchObject({
+      status: 'dead_letter',
+      last_error_code: code,
+      attempt_count: 1,
+    });
+    expect(h.sendMessage).toHaveBeenCalledOnce();
+    expect(h.recoverMessageByNonce).toHaveBeenCalledOnce();
+  }
+);

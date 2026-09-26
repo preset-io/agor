@@ -13,7 +13,7 @@ import type {
   SessionID,
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
-import { and, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, like, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -144,6 +144,43 @@ export class GatewayOutboundMessageRepository {
         error
       );
     }
+  }
+
+  /** Stored proactive texts only; never reads provider history. */
+  async listDiscordDirectMessageSends(
+    gatewayChannelId: GatewayChannelID,
+    platformChannelId: string,
+    createdSince: Date | null
+  ): Promise<
+    Pick<GatewayOutboundMessage, 'platform_message_id' | 'created_at' | 'message_text'>[]
+  > {
+    // Read the full window for an exact omitted count; observed high DM
+    // volume would justify a per-user outbound limit and a bounded/counting query.
+    const rows = await select(this.db, {
+      platform_message_id: gatewayOutboundMessages.platform_message_id,
+      created_at: gatewayOutboundMessages.created_at,
+      message_text: gatewayOutboundMessages.message_text,
+    })
+      .from(gatewayOutboundMessages)
+      .where(
+        and(
+          eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
+          eq(gatewayOutboundMessages.platform_channel_id, platformChannelId),
+          eq(gatewayOutboundMessages.channel_type, 'discord'),
+          createdSince ? gte(gatewayOutboundMessages.created_at, createdSince) : undefined
+        )
+      )
+      .orderBy(asc(gatewayOutboundMessages.created_at))
+      .all();
+    return rows.map(
+      (
+        row: Pick<GatewayOutboundMessageRow, 'platform_message_id' | 'created_at' | 'message_text'>
+      ) => ({
+        platform_message_id: row.platform_message_id,
+        created_at: new Date(row.created_at).toISOString(),
+        message_text: row.message_text,
+      })
+    );
   }
 
   private async findReplySeedRow(

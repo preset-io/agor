@@ -456,6 +456,7 @@ function createStepFields(
     return [
       'discord_allowed_channel_ids',
       'discord_files',
+      'discord_direct_messages_enabled',
       'discord_channel_history',
       'discord_align_users',
       ...(alignDiscordUsers ? ['discord_user_map'] : ['agor_user_id']),
@@ -506,6 +507,7 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_message_content_enabled',
   'discord_thread_mode',
   'discord_files',
+  'discord_direct_messages_enabled',
   'discord_channel_history',
   'discord_thread_auto_archive_minutes',
   'discord_align_users',
@@ -663,6 +665,11 @@ const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }
                 App token (Socket Mode):{' '}
                 <strong>{result.appTokenValid ? 'valid' : 'not verified'}</strong>
               </div>
+            )}
+            {result.directMessages && (
+              <Typography.Text>
+                Direct messages: {result.directMessages.enabled ? 'On' : 'Off'}
+              </Typography.Text>
             )}
             {result.channelAccess && result.channelAccess.length > 0 && (
               <Typography.Paragraph
@@ -1776,6 +1783,15 @@ const DiscordSetupFields: React.FC<{
               ))}
             </Select>
           </Form.Item>
+          <Form.Item
+            name="discord_direct_messages_enabled"
+            label="Direct messages"
+            valuePropName="checked"
+            initialValue={false}
+            help="Allowed current server members can DM the bot. DM sessions are visible to people with access to the target branch."
+          >
+            <Switch />
+          </Form.Item>
           <Form.Item name="discord_files" valuePropName="checked" initialValue={false}>
             <Checkbox>
               Enable inbound PNG/JPEG image attachments (<code>files:true</code>)
@@ -2025,6 +2041,7 @@ function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupD
     alignUsers,
     userMap: alignUsers ? userMap : undefined,
     files: readFormBoolean(values.discord_files, false),
+    directMessagesEnabled: readFormBoolean(values.discord_direct_messages_enabled, false),
     channelHistory: readFormBoolean(values.discord_channel_history, false),
     outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
     defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
@@ -4482,6 +4499,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         catchUp.rate_limit_max_total_delay_ms ??
         DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms;
       formValues.discord_files = config?.files === true;
+      formValues.discord_direct_messages_enabled = config?.direct_messages_enabled === true;
       formValues.discord_channel_history = resolveDiscordAgentTools(
         config?.agent_tools
       ).channel_history;
