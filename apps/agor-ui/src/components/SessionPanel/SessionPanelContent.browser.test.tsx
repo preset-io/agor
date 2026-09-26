@@ -343,20 +343,23 @@ it('refreshes separator bounds on a constraint-only resize without remounting th
   expect(conversation()).toBe(transcript);
 });
 
-it('keeps failed-queue recovery and rollback actions reachable inside the bounded scroll area', async () => {
-  render(<Harness count={25} failed />);
-  await expectBounded();
-  await userEvent.click(screen.getByRole('button', { name: 'Resume queue' }));
-  expect(patch).toHaveBeenCalledWith(session.session_id, { ready_for_prompt: true });
-  await userEvent.click(await screen.findByRole('button', { name: 'Run next' }));
-  expect(patch).toHaveBeenCalledTimes(2);
-  remove.mockRejectedValueOnce(new Error('Try again'));
-  await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-  await screen.findByText('Failed to remove queued task: Try again');
-  expect(find).not.toHaveBeenCalled();
-  expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
-});
+// Exercise each recovery entry point on a fresh failed queue. Resuming twice in
+// one fixture races the shared loading icon's exit motion and accessible name.
+it.each(['Resume queue', 'Run next'])(
+  'keeps failed-queue recovery via %s and rollback actions reachable inside the bounded scroll area',
+  async (recoveryAction) => {
+    render(<Harness count={25} failed />);
+    await expectBounded();
+    await userEvent.click(screen.getByRole('button', { name: recoveryAction }));
+    expect(patch).toHaveBeenCalledExactlyOnceWith(session.session_id, { ready_for_prompt: true });
+    remove.mockRejectedValueOnce(new Error('Try again'));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
+    await screen.findByText('Failed to remove queued task: Try again');
+    expect(find).not.toHaveBeenCalled();
+    expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
+  }
+);
 
 it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',

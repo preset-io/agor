@@ -1565,6 +1565,64 @@ describe('agor_branches_set_zone', () => {
     random.mockRestore();
   });
 
+  it.each([undefined, 2])(
+    'surfaces always_new skipped defaults (%s) without exposing IDs',
+    async (skipped) => {
+      const branch = { branch_id: 'branch-1', board_id: 'board-1', name: 'Branch 1' };
+      const zone = {
+        type: 'zone',
+        x: 0,
+        y: 0,
+        width: 740,
+        height: 720,
+        label: 'Review',
+        trigger: { behavior: 'always_new', template: 'Review {{branch.name}}' },
+      };
+      const createSession = vi.fn(async () => ({
+        session_id: 'session-new',
+        agentic_tool: 'claude-code',
+        ...(skipped && { mcp_defaults_skipped: skipped }),
+      }));
+      const prompt = vi.fn(async () => ({ task_id: 'task-new', status: 'running' }));
+      const app = {
+        get: () => ({}),
+        service(name: string) {
+          if (name === 'branches') return { get: async () => branch };
+          if (name === 'boards')
+            return { get: async () => ({ board_id: 'board-1', objects: { review: zone } }) };
+          if (name === 'board-objects')
+            return {
+              findByBranchId: async () => ({ object_id: 'object-1' }),
+              patch: async () => ({}),
+            };
+          if (name === 'users') return { get: async () => ({ user_id: 'user-1' }) };
+          if (name === 'sessions') return { create: createSession };
+          if (name === '/sessions/:id/prompt') return { create: prompt };
+          throw new Error(`Unexpected service call: ${name}`);
+        },
+      };
+      const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+        app,
+        userId: 'user-1',
+      });
+      const result = await setZone({ branchId: 'branch-1', zoneId: 'review' });
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.trigger).toMatchObject({ sessionId: 'session-new', taskId: 'task-new' });
+      expect(createSession).toHaveBeenCalledOnce();
+      expect(prompt).toHaveBeenCalledOnce();
+      if (skipped) {
+        expect(parsed.trigger.mcp_defaults_skipped).toBe(skipped);
+        expect(parsed.trigger.note).toContain(
+          'Warning: 2 unavailable default MCP server(s) were skipped'
+        );
+        expect(parsed.trigger.note).toContain('Review branch MCP Servers or your user defaults');
+      } else {
+        expect(parsed.trigger).not.toHaveProperty('mcp_defaults_skipped');
+        expect(parsed.trigger.note).not.toContain('Warning:');
+      }
+    }
+  );
+
   it('rejects show_picker zone triggers when the target session belongs to another branch', async () => {
     const baseServiceParams = {
       authenticated: true,

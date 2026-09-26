@@ -88,3 +88,10 @@ export async function runSessionCreationStages({
       : { status: 'cancelled' };
   }
 }
+
+/** Safe, identity-free warning returned only by the authoritative create boundary. */
+export function getSessionCreationWarning(session: Session): string | undefined {
+  return session.mcp_defaults_skipped
+    ? `Session created. ${session.mcp_defaults_skipped} unavailable default MCP server(s) were skipped. Review MCP Servers in branch settings or your user defaults.`
+    : undefined;
+}

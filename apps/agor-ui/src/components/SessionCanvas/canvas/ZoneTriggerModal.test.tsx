@@ -153,7 +153,7 @@ describe('ZoneTriggerModal action snapshot', () => {
 
   it('rerenders once and resets the prompt when the user deliberately changes session', async () => {
     renderTemplateMock.mockImplementation(async (_client, _template, context) => {
-      const session = context.session as { description?: string } | undefined;
+      const session = context?.session as { description?: string } | undefined;
       return `Prompt for ${session?.description}`;
     });
     const older = {
@@ -422,7 +422,7 @@ describe('ZoneTriggerModal reasoning effort', () => {
           agent: 'codex',
           modelConfig: undefined,
           permissionMode: undefined,
-          mcpServerIds: ['branch-mcp'],
+          mcpServerIds: undefined,
         })
       )
     );

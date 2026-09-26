@@ -347,7 +347,7 @@ describe('MobileApp branch actions', () => {
         agent: DEFAULT_AGENTIC_TOOL_NAME,
         permissionMode: 'acceptEdits',
         modelConfig: { model: 'saved-model' },
-        mcpServerIds: ['branch-mcp'],
+        mcpServerIds: undefined,
         agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
       }),
       'board-1',

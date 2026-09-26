@@ -17,7 +17,6 @@ import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODELS,
 } from '@agor/core/models';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import {
   AGENTIC_TOOL_NAMES,
   type AgenticToolName,
@@ -1075,7 +1074,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
-            'MCP server IDs to attach. Overrides branch and user default inheritance. Omit to use branch config > user defaults.'
+            'Explicit MCP server IDs to attach atomically; an unavailable or unauthorized selection rejects creation. [] selects none. Omit to inherit branch config > user defaults; missing inherited servers are skipped with a warning.'
           ),
         modelConfig: modelConfigInputSchema,
       }),
@@ -1089,26 +1088,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
-      // Session creation materializes permission/model defaults centrally so
-      // selected presets retain their provenance. MCP attachment remains here
-      // because explicit attach failures are part of this tool's response.
+      // The service owns atomic attachment and inherited-default warnings.
       const explicitMcpServerIds =
         args.mcpServerIds !== undefined
           ? await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))
           : undefined;
       const modelConfig = coerceModelConfig(args.modelConfig);
-      const mcpServerIds = resolveSessionDefaults({
-        agenticTool,
-        user,
-        branch,
-        overrides: { mcpServerIds: explicitMcpServerIds },
-      }).mcp_server_ids;
-      // Track whether the caller explicitly requested these servers. When they
-      // did, we surface attach failures in the response instead of silently
-      // dropping them (the "mcpServerId doesn't stick" bug). For inherited
-      // servers (branch/user defaults) we preserve the existing "gracefully
-      // skip deleted/invalid" behavior so startup doesn't get chatty.
-      const mcpServerIdsFromArgs = args.mcpServerIds !== undefined;
 
       // Build callback configuration for remote session callbacks
       const callbackConfig: Record<string, unknown> = {};
@@ -1230,6 +1215,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       const sessionData: Record<string, unknown> = {
         branch_id: branch.branch_id,
+        mcpServerIds: explicitMcpServerIds,
         agentic_tool: agenticTool,
         status: 'idle',
         title: args.title,
@@ -1297,39 +1283,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
-      // Attach MCP servers (inherited from branch or user defaults, or
-      // explicitly requested via args.mcpServerIds). Explicit failures are
-      // collected and returned to the caller so they don't silently vanish.
-      const mcpAttachFailures: Array<{ mcp_server_id: string; reason: string }> = [];
-      if (mcpServerIds && mcpServerIds.length > 0) {
-        for (const mcpServerId of mcpServerIds) {
-          try {
-            // Attach via the session-scoped REST surface — `session-mcp-servers`
-            // (flat) is read-only here; the create handler lives on
-            // `/sessions/:id/mcp-servers` with `{ mcpServerId }` (camelCase).
-            // See register-routes.ts: `/sessions/:id/mcp-servers` create handler.
-            await ctx.app
-              .service('/sessions/:id/mcp-servers')
-              .create(
-                { mcpServerId },
-                { ...ctx.baseServiceParams, route: { id: session.session_id } }
-              );
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            if (mcpServerIdsFromArgs) {
-              // Caller explicitly asked for this server — surface the failure.
-              mcpAttachFailures.push({ mcp_server_id: mcpServerId, reason });
-            } else {
-              // Inherited from branch/user defaults — gracefully skip.
-              console.warn(
-                `Skipped MCP server ${mcpServerId} for session ${session.session_id}: ${reason}`
-              );
-            }
-          }
-        }
-      }
-
-      // Execute initial prompt if provided
       let initialTask = null;
       if (args.initialPrompt) {
         initialTask = await ctx.app.service('/sessions/:id/prompt').create(
@@ -1353,19 +1306,18 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ? ' Not genealogy-linked because the target branch differs from the calling session branch.'
           : '';
 
-      const mcpFailureNote =
-        mcpAttachFailures.length > 0
-          ? ` Warning: ${mcpAttachFailures.length} requested MCP server(s) failed to attach — see mcpAttachFailures.`
-          : '';
+      const mcpWarningNote = session.mcp_defaults_skipped
+        ? ` Warning: ${session.mcp_defaults_skipped} unavailable default MCP server(s) were skipped. Review branch MCP Servers or your user defaults.`
+        : '';
 
       return textResult({
         session: redactSessionForMcp(session),
         taskId: initialTask?.task_id,
         note: args.initialPrompt
-          ? `Session created and initial prompt execution started.${parentNote}${callbackNote}${mcpFailureNote}`
-          : `Session created successfully.${parentNote}${callbackNote}${mcpFailureNote}`,
+          ? `Session created and initial prompt execution started.${parentNote}${callbackNote}${mcpWarningNote}`
+          : `Session created successfully.${parentNote}${callbackNote}${mcpWarningNote}`,
         ...(remoteRelationship && { remoteRelationship }),
-        ...(mcpAttachFailures.length > 0 && { mcpAttachFailures }),
+        ...(session.mcp_defaults_skipped && { mcp_defaults_skipped: session.mcp_defaults_skipped }),
       });
     }
   );

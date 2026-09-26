@@ -29,18 +29,18 @@ const user = {
 } as unknown as User;
 
 describe('getNewSessionDefaultValues', () => {
-  it('seeds the saved agent config and branch-inherited MCP servers', () => {
-    expect(getNewSessionDefaultValues(user, 'claude-code', branch)).toEqual({
+  it('seeds agent config but leaves MCP defaults implicit', () => {
+    expect(getNewSessionDefaultValues(user, 'claude-code')).toEqual({
       agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
       modelConfig: { model: 'claude-opus', effort: 'high' },
       effort: 'high',
       permissionMode: 'acceptEdits',
-      mcpServerIds: ['branch-mcp'],
+      mcpServerIds: undefined,
     });
   });
 
-  it('falls back to the caller MCP defaults before a branch is known', () => {
-    expect(getNewSessionDefaultValues(user, 'claude-code').mcpServerIds).toEqual(['user-mcp']);
+  it('leaves user defaults implicit before a branch is known', () => {
+    expect(getNewSessionDefaultValues(user, 'claude-code').mcpServerIds).toBeUndefined();
   });
 });
 
@@ -77,7 +77,7 @@ describe('buildNewSessionConfig', () => {
         initialPrompt: '',
         modelConfig: { model: 'claude-opus', effort: 'high' },
         effort: 'high',
-        mcpServerIds: ['branch-mcp'],
+        mcpServerIds: undefined,
         permissionMode: 'acceptEdits',
         attachmentFiles: undefined,
       }
