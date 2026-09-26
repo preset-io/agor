@@ -947,6 +947,46 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
   });
 
+  it('leaves no directory behind when materialization fails', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'agor-branch-add-failure-'));
+    const branchPath = join(parent, 'never-materialized');
+    try {
+      createClient({
+        repo: {
+          repo_id: repoId,
+          local_path: '/trusted/repo',
+          remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+        },
+        branch: {
+          branch_id: branchId,
+          repo_id: repoId,
+          path: branchPath,
+          name: 'doomed-branch',
+          ref: 'doomed-branch',
+          new_branch: true,
+          storage_mode: 'clone',
+        },
+      });
+      mocks.createBranchAsClone.mockRejectedValueOnce(new Error('clone failed'));
+
+      const result = await handleGitBranchAdd(
+        {
+          command: 'git.branch.add',
+          sessionToken: 'tenant-token',
+          params: { branchId, repoId },
+        },
+        {}
+      );
+
+      expect(result.success).toBe(false);
+      // A failed create must not leave an empty directory occupying the path —
+      // it would otherwise block a future create/archive/delete at that path.
+      await expect(stat(branchPath)).rejects.toThrow(/ENOENT/);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a forged persisted template remote before filesystem materialization', async () => {
     createClient({
       repo: {

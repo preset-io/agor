@@ -184,3 +184,34 @@ test('pre-dispatch failures settle visibly, but cannot release an invocation', a
   await expect(cleanup.failBeforeExecution(next.claim)).rejects.toThrow('must settle');
   await expect(maintenance.release(next.claim)).rejects.toThrow('containment');
 });
+
+test('metadata-only claims cannot be promoted into cleanup or removal', async ({ db }) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const workspace = new BranchWorkspaceOperationRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'metadata_archive', user.user_id);
+  const operation = {
+    operation_id: claim.operation_id,
+    action: 'archive' as const,
+    filesystem_action: 'preserved' as const,
+    status: 'accepted' as const,
+    requested_by: user.user_id,
+    requested_at: new Date().toISOString(),
+    deadline_at: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const snapshot = { repo_id: branch.repo_id, path: branch.path, repo_path: '/fixture' };
+  for (const filesystem_action of ['cleaned', 'deleted'] as const) {
+    await expect(
+      workspace.prepare(claim, { ...operation, filesystem_action }, snapshot)
+    ).rejects.toThrow('must preserve');
+  }
+  await workspace.prepare(claim, operation, snapshot);
+  await expect(maintenance.beginExecution(claim)).rejects.toThrow('cannot launch');
+  await workspace.archiveMetadata(claim);
+  await workspace.finishPreserve(claim);
+  expect(await new BranchRepository(db).findById(branch.branch_id)).toMatchObject({
+    archived: true,
+    filesystem_status: 'ready',
+    workspace_operation: { status: 'succeeded' },
+  });
+});

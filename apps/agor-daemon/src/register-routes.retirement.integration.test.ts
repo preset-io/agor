@@ -25,6 +25,12 @@ dbTest(
     };
     const scoped = <T>(work: () => Promise<T>) => runWithTenantDatabaseScope(db, tenantId, work);
     const fixture = await scoped(() => seedPreferenceRace(db));
+    // Retirement is metadata-only even when another row owns the same path.
+    await scoped(() =>
+      new BranchRepository(db).update(fixture.replacement.branch_id, {
+        path: fixture.branch.path,
+      })
+    );
     const app = await retirementRouteApp(db, config);
     const path = 'branches/:id/retire-teammate';
     expect(tenantServiceClassificationFor(path)?.scopeClass).toBe('identity-only');

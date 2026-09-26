@@ -82,6 +82,38 @@ test('known unfinished tasks prevent claiming maintenance without changing branc
   ).toBeUndefined();
 });
 
+for (const status of ['failed', 'cleaned', 'deleted', 'ready', 'creating'] as const) {
+  for (const path of ['/tmp/environment-test', '/tmp/environment-test/child', '/tmp']) {
+    test(`overlap guard protects ${status} sibling at ${path} for every filesystem claim`, async ({
+      db,
+    }) => {
+      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const branches = new BranchRepository(db);
+      await branches.create({
+        repo_id: branch.repo_id,
+        name: 'sibling',
+        ref: 'sibling',
+        branch_unique_id: 9600001,
+        path,
+        created_by: user.user_id,
+        filesystem_status: status,
+        archived: true,
+      });
+      const maintenance = new BranchMaintenanceRepository(db);
+      for (const kind of ['delete', 'cleanup', 'workspace_write'] as const) {
+        await expect(maintenance.claim(branch.branch_id, kind)).rejects.toThrow('overlaps');
+      }
+      expect((await branches.findById(branch.branch_id))?.deletion_status).toBeUndefined();
+      const { claim } = await maintenance.claim(branch.branch_id, 'metadata_archive');
+      await expect(maintenance.beginExecution(claim)).rejects.toThrow('cannot launch');
+      await expect(maintenance.beginExecution({ ...claim, kind: 'cleanup' })).rejects.toThrow(
+        'ownership changed'
+      );
+      await maintenance.release(claim);
+    });
+  }
+}
+
 test('environment admission and maintenance exclude each other under the branch lock', async ({
   db,
 }) => {

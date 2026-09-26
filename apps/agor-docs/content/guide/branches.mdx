@@ -311,6 +311,12 @@ automatically. A repository administrator can open **Repository settings** above
 the archive dialog; saving refreshes the command without submitting archive or
 overriding an explicit Preserve/Delete choice.
 
+If two branch records share or overlap a workspace path, choose **Archive → Leave
+untouched** to hide the broken record without touching files. Cleanup, workspace
+removal, and permanent deletion remain blocked until ownership is reconciled,
+even if the other record is archived, failed, cleaned, or marked deleted. These
+states do not prove that files are absent or that provisioning cannot retry.
+
 ### Branch cleanup settings
 
 In **Settings → Repositories → Edit**, configure **Branch cleanup**. Cleanup is

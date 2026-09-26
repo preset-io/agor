@@ -8,7 +8,9 @@ import { executeRaw, rawRows } from './database-wrapper';
 import { runMigrations } from './migrate';
 import { BranchDeletionRepository } from './repositories/branch-deletion';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
+import { BranchWorkspaceOperationRepository } from './repositories/branch-workspace-operations';
 import { BranchRepository } from './repositories/branches';
+import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
 import { KnowledgeNamespaceRepository } from './repositories/knowledge';
 import { RepoRepository } from './repositories/repos';
 import { UsersRepository } from './repositories/users';
@@ -183,4 +185,73 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
     }
   },
   60_000
+);
+
+it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
+  'metadata-only archival cannot claim or mutate a foreign tenant branch',
+  async () => {
+    const db = createDatabase({ dialect: 'postgresql', url: url! });
+    try {
+      await runMigrations(db, { allowOfflineCutover: true });
+      const tenantA = `archive-a-${generateId()}`;
+      const tenantB = `archive-b-${generateId()}`;
+      const { branch, claim } = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const { branch, user } = await seedEnvironmentCommandBranch(scoped);
+        await new BranchRepository(scoped).create({
+          repo_id: branch.repo_id,
+          name: 'overlap',
+          ref: 'overlap',
+          path: branch.path,
+          branch_unique_id: 9600005,
+          created_by: user.user_id,
+          filesystem_status: 'failed',
+        });
+        const { claim } = await new BranchMaintenanceRepository(scoped).claim(
+          branch.branch_id,
+          'metadata_archive',
+          user.user_id
+        );
+        await new BranchWorkspaceOperationRepository(scoped).prepare(
+          claim,
+          {
+            operation_id: claim.operation_id,
+            action: 'archive',
+            filesystem_action: 'preserved',
+            status: 'accepted',
+            requested_by: user.user_id,
+            requested_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+          { repo_id: branch.repo_id, path: branch.path, repo_path: '/fixture' }
+        );
+        return { branch, claim };
+      });
+      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        await expect(
+          new BranchMaintenanceRepository(scoped).claim(branch.branch_id, 'metadata_archive')
+        ).rejects.toThrow('not found');
+        const workspace = new BranchWorkspaceOperationRepository(scoped);
+        await expect(workspace.archiveMetadata(claim)).rejects.toThrow('not found');
+        await expect(workspace.finishPreserve(claim)).rejects.toThrow('not found');
+      });
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        expect(await new BranchRepository(scoped).findById(branch.branch_id)).toMatchObject({
+          archived: false,
+        });
+        const workspace = new BranchWorkspaceOperationRepository(scoped);
+        await workspace.archiveMetadata(claim);
+        await workspace.finishPreserve(claim);
+        expect(await new BranchRepository(scoped).findById(branch.branch_id)).toMatchObject({
+          archived: true,
+          filesystem_status: 'ready',
+          workspace_operation: { status: 'succeeded' },
+        });
+        await expect(
+          new BranchMaintenanceRepository(scoped).claim(branch.branch_id, 'delete')
+        ).rejects.toThrow('overlaps');
+      });
+    } finally {
+      await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
+    }
+  }
 );

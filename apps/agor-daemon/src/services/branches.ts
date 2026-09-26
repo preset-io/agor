@@ -1949,7 +1949,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       : await this.withTenantDatabase(params, () =>
           new BranchMaintenanceRepository(this.db).claim(
             id,
-            'cleanup',
+            needsFiles ? 'cleanup' : 'metadata_archive',
             user.user_id as UserID,
             validate
           )
@@ -2017,7 +2017,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         await this.withTenantDatabase(params, () =>
           new BranchWorkspaceOperationRepository(this.db).finishPreserve(admission.claim)
         );
-        this.closeBranchTerminals(id, String(tenantId));
         const current = await this.withTenantDatabase(params, () => this.get(id, params));
         emitServiceEvent(this.app, {
           path: 'branches',
