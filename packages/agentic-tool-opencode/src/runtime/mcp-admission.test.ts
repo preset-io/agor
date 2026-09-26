@@ -11,9 +11,10 @@
  * "unconfigured" — which is `allow`.
  *
  * What is NOT proven here is that OpenCode reports exactly that string. That
- * comes from the shipped 1.14.33 binary, where the MCP tool registry composes
- * `CP(server) + "_" + CP(tool)` and the execute path calls
- * `ask({permission: <that key>})`, with `CP = s => s.replace(/[^a-zA-Z0-9_-]/g, "_")`.
+ * was checked against the shipped 1.14.33 binary and the v1.18.31 upstream
+ * sources: src/mcp/catalog.ts composes `sanitize(server) + "_" + sanitize(tool)`;
+ * src/session/tools.ts calls `ask({permission: <that key>})`, with
+ * `sanitize = s => s.replace(/[^a-zA-Z0-9_-]/g, "_")`.
  */
 
 import { EventEmitter } from 'node:events';
@@ -107,8 +108,13 @@ describe('MCP servers reaching OpenCode invocation config', () => {
 
   it('keeps the built-in Agor server addressable', async () => {
     const { config, withheld } = await buildConfig([server(PLAIN)]);
-
-    expect(Object.keys(config.mcp).some((name) => name.startsWith('agor_'))).toBe(true);
+    const builtin = Object.entries(config.mcp).find(([name]) => name.startsWith('agor_'))?.[1];
+    expect(builtin).toMatchObject({
+      headers: {
+        Authorization: 'Bearer token',
+        'x-agor-mcp-client': 'opencode',
+      },
+    });
     expect(withheld).toEqual([]);
   });
 });
@@ -222,4 +228,32 @@ describe('MCP servers reaching the OpenCode process environment', () => {
     // the config the OpenCode process reads.
     expect(configContent).not.toContain('mcpToolPermissions');
   });
+});
+
+it('adds no client hint to an external OpenCode HTTP connection', async () => {
+  const tool = new OpenCodeTool({
+    getDaemonUrl: async () => 'http://localhost:3030',
+    resolveMcpServers: async () =>
+      [
+        {
+          server: {
+            ...server(PLAIN),
+            transport: 'http',
+            url: 'https://example.com/mcp',
+            auth: { type: 'bearer', token: 'external-token' },
+          },
+        },
+      ] as never,
+  });
+  const config = await (
+    tool as unknown as {
+      buildInvocationConfig(s: string, t: string): Promise<{ mcp: Record<string, unknown> }>;
+    }
+  ).buildInvocationConfig('session-1', 'token');
+  const external = Object.values(config.mcp).filter(
+    (value) => (value as { url?: string }).url === 'https://example.com/mcp'
+  );
+  expect(external).toHaveLength(1);
+  expect(external[0]).toMatchObject({ headers: { Authorization: 'Bearer external-token' } });
+  expect(external[0]).not.toHaveProperty('headers.x-agor-mcp-client');
 });

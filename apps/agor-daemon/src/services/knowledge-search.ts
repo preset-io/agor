@@ -241,7 +241,7 @@ export class KnowledgeSearchService {
         )})`
       : sql``;
 
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
     const result = await executeRaw(
       this.db,
       sql`SELECT
@@ -343,7 +343,9 @@ export class KnowledgeSearchService {
           namespace_id: String(row.namespace_id) as never,
           path: String(row.path),
           uri: String(row.uri),
-          url: getKnowledgeUrl(String(row.namespace_slug), String(row.path), baseUrl),
+          url: baseUrl
+            ? getKnowledgeUrl(String(row.namespace_slug), String(row.path), baseUrl)
+            : null,
           title: String(row.title),
           kind: row.kind as never,
           visibility: row.visibility as never,

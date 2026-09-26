@@ -17,10 +17,18 @@ import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } f
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
-import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isSQLiteDatabase,
+  jsonExtract,
+  select,
+  update,
+} from '../database-wrapper';
 import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
+  inVisibleBranchSet,
   visibleBoardReferenceAccessExists,
   visibleBranchReferenceAccessExists,
 } from './branch-access';
@@ -31,6 +39,8 @@ export interface BoardObjectFindFilters {
   card_id?: CardID;
   zone_id?: string;
   entity_type?: BoardEntityType;
+  /** Exclude archived/missing branch references, preserving card entities. */
+  exclude_archived_branches?: boolean;
 }
 
 export interface BoardObjectFindOptions {
@@ -66,11 +76,23 @@ export class BoardObjectRepository {
     } else if (filters.entity_type === 'card') {
       conditions.push(isNotNull(boardObjects.card_id));
     }
+    if (filters.exclude_archived_branches) {
+      // Keep archive filtering in the same query as visibility and pagination.
+      // EXISTS avoids hydrating branches or building an unbounded client ID set.
+      conditions.push(
+        or(
+          isNull(boardObjects.branch_id),
+          sql`exists (select 1 from ${branches}
+            where ${branches.branch_id} = ${boardObjects.branch_id}
+              and ${branches.archived} = false)`
+        )!
+      );
+    }
 
     return conditions;
   }
 
-  private buildVisibleToUserCondition(userId: UUID): SQL {
+  private buildVisibleToUserCondition(userId: UUID, inventory = false): SQL {
     return (
       and(
         // Board visibility is authoritative for the canvas itself. Access to a
@@ -80,7 +102,9 @@ export class BoardObjectRepository {
           isNull(boardObjects.branch_id),
           and(
             isNotNull(boardObjects.branch_id),
-            visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
+            inventory
+              ? inVisibleBranchSet(this.db, userId, boardObjects.branch_id)
+              : visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
           )
         )
       ) ?? sql`false`
@@ -104,6 +128,9 @@ export class BoardObjectRepository {
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
+      } else if (options.offset !== undefined && isSQLiteDatabase(this.db)) {
+        // SQLite requires LIMIT with OFFSET; -1 preserves the unbounded contract.
+        query = query.limit(sql`-1`);
       }
       if (options.offset !== undefined) {
         query = query.offset(options.offset);
@@ -153,7 +180,10 @@ export class BoardObjectRepository {
     try {
       const conditions = [
         ...this.buildFindConditions(filters),
-        this.buildVisibleToUserCondition(userId),
+        this.buildVisibleToUserCondition(
+          userId,
+          !filters.board_id && !filters.branch_id && !filters.card_id && !filters.zone_id
+        ),
       ];
       let query = select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
@@ -162,6 +192,8 @@ export class BoardObjectRepository {
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
       if (options.limit !== undefined) {
         query = query.limit(options.limit);
+      } else if (options.offset !== undefined && isSQLiteDatabase(this.db)) {
+        query = query.limit(sql`-1`);
       }
       if (options.offset !== undefined) {
         query = query.offset(options.offset);
@@ -184,7 +216,10 @@ export class BoardObjectRepository {
     try {
       const conditions = [
         ...this.buildFindConditions(filters),
-        this.buildVisibleToUserCondition(userId),
+        this.buildVisibleToUserCondition(
+          userId,
+          !filters.board_id && !filters.branch_id && !filters.card_id && !filters.zone_id
+        ),
       ];
       const row = await select(this.db, { count: sql<number>`count(*)` })
         .from(boardObjects)

@@ -1,6 +1,7 @@
 // src/types/repo.ts
 
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from './branch';
+import type { RepoCleanupPolicy } from './branch-cleanup';
 import type { SessionID, UUID } from './id';
 
 /**
@@ -36,6 +37,9 @@ export type BranchName = string;
 export type RepoType = 'remote' | 'local';
 
 export interface Repo {
+  /** Deployment-local workspace cleanup; absent legacy policy is disabled. */
+  cleanup_policy?: RepoCleanupPolicy;
+
   /** Unique repository identifier (UUIDv7) */
   repo_id: UUID;
 
@@ -102,6 +106,9 @@ export interface Repo {
    * Null when the repo has no environment config. Legacy v1 configs are
    * wrapped as `variants.default` on read.
    *
+   * When supplied in an update, replaces the complete configuration (including
+   * template_overrides). Omit the key to leave it unchanged.
+   *
    * This is the source of truth for backend logic. `environment_config`
    * (below) is a legacy view kept in sync for UI back-compat.
    */
@@ -156,7 +163,7 @@ export type RepoCloneErrorCategory =
 export interface RepoCloneError {
   exit_code: number;
   category: RepoCloneErrorCategory;
-  /** Short, user-facing first-line message (stderr excerpt or wrapper message). */
+  /** Bounded, credential-redacted diagnostic (possibly multiline stderr or wrapper message). */
   message: string;
 }
 

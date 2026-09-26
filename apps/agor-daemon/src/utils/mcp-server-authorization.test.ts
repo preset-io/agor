@@ -10,6 +10,7 @@ import {
   isMcpServerUsableByCaller,
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
+  resolveMcpCaller,
 } from './mcp-server-authorization.js';
 
 const { resolveMcpMemberPolicy, findById } = vi.hoisted(() => ({
@@ -96,6 +97,19 @@ describe('authorizeMcpServerWrite', () => {
     ).resolves.toEqual({});
     expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
   });
+
+  it.each(['000000000000700080000000', 'not-a-user-id'])(
+    'rejects non-canonical authentication-hydrated identity %s without resolving it',
+    async (userId) => {
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(userId as UserID, 'member'), {
+          method: 'create',
+          data: remoteCreate,
+        })
+      ).rejects.toThrow(/canonical full UUID/);
+      expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
+    }
+  );
 
   it('stamps the creator as owner and the session reach under allow_private_only', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
@@ -628,5 +642,32 @@ describe('isSessionMcpServerLinkVisibleToCaller', () => {
         undefined
       )
     ).toBe(true);
+  });
+});
+
+describe('resolveMcpCaller', () => {
+  it('reads an absent provider as a daemon-internal call', () => {
+    expect(resolveMcpCaller(undefined)).toEqual({ kind: 'internal' });
+    expect(resolveMcpCaller({} as AuthenticatedParams)).toEqual({ kind: 'internal' });
+  });
+
+  it('reads an authenticated request carrying no user as anonymous, not as a service account', () => {
+    expect(resolveMcpCaller({ provider: 'rest' } as AuthenticatedParams)).toEqual({
+      kind: 'anonymous',
+    });
+  });
+
+  it('separates a service account from an ordinary user', () => {
+    const serviceAccount = {
+      provider: 'rest',
+      user: { user_id: 'svc-1', role: 'member', _isServiceAccount: true },
+    } as unknown as AuthenticatedParams;
+    expect(resolveMcpCaller(serviceAccount)).toEqual({ kind: 'service-account' });
+
+    const member = {
+      provider: 'rest',
+      user: { user_id: 'user-1', role: 'member' },
+    } as unknown as AuthenticatedParams;
+    expect(resolveMcpCaller(member)).toMatchObject({ kind: 'user', user: { user_id: 'user-1' } });
   });
 });

@@ -10,14 +10,19 @@
  * later read is served from there.
  *
  * Two methods, for two different callers: `find` hands the Marketplace the
- * whole catalog to filter in the browser, and `get` resolves one entry by name
- * for the connect flow, which is given a `catalog_key` and needs the URL and
- * transport behind it.
+ * whole visible catalog to filter in the browser, and `get` resolves one visible
+ * entry by name for the connect flow. Saved-server policy and consent use the
+ * full definitions instead: hiding discovery must not invalidate an install.
  */
 
-import { filterCatalog, findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
+import { NotFound } from '@agor/core/feathers';
+import {
+  filterCatalog,
+  findCatalogEntry,
+  isCatalogEntryVisible,
+  loadCatalog,
+} from '@agor/core/mcp-catalog';
 import type { AuthenticatedParams, Id, MCPCatalogEntry, Paginated } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
 
 export type MCPCatalogParams = AuthenticatedParams;
 
@@ -26,7 +31,7 @@ export class MCPCatalogService {
   constructor(private filePath?: string) {}
 
   /**
-   * The whole catalog, every time.
+   * The whole visible catalog, every time.
    *
    * There is nothing to narrow here and no page to take. The current static
    * catalog is bounded and small enough to hand to the browser in one response,
@@ -51,11 +56,13 @@ export class MCPCatalogService {
     return { total: data.length, limit: data.length, skip: 0, data };
   }
 
-  /** Fetch one entry by its catalog name. */
+  /** Discovery and new catalog installs only; saved-server policy uses full definitions. */
   async get(id: Id): Promise<MCPCatalogEntry> {
     const key = String(id);
     const entry = findCatalogEntry(await loadCatalog(this.filePath), key);
-    if (!entry) throw new NotFoundError('MCPCatalogEntry', key);
+    if (!entry || !isCatalogEntryVisible(entry)) {
+      throw new NotFound(`MCP catalog entry not found: ${key}`);
+    }
     return entry;
   }
 }

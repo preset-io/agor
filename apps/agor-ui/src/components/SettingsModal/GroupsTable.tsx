@@ -1,7 +1,7 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
 import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
-import { Button, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Button, Form, Input, Popconfirm, Select, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
@@ -12,6 +12,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GroupsTableProps {
@@ -188,7 +189,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
         )}
       />
 
-      <Table
+      <ResponsiveTable
         rowKey="group_id"
         size="small"
         pagination={false}
@@ -229,6 +230,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           },
           {
             title: 'Actions',
+            key: 'actions',
             width: 76,
             render: (_: unknown, group: Group) => (
               <SettingsActionGroup>

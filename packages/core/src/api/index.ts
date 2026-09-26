@@ -1,3 +1,10 @@
+import type {
+  KNOWLEDGE_TRANSFER,
+  KnowledgeTransferBody,
+  KnowledgeTransferPage,
+  KnowledgeTransferWrite,
+  KnowledgeTransferWriteResult,
+} from '../types/knowledge-transfer';
 /**
  * Feathers Client for Agor
  *
@@ -15,9 +22,10 @@ import type {
   BoardCommentPatch,
   BoardCommentReposition,
   BoardExportBlob,
+  BoardImportResult,
   Branch,
   BranchCapabilityPolicy,
-  BranchEnvironmentUpdate,
+  CancelQueuedTasksInput,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -43,6 +51,8 @@ import type {
   MCPCatalogConnectResult,
   MCPCatalogEntry,
   MCPCatalogReadiness,
+  MCPCatalogStartSessionData,
+  MCPCatalogStartSessionResult,
   MCPMarketplaceOverview,
   MCPMarketplaceRemoveServerData,
   MCPMarketplaceRemoveServerResult,
@@ -58,8 +68,11 @@ import type {
   OpenCodeOAuthAttemptPatch,
   OpenCodeOAuthConnectRequest,
   OpenCodeProviderSettings,
+  OwnershipTransferRequest,
+  OwnershipTransferResult,
   PatchAgenticToolPreset,
   PermissionMode,
+  ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
   Schedule,
@@ -70,6 +83,7 @@ import type {
   SessionID,
   SessionUpdate,
   Task,
+  TaskQueueMutationResult,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
@@ -228,6 +242,14 @@ export interface MCPMarketplaceToolPermissionService {
   ): Promise<MCPMarketplaceToolPermissionResult>;
 }
 
+export interface OwnershipTransferService {
+  patch(
+    id: null,
+    data: ClientInput<OwnershipTransferRequest>,
+    params?: Params
+  ): Promise<OwnershipTransferResult>;
+}
+
 export interface BoardPermissionsService {
   find(params?: Params): Promise<BoardCapabilityPolicies>;
   patch(
@@ -272,6 +294,8 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
+  'boards/:id/ownership': OwnershipTransferResult;
+  'branches/:id/ownership': OwnershipTransferResult;
   'boards/:id/permissions': BoardCapabilityPolicies;
   'branches/:id/permissions': BranchCapabilityPolicy;
   'workspace-preferences': CapabilityPolicyWorkspacePreferences;
@@ -282,6 +306,7 @@ export interface ServiceTypes {
   'mcp-catalog': MCPCatalogEntry;
   'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-catalog/start-session': MCPCatalogStartSessionResult;
   'mcp-marketplace': MCPMarketplaceOverview;
   'mcp-marketplace/remove-unattached': MCPMarketplaceRemoveServerResult;
   'mcp-marketplace/tool-permission': MCPMarketplaceToolPermissionResult;
@@ -450,11 +475,16 @@ export interface OpenCodeModelsService {
 /**
  * Marketplace connect command endpoint.
  *
- * Create-only: it installs one catalog entry and returns the session that can
- * use it. There is nothing to read back, so it exposes no find/get.
+ * Create-only: it installs one catalog entry for the caller. There is nothing
+ * to read back, so it exposes no find/get.
  */
 export interface MCPCatalogConnectService {
   create(data: MCPCatalogConnectData, params?: Params): Promise<MCPCatalogConnectResult>;
+}
+
+/** Create-only next step that starts a session with an added Catalog server. */
+export interface MCPCatalogStartSessionService {
+  create(data: MCPCatalogStartSessionData, params?: Params): Promise<MCPCatalogStartSessionResult>;
 }
 
 /**
@@ -521,6 +551,8 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  cancelQueued(data: CancelQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
+  reorderQueued(data: ReorderQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   /**
    * Mark a task as completed
    */
@@ -637,7 +669,7 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from a JSON blob
    */
-  fromBlob(blob: BoardExportBlob, params?: Params): Promise<Board>;
+  fromBlob(blob: BoardExportBlob, params?: Params): Promise<BoardImportResult>;
 
   /**
    * Export board to YAML string
@@ -647,7 +679,10 @@ export interface BoardsService extends AgorService<Board> {
   /**
    * Import board from YAML string
    */
-  fromYaml(data: { yaml?: string; content?: string } | string, params?: Params): Promise<Board>;
+  fromYaml(
+    data: { yaml?: string; content?: string } | string,
+    params?: Params
+  ): Promise<BoardImportResult>;
 
   /**
    * Clone an existing board with a new name
@@ -694,7 +729,7 @@ export interface UsersService extends AgorService<User> {
    * recorded as an explicit user pick.
    */
   setPrimaryTeammate(
-    data: { branchId: string; expectedUserId: UserID },
+    data: { branchId: string | null; expectedUserId: UserID },
     params?: Params
   ): Promise<Branch | null>;
   /** Set an onboarding/default teammate only when the caller is still unset. */
@@ -747,22 +782,6 @@ export interface BranchesService extends AgorService<Branch> {
   removeFromBoard(id: string, params?: Params): Promise<Branch>;
 
   /**
-   * Update environment status
-   */
-  updateEnvironment(
-    data:
-      | {
-          branch_id?: string;
-          branchId?: string;
-          environment_update?: BranchEnvironmentUpdate;
-          environmentUpdate?: BranchEnvironmentUpdate;
-        }
-      | string,
-    environmentUpdate?: BranchEnvironmentUpdate,
-    params?: Params
-  ): Promise<Branch>;
-
-  /**
    * Start branch environment
    */
   startEnvironment(id: string, params?: Params): Promise<Branch>;
@@ -787,16 +806,18 @@ export interface BranchesService extends AgorService<Branch> {
    */
   archiveOrDelete(
     id: string,
-    options: {
-      metadataAction: 'archive' | 'delete';
-      filesystemAction: 'preserved' | 'cleaned' | 'deleted';
-    },
+    options: import('../types').BranchArchiveOrDeleteOptions,
     params?: Params
   ): Promise<Branch | { deleted: true; branch_id: string }>;
 
   /**
    * Unarchive a branch
    */
+  clean(
+    input: { branchId: import('../types').BranchID },
+    params?: Params
+  ): Promise<import('../types').BranchCleanAccepted>;
+
   unarchive(id: string, options?: { boardId?: string }, params?: Params): Promise<Branch>;
 }
 
@@ -834,6 +855,7 @@ export interface AgorClient
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'boards/:id/ownership' | 'branches/:id/ownership'): OwnershipTransferService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
   service(path: 'branches/:id/permissions'): BranchPermissionsService;
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
@@ -849,6 +871,11 @@ export interface AgorClient
   service(path: `board-comments/${string}/reposition`): BoardCommentRepositionService;
 
   // Standard services (CRUD only)
+  service(path: typeof KNOWLEDGE_TRANSFER.path): {
+    find(params?: Params): Promise<KnowledgeTransferPage>;
+    get(id: string, params?: Params): Promise<KnowledgeTransferBody>;
+    create(data: KnowledgeTransferWrite, params?: Params): Promise<KnowledgeTransferWriteResult>;
+  };
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
@@ -856,6 +883,7 @@ export interface AgorClient
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
   service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-catalog/start-session'): MCPCatalogStartSessionService;
   service(path: 'mcp-marketplace'): MCPMarketplaceService;
   service(path: 'mcp-marketplace/remove-unattached'): MCPMarketplaceRemoveServerService;
   service(path: 'mcp-marketplace/tool-permission'): MCPMarketplaceToolPermissionService;
@@ -925,7 +953,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromBlob = (
     boardsService as unknown as {
-      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<Board>;
+      fromBlob?: (data: BoardExportBlob, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromBlob?.bind(boardsService);
 
@@ -950,7 +978,7 @@ function extendBoardsService(client: AgorClient): void {
 
   const rawFromYaml = (
     boardsService as unknown as {
-      fromYaml?: (data: unknown, params?: Params) => Promise<Board>;
+      fromYaml?: (data: unknown, params?: Params) => Promise<BoardImportResult>;
     }
   ).fromYaml?.bind(boardsService);
 
@@ -1333,7 +1361,7 @@ function extendBranchesService(client: AgorClient): void {
   };
   if (branchesService[BRANCHES_SERVICE_EXTENDED]) return;
   if (typeof branchesService.methods === 'function') {
-    branchesService.methods('updateEnvironment', 'ensureTeammateKnowledgeNamespace');
+    branchesService.methods('ensureTeammateKnowledgeNamespace', 'clean');
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }
@@ -1349,7 +1377,9 @@ function extendTasksService(client: AgorClient): void {
       'connectExecutor',
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
-      'reportSdkHealthFailure'
+      'reportSdkHealthFailure',
+      'cancelQueued',
+      'reorderQueued'
     );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;

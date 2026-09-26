@@ -5,13 +5,19 @@
  */
 
 import { shortId } from '@agor-live/client';
-import { Args } from '@oclif/core';
+import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
 import { requestBranchEnvironmentAction } from '../../../lib/branch-environment-action.js';
 
 export default class BranchEnvStart extends BaseCommand {
   static description = 'Start branch environment';
+  static flags = {
+    'confirm-previous-attempt': Flags.string({
+      description:
+        'Explicitly accept unconfirmed cleanup for this exact attempt ID. May create additional billable remote resources that prior scripts cannot stop.',
+    }),
+  };
 
   static examples = [
     '<%= config.bin %> <%= command.id %> abc123',
@@ -26,7 +32,7 @@ export default class BranchEnvStart extends BaseCommand {
   };
 
   async run(): Promise<void> {
-    const { args } = await this.parse(BranchEnvStart);
+    const { args, flags } = await this.parse(BranchEnvStart);
 
     // Connect to daemon
     const client = await this.connectToDaemon();
@@ -43,7 +49,12 @@ export default class BranchEnvStart extends BaseCommand {
       this.log(`  Path: ${chalk.dim(branch.path)}`);
       this.log('');
 
-      const updated = await requestBranchEnvironmentAction(client, branch.branch_id, 'start');
+      const updated = await requestBranchEnvironmentAction(
+        client,
+        branch.branch_id,
+        'start',
+        flags['confirm-previous-attempt']
+      );
 
       this.log(`${chalk.green('✓')} Environment start requested`);
 

@@ -147,9 +147,10 @@ describe('safe outbound connection-time DNS policy', () => {
   it('applies the absolute deadline to unresolved DNS', async () => {
     lookupMock.mockReturnValue(new Promise(() => undefined));
 
-    await expect(
-      safeOutboundFetch('https://unresolved.example/token', { timeoutMs: 30 })
-    ).rejects.toThrow('Outbound OAuth timeout');
+    const failure = await safeOutboundFetch('https://unresolved.example/token', {
+      timeoutMs: 30,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ message: 'Outbound OAuth timeout', code: 'ETIMEDOUT' });
   });
 
   it('propagates DNS resolver failures without attempting a socket', async () => {

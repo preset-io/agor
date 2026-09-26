@@ -97,6 +97,15 @@ The default prefix is `agor.daemon.`. Names below omit that prefix.
 | `http.request.duration_ms`                   | distribution   | same                                                       | Middleware entry to response finish/close                                               |
 | `feathers.requests`                          | count          | `service`, `method`, `transport`, `outcome`, `status_code` | External logical service calls only; transport is `rest`, `socketio`, `mcp`, or `other` |
 | `feathers.request.duration_ms`               | distribution   | same                                                       | Whole external Feathers hook duration                                                   |
+| `external_requests.in_flight`                | gauge          | `transport=http\|socketio`                                 | Exact process-local concurrency at the 15-second sample instant                         |
+| `socketio.clients.active`                    | gauge          | none                                                       | Authenticated interactive-user namespace connections; executor/service sockets excluded |
+| `socketio.client.connections`                | count          | none                                                       | Successful interactive-user namespace connections                                       |
+| `socketio.client.disconnections`             | count          | `disconnect_reason`                                        | Interactive-user disconnects; reason is a fixed normalized category                     |
+| `socketio.authentication_failures`           | count          | none                                                       | Rejected namespace handshakes for any presented principal type                          |
+| `node.event_loop.delay.p50_ms`               | gauge          | none                                                       | Process event-loop delay p50 over the preceding 15-second interval, milliseconds        |
+| `node.event_loop.delay.p90_ms`               | gauge          | none                                                       | Process event-loop delay p90 over the preceding 15-second interval, milliseconds        |
+| `node.event_loop.delay.p99_ms`               | gauge          | none                                                       | Process event-loop delay p99 over the preceding 15-second interval, milliseconds        |
+| `node.event_loop.delay.max_ms`               | gauge          | none                                                       | Process event-loop delay maximum over the preceding 15-second interval, milliseconds    |
 | `executors.running`                          | gauge          | `mode=local`, `scope=process_group`                        | Absolute local process groups tracked by this daemon                                    |
 | `executor.dispatches`                        | count          | `mode`, `outcome`                                          | Durable dispatch-claim attempts/results                                                 |
 | `executor.request_to_dispatch.duration_ms`   | distribution   | `mode`, `outcome=claimed`                                  | Persisted Task `created_at` to DB-authored `started_at`                                 |
@@ -120,12 +129,47 @@ dimension. Runtime tag keys are allow-listed in code. Tenant/user/session/
 task/branch/repository IDs, model names, prompts, raw paths, and arbitrary
 errors are not emitted.
 
-Distributions are used for cross-agent percentile aggregation. The one gauge
-is an absolute current value. Counts represent events; there is no sampled
-counter behavior in this foundation. Histogram and timing methods remain on
-the abstraction for modules with Agent-local histogram or plain StatsD timer
-needs, but the initial latencies use distributions for correct fleet-wide
-DogStatsD percentiles.
+Distributions are used for cross-agent percentile aggregation. Each active or
+concurrency gauge is an absolute current value. Counts represent events; there
+is no sampled counter behavior in this foundation. Histogram and timing methods
+remain on the abstraction for modules with Agent-local histogram or plain
+StatsD timer needs, but the initial latencies use distributions for correct
+fleet-wide DogStatsD percentiles.
+
+### Passive load-signal aggregation contract
+
+`external_requests.in_flight` has two deliberately disjoint series. `http`
+starts at the Express instrumentation boundary and includes REST, MCP, health,
+and other instrumented HTTP routes. `socketio` starts only for the outermost
+external Socket.IO Feathers service call. REST and MCP Feathers hooks therefore
+do not increment the in-flight metric, and nested/internal service fan-out is
+suppressed by the same request-local scope as completion metrics. Sum the two
+transport series for total observed external request concurrency. Do not add
+`http.requests` and `feathers.requests`: a REST completion intentionally
+appears in both because those counters describe transport and logical-service
+layers, respectively.
+
+Every 15 seconds each daemon emits both in-flight gauges and the interactive
+Socket.IO client gauge, including idle zero. It also snapshots Node's bounded
+event-loop-delay histogram into per-instance p50/p90/p99/max gauges in
+milliseconds, then resets the histogram. The fixed cadence is not an overload
+control and does not alter request handling. Startup emits the three active
+gauges immediately. Operational stop emits terminal zero for `socketio.clients.active`
+and both `external_requests.in_flight` transport gauges, even if the socket drain
+timed out, while retaining the final event-loop histogram sample. It then disables
+the histogram and disposes the unreferenced timer before exporter close. Repeated
+stop calls emit nothing further.
+
+“Socket.IO client” means an authenticated `user` principal accepted by the
+namespace. Service, delegated executor, and terminal-executor connections are
+excluded from the active/client lifecycle series rather than silently mixed
+with interactive workload. Authentication failures cannot reliably identify
+the intended principal, so the separate failure counter covers all rejected
+handshakes and has no identity or inferred reconnect tag. `disconnect_reason`
+is limited to `client`, `server`, `server_shutdown`, `ping_timeout`,
+`transport_close`, `transport_error`, `parse_error`, `forced_close`, or
+`other`. A reconnect is a new successful connection; the server does not claim
+to identify it as a distinct event.
 
 ## Running executor and HA contract
 
@@ -198,5 +242,5 @@ tags describe bounded daemon/control-flow categories only.
 5. Add scheduler, health monitor, knowledge indexer, and termination-
    coordinator metrics only where each worker has authoritative claim/result
    outcomes. Avoid generic timer-by-callback names.
-6. Consider event-loop lag and process CPU/memory through standard runtime
-   integrations rather than hand-rolled high-frequency gauges.
+6. Consider process CPU/memory through standard runtime integrations rather
+   than hand-rolled high-frequency gauges.

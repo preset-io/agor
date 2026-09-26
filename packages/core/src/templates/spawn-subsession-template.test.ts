@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import {
+  type AgenticToolPresetID,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '../types/agentic-tool-preset';
 import { renderSpawnSubsessionPrompt } from './spawn-subsession-template';
 
 describe('renderSpawnSubsessionPrompt', () => {
@@ -16,6 +21,40 @@ describe('renderSpawnSubsessionPrompt', () => {
     // The template includes "Permission Mode: <value>" for the child.
     expect(out).toContain('Permission Mode:');
     expect(out).toContain('plan');
+  });
+
+  it.each([
+    USER_DEFAULT_AGENTIC_CONFIGURATION,
+    WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+    '00000000-0000-7000-8000-000000000001' as AgenticToolPresetID,
+  ] as const)(
+    'preserves configuration reference %s in the instructions and exact call',
+    (presetId) => {
+      const out = renderSpawnSubsessionPrompt({ userPrompt: 'Delegate', presetId });
+      expect(out).toContain('USER CONFIGURATION:');
+      expect(out).toContain(`presetId: "${presetId}"`);
+      expect(out).toContain(`"presetId": "${presetId}"`);
+    }
+  );
+
+  it('serializes valid exact arguments without losing false, empty arrays, or quoted strings', () => {
+    const out = renderSpawnSubsessionPrompt({
+      userPrompt: 'Delegate',
+      codexNetworkAccess: false,
+      mcpServerIds: [],
+      callbackConfig: { enableCallback: false },
+      extraInstructions: 'Use "quotes" & newlines\ncarefully',
+    });
+    const match = out.match(
+      /YOUR EXACT TOOL CALL MUST BE: agor_sessions_spawn\((\{[\s\S]*\})\) Proceed/
+    );
+    expect(match).not.toBeNull();
+    expect(JSON.parse(match![1])).toMatchObject({
+      codexNetworkAccess: false,
+      mcpServerIds: [],
+      enableCallback: false,
+      extraInstructions: 'Use "quotes" & newlines\ncarefully',
+    });
   });
 
   it('autocomputes hasConfig when any config field is present', () => {

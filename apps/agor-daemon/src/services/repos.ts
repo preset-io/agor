@@ -1,3 +1,4 @@
+import { BRANCH_FILESYSTEM_ACTIONS } from '@agor/core/types';
 /**
  * Repos Service
  *
@@ -25,19 +26,31 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
+  BranchMaintenanceRepository,
   BranchRepository,
+  enqueueAfterTenantDatabaseCommit,
+  generateId,
   getCurrentTenantId,
   RepoRepository,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+} from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Branch,
+  BranchID,
   CloneRepositoryResult,
   QueryParams,
   Repo,
@@ -47,10 +60,19 @@ import type {
   UserRole,
   UUID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import {
+  getTeammateConfig,
+  hasMinimumRole,
+  isCanonicalTeammateFrameworkRepo,
+  isTeammate,
+  ROLES,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+  validateRepoCleanupPolicy,
+} from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
+import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -59,8 +81,10 @@ import {
   getDaemonUrl,
   requestExecutor,
   spawnExecutorFireAndForget,
+  startContainedExecutorCommand,
 } from '../utils/spawn-executor.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import { BRANCH_MATERIALIZATION_INTENT, type BranchParams } from './branches.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
 /**
@@ -70,7 +94,23 @@ export type RepoParams = QueryParams<{
   slug?: string;
   managed_by_agor?: boolean;
   cleanup?: boolean; // For delete operations: true = delete filesystem, false = database only
-}>;
+}> &
+  AuthenticatedParams;
+
+/**
+ * Reduce an error to a short, log/DB-safe message. Strips embedded credentials
+ * from any remote URLs the underlying git error may have echoed back, so
+ * persisted `error_message` values and logs never leak secrets. Callers are
+ * responsible for not passing absolute user paths into user-facing copy.
+ */
+function sanitizeProvisioningError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    return redactGitUrlCredentials(raw);
+  } catch {
+    return raw;
+  }
+}
 
 function deriveLocalRepoSlug(remoteUrl: string | undefined, explicitSlug?: string): RepoSlug {
   if (explicitSlug) {
@@ -134,11 +174,30 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     this.db = db;
   }
 
+  /**
+   * Short tenant/RLS unit of work for custom methods that bypass Feathers hooks.
+   *
+   * Custom route/MCP methods reach the repositories directly, so nothing else
+   * establishes a tenant database scope for them. In `required_from_auth` mode
+   * the daemon's database handle is a scope-requiring proxy, so an unscoped
+   * repository write throws `MissingTenantDatabaseScopeError`. Re-entrant: it
+   * no-ops when a compatible scope is already active.
+   */
+  private withTenantDatabase<T>(
+    params: RepoParams | undefined,
+    work: () => Promise<T>
+  ): Promise<T> {
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
   override async create(
     data: Partial<Repo> | Partial<Repo>[],
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
     const rows = Array.isArray(data) ? data : [data];
+    for (const row of rows) this.validateCleanupPolicyWrite(row, params);
     if (
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth' &&
       rows.some((row) => row.repo_type === 'local')
@@ -155,6 +214,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     data: Partial<Repo>,
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
+    this.validateCleanupPolicyWrite(data, params);
     if (
       data.repo_type === 'local' &&
       resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
@@ -172,6 +232,28 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       }
     }
     return super.patch(id, data, params);
+  }
+
+  override async update(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
+    this.validateCleanupPolicyWrite(data, params);
+    return super.update(id, data, params);
+  }
+
+  private validateCleanupPolicyWrite(data: Partial<Repo>, params?: RepoParams): void {
+    if (!Object.hasOwn(data, 'cleanup_policy')) return;
+    // Executable repo configuration uses the existing admin boundary, even
+    // for direct in-process service callers. Branch management is insufficient.
+    const user = (params as AuthenticatedParams | undefined)?.user;
+    if (!user || !hasMinimumRole(user.role, ROLES.ADMIN)) {
+      throw new Forbidden('Admin access is required to configure repository workspace cleanup');
+    }
+    try {
+      data.cleanup_policy = validateRepoCleanupPolicy(data.cleanup_policy);
+    } catch {
+      throw new BadRequest(
+        'Invalid cleanup policy: supply boolean settings and a command of at most 4096 characters, nonempty when enabled, with no NUL'
+      );
+    }
   }
 
   /**
@@ -540,10 +622,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-      this.db,
-      userId,
-      this.app.get('config')
+    // Both MCP and HTTP enter with tenant identity only. Admit in a short
+    // write-gated unit, then release it before the executor inspects the repo.
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    const delegatedHomeKey = await withFreshTenantWrite(this.db, tenantId, () =>
+      resolveDelegatedExecutionHomeKey(this.db, userId, this.app.get('config'))
     );
     const inspection = await requestExecutor(
       {
@@ -566,37 +650,40 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const repoPath = metadata.path;
     const slug = deriveLocalRepoSlug(metadata.remoteUrl, data.slug);
 
-    const existing = await this.repoRepo.findBySlug(slug);
-    if (existing) {
-      throw new Error(
-        `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
-      );
-    }
+    // Inspection may outlive admission; recheck the write gate when persisting.
+    return withFreshTenantWrite(this.db, tenantId, async () => {
+      const existing = await this.repoRepo.findBySlug(slug);
+      if (existing) {
+        throw new Error(
+          `Repository '${slug}' already exists.\nUse a different slug with: --slug custom/name`
+        );
+      }
 
-    if (metadata.credentialFindingCount > 0) {
-      console.warn(
-        `[repos.local] Registered local repo has ${metadata.credentialFindingCount} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
-      );
-    }
-    if (metadata.environmentWarning) {
-      console.warn(`[repos.local] ${metadata.environmentWarning}`);
-    }
-    const name = slug.split('/').pop() ?? slug;
+      if (metadata.credentialFindingCount > 0) {
+        console.warn(
+          `[repos.local] Registered local repo has ${metadata.credentialFindingCount} credential-bearing remote URL(s) in git config; persisted remote_url was sanitized. Run the repair utility if this repo is managed/shared.`
+        );
+      }
+      if (metadata.environmentWarning) {
+        console.warn(`[repos.local] ${metadata.environmentWarning}`);
+      }
+      const name = slug.split('/').pop() ?? slug;
 
-    const repo = (await this.create(
-      {
-        repo_type: 'local',
-        slug,
-        name,
-        remote_url: metadata.remoteUrl,
-        local_path: repoPath,
-        default_branch: metadata.defaultBranch,
-        environment: metadata.environment,
-      },
-      params
-    )) as Repo;
+      const repo = (await this.create(
+        {
+          repo_type: 'local',
+          slug,
+          name,
+          remote_url: metadata.remoteUrl,
+          local_path: repoPath,
+          default_branch: metadata.defaultBranch,
+          environment: metadata.environment,
+        },
+        params
+      )) as Repo;
 
-    return repo;
+      return repo;
+    });
   }
 
   /**
@@ -677,14 +764,16 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       remote_url: repo.remote_url ? redactGitUrlCredentials(repo.remote_url) : repo.remote_url,
     });
 
-    // Check for duplicate branch name in this repo (non-archived only)
+    // The deterministic workspace path is owned by the branch name even while
+    // archived. Reusing it would let a new row collide with preserved cleanup.
     const branchRepo = new BranchRepository(this.db);
-    const existingBranch = await branchRepo.findActiveByRepoAndName(
-      repo.repo_id as UUID,
-      data.name
-    );
+    const existingBranch = await branchRepo.findByRepoAndName(repo.repo_id as UUID, data.name);
     if (existingBranch) {
-      throw new Error(`A branch named '${data.name}' already exists in this repository`);
+      throw new Conflict(
+        existingBranch.archived
+          ? `An archived branch named '${data.name}' still owns this workspace path. Unarchive it instead of creating a new branch.`
+          : `A branch named '${data.name}' already exists in this repository`
+      );
     }
 
     // Resolve + validate the storage mode. The daemon owns DB/auth/config
@@ -693,7 +782,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // rule: "daemon/client = database, executor = filesystem").
     const config = this.app.get('config');
     const { defaultMode } = resolveBranchStorageConfig(config);
-    const storageMode: 'worktree' | 'clone' = data.storage_mode ?? defaultMode;
+    const localHome = isTeammate(data) && isCanonicalTeammateFrameworkRepo(repo);
+    const storageMode: 'worktree' | 'clone' = localHome
+      ? 'clone'
+      : (data.storage_mode ?? defaultMode);
     ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
@@ -703,7 +795,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
       );
     }
-    const cloneDepth = data.clone_depth;
+    const cloneDepth = localHome ? undefined : data.clone_depth;
     if (cloneDepth !== undefined) {
       if (storageMode !== 'clone') {
         throw new Error(
@@ -791,7 +883,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // causing ID collisions when archived branches held the assigned ID.
     const allUsedIds = await branchRepo.getAllUsedUniqueIds();
     const branchUniqueId = autoAssignBranchUniqueId(allUsedIds);
-
     const branchesService = this.app.service('branches');
 
     // Environment command templates (start_command, stop_command, etc.) are
@@ -805,6 +896,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
+    const branchCreateParams: BranchParams | undefined = localHome
+      ? { ...params, [BRANCH_MATERIALIZATION_INTENT]: true }
+      : params;
     let branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
@@ -817,6 +911,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         new_branch: data.createBranch ?? false,
         branch_unique_id: branchUniqueId,
         filesystem_status: 'creating', // Will be set to 'ready' by executor
+        // Generation owning this first attempt. Fences its acknowledgements
+        // against any later retry that supersedes it.
+        provisioning_attempt_id: generateId(),
+        provisioning_operation: 'create',
         // Environment templates are rendered after filesystem materialization.
         // RBAC fields are intentionally omitted at creation: new branches
         // always align with their board defaults. Overrides are a deliberate
@@ -833,7 +931,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         board_id: data.boardId,
         created_by: userId,
       },
-      params
+      branchCreateParams
     )) as Branch;
 
     if (data.boardId) {
@@ -939,56 +1037,465 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // render-environment route to derive executable fields from trusted repo
     // configuration. Per-user credentials come from the same Feathers identity.
     // Filesystem authorization stays fail-closed inside the selected substrate.
+    branch = await this.dispatchBranchProvisioning(
+      branch,
+      repo,
+      userId,
+      params,
+      'create',
+      delegatedHomeKey
+    );
+
+    // Return immediately; asynchronous filesystem updates arrive via WebSocket.
+    // A synchronous dispatch failure instead returns the patched failed branch.
+    return branch;
+  }
+
+  /**
+   * Spawn the `git.branch.add` executor that materializes a branch's working
+   * directory, with a daemon-side safety net for observed executor failures.
+   * HA orphan recovery after owner loss requires a separate ownership protocol.
+   *
+   * The executor itself patches `ready`/`failed` when it can, but only if its
+   * own error handler runs AND it still holds a daemon connection. When the
+   * process is killed or crashes first (SIGTERM on a watch restart, OOM, a
+   * startup crash, a dropped socket) nothing would otherwise transition the
+   * row. The `onExit` net below reconciles those cases.
+   *
+   * A synchronous spawn failure is patched to `failed` and the patched row is
+   * returned, so `createBranch` still hands its caller the failed
+   * representation rather than a stale `creating` one.
+   *
+   * Reusable for explicit `retryBranchProvisioning()` calls. The standalone
+   * startup watchdog only marks interrupted attempts failed; it never dispatches. Structured logs are emitted at
+   * enqueue / exit / reconcile so the lifecycle is traceable.
+   *
+   * `delegatedHomeKey` is pre-resolved by `createBranch` on purpose — routing
+   * is validated before a branch row is persisted, so an invalid home key can
+   * never leave a row stuck in `creating`. Other callers resolve it here.
+   */
+  private async dispatchBranchProvisioning(
+    branch: Branch,
+    repo: Repo,
+    userId: UserID,
+    params: RepoParams | undefined,
+    reason: 'create' | 'retry' | 'restore',
+    delegatedHomeKey?: string
+  ): Promise<Branch> {
+    const storageMode = branch.storage_mode ?? 'worktree';
+    const logPrefix = `[branch-provisioning ${shortId(branch.branch_id)}]`;
+    // Capture the tenant NOW (we are inside a request/startup scope). The
+    // executor's onExit fires asynchronously after that scope has unwound, so
+    // any DB write there must re-establish this tenant's transaction scope or
+    // Postgres rejects the SAVEPOINT the branch mutation opens.
+    const tenantId = getCurrentTenantId();
+    // The generation this dispatch owns. Captured by the onExit closure and
+    // handed to the executor so both acknowledgement paths can be fenced: if a
+    // retry supersedes this attempt, neither our late onExit nor the executor's
+    // late terminal patch may write over the newer attempt.
+    const attemptId = branch.provisioning_attempt_id;
     try {
       const sessionToken = await issueExecutorCommandToken(
         this.app,
         'git.branch.add',
         userId,
-        branch.branch_id
+        branch.branch_id,
+        undefined,
+        attemptId
       );
 
-      spawnExecutorFireAndForget(
-        {
-          command: 'git.branch.add',
-          sessionToken,
-          daemonUrl: getDaemonUrl(),
-          params: {
-            branchId: branch.branch_id,
-            repoId: repo.repo_id,
-            userId: userId as string | undefined,
-            principalBranchAccess: 'write',
-            useReference:
-              storageMode === 'clone' &&
-              !!repo.local_path &&
-              shouldUseCloneReferencePath(this.app.get('config')),
-          },
-        },
-        {
-          logPrefix: `[ReposService.createBranch ${data.name}]`,
-          delegatedHomeKey: delegatedHomeKey,
-          templateVariables: {
-            branch_id: branch.branch_id,
-            user_id: userId,
-            branch_fs_access: 'write',
-          },
-        }
+      // Retry/watchdog callers have no pre-resolved routing; create passes its
+      // own so validation still happens before the row is persisted.
+      const homeKey =
+        delegatedHomeKey ??
+        (await resolveDelegatedExecutionHomeKey(this.db, userId, this.app.get('config')));
+
+      console.log(
+        `${logPrefix} enqueue git.branch.add (reason=${reason}, storage_mode=${storageMode})`
       );
+
+      const launch = () =>
+        spawnExecutorFireAndForget(
+          {
+            command: 'git.branch.add',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            params: {
+              branchId: branch.branch_id,
+              repoId: repo.repo_id,
+              userId: userId as string | undefined,
+              principalBranchAccess: 'write',
+              // Echoed back on the executor's terminal patch so a superseded
+              // attempt's late ack can be discarded instead of overwriting a
+              // newer one.
+              ...(attemptId ? { provisioningAttemptId: attemptId } : {}),
+              restoreMode: branch.provisioning_operation === 'restore',
+              allowExistingCheckout: reason !== 'create',
+              useReference:
+                storageMode === 'clone' &&
+                !getTeammateConfig(branch)?.localHome &&
+                !!repo.local_path &&
+                shouldUseCloneReferencePath(this.app.get('config')),
+            },
+          },
+          {
+            logPrefix,
+            delegatedHomeKey: homeKey,
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: userId,
+              branch_fs_access: 'write',
+            },
+            onExit: (code) => {
+              if (code === 0) {
+                // Success path: the executor patched 'ready' itself.
+                console.log(`${logPrefix} executor exited cleanly (code 0)`);
+                return;
+              }
+              console.error(
+                `${logPrefix} executor exited with code ${code ?? 'null'}; running safety-net reconcile`
+              );
+              void this.reconcileBranchFilesystemAfterExit(
+                branch.branch_id,
+                code,
+                tenantId,
+                attemptId
+              );
+            },
+          }
+        );
+      // REST uses short scopes; MCP may own an outer transaction. Neither the
+      // attempt nor its command credential may be consumed before commit.
+      if (
+        reason !== 'create' &&
+        enqueueAfterTenantDatabaseCommit(async () => {
+          const work = async () => {
+            try {
+              launch();
+            } catch (error) {
+              await this.markBranchProvisioningFailedIfStuck(
+                branch.branch_id,
+                `Failed to spawn executor: ${sanitizeProvisioningError(error)}`,
+                tenantId,
+                attemptId
+              );
+            }
+          };
+          if (tenantId) await runWithTenantContext(tenantId, work);
+          else await work();
+        })
+      )
+        return branch;
+      launch();
+      return branch;
     } catch (error) {
+      // Synchronous spawn failure (token generation, routing resolution, or a
+      // missing executor binary). Fire-and-forget means no process exists to
+      // emit onExit, so mark the branch failed here or it stays 'creating'
+      // with no signal at all. Returned so callers surface the failed row.
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[ReposService.createBranch] Failed to spawn executor:', message);
-      branch = (await branchesService.patch(
+      console.error(`${logPrefix} failed to spawn executor: ${message}`);
+      const { applied, branch: failedBranch } = await new BranchRepository(
+        this.db
+      ).acknowledgeProvisioningAttempt(
         branch.branch_id,
         {
           filesystem_status: 'failed',
           error_message: `Failed to spawn executor: ${message}`,
         },
-        { ...params, provider: undefined }
-      )) as Branch;
+        attemptId
+      );
+      if (applied) this.emitBranchPatched(failedBranch, params);
+      return failedBranch;
+    }
+  }
+
+  /**
+   * onExit safety net: after a non-zero executor exit, move the branch to a
+   * terminal `failed` state IF it is still `creating` (the executor died before
+   * it could report success or failure itself). Deliberately does NOT inspect
+   * the daemon-local filesystem or promote to `ready` from a `.git` path — a
+   * daemon cannot reliably tell a complete checkout from a stale/partial/
+   * wrong-ref one, and in a multi-host deployment it may not even see the
+   * executor's filesystem. Surfacing `failed` keeps a human decision point;
+   * the user (or MCP/UI) retries explicitly. Never deletes refs or directories.
+   *
+   * Fenced on `attemptId`: this net belongs to one specific dispatch. A slow
+   * attempt can exit long after a retry has already claimed `creating` for a
+   * newer attempt, and marking the row `failed` then would kill a healthy
+   * in-flight materialization.
+   */
+  private async reconcileBranchFilesystemAfterExit(
+    branchId: string,
+    code: number | null,
+    tenantId: string | undefined,
+    attemptId: string | undefined
+  ): Promise<void> {
+    await this.markBranchProvisioningFailedIfStuck(
+      branchId,
+      `Branch provisioning did not complete: the materialization process exited with code ${code ?? 'unknown'} before it could confirm a usable working directory. Retry provisioning to try again.`,
+      tenantId,
+      attemptId
+    );
+  }
+
+  /**
+   * Atomically move a branch to `failed` with an actionable message IF (and
+   * only if) it is still `creating`. The compare-and-swap lives in the
+   * repository under a row lock, so it never clobbers a terminal status the
+   * executor already wrote and never races a concurrent transition. Emits a
+   * `patched` event so connected UIs update.
+   */
+  private async markBranchProvisioningFailedIfStuck(
+    branchId: string,
+    message: string,
+    tenantId: string | undefined,
+    expectedAttemptId?: string
+  ): Promise<boolean> {
+    const logPrefix = `[branch-provisioning ${shortId(branchId)}]`;
+    try {
+      return await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+        const branchRepo = new BranchRepository(this.db);
+        const { changed, branch } = await branchRepo.markProvisioningFailedIfCreating(
+          branchId,
+          message,
+          expectedAttemptId
+        );
+        if (changed) {
+          console.warn(`${logPrefix} → failed (interrupted provisioning surfaced for retry)`);
+          this.emitBranchPatched(branch);
+        }
+        return changed;
+      });
+    } catch (error) {
+      console.error(
+        `${logPrefix} failed to mark stuck branch failed: ${sanitizeProvisioningError(error)}`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Authorized retry/restore through one atomic admission and executor owner.
+   * Active failed or stale archive outcomes are repairable; archived branches
+   * enter only via unarchive's internal restoreArchived argument. Creating is
+   * never taken over based on age. A ready active branch is a no-op.
+   */
+  async retryBranchProvisioning(
+    branchId: string,
+    params?: RepoParams,
+    restoreArchived = false
+  ): Promise<Branch> {
+    const branchesService = this.app.service('branches');
+    // Read through the service so short IDs resolve and RBAC hooks fire.
+    const branch = (await branchesService.get(branchId, params)) as Branch;
+    const status = branch.filesystem_status;
+    const branchRepo = new BranchRepository(this.db);
+
+    // Authorization. The `get` above only establishes VIEW access, and the CAS
+    // below writes through the repository — so it never passes through the
+    // branches-service `patch` hook that normally demands `all`. Without this
+    // gate any member who can *see* a failed branch could trigger provisioning. Assert the
+    // canonical branch-control level (effective `all`, owner, or global admin)
+    // here in the service so REST, MCP and the UI are covered by one check;
+    // The row-locked validation below also requires a caller and filesystem write access.
+    await this.withTenantDatabase(params, () =>
+      ensureCanControlBranchEnvironment(
+        branchRepo,
+        branch.branch_id as BranchID,
+        params as AuthenticatedParams | undefined,
+        'retry branch provisioning'
+      )
+    );
+
+    // Archived branches have their own restore/unarchive lifecycle. Status alone
+    // does not catch this: archiving overwrites `filesystem_status`, but an
+    // already-`failed` branch that was then archived can still read `failed`.
+    if (branch.archived && !restoreArchived) {
+      throw new Conflict(
+        'This branch is archived. Unarchive it first — archived branches are restored through the unarchive flow, not by retrying provisioning.',
+        {
+          code: 'BRANCH_PROVISIONING_NOT_RETRYABLE',
+          branchId: branch.branch_id,
+          filesystemStatus: status ?? 'unknown',
+        }
+      );
     }
 
-    // Return immediately; asynchronous filesystem updates arrive via WebSocket.
-    // A synchronous dispatch failure instead returns the patched failed branch.
-    return branch;
+    const restore =
+      restoreArchived || BRANCH_FILESYSTEM_ACTIONS.some((candidate) => candidate === status);
+    if (status === 'ready' && !restore) {
+      return branch;
+    }
+    if (status === 'creating') {
+      throw new Conflict(
+        'Branch provisioning is already in progress. Wait for it to finish before retrying.',
+        {
+          code: 'BRANCH_PROVISIONING_IN_PROGRESS',
+          branchId: branch.branch_id,
+          filesystemStatus: status,
+        }
+      );
+    } else if (status !== 'failed' && !restore) {
+      throw new Conflict(
+        `Branch provisioning cannot be retried from status "${status ?? 'unknown'}". Only failed or active preserved/cleaned/deleted records are recoverable; use unarchive for archived branches.`,
+        {
+          code: 'BRANCH_PROVISIONING_NOT_RETRYABLE',
+          branchId: branch.branch_id,
+          filesystemStatus: status ?? 'unknown',
+        }
+      );
+    }
+
+    const repo = await this.withTenantDatabase(params, () =>
+      this.repoRepo.findById(branch.repo_id)
+    );
+    if (!repo) {
+      throw new BadRequest(`Repo ${branch.repo_id} not found for branch ${branchId}`);
+    }
+
+    const requestUser = params?.user;
+    if (!requestUser) throw new NotAuthenticated('Authentication required');
+    const validate = async (db: import('@agor/core/db').Database, current: Branch) => {
+      await ensureBranchWorkspaceAccess(
+        new BranchRepository(db),
+        current,
+        requestUser.user_id,
+        requestUser.role as UserRole,
+        'all',
+        'write',
+        this.app.get('config').execution?.allow_superadmin === true
+      );
+      if (current.path !== branch.path || current.repo_id !== branch.repo_id)
+        throw new Conflict('Branch location changed; refresh before recovery');
+      if (
+        (current.storage_mode ?? 'worktree') === 'worktree' &&
+        resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      )
+        throw new BadRequest(
+          'Historical worktree branches cannot be restored in hosted multi-tenant mode.'
+        );
+    };
+    const { claimed, branch: claimedBranch } = await this.withTenantDatabase(params, () =>
+      branchRepo.claimForProvisioning(branch.branch_id, generateId(), {
+        restore,
+        archived: restoreArchived,
+        validate,
+      })
+    );
+    if (!claimed) {
+      // A competing attempt can finish before our locked read. Returning its
+      // durable ready state is a safe no-op, never another executor admission.
+      if (
+        !claimedBranch.archived &&
+        !claimedBranch.deletion_status &&
+        claimedBranch.filesystem_status === 'ready'
+      )
+        return claimedBranch;
+      if (claimedBranch.filesystem_status === 'creating') {
+        throw new Conflict(
+          'Branch provisioning is already in progress. Wait for it to finish before retrying.',
+          {
+            code: 'BRANCH_PROVISIONING_IN_PROGRESS',
+            branchId: claimedBranch.branch_id,
+            filesystemStatus: 'creating',
+          }
+        );
+      }
+      throw new Conflict(
+        'Branch recovery is blocked or its state changed. Refresh before retrying.'
+      );
+    }
+    this.emitBranchPatched(claimedBranch, params);
+    // Use the authorized caller's credentials and execution identity, never the
+    // original creator's credentials for another manager's recovery request.
+    return this.withTenantDatabase(params, () =>
+      this.dispatchBranchProvisioning(
+        claimedBranch,
+        repo,
+        requestUser.user_id as UserID,
+        params,
+        restore ? 'restore' : 'retry'
+      )
+    );
+  }
+
+  /**
+   * Legacy standalone-startup reconciliation of interrupted provisioning.
+   * The caller must establish that no other materializer can still own these
+   * attempts; a `creating` row alone is not evidence of owner death. HA startup
+   * does not call this method. It marks eligible rows `failed` without checking
+   * local `.git` paths or automatically dispatching replacements.
+   *
+   * This operates only in the caller's trusted tenant scope (the bootstrap
+   * tenant at standalone startup), never as a cross-tenant sweep. Other tenants'
+   * stranded `creating` rows are not recovered here, and retryBranchProvisioning
+   * refuses them. The bounded scan is a safety net, not a guarantee that all
+   * interrupted provisioning becomes retryable.
+   */
+  async reconcileStuckCreatingBranches(
+    params?: RepoParams
+  ): Promise<{ scanned: number; failed: number }> {
+    const SCAN_LIMIT = 5000;
+    const branchRepo = new BranchRepository(this.db);
+    const stuck = await this.withTenantDatabase(params, () =>
+      branchRepo.findCreatingPage(SCAN_LIMIT + 1)
+    );
+    if (stuck.length > SCAN_LIMIT) {
+      console.warn(
+        `[branch-provisioning] watchdog: hit the ${SCAN_LIMIT}-row scan cap — some stuck branches may not be reconciled this pass.`
+      );
+    }
+    // Filter in memory: `filesystem_status` is a real column but the generic
+    // service find does not guarantee arbitrary-column pushdown, so don't rely
+    // on the query narrowing it for us.
+    stuck.length = Math.min(stuck.length, SCAN_LIMIT);
+
+    const tenantId = getCurrentTenantId();
+    // Count only transitions the CAS actually applied. A row can leave
+    // `creating` between the scan and the write (the executor acks, or another
+    // reconcile wins), in which case the CAS reports `changed: false` — counting
+    // it anyway would over-report transitions in the operational summary.
+    const summary = { scanned: stuck.length, failed: 0 };
+    for (const branch of stuck) {
+      const changed = await this.markBranchProvisioningFailedIfStuck(
+        branch.branch_id,
+        'Branch provisioning was interrupted — the daemon restarted before it completed. Retry provisioning to try again.',
+        tenantId
+      );
+      if (changed) summary.failed++;
+    }
+    if (summary.scanned > 0) {
+      console.log(
+        `[branch-provisioning] watchdog: scanned=${summary.scanned} failed=${summary.failed} (interrupted → failed, awaiting explicit retry)`
+      );
+    }
+    return summary;
+  }
+
+  /**
+   * Broadcast a `branches` `patched` event for a row we wrote directly through
+   * the repository (the atomic provisioning CAS bypasses the Feathers service,
+   * so its automatic event doesn't fire). Best-effort: if it can't emit, the
+   * executor's own terminal `patch` — or a client refetch — still converges.
+   * `params` carries the requester's tenant/connection context so the event
+   * reaches browser sockets; the crash/watchdog paths have none, which is fine
+   * (those set `failed`, which clients also pick up on their next read).
+   */
+  private emitBranchPatched(branch: Branch, params?: RepoParams): void {
+    try {
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: branch,
+        params,
+        id: branch.branch_id,
+      });
+    } catch (error) {
+      console.warn(
+        `[branch-provisioning ${shortId(branch.branch_id)}] failed to emit patched event: ${sanitizeProvisioningError(error)}`
+      );
+    }
   }
 
   /**
@@ -1045,29 +1552,63 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       this.app.get('config')
     );
 
-    return requestExecutor(
-      {
-        command,
-        sessionToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          repoId: repo.repo_id,
-          branchId: branch.branch_id,
-          ...params,
-          cwd: branch.path,
-          principalBranchAccess: branchFsAccess,
-        },
+    const payload = {
+      command,
+      sessionToken,
+      daemonUrl: getDaemonUrl(),
+      params: {
+        repoId: repo.repo_id,
+        branchId: branch.branch_id,
+        ...params,
+        cwd: branch.path,
+        principalBranchAccess: branchFsAccess,
       },
-      {
-        logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
-        delegatedHomeKey: delegatedHomeKey,
-        templateVariables: {
-          branch_id: branch.branch_id,
-          user_id: userId,
-          branch_fs_access: branchFsAccess,
-        },
-      }
+    };
+    const options = {
+      logPrefix: `[${command} ${repo.slug}/${branch.name}]`,
+      delegatedHomeKey: delegatedHomeKey,
+      templateVariables: {
+        branch_id: branch.branch_id,
+        user_id: userId,
+        branch_fs_access: branchFsAccess,
+      },
+    };
+    if (command !== 'branch.agor-yml.export') return requestExecutor(payload, options);
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
+    const scoped = <T>(work: (repository: BranchMaintenanceRepository) => Promise<T>) =>
+      withFreshTenantWrite(this.db, tenantId, () => work(new BranchMaintenanceRepository(this.db)));
+    const admitted = await scoped((repository) =>
+      repository.claim(branch.branch_id, 'workspace_write', userId, async (tx) => {
+        const branches = new BranchRepository(tx);
+        const current = await branches.findById(branch.branch_id);
+        if (!current) throw new BadRequest('Branch no longer exists');
+        await ensureBranchWorkspaceAccess(
+          branches,
+          current,
+          userId,
+          (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.role as
+            | UserRole
+            | undefined,
+          'session',
+          'write',
+          this.app.get('config').execution?.allow_superadmin === true
+        );
+      })
     );
+    if (!admitted.acquired) throw new Error('Branch workspace maintenance is already in progress');
+    const invocation = await scoped((repository) => repository.beginExecution(admitted.claim));
+    // The existing contained request executor owns this short taskless write.
+    // Lost ownership never permits deletion to race an unknown writer.
+    const handle = startContainedExecutorCommand(payload, options);
+    const result = await handle.result;
+    if (!(await handle.verifyAbsence()))
+      throw new Error('Workspace write outcome requires containment reconciliation');
+    await scoped(async (repository) => {
+      await repository.settleExecution(admitted.claim, invocation);
+      await repository.release(admitted.claim);
+    });
+    return result;
   }
 
   /**
@@ -1124,11 +1665,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       ? { ...environment, template_overrides: repo.environment.template_overrides }
       : environment;
 
-    // Replace wholesale (NOT deep-merge) — otherwise deepMerge in
-    // RepoRepository.update would preserve stale variant keys that the user
-    // renamed or removed in .agor.yml, and fields dropped from a still-present
-    // variant would also linger. See packages/core/src/db/repositories/repos.ts
-    // setEnvironment() for the single-field replace semantics.
+    // Imports and YAML Save share the repository's complete-configuration
+    // replacement contract, removing deleted variants and fields atomically.
     const updated = await this.repoRepo.setEnvironment(id, replacement);
 
     emitServiceEvent(this.app, {
@@ -1210,6 +1748,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   async remove(id: string, params?: RepoParams): Promise<Repo> {
     const repo = await this.get(id, params);
     const cleanup = params?.query?.cleanup === true;
+    // This legacy path deletes remote files before taking branch lifecycle
+    // locks. Do not erase a newly admitted command's checkout. A distributed
+    // repository-cleanup workflow is deliberately outside environment scope.
+    const config = this.app.get('config');
+    if (
+      cleanup &&
+      config.deployment?.mode === 'ha' &&
+      config.deployment.ha?.execution_topology === 'external'
+    ) {
+      throw new Error(
+        'Repository filesystem cleanup is unavailable with external HA execution. Stop environments, inspect outcomes, and use operator-managed cleanup; metadata-only removal remains available.'
+      );
+    }
 
     // Get ALL branches for this repo (needed for both filesystem and database cleanup).
     // CRITICAL: Use the unbounded repository query so transport pagination and
@@ -1228,6 +1779,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       return found;
     };
     const branches = await findRepoBranches(repo.repo_id as UUID);
+    if (branches.length)
+      throw new Error(
+        'Permanently delete this repository’s branches first and wait for completion before removing the repository.'
+      );
 
     console.log(
       `🗑️  Repo deletion: Found ${branches.length} branch(s) for repo ${repo.slug} (${repo.repo_id})`

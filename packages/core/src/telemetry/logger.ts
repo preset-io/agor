@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { segmentTrackFields } from '../analytics/segment.js';
 import type { AgorConfig } from '../config/types.js';
 import type {
   OpenSourceTelemetryConfig,
@@ -151,9 +152,8 @@ export class BatchedOpenSourceTelemetryLogger implements OpenSourceTelemetryLogg
     try {
       const payload: SegmentTrackPayload = {
         type: 'track',
-        event: input.event,
+        ...segmentTrackFields(input.event, sanitizeTelemetryProperties(input.properties)),
         anonymousId: this.config.instanceId,
-        properties: sanitizeTelemetryProperties(input.properties),
         timestamp: input.timestamp ?? new Date().toISOString(),
         context: { app: 'agor', telemetry: 'open-source' },
       };

@@ -15,7 +15,11 @@ import {
   hasExactUserExecutorCredentialHome,
   resolveApiKey,
 } from '@agor/core/config';
-import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  runWithTenantDatabaseScope,
+  TaskRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AgenticToolName,
@@ -26,13 +30,22 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
   matchesTaskExecutorRuntimeScope,
 } from '../auth/executor-runtime-scope.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import {
   resolveExecutionCredentialHome,
   sameExecutionCredentialHome,
 } from './credential-home-identity.js';
+
+interface ClaudeRuntimeCredentialResolverLike {
+  resolve(
+    tenantId: string,
+    userId: UserID
+  ): Promise<{ connection: { CLAUDE_CODE_OAUTH_TOKEN: string }; useNativeAuth: false }>;
+}
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
@@ -58,7 +71,9 @@ export class ConfigService {
 
   constructor(
     db: TenantScopeAwareDatabase,
-    private readonly config: DeepReadonly<AgorConfig>
+    private readonly config: DeepReadonly<AgorConfig> = {},
+    private readonly claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike,
+    private readonly claudeBackendOAuth?: ClaudeBackendOAuth
   ) {
     this.db = db;
   }
@@ -89,6 +104,7 @@ export class ConfigService {
     source: 'user' | 'tenant' | 'none';
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
+    credentialExpiresAt?: string;
   }> {
     const { taskId, keyName, tool } = data;
     if (!isResolvableApiKeyName(keyName)) {
@@ -179,15 +195,70 @@ export class ConfigService {
       }
     }
 
-    const result = await runWithTenantDatabaseScope(
+    let result = await runWithTenantDatabaseScope(
       this.db,
       internalParams.tenant?.tenant_id,
       (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
     );
+    if (result.managedOAuth) {
+      const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+      if (
+        !authority ||
+        !this.claudeBackendOAuth ||
+        tool !== 'claude-code' ||
+        !userId ||
+        authority.taskId !== taskId ||
+        authority.userId !== userId ||
+        authority.sessionId !== sessionId
+      ) {
+        throw new Forbidden('A live task executor is required for managed Claude credentials.');
+      }
+      const assertTask = async () => {
+        await runWithTenantDatabaseScope(this.db, authority.tenantId, (db) =>
+          new TaskRepository(db).assertRuntimeCredentialAuthority(taskId, {
+            token_fingerprint: authority.tokenFingerprint,
+            principal_user_id: authority.userId,
+            session_id: authority.sessionId,
+            branch_id: authority.branchId,
+          })
+        );
+        const session = await this.app
+          ?.service('sessions')
+          .get(authority.sessionId, internalParams);
+        if (!session || session.agentic_tool !== tool || session.branch_id !== authority.branchId) {
+          throw new Forbidden('Task credential scope changed.');
+        }
+        if (session.sdk_home_scope !== 'branch') {
+          await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
+        }
+      };
+      const managed = await this.claudeBackendOAuth.resolve(authority.tenantId, userId, assertTask);
+      result = { ...result, ...managed, apiKey: undefined, managedOAuth: undefined };
+    }
+    if (result.useNativeAuth && tool === 'claude-code') {
+      const tenantId = internalParams.tenant?.tenant_id;
+      if (!tenantId || !userId || !this.claudeRuntimeCredentials) {
+        throw new BadRequest(
+          'Managed Claude subscription login is unavailable for this task. Use an API key or pasted subscription token.'
+        );
+      }
+      // The token is short-lived, but it is still the prompter's credential.
+      // Do not inject it into a session executing in another user's home; the
+      // same identity agreement that protected native-file auth remains the
+      // task-runtime credential boundary after canonical-file masking.
+      await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
+      const managed = await this.claudeRuntimeCredentials.resolve(tenantId, userId);
+      result = {
+        ...result,
+        apiKey: undefined,
+        connection: managed.connection,
+        useNativeAuth: false,
+      };
+    }
     if (result.useNativeAuth) {
       if (
         this.config.multi_tenancy?.mode === 'required_from_auth' &&
-        !(tool === 'codex' && hasExactUserExecutorCredentialHome(this.config))
+        !(hasExactUserExecutorCredentialHome(this.config) && tool === 'codex')
       ) {
         throw new BadRequest(
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
@@ -202,6 +273,7 @@ export class ConfigService {
       connection: result.connection as Record<string, string> | undefined,
       source: result.source,
       useNativeAuth: result.useNativeAuth,
+      ...(result.credentialExpiresAt ? { credentialExpiresAt: result.credentialExpiresAt } : {}),
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
   }
@@ -227,11 +299,12 @@ export class ConfigService {
         config: this.config,
         withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
       });
-    const requireCanonicalCodexHome = tool === 'codex' && this.config.deployment?.mode === 'ha';
-    let prompterHome = requireCanonicalCodexHome ? await homeOf(promptingUserId) : undefined;
+    const requireCanonicalProviderHome =
+      (tool === 'codex' || tool === 'claude-code') && this.config.deployment?.mode === 'ha';
+    let prompterHome = requireCanonicalProviderHome ? await homeOf(promptingUserId) : undefined;
     if (prompterHome?.homeStoreSource === 'override') {
       throw new BadRequest(
-        'HA Codex subscription auth requires Agor’s canonical tenant/user home. ' +
+        'HA subscription auth requires Agor’s canonical tenant/user home. ' +
           'Remove the filesystem_home override for this account or use an API key.'
       );
     }
@@ -240,7 +313,11 @@ export class ConfigService {
     const sessionsService = this.app?.service('sessions');
     if (!sessionsService) return;
     const session = (await sessionsService.get(sessionId, internalParams)) as
-      | { created_by?: string; sdk_home_scope?: 'execution_home' | 'branch' }
+      | {
+          created_by?: string;
+          unix_username?: string | null;
+          sdk_home_scope?: 'execution_home' | 'branch';
+        }
       | undefined;
     // A branch-scoped Session deliberately selects the immutable prompt actor's
     // per-user home and overlays that actor's pinned Codex auth inode. The
@@ -250,13 +327,23 @@ export class ConfigService {
     // home and therefore still require the comparison below.
     if (tool === 'codex' && session?.sdk_home_scope === 'branch') return;
     const ownerUserId = session?.created_by;
-    if (!ownerUserId || ownerUserId === promptingUserId) return;
+    if (!ownerUserId) return;
 
     prompterHome ??= await homeOf(promptingUserId);
-    const ownerHome = await homeOf(ownerUserId as UserID);
-    if (requireCanonicalCodexHome && ownerHome.homeStoreSource === 'override') {
+    let ownerHome =
+      ownerUserId === promptingUserId ? prompterHome : await homeOf(ownerUserId as UserID);
+    // Delegated sessions execute under the immutable home key stamped when the
+    // session was created. Comparing only current user rows lets a same-owner
+    // session silently read an old or reassigned home after that key changes.
+    if ((this.config.execution?.unix_user_mode ?? 'simple') === 'delegated') {
+      ownerHome = {
+        ...ownerHome,
+        delegatedHomeKey: session?.unix_username ?? null,
+      };
+    }
+    if (requireCanonicalProviderHome && ownerHome.homeStoreSource === 'override') {
       throw new BadRequest(
-        'HA Codex subscription auth requires the session owner’s canonical tenant/user home. ' +
+        'HA subscription auth requires the session owner’s canonical tenant/user home. ' +
           'Remove the filesystem_home override or use an API key.'
       );
     }
@@ -275,7 +362,9 @@ export class ConfigService {
  */
 export function createConfigService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike,
+  claudeBackendOAuth?: ClaudeBackendOAuth
 ): ConfigService {
-  return new ConfigService(db, config);
+  return new ConfigService(db, config, claudeRuntimeCredentials, claudeBackendOAuth);
 }

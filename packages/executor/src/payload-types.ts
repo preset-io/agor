@@ -14,7 +14,14 @@ import {
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
 } from '@agor/core/executor-protocol';
-import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_NAMES,
+  type AgenticToolName,
+  BRANCH_ARCHIVE_COMMAND,
+  BRANCH_CLEANUP_COMMAND,
+  BRANCH_CLEANUP_COMMAND_MAX_LENGTH,
+  BRANCH_DELETION_COMMAND,
+} from '@agor/core/types';
 import { z } from 'zod';
 
 // Re-export so existing executor consumers (handlers, tool-registry, etc.)
@@ -166,6 +173,12 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
+    promptOrigin: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('human') }),
+        z.object({ kind: z.literal('channel'), server: z.string().min(1) }),
+      ])
+      .optional(),
   }),
 });
 
@@ -292,8 +305,19 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
     /** Repo ID (UUID) */
     repoId: z.string().uuid(),
 
+    /**
+     * Generation that owns this provisioning attempt. Echoed back on the
+     * terminal `ready`/`failed` patch so the daemon can discard the
+     * acknowledgement when a retry has since superseded this attempt.
+     * Optional: a daemon that predates the fence simply won't send one.
+     */
+    provisioningAttemptId: z.string().optional(),
+
     /** Use restore mode: smart branch detection via ls-remote, falls back to creating from sourceBranch */
     restoreMode: z.boolean().optional(),
+
+    /** Retry/restore may adopt only a checkout durably owned by this DB branch. */
+    allowExistingCheckout: z.boolean().optional().default(false),
 
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
@@ -324,6 +348,9 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
 
     /** Tenant-aware root that must contain branchPath */
     branchesRoot: z.string(),
+
+    /** Authoritative base repository; never infer it from the victim .git file. */
+    repoPath: z.string().min(1),
 
     /** Force removal even if dirty */
     force: z.boolean().optional(),
@@ -373,6 +400,60 @@ export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
 
 export type GitBranchCleanPayload = z.infer<typeof GitBranchCleanPayloadSchema>;
 
+/** Server-resolved operation identity and immutable-at-admission executable configuration. */
+const BranchCleanupSpecificationSchema = z.object({
+  command: z
+    .string()
+    .min(1)
+    .max(BRANCH_CLEANUP_COMMAND_MAX_LENGTH)
+    .refine((value) => !value.includes('\0')),
+});
+const BranchMaintenanceParamsSchema = z.object({
+  branchId: z.string().uuid(),
+  operationId: z.string().uuid(),
+  generation: z.number().int().positive(),
+  executionId: z.string().uuid(),
+  deadlineAt: z.number().positive(),
+});
+const BranchCleanupParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('cleaned'),
+  cwd: z.string().min(1),
+  principalBranchAccess: z.literal('write'),
+  sandboxHomeStore: z.string().optional(),
+  sandboxWorktreesRoot: z.string().optional(),
+  sandboxBaseRepoPath: z.string().optional(),
+  cleanup: BranchCleanupSpecificationSchema,
+}).strict();
+// Fixed storage-owner operation, deliberately without a branch-shell cwd/mount.
+const BranchWorkspaceRemovalParamsSchema = BranchMaintenanceParamsSchema.extend({
+  filesystemAction: z.literal('deleted'),
+  removal: z
+    .object({
+      branchPath: z.string().min(1),
+      branchesRoot: z.string().min(1),
+      repoPath: z.string().min(1),
+      storageMode: z.enum(['worktree', 'clone']),
+    })
+    .strict(),
+}).strict();
+export const BranchCleanPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_CLEANUP_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: BranchCleanupParamsSchema,
+});
+export type BranchCleanPayload = z.infer<typeof BranchCleanPayloadSchema>;
+export const BranchArchivePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_ARCHIVE_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: z.discriminatedUnion('filesystemAction', [
+    BranchCleanupParamsSchema,
+    BranchWorkspaceRemovalParamsSchema,
+  ]),
+});
+export type BranchArchivePayload = z.infer<typeof BranchArchivePayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Branch Files List Payload
 // ═══════════════════════════════════════════════════════════
@@ -416,6 +497,7 @@ export const BranchFilesReadPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     branchId: z.string().uuid(),
     filePath: z.string().min(1),
+    gitStatusSource: z.enum(['combined', 'workingTree', 'staged']).optional().default('combined'),
   }),
 });
 
@@ -575,7 +657,7 @@ export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPaylo
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Environment lifecycle payload - run shell-based start/stop/restart/nuke
+ * Environment lifecycle payload - run shell-based start/stop/nuke
  * commands from the executor. Webhook lifecycle commands stay daemon-owned.
  */
 export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
@@ -590,29 +672,34 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       branchId: z.string().uuid(),
 
       /** Branch checkout path. Executor refetches the branch but this avoids ambiguity. */
-      branchPath: z.string().optional(),
+      branchPath: z.string(),
 
       /** Lifecycle action */
-      action: z.enum(['start', 'stop', 'restart', 'nuke']),
+      action: z.enum(['start', 'stop', 'nuke']),
+      /** Durable, daemon-issued attempt authority for every execution mode. */
+      attempt: z.object({
+        id: z.string().uuid(),
+        claimDeadline: z.string().datetime(),
+        commandDeadline: z.string().datetime(),
+        resultDeadline: z.string().datetime(),
+        externalJobDeadlineMs: z.number().int().min(305000).max(365000),
+      }),
 
-      /** Shell start command. Required for start/restart. */
+      /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
 
-      /** Shell stop command. Required for stop and used before restart when present. */
+      /** Shell stop command. Required for stop. */
       stopCommand: z.string().optional(),
 
       /** Shell nuke command. Required for nuke. */
       nukeCommand: z.string().optional(),
-
-      /** Static app URL rendered by the daemon/branch snapshot. */
-      appUrl: z.string().optional(),
     })
     .superRefine((params, ctx) => {
-      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
+      if (params.action === 'start' && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
-          message: 'startCommand is required for start/restart',
+          message: 'startCommand is required for start',
         });
       }
       if (params.action === 'stop' && !params.stopCommand) {
@@ -816,6 +903,30 @@ export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
 
 export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 
+/**
+ * Narrow user-runtime credential filesystem operation for Claude's
+ * `~/.claude/.credentials.json`. Like `codex.auth-file`, the daemon resolves the
+ * Unix identity and spawns this command as that identity; no username or path is
+ * accepted in the payload.
+ */
+export const ClaudeAuthFilePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('claude.auth-file'),
+  params: z.discriminatedUnion('operation', [
+    z.object({ operation: z.literal('inspect') }),
+    z.object({
+      operation: z.literal('write'),
+      content: z.string().max(64 * 1024),
+      generation: z.number().int().positive().optional(),
+    }),
+    z.object({
+      operation: z.literal('delete'),
+      generation: z.number().int().positive().optional(),
+    }),
+  ]),
+});
+
+export type ClaudeAuthFilePayload = z.infer<typeof ClaudeAuthFilePayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Union Payload Type
 // ═══════════════════════════════════════════════════════════
@@ -823,13 +934,37 @@ export type CodexAuthFilePayload = z.infer<typeof CodexAuthFilePayloadSchema>;
 /**
  * All supported executor payloads
  */
+export const BranchDeletePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal(BRANCH_DELETION_COMMAND),
+  daemonUrl: z.string().url(),
+  sessionToken: z.string().min(1),
+  params: z.object({
+    branchId: z.string().uuid(),
+    operationId: z.string().uuid(),
+    generation: z.number().int().positive(),
+    executionId: z.string().uuid(),
+    branchPath: z.string(),
+    branchesRoot: z.string(),
+    repoPath: z.string(),
+    branchHome: z.string(),
+    /** Existing tenant storage anchor; branch-homes itself is lazily created. */
+    tenantDataRoot: z.string(),
+    storageMode: z.enum(['clone', 'worktree']),
+    verifyDelegatedStorageMounts: z.boolean().optional(),
+  }),
+});
+export type BranchDeletePayload = z.infer<typeof BranchDeletePayloadSchema>;
+
 const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
+  BranchDeletePayloadSchema,
   PromptPayloadSchema,
   AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchRemovePayloadSchema,
   GitBranchCleanPayloadSchema,
+  BranchCleanPayloadSchema,
+  BranchArchivePayloadSchema,
   BranchFilesListPayloadSchema,
   BranchFilesBrowsePayloadSchema,
   BranchFilesReadPayloadSchema,
@@ -852,6 +987,7 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   ZellijAttachPayloadSchema,
   ZellijTabPayloadSchema,
   CodexAuthFilePayloadSchema,
+  ClaudeAuthFilePayloadSchema,
 ]);
 
 export const ExecutorPayloadSchema = ExecutorPayloadUnionSchema.superRefine((payload, ctx) => {
@@ -907,6 +1043,8 @@ export function getSupportedCommands(): string[] {
     'git.branch.add',
     'git.branch.remove',
     'git.branch.clean',
+    BRANCH_CLEANUP_COMMAND,
+    BRANCH_ARCHIVE_COMMAND,
     'git.repo.inspect',
     'git.managed-credentials.reconcile',
     'branch.files.list',
@@ -929,6 +1067,7 @@ export function getSupportedCommands(): string[] {
     'zellij.attach',
     'zellij.tab',
     'codex.auth-file',
+    'claude.auth-file',
   ];
 }
 

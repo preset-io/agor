@@ -358,3 +358,22 @@ export function validateHeadersJSON(headersValue: unknown): string | undefined {
 
   return undefined;
 }
+
+/** Environment edits must not silently disappear on malformed JSON. */
+export function validateEnvJSON(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return 'Environment variables must be valid JSON';
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    return 'Environment variables must be a JSON object';
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+      return 'Environment variable names must be valid identifiers';
+    if (typeof entry !== 'string') return 'Environment variable values must be strings';
+  }
+  return undefined;
+}

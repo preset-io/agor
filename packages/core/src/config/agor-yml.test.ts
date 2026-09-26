@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { renderBranchSnapshot } from '../environment/render-snapshot';
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
 
@@ -266,6 +267,62 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('renders the experimental Codespaces launcher with shell-quoted exact identity and ref', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const snapshot = renderBranchSnapshot(
+      {
+        // Agor's slug is a local identifier and is not necessarily the
+        // provider's owner/repository identity.
+        slug: 'agor',
+        remote_url: 'https://github.com/preset-io/agor.git',
+        environment: env!,
+      },
+      {
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        branch_unique_id: 42,
+        name: 'safe-display-name',
+        ref: "feature/it's-$(not-a-command)",
+        path: '/worktree',
+      },
+      'codespaces-sqlite'
+    );
+
+    expect(snapshot?.start).toContain("--repository 'preset-io/agor'");
+    expect(snapshot?.start).toContain("--ref 'feature/it'\"'\"'s-$(not-a-command)'");
+    expect(snapshot?.start).toContain("--binding '01999999-1111-7222-8333-444444444444'");
+    expect(snapshot?.start).toContain('--wait-seconds 1200');
+    expect(snapshot?.start).toContain('--port-visibility public');
+    expect(snapshot?.start).toContain('--emit-health public-only');
+    expect(snapshot?.health).toBeUndefined();
+    expect(snapshot?.app).toBe('https://github.com/codespaces');
+  });
+
+  it('does not render a same-named non-GitHub repository as a GitHub target', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const snapshot = renderBranchSnapshot(
+      {
+        slug: 'agor',
+        remote_url: 'https://gitlab.com/preset-io/agor.git',
+        environment: env!,
+      },
+      {
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        branch_unique_id: 42,
+        name: 'safe-display-name',
+        ref: 'feature/test',
+        path: '/worktree',
+      },
+      'codespaces-sqlite'
+    );
+
+    expect(snapshot?.start).toContain("--repository ''");
+    expect(snapshot?.start).not.toContain('preset-io/agor');
+  });
+
   it('renders HA as the auth-resolved multi-tenant development profile', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
@@ -273,9 +330,12 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     if (ha === null) throw new Error('ha variant must resolve');
 
     expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
+    expect(ha.start).toContain(
+      `AGOR_HA_PUBLIC_ORIGIN="\${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:`
+    );
     expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
     expect(ha.app).toMatch(/\/dev-auth\/$/);
-    expect(ha.description).toMatch(/auth-resolved tenants/);
+    expect(ha.description).toMatch(/auth-resolved multi-tenancy/);
   });
 
   it('forwards the RBAC fixture flag used by .env.postgres', () => {

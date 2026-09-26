@@ -1,9 +1,113 @@
-import { describe, expect, it } from 'vitest';
+import type { SessionID, TaskID } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCursorAssistantContent,
+  executeCursorTask,
   normalizeCursorToolInput,
   normalizeCursorToolName,
 } from './cursor.js';
+
+const mocks = vi.hoisted(() => ({ send: vi.fn(), configured: vi.fn() }));
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+}));
+
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(async () => {
+    const agent = {
+      agentId: 'provider-thread-A',
+      send: mocks.send,
+      close: vi.fn(),
+    };
+    return {
+      Agent: {
+        create: vi.fn(async (options) => {
+          mocks.configured(options);
+          return agent;
+        }),
+        resume: vi.fn(async (_id, options) => {
+          mocks.configured(options);
+          return agent;
+        }),
+      },
+    };
+  }),
+}));
+vi.mock('@agor/core/mcp', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp')>()),
+  getMcpServersForSession: vi.fn(async () => [
+    {
+      server: {
+        name: 'external',
+        transport: 'http',
+        url: 'https://example.com/mcp',
+      },
+    },
+  ]),
+  resolveScopedMCPAuthHeaders: vi.fn(async () => ({ Authorization: 'Bearer external-token' })),
+}));
+vi.mock('../../db/feathers-repositories.js', () => ({
+  createFeathersBackedRepositories: () => ({}),
+}));
+vi.mock('./git-safe-directory.js', () => ({ configureSessionGitSafeDirectories: vi.fn() }));
+vi.mock('./base-executor.js', () => ({
+  createStreamingCallbacks: () => ({}),
+  stampGitStateAtTaskStart: vi.fn(),
+  captureGitStateAtTaskEnd: vi.fn(),
+  settleTaskFailure: vi.fn(),
+}));
+
+it('refreshes Cursor request identity without persisting the identity block as user text', async () => {
+  const messagesCreate = vi.fn();
+  mocks.send.mockResolvedValue({
+    stream: async function* () {},
+    wait: async () => ({ status: 'completed', result: '' }),
+  });
+  const services = {
+    'config/resolve-api-key': { create: async () => ({ apiKey: 'test-key' }) },
+    sessions: {
+      get: async (id: string) => ({
+        session_id: id,
+        branch_id: 'branch-1',
+        mcp_token: 'test-token',
+        sdk_session_id: 'provider-thread-A',
+      }),
+    },
+    branches: { get: async () => ({ path: '/workspace' }) },
+    messages: { find: async () => [], create: messagesCreate },
+    tasks: { patch: vi.fn() },
+  };
+  const client = { service: (name: keyof typeof services) => services[name] };
+  for (const id of ['fork-B', 'fork-B', 'nested-C']) {
+    await executeCursorTask({
+      client: client as never,
+      sessionId: id as SessionID,
+      taskId: 'task-1' as TaskID,
+      prompt: 'Inherited ID: A',
+      abortController: new AbortController(),
+    });
+    expect(mocks.configured).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          agor: expect.objectContaining({
+            headers: { Authorization: 'Bearer test-token', 'x-agor-mcp-client': 'cursor' },
+          }),
+        }),
+      })
+    );
+    expect(mocks.configured.mock.lastCall?.[0].mcpServers.external.headers).toEqual({
+      Authorization: 'Bearer external-token',
+    });
+    expect(mocks.send).toHaveBeenLastCalledWith(
+      expect.stringContaining(`Current Agor session ID: ${id}`),
+      expect.objectContaining({ idempotencyKey: 'task-1' })
+    );
+    expect(messagesCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: 'Inherited ID: A' })
+    );
+  }
+});
 
 describe('Cursor SDK handler helpers', () => {
   it('persists thinking before assistant text', () => {

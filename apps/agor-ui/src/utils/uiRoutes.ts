@@ -6,6 +6,8 @@ function currentPathname(): string {
   return typeof window === 'undefined' ? '/' : window.location.pathname;
 }
 
+// Remote watch can mount Vite at /ui too; the URL base, not production mode,
+// determines routing for both packaged and live-preview UIs.
 export function getRouterBasename(
   baseUrl = import.meta.env.BASE_URL,
   pathname = currentPathname()

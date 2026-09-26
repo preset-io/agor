@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MCPExternalError } from './external-error';
 import { clearAllJWTTokens, fetchJWTToken, resolveMCPAuthHeaders } from './jwt-auth';
 import { __seedAuthCodeTokenCacheForTests, clearAuthCodeTokenCache } from './oauth-mcp-transport';
 
@@ -15,6 +16,20 @@ async function listen(handler: http.RequestListener): Promise<string> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
   return `http://127.0.0.1:${address.port}`;
+}
+
+async function expectJWTConfigurationRequired(operation: Promise<unknown>): Promise<void> {
+  const error = await operation.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(MCPExternalError);
+  expect(error).toMatchObject({
+    category: 'configuration_required',
+    action: 'review_configuration',
+    diagnostic: {
+      stage: 'jwt',
+      type: 'ConfigurationError',
+      code: 'unsafe_outbound_url',
+    },
+  });
 }
 
 afterEach(async () => {
@@ -148,9 +163,9 @@ describe('JWT discovery authentication outbound policy', () => {
     'https://169.254.169.254/latest/meta-data',
     'http://example.com/token',
   ])('rejects loopback, private, metadata, and non-HTTPS destination %s', async (api_url) => {
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toThrow('The MCP operation failed');
+    );
   });
 
   it('allows the narrow loopback development exception only when explicit', async () => {
@@ -159,9 +174,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end('{"access_token":"development-token"}');
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: false, cache: false })
-    ).rejects.toThrow('The MCP operation failed');
+    );
     await expect(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
     ).resolves.toBe('development-token');
@@ -173,9 +188,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end();
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('The MCP operation failed');
+    );
   });
 
   it('bounds provider responses before parsing', async () => {
@@ -184,9 +199,9 @@ describe('JWT discovery authentication outbound policy', () => {
       response.end('x'.repeat(300 * 1024));
     });
 
-    await expect(
+    await expectJWTConfigurationRequired(
       fetchJWTToken({ api_url, ...credentials }, { allowLocalhostHttp: true, cache: false })
-    ).rejects.toThrow('The MCP operation failed');
+    );
   });
 
   it('does not expose a provider response body in errors', async () => {

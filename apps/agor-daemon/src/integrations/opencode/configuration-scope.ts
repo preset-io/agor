@@ -38,23 +38,21 @@ export async function resolveOpenCodeConfigurationDirectory(input: {
     const branchRepo = new BranchRepository(tenantDb);
     const branch = await branchRepo.findById(branchId);
     if (!branch) throw new Forbidden('OpenCode configuration branch is not authorized.');
-    if (input.config.execution?.branch_rbac === true) {
-      const callerId = input.context.subjectUserId as UUID;
-      const effectiveAccess = await branchRepo.resolveUserAccess(branch, callerId);
-      if (
-        !hasBranchPermission(
-          branch,
-          callerId,
-          effectiveAccess.is_owner,
-          'view',
-          input.params?.user?.role,
-          input.config.execution?.allow_superadmin === true,
-          effectiveAccess.can
-        ) ||
-        (effectiveAccess.fs_access !== 'read' && effectiveAccess.fs_access !== 'write')
-      ) {
-        throw new Forbidden('OpenCode configuration branch is not authorized.');
-      }
+    const callerId = input.context.subjectUserId as UUID;
+    const effectiveAccess = await branchRepo.resolveUserAccess(branch, callerId);
+    if (
+      !hasBranchPermission(
+        branch,
+        callerId,
+        effectiveAccess.is_owner,
+        'view',
+        input.params?.user?.role,
+        input.config.execution?.allow_superadmin === true,
+        effectiveAccess.can
+      ) ||
+      (effectiveAccess.fs_access !== 'read' && effectiveAccess.fs_access !== 'write')
+    ) {
+      throw new Forbidden('OpenCode configuration branch is not authorized.');
     }
     return branch.path;
   });

@@ -1,4 +1,9 @@
-import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
+import {
+  getCurrentTenantDatabaseScope,
+  RepoRepository,
+  runWithTenantContext,
+  UsersRepository,
+} from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestExecutor } from '../utils/spawn-executor.js';
 import { FileService } from './file.js';
@@ -16,14 +21,20 @@ vi.mock('../utils/spawn-executor.js', () => ({
   requestExecutor: vi.fn(),
 }));
 
-function createApp() {
+function createApp(config = {}) {
   return {
-    get: () => ({}),
+    get: () => config,
     sessionTokenService: { generateCommandToken: vi.fn(async () => 'user-token') },
   } as never;
 }
 
-const branch = { branch_id: 'branch-1', path: '/tenant-a/branch-1' };
+const branch = {
+  branch_id: 'branch-1',
+  path: '/tenant-a/branch-1',
+  repo_id: 'repo-1',
+  storage_mode: 'worktree',
+  primary_owner_user_id: 'branch-owner',
+};
 
 function createBranchRepo(
   findById = vi.fn().mockResolvedValue(branch),
@@ -43,6 +54,7 @@ function createBranchRepo(
 describe('FileService executor failures', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue(undefined);
   });
 
@@ -65,6 +77,85 @@ describe('FileService executor failures', () => {
         })
       )
     ).rejects.toThrow('Failed to browse files: executor unavailable');
+  });
+
+  it.each(['combined', 'staged', 'workingTree'] as const)(
+    'does not dispatch a %s read for a branch outside the caller tenant',
+    async (source) => {
+      const findById = vi.fn(async () =>
+        getCurrentTenantDatabaseScope()?.tenantId === 'tenant-a' ? branch : null
+      );
+      const service = new FileService(
+        createBranchRepo(findById),
+        { run: vi.fn() } as never,
+        createApp()
+      );
+      const params = {
+        query: { branch_id: branch.branch_id, git_status_source: source },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' as const },
+      };
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { file: { path: 'a.txt' } },
+      });
+      await runWithTenantContext('tenant-a', () => service.get('a.txt', params));
+      expect(requestExecutor).toHaveBeenCalledOnce();
+      vi.mocked(requestExecutor).mockClear();
+      await expect(
+        runWithTenantContext('tenant-b', () => service.get('a.txt', params))
+      ).rejects.toThrow('Branch not found');
+      expect(requestExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects invalid Git snapshot selectors before dispatch', async () => {
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
+    await expect(
+      runWithTenantContext('tenant-a', () =>
+        service.get('a.txt', {
+          query: { branch_id: branch.branch_id, git_status_source: 'HEAD~1' },
+          user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+        } as never)
+      )
+    ).rejects.toThrow('git_status_source must be');
+    expect(requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('passes the requested git snapshot to file previews', async () => {
+    vi.mocked(requestExecutor).mockResolvedValue({
+      success: true,
+      data: {
+        file: {
+          path: 'added.txt',
+          title: 'added.txt',
+          size: 6,
+          lastModified: '',
+          isText: true,
+          gitStatus: 'added',
+          content: 'staged',
+          encoding: 'utf-8',
+        },
+      },
+    });
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
+
+    await runWithTenantContext('tenant-a', () =>
+      service.get('added.txt', {
+        query: { branch_id: 'branch-1', git_status_source: 'staged' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.files.read',
+        params: expect.objectContaining({
+          filePath: 'added.txt',
+          gitStatusSource: 'staged',
+        }),
+      }),
+      expect.anything()
+    );
   });
 
   it.each([
@@ -130,11 +221,67 @@ describe('FileService executor failures', () => {
     }
   );
 
+  it('passes the caller-scoped canonical home and tenant mounts to the per-user sandbox', async () => {
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue({
+      user_id: 'user-1',
+      filesystem_home: null,
+    } as never);
+    vi.spyOn(RepoRepository.prototype, 'findById').mockResolvedValue({
+      local_path: '/srv/tenants/tenant-a/repos/org/repo',
+    } as never);
+    vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { files: [] } });
+    const service = new FileService(
+      createBranchRepo(),
+      { run: vi.fn() } as never,
+      createApp({
+        paths: { data_home: '/srv/agor' },
+        multi_tenancy: {
+          mode: 'required_from_auth',
+          filesystem_isolation_enabled: true,
+          tenants_base_folder: '/srv/tenants',
+        },
+        execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+      })
+    );
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { branch_id: 'branch-1' },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      })
+    );
+
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          sandboxHomeStore: '/srv/tenants/tenant-a/homes/user-1',
+          sandboxWorktreesRoot: '/srv/tenants/tenant-a/worktrees',
+          sandboxBaseRepoPath: '/srv/tenants/tenant-a/repos/org/repo',
+        }),
+      }),
+      expect.objectContaining({
+        templateVariables: expect.objectContaining({ user_id: 'user-1' }),
+      })
+    );
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledWith('user-1');
+    expect(JSON.stringify(vi.mocked(requestExecutor).mock.calls[0])).not.toContain('branch-owner');
+  });
+
   it('scopes database reads but leaves executor work outside the transaction', async () => {
     const db = { run: vi.fn() } as never;
     const findById = vi.fn(async () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
-      return { branch_id: 'branch-1' };
+      return branch;
+    });
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockImplementation(
+      async (userId) => {
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+        return { user_id: userId as never, filesystem_home: null };
+      }
+    );
+    vi.spyOn(RepoRepository.prototype, 'findById').mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return { local_path: '/srv/agor/repos/org/repo' } as never;
     });
     impersonationMocks.resolveDelegatedExecutionHomeKey.mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
@@ -144,7 +291,14 @@ describe('FileService executor failures', () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { files: [] } };
     });
-    const service = new FileService(createBranchRepo(findById), db, createApp());
+    const service = new FileService(
+      createBranchRepo(findById),
+      db,
+      createApp({
+        paths: { data_home: '/srv/agor' },
+        execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+      })
+    );
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -154,6 +308,8 @@ describe('FileService executor failures', () => {
     );
 
     expect(findById).toHaveBeenCalledOnce();
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledOnce();
+    expect(RepoRepository.prototype.findById).toHaveBeenCalledOnce();
     expect(requestExecutor).toHaveBeenCalledOnce();
   });
 

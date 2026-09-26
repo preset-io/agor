@@ -8,10 +8,19 @@ import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor
 import { eq, like, sql } from 'drizzle-orm';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
+import { resolveRepoCleanupPolicy, validateRepoCleanupPolicy } from '../../types/branch-cleanup';
 import { httpUrlHasUserinfo, stripHttpUrlUserinfo } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
-import { type RepoInsert, type RepoRow, repos } from '../schema';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
+import { branches, type RepoInsert, type RepoRow, repos } from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -90,6 +99,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         ...data,
+        cleanup_policy: resolveRepoCleanupPolicy(row.cleanup_policy),
         remote_url,
         environment,
         environment_config,
@@ -137,6 +147,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
       created_at: new Date(repo.created_at ?? now),
       updated_at: repo.last_updated ? new Date(repo.last_updated) : new Date(now),
       repo_type: repo.repo_type,
+      cleanup_policy: validateRepoCleanupPolicy(resolveRepoCleanupPolicy(repo.cleanup_policy)),
       data: {
         name: repo.name ?? repo.slug,
         remote_url: repo.remote_url ? stripHttpUrlUserinfo(repo.remote_url) : undefined,
@@ -361,6 +372,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    *
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
    * when multiple updates happen concurrently (e.g., permission_config updates).
+   * A supplied v2 environment is a complete configuration and replaces the old
+   * value; omitting that top-level key preserves it. null/undefined clears it.
    */
   async update(id: string, updates: Partial<Repo>): Promise<Repo> {
     try {
@@ -387,6 +400,17 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates
         const merged = deepMerge(current, updates);
+        // YAML Save and imports supply a complete v2 configuration, not a
+        // nested patch. Otherwise removed variants/fields survive the merge.
+        if (Object.hasOwn(updates, 'environment')) {
+          merged.environment = updates.environment ?? undefined;
+          // Do not resurrect a cleared config through the legacy fallback.
+          // repoToInsert re-derives this projection from the replacement.
+          merged.environment_config = undefined;
+        }
+        if (Object.hasOwn(updates, 'cleanup_policy')) {
+          merged.cleanup_policy = validateRepoCleanupPolicy(updates.cleanup_policy);
+        }
         const insertData = this.repoToInsert(merged);
 
         // STEP 3: Write merged repo (within same transaction)
@@ -397,6 +421,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
             slug: insertData.slug,
             updated_at: newUpdatedAt,
             repo_type: insertData.repo_type,
+            cleanup_policy: insertData.cleanup_policy,
             data: insertData.data,
           })
           .where(eq(repos.repo_id, fullId))
@@ -407,6 +432,8 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         // explicit-clear sentinels (e.g. `clone_error: null` from deepMerge)
         // to `undefined`; without this sync the caller sees the un-coerced
         // null and the type invariant lies.
+        merged.environment = insertData.data.environment;
+        merged.environment_config = insertData.data.environment_config;
         merged.clone_error = insertData.data.clone_error;
         merged.remote_url = insertData.data.remote_url;
         merged.last_updated = newUpdatedAt.toISOString();
@@ -423,77 +450,10 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
   }
 
   /**
-   * Replace specified top-level fields on the repo WITHOUT deep-merging.
-   *
-   * Unlike {@link update}, any key present in `patch` fully overwrites the
-   * corresponding value on the current row — nested objects are NOT merged.
-   * Fields omitted from `patch` are left untouched. Pass a field with value
-   * `undefined` to clear it.
-   *
-   * Used by named wrappers like {@link setEnvironment} that want replace
-   * semantics for a specific subset of fields. Kept private so callers must
-   * go through a wrapper where the decision to replace-vs-merge is explicit.
-   *
-   * Runs in a transaction so the read-replace-write is atomic, matching
-   * {@link update}'s concurrency guarantees.
-   */
-  private async replaceFields(id: string, patch: Partial<Repo>): Promise<Repo> {
-    try {
-      const fullId = await this.resolveId(id);
-
-      return await this.db.transaction(async (tx) => {
-        await lockRowForUpdate(txAsDb(tx), this.db, repos, eq(repos.repo_id, fullId));
-
-        const currentRow = await select(txAsDb(tx))
-          .from(repos)
-          .where(eq(repos.repo_id, fullId))
-          .one();
-
-        if (!currentRow) {
-          throw new EntityNotFoundError('Repo', id);
-        }
-
-        const current = this.rowToRepo(currentRow);
-        const next: Repo = { ...current, ...patch };
-        const insertData = this.repoToInsert(next);
-        const newUpdatedAt = new Date();
-        await update(txAsDb(tx), repos)
-          .set({
-            slug: insertData.slug,
-            updated_at: newUpdatedAt,
-            repo_type: insertData.repo_type,
-            data: insertData.data,
-          })
-          .where(eq(repos.repo_id, fullId))
-          .run();
-
-        // repoToInsert may re-derive computed fields from the patch (e.g. the
-        // v1 environment_config projection is derived from v2 environment).
-        // Sync those back onto `next` so the returned Repo matches what was
-        // actually persisted — otherwise callers see stale values for any
-        // field we explicitly undefined'd in `patch`.
-        next.environment = insertData.data.environment;
-        next.environment_config = insertData.data.environment_config;
-        next.remote_url = insertData.data.remote_url;
-        next.last_updated = newUpdatedAt.toISOString();
-        return next;
-      });
-    } catch (error) {
-      if (error instanceof RepositoryError) throw error;
-      if (error instanceof EntityNotFoundError) throw error;
-      throw new RepositoryError(
-        `Failed to replace repo fields: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
-  }
-
-  /**
    * Replace the repo's `environment` column wholesale.
    *
-   * Unlike {@link update}, this does NOT deep-merge — use this for imports
-   * and any other "source-of-truth refresh" that needs to CLEAR keys
-   * (renamed or removed variants, dropped fields inside a variant, etc).
+   * Named convenience for imports; uses the same atomic replacement contract
+   * as {@link update} so imports and the repository YAML editor cannot drift.
    *
    * Pass `null` to clear the environment entirely. `template_overrides` is
    * not treated specially here; callers that need to preserve DB-only
@@ -501,14 +461,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * `environment` object themselves.
    */
   async setEnvironment(id: string, environment: RepoEnvironment | null): Promise<Repo> {
-    // Clear the v1 projection explicitly — repoToInsert re-derives it from
-    // the new v2 environment, but only when environment_config is undefined
-    // on the incoming patch. Without this, clearing environment would leave
-    // a ghost v1 projection around.
-    return this.replaceFields(id, {
-      environment: environment ?? undefined,
-      environment_config: undefined,
-    });
+    return this.update(id, { environment: environment ?? undefined });
   }
 
   /**
@@ -518,7 +471,19 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await deleteFrom(this.db, repos).where(eq(repos.repo_id, fullId)).run();
+      const result = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await new RepoRepository(tx).lockForBranchInventory(fullId);
+          if (await select(tx).from(branches).where(eq(branches.repo_id, fullId)).limit(1).one()) {
+            throw new RepositoryError(
+              'Permanently delete repository branches before deleting the repository'
+            );
+          }
+          return deleteFrom(tx, repos).where(eq(repos.repo_id, fullId)).run();
+        },
+        { sqliteImmediate: true }
+      );
 
       if (result.rowsAffected === 0) {
         throw new EntityNotFoundError('Repo', id);
@@ -545,7 +510,9 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
    * Use BranchRepository instead.
    */
   async removeBranch(): Promise<never> {
-    throw new Error('removeBranch is deprecated. Use BranchRepository.delete() instead.');
+    throw new Error(
+      'removeBranch is deprecated. Use the branch permanent deletion service instead.'
+    );
   }
 
   /**

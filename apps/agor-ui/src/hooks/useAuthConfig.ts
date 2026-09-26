@@ -45,6 +45,11 @@ interface InstanceConfig {
 }
 
 export interface FeaturesConfig {
+  /** Instance-owned informational copy; never a capability or repository override. */
+  environmentDisclaimerMarkdown?: string;
+  environmentCommands?: ReturnType<
+    typeof import('@agor/core/config/browser').environmentCommandCapabilities
+  >;
   /** Operator-selected repository used to bootstrap the first teammate. */
   teammateFrameworkRepoUrl?: string;
   /**
@@ -71,6 +76,9 @@ export interface FeaturesConfig {
   multiUser?: boolean;
   /** Experimental Cursor SDK provider enabled on the daemon. */
   cursorSdk?: boolean;
+  /** Daemon-driven Claude subscription OAuth is explicitly operator-authorized. */
+  claudeSubscriptionOAuth?: boolean;
+  claudeOAuthCapability?: import('@agor/core/types').ClaudeOAuthCapability;
   /**
    * Resolved branch storage policy from execution.branch_storage.
    * Defaults server-side to { defaultMode: 'worktree',
@@ -79,7 +87,7 @@ export interface FeaturesConfig {
   branchStorage?: BranchStorageConfig;
   /** Resolved upload limits enforced by the daemon. */
   uploadPolicy?: UploadIngressPolicy;
-  /** Whether normalized board/branch RBAC is enabled on the daemon. */
+  /** @deprecated Compatibility field from older daemons; current RBAC is always enabled. */
   branchRbac?: boolean;
 }
 

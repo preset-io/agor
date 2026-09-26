@@ -107,7 +107,10 @@ function makeClient() {
   return { client, channelCreate, channelPatch, testCreate };
 }
 
-function renderTable(client: AgorClient) {
+function renderTable(
+  client: AgorClient,
+  options: { channels?: GatewayChannel[]; onUpdate?: (...args: unknown[]) => unknown } = {}
+) {
   const branch = {
     branch_id: 'branch-1',
     name: 'main',
@@ -117,6 +120,7 @@ function renderTable(client: AgorClient) {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    role: 'admin',
   } as unknown as User;
 
   return render(
@@ -124,7 +128,10 @@ function renderTable(client: AgorClient) {
       <AntdApp>
         <GatewayChannelsTable
           client={client}
-          gatewayChannelById={new Map<string, GatewayChannel>()}
+          gatewayChannelById={
+            new Map((options.channels ?? []).map((channel) => [channel.id, channel]))
+          }
+          onUpdate={options.onUpdate as never}
           branchById={new Map([[branch.branch_id, branch]])}
           userById={new Map([[user.user_id, user]])}
           mcpServerById={new Map<string, MCPServer>()}
@@ -190,9 +197,13 @@ function getTokenInput(): HTMLInputElement {
 async function fillDiscordWizard({
   allowedUserId,
   allowedRoleId,
+  files = false,
+  channelHistory = false,
 }: {
   allowedUserId?: string;
   allowedRoleId?: string;
+  files?: boolean;
+  channelHistory?: boolean;
 }) {
   clickButton(/Add Channel/);
   selectDiscord();
@@ -221,6 +232,9 @@ async function fillDiscordWizard({
 
   expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
+  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
+  if (channelHistory)
+    fireEvent.click(screen.getByLabelText(/Let session agents read channel history/));
   addTag('Allowed public text channel IDs', CHANNEL_ID);
   if (allowedUserId) addTag('Allowed user IDs', allowedUserId);
   if (allowedRoleId) addTag('Allowed role IDs', allowedRoleId);
@@ -270,7 +284,12 @@ describe('GatewayChannelsTable Discord create wizard', () => {
   it('submits the complete draft, verifies stored credentials, then enables', async () => {
     const { client, channelCreate, channelPatch, testCreate } = makeClient();
     renderTable(client);
-    await fillDiscordWizard({ allowedUserId: USER_ID, allowedRoleId: ROLE_ID });
+    await fillDiscordWizard({
+      allowedUserId: USER_ID,
+      allowedRoleId: ROLE_ID,
+      files: true,
+      channelHistory: true,
+    });
     await createDraft(channelCreate);
 
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
@@ -297,13 +316,18 @@ describe('GatewayChannelsTable Discord create wizard', () => {
           rate_limit_max_retries: 2,
           rate_limit_max_total_delay_ms: 10000,
         },
-        files: false,
-        agent_tools: [],
+        files: true,
+        agent_tools: { channel_history: true },
       },
     });
     expect(JSON.stringify(channelCreate.mock.calls[0][0])).not.toContain('••••••••');
 
     fireEvent.change(getTokenInput(), { target: { value: TOKEN } });
+    clickButton(/^Back$/);
+    await waitForStep('Access');
+    clickButton(/^Continue$/);
+    await waitForStep('Token & test');
+    expect(getTokenInput()).toHaveValue(TOKEN);
     clickButton(/Verify and enable/);
     await waitFor(() => expect(channelPatch).toHaveBeenCalledTimes(2), ASYNC);
     expect(channelPatch.mock.calls[0]).toEqual([
@@ -322,5 +346,62 @@ describe('GatewayChannelsTable Discord create wizard', () => {
       channelPatch.mock.invocationCallOrder[1]
     );
     expect(channelPatch.mock.calls[1]).toEqual(['channel-discord', { enabled: true }]);
+  }, 30_000);
+});
+
+describe('GatewayChannelsTable Discord edit', () => {
+  const storedChannel = {
+    id: 'channel-discord',
+    name: 'My Discord',
+    channel_type: 'discord',
+    target_branch_id: 'branch-1',
+    agor_user_id: 'user-1',
+    enabled: true,
+    agentic_config: { agent: 'claude-code' },
+    config: {
+      bot_token: '••••••••',
+      application_id: '123456789012345678',
+      guild_id: '223456789012345678',
+      allowed_channel_ids: [CHANNEL_ID],
+      allowed_user_ids: [USER_ID],
+      allowed_role_ids: [],
+      message_content_enabled: true,
+      thread_mode: 'public_thread_per_summon',
+      thread_auto_archive_minutes: 1440,
+      align_discord_users: false,
+      files: false,
+      agent_tools: { channel_history: true },
+      outbound_enabled: false,
+      default_outbound_target: null,
+    },
+    created_at: '2026-09-24T00:00:00.000Z',
+    updated_at: '2026-09-24T00:00:00.000Z',
+  } as unknown as GatewayChannel;
+
+  async function saveEdit(channel: GatewayChannel) {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    renderTable(makeClient().client, { channels: [channel], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    const checkbox = await screen.findByLabelText(/Let session agents read channel history/);
+    const checked = (checkbox as HTMLInputElement).checked;
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
+    return { checked, updates: onUpdate.mock.calls[0]![1] as { config: Record<string, unknown> } };
+  }
+
+  it('keeps an enabled channel-history toggle through an edit', async () => {
+    const { checked, updates } = await saveEdit(storedChannel);
+    expect(checked).toBe(true);
+    expect(updates.config.agent_tools).toEqual({ channel_history: true });
+  }, 30_000);
+
+  it('shows a legacy agent_tools:[] row as off', async () => {
+    const legacy = {
+      ...storedChannel,
+      config: { ...storedChannel.config, agent_tools: [] },
+    } as unknown as GatewayChannel;
+    const { checked, updates } = await saveEdit(legacy);
+    expect(checked).toBe(false);
+    expect(updates.config.agent_tools).toEqual({ channel_history: false });
   }, 30_000);
 });

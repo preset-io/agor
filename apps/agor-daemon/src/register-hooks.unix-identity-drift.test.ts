@@ -5,10 +5,8 @@
  * identity the user no longer owns and the SDK state sits in a home directory
  * the instance cannot read, so the prompt has to be refused.
  *
- * That property comes from `unix_user_mode` alone, but `validateSessionUnixUsername`
- * used to be registered only inside the `branch_rbac` spread — so an
- * open-access instance running `delegated` kept executing prompts as the stale
- * user, while the same request was refused once RBAC was on.
+ * That property comes from `unix_user_mode` alone. Authorization is always on;
+ * this suite keeps the execution-home identity check independently pinned.
  *
  * These tests run the before-create chains that `registerHooks` actually
  * installs, rather than calling the validator directly: the bug was never in
@@ -41,7 +39,6 @@ interface Harness {
  * with session/user stubs wired in so the captured chain can be executed.
  */
 const buildHarness = (options: {
-  branchRbac: boolean;
   unixUserMode: 'simple' | 'sandbox' | 'delegated';
   sdkHomeScope?: 'execution_home' | 'branch';
   /** Creator's `unix_username` today; the session is always stamped 'alice'. */
@@ -98,13 +95,28 @@ const buildHarness = (options: {
     },
   };
 
+  const branchRepository = {
+    async findById(branchId: string) {
+      return { branch_id: branchId, created_by: CREATOR_ID, primary_owner_user_id: CREATOR_ID };
+    },
+    async isOwner() {
+      return true;
+    },
+    async resolveUserPermission() {
+      return 'all';
+    },
+    async resolveSessionPromptAuthority() {
+      return { allowed: true, source: 'owner', execution_user_id: CREATOR_ID };
+    },
+  };
+
   registerHooks({
     db: {} as RegisterHooksContext['db'],
     app: app as unknown as RegisterHooksContext['app'],
     config: {
       database: { dialect: 'postgresql' },
       multi_tenancy: { mode: 'static', static_tenant_id: 'unix-identity-drift-test' },
-      execution: { branch_rbac: options.branchRbac, unix_user_mode: options.unixUserMode },
+      execution: { unix_user_mode: options.unixUserMode },
     } as RegisterHooksContext['config'],
     jwtSecret: 'unix-identity-drift-test-secret',
     deployment: { mode: 'standalone' },
@@ -113,7 +125,7 @@ const buildHarness = (options: {
     sessionsService: sessionsService as unknown as RegisterHooksContext['sessionsService'],
     messagesService: {} as RegisterHooksContext['messagesService'],
     boardsService: undefined,
-    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    branchRepository: branchRepository as unknown as RegisterHooksContext['branchRepository'],
     usersRepository: usersRepository as unknown as RegisterHooksContext['usersRepository'],
     sessionsRepository: sessionsRepository as unknown as RegisterHooksContext['sessionsRepository'],
   });
@@ -181,10 +193,9 @@ const PROMPT_WRITES = ['messages', 'tasks'] as const;
 const IDENTITY_MODES = ['delegated'] as const;
 
 describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path) => {
-  describe.each(IDENTITY_MODES)('unix_user_mode: %s, branch_rbac: false', (unixUserMode) => {
+  describe.each(IDENTITY_MODES)('unix_user_mode: %s', (unixUserMode) => {
     it('refuses a prompt whose creator has been renamed since session creation', async () => {
       const harness = buildHarness({
-        branchRbac: false,
         unixUserMode,
         creatorUnixUsername: 'alice-renamed',
       });
@@ -197,7 +208,6 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
 
     it('allows a prompt while the creator still owns the stamped identity', async () => {
       const harness = buildHarness({
-        branchRbac: false,
         unixUserMode,
         creatorUnixUsername: 'alice',
       });
@@ -209,7 +219,6 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
 
     it("ignores the creator's old stamp for a branch-scoped Session", async () => {
       const harness = buildHarness({
-        branchRbac: false,
         unixUserMode,
         sdkHomeScope: 'branch',
         creatorUnixUsername: 'alice-renamed',
@@ -229,7 +238,6 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
      */
     it('exempts the executor writing its own transcript', async () => {
       const harness = buildHarness({
-        branchRbac: false,
         unixUserMode,
         creatorUnixUsername: 'alice-renamed',
       });
@@ -245,7 +253,6 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
      */
     it('does not exempt an executor token scoped to another session', async () => {
       const harness = buildHarness({
-        branchRbac: false,
         unixUserMode,
         creatorUnixUsername: 'alice-renamed',
       });
@@ -262,38 +269,14 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
    * an identity nothing runs as. RBAC still stamps sessions in those modes,
    * which is what used to make the check fire.
    */
-  it('does not consult the creator under branch_rbac when the mode ignores the stamp', async () => {
+  it('does not consult the creator when the execution mode ignores the stamp', async () => {
     const harness = buildHarness({
-      branchRbac: true,
-      unixUserMode: 'simple',
-      creatorUnixUsername: 'alice-renamed',
-    });
-
-    // The branch-permission half of the chain is deliberately not stubbed: this
-    // asserts which hooks are registered, not what they decide. Pin the failure
-    // it does produce, so stubbing `branchRepository` later cannot turn the
-    // negative assertion below into a no-op against `undefined`.
-    const failure = await runCreateChain(harness, path).catch((error: Error) => error);
-
-    expect(String(failure)).toMatch(/is not a function/);
-    expect(String(failure)).not.toMatch(/Session security context has changed/);
-    expect(harness.userReads).toBe(0);
-    expect(harness.sessionReads).toBe(1);
-  });
-
-  /**
-   * The inverse pin. Widening the guard costs one session read plus one user
-   * read per prompt, and the default deployment must not pay either.
-   */
-  it('reads neither session nor creator when RBAC and per-user identity are both off', async () => {
-    const harness = buildHarness({
-      branchRbac: false,
       unixUserMode: 'simple',
       creatorUnixUsername: 'alice-renamed',
     });
 
     await expect(runCreateChain(harness, path)).resolves.toBeUndefined();
-    expect(harness.sessionReads).toBe(0);
     expect(harness.userReads).toBe(0);
+    expect(harness.sessionReads).toBe(1);
   });
 });

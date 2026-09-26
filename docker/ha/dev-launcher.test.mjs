@@ -106,6 +106,7 @@ test('exchanges a selected persona once for a correctly scoped signed assertion'
   assert.equal(claims.aud, AUDIENCE);
   assert.equal(claims.sub, 'beatrice-admin');
   assert.equal(claims.tenant_id, 'globex');
+  assert.equal(claims.public_base_url, 'http://127.0.0.1:3030');
   assert.equal(typeof claims.exp, 'number');
 });
 
@@ -179,6 +180,80 @@ test('bounds pending launch codes and evicts the oldest unexchanged identity', a
   } finally {
     await new Promise((resolve, reject) =>
       bounded.server.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
+});
+
+test('snapshots trusted tenant origins and issuance time at mint, independently of caller headers', async (t) => {
+  let now = 1_800_000_000_000;
+  const origins = { acme: 'https://acme.example.test/', globex: 'https://globex.example.test' };
+  const instance = createDevLauncher({
+    publicOrigin: 'https://cell.example.test',
+    tenantOrigins: origins,
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    instanceId: INSTANCE_ID,
+    sharedSecret: SHARED_SECRET,
+    now: () => now,
+  });
+  await new Promise((resolve) => instance.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => instance.server.close(resolve)));
+  const base = `http://127.0.0.1:${instance.server.address().port}`;
+  const picker = await fetch(`${base}/dev-auth/`);
+  assert.match(
+    picker.headers.get('content-security-policy'),
+    /form-action 'self' https:\/\/acme\.example\.test https:\/\/globex\.example\.test;/
+  );
+  for (const [tenant, persona] of [
+    ['acme', 'acme-alice'],
+    ['globex', 'globex-beatrice'],
+  ]) {
+    const issuedAt = Math.floor(now / 1000);
+    const selected = await fetch(`${base}/dev-auth/select`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        host: 'attacker.test',
+        'x-forwarded-host': 'attacker.test',
+      },
+      body: new URLSearchParams({
+        tenant,
+        persona,
+        public_base_url: 'https://attacker.test',
+        return_to: '/ui/',
+      }),
+    });
+    assert.equal(
+      new URL(selected.headers.get('location')).origin,
+      `https://${tenant}.example.test`
+    );
+    origins[tenant] = 'https://changed.example.test';
+    now += 5000;
+    const response = await exchange(launchCodeFrom(selected), {}, base);
+    assert.equal(response.status, 200);
+    const claims = decodeJwtPayload((await response.json()).assertion);
+    assert.equal(claims.public_base_url, `https://${tenant}.example.test`);
+    assert.equal(claims.tenant_id, tenant);
+    assert.equal(claims.iat, issuedAt);
+  }
+});
+
+test('rejects invalid configured tenant origins without reflecting their contents', () => {
+  for (const value of [
+    'https://user:secret@host.test',
+    'https://host.test/mount',
+    'https://host.test?secret',
+    '//host.test',
+    'https://host.test/#secret',
+  ]) {
+    assert.throws(
+      () =>
+        createDevLauncher({
+          publicOrigin: 'http://localhost:3030',
+          tenantOrigins: { acme: value },
+        }),
+      { message: 'Invalid development tenant public origin' }
     );
   }
 });

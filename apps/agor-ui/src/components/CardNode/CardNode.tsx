@@ -6,31 +6,22 @@
  * - Zone border color when pinned to a zone (matching BranchCard pattern)
  * - CardType emoji + title (with optional URL link)
  * - Pin icon when in a zone (click to unpin)
- * - Description (collapsed after ~100 chars)
+ * - Description (markdown, collapsed after ~3 lines)
  * - Note (always shown in full, distinct background)
  */
 
 import type { CardWithType } from '@agor-live/client';
 import { DragOutlined, LinkOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
-
-function isSafeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
+import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
+import { MarkdownPreview } from '../MarkdownRenderer';
 
-const DESCRIPTION_MAX_CHARS = 100;
 const CARD_WIDTH = 380;
 
 export interface CardNodeData {
@@ -45,7 +36,6 @@ export interface CardNodeData {
 const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
   const { token } = theme.useToken();
   const { card, isPinned, zoneName, zoneColor, onClick, onUnpin } = data;
-  const [descExpanded, setDescExpanded] = useState(false);
 
   const borderColor = card.effective_color || token.colorBorder;
   const emoji = card.effective_emoji;
@@ -56,16 +46,6 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     if (!zoneColor) return undefined;
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
-
-  const truncatedDesc = useMemo(() => {
-    if (!card.description) return '';
-    if (card.description.length <= DESCRIPTION_MAX_CHARS || descExpanded) return card.description;
-    const truncated = card.description.slice(0, DESCRIPTION_MAX_CHARS);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return `${lastSpace > DESCRIPTION_MAX_CHARS * 0.7 ? truncated.slice(0, lastSpace) : truncated}...`;
-  }, [card.description, descExpanded]);
-
-  const needsTruncation = (card.description?.length ?? 0) > DESCRIPTION_MAX_CHARS;
 
   return (
     <div
@@ -114,7 +94,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
         >
           {card.title}
         </Typography.Text>
-        {card.url && isSafeUrl(card.url) && (
+        {isSafeExternalUrl(card.url) && (
           <a
             href={card.url}
             target="_blank"
@@ -163,36 +143,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
             borderBottom: card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
           }}
         >
-          <Typography.Text
-            style={{
-              fontSize: 12,
-              color: token.colorTextSecondary,
-              lineHeight: '1.5',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            {truncatedDesc}
-          </Typography.Text>
-          {needsTruncation && (
-            <Button
-              type="link"
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDescExpanded(!descExpanded);
-              }}
-              style={{
-                padding: 0,
-                height: 'auto',
-                fontSize: 11,
-                color: token.colorLink,
-                marginLeft: 4,
-              }}
-            >
-              {descExpanded ? 'less' : 'more'}
-            </Button>
-          )}
+          <MarkdownPreview key={card.card_id} content={card.description} />
         </div>
       )}
 

@@ -74,7 +74,10 @@ export function useLocalStorage<T>(
     if (typeof window === 'undefined') return;
 
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === key) {
+      if (
+        (event.key === null || event.key === key) &&
+        (event.storageArea === null || event.storageArea === window.localStorage)
+      ) {
         setStoredValue(readValue());
       }
     };

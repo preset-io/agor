@@ -54,17 +54,38 @@ export function getClaudeContextWindowLimit(modelId?: string): number | undefine
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-fable-5-1',
+    displayName: 'Claude Fable 5.1 · 1M',
+    family: 'claude-5',
+    description: 'Most capable model for demanding reasoning and long-horizon agentic work',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
     id: 'claude-fable-5',
     displayName: 'Claude Fable 5 · 1M',
     family: 'claude-5',
-    description: 'Frontier model for complex reasoning, creative work, and agentic coding',
+    description: 'Previous Fable model for complex reasoning and long-horizon agentic work',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
+    id: 'claude-opus-5-5',
+    displayName: 'Claude Opus 5.5 · 200k',
+    family: 'claude-5',
+    description: 'Frontier agentic coding and enterprise work; standard Claude Code context',
+    contextWindow: CLAUDE_STANDARD_CONTEXT_WINDOW,
+  },
+  {
+    id: 'claude-opus-5-5[1m]',
+    displayName: 'Claude Opus 5.5 · 1M',
+    family: 'claude-5',
+    description: 'Opus 5.5 with Claude Code extended 1M context accounting',
     contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
   },
   {
     id: 'claude-opus-5',
     displayName: 'Claude Opus 5 · 200k',
     family: 'claude-5',
-    description: 'Frontier agentic coding and enterprise work; standard Claude Code context',
+    description: 'Previous Opus model for agentic coding; standard Claude Code context',
     contextWindow: CLAUDE_STANDARD_CONTEXT_WINDOW,
   },
   {

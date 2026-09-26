@@ -10,7 +10,12 @@ import type {
   TerminationCause,
   TerminationCoordinationPendingCode,
 } from '@agor/core/types';
-import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
+import {
+  isAgenticToolName,
+  isAwaitingRemoteExecutor,
+  isTerminalTaskStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
 import {
   containExecutorProcess,
@@ -47,6 +52,12 @@ export interface TerminationInput {
   requireExecutorDisconnected?: boolean;
   /** Permit guarded recovery when this daemon does not own a local process handle. */
   allowUnownedLocalContainment?: boolean;
+  /**
+   * The remote startup deadline has passed for a templated executor that never
+   * connected. Only the runtime reconciler sets this; it turns the normally
+   * pending `awaiting_remote_executor` state into a guarded unverified result.
+   */
+  remoteConnectDeadlineExpired?: boolean;
   /** Database-time age required before a non-owner may reclaim local containment. */
   unownedLocalOwnerGraceMs?: number;
   /** Task-specific containment lease; long enough for cooperative + signal grace. */
@@ -119,6 +130,32 @@ function runInFreshTenantWriteDatabase<T>(
   return input.runInFreshTenantWriteDatabase(work);
 }
 
+const AWAITING_REMOTE_EXECUTOR_REASON =
+  'Stop is recorded. The remote executor has not connected yet; it will stop as soon as it starts.';
+
+function awaitingRemoteExecutorResult(task: Task): TerminationResult {
+  return {
+    status: 'pending',
+    task,
+    reason: AWAITING_REMOTE_EXECUTOR_REASON,
+    pendingCode: 'awaiting_remote_executor',
+  };
+}
+
+function remoteUnverifiedReason(task: Task, waitedMs: number): string {
+  if (!task.executor_connected_at) {
+    const requestedAt = Date.parse(task.termination_request?.requested_at ?? '');
+    const sinceRequest = Number.isFinite(requestedAt)
+      ? ` The stop was requested ${Math.round((Date.now() - requestedAt) / 1000)}s ago.`
+      : '';
+    return `Remote executor never connected before the startup deadline.${sinceRequest}`;
+  }
+  return (
+    `Remote executor did not acknowledge quiescence for this termination request ` +
+    `within ${waitedMs}ms.`
+  );
+}
+
 function unverifiedMessage(taskId: string, detail: string): string {
   return (
     `${detail} Agor could not verify that this executor stopped. It may still be running ` +
@@ -156,17 +193,27 @@ async function loadAgenticTool(input: TerminationInput): Promise<PersistedAgenti
   });
 }
 
-async function waitForExecutorQuiescence(input: TerminationInput, requested: Task): Promise<Task> {
+interface QuiescenceWait {
+  task: Task;
+  /** Wall-clock time actually spent waiting for the executor, for diagnostics. */
+  waitedMs: number;
+}
+
+async function waitForExecutorQuiescence(
+  input: TerminationInput,
+  requested: Task
+): Promise<QuiescenceWait> {
   if (
     !requested.executor_connected_at ||
     requested.termination_request?.executor_quiesced_at ||
     isTerminalTaskStatus(requested.status)
   ) {
-    return requested;
+    return { task: requested, waitedMs: 0 };
   }
 
   const graceMs = cooperativeGraceMs(input, requested);
-  if (graceMs <= 0) return requested;
+  if (graceMs <= 0) return { task: requested, waitedMs: 0 };
+  const startedAt = Date.now();
 
   const tasks = input.app.service('tasks');
   const requestedAt = requested.termination_request?.requested_at;
@@ -187,10 +234,10 @@ async function waitForExecutorQuiescence(input: TerminationInput, requested: Tas
       current.termination_request?.coordination?.claim_token !== coordinationToken ||
       current.termination_request?.executor_quiesced_at
     ) {
-      return current;
+      return { task: current, waitedMs: Date.now() - startedAt };
     }
   }
-  return current;
+  return { task: current, waitedMs: Date.now() - startedAt };
 }
 
 async function runContainment(
@@ -203,7 +250,7 @@ async function runContainment(
   if (!coordinationToken && !isTerminalTaskStatus(requested.status)) {
     return { status: 'condition_changed', task: requested };
   }
-  const current = await waitForExecutorQuiescence(input, requested);
+  const { task: current, waitedMs } = await waitForExecutorQuiescence(input, requested);
   if (
     current.status === TaskStatus.STOPPING &&
     current.termination_request?.coordination?.claim_token !== coordinationToken
@@ -228,9 +275,7 @@ async function runContainment(
         ? ({ status: 'verified_absent' } as const)
         : ({
             status: 'unverified',
-            reason:
-              `Remote executor did not acknowledge quiescence for this termination request ` +
-              `within ${cooperativeGraceMs(input, current)}ms.`,
+            reason: remoteUnverifiedReason(current, waitedMs),
           } as const)
       : executorQuiesced
         ? await containExecutorProcess(
@@ -380,6 +425,15 @@ export async function requestExecutorTermination(
   const existing = operationsFor(input.app).get(claim.task.task_id);
   if (existing) return existing.promise;
   if (claim.outcome === 'terminal') return startContainment(input, claim.task, tool);
+  if (
+    !input.absenceVerified &&
+    !input.remoteConnectDeadlineExpired &&
+    isAwaitingRemoteExecutor(claim.task)
+  ) {
+    // No lease and no unverified guard: the durable request alone is enough
+    // for the executor's startup recovery, and the reconciler bounds the wait.
+    return awaitingRemoteExecutorResult(claim.task);
+  }
 
   const coordination = await claimContainmentCoordination(input, claim.task);
   if (coordination.outcome !== 'claimed') {
@@ -428,6 +482,13 @@ export async function beginExecutorTermination(input: TerminationInput): Promise
   if (operations.has(claim.task.task_id)) return claim.task;
   if (claim.outcome === 'terminal') {
     startContainment(input, claim.task, tool);
+    return claim.task;
+  }
+  if (
+    !input.absenceVerified &&
+    !input.remoteConnectDeadlineExpired &&
+    isAwaitingRemoteExecutor(claim.task)
+  ) {
     return claim.task;
   }
   const coordination = await claimContainmentCoordination(input, claim.task);

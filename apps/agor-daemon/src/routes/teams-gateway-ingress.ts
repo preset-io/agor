@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   and,
   eq,
@@ -19,11 +20,40 @@ import type { GatewayChannel, TeamsGatewayConfig } from '@agor/core/types';
 import { validateTeamsConfig, withTeamsConfigDefaults } from '@agor/core/types';
 import { authorizeJWT, buildJwksUri } from '@microsoft/agents-hosting';
 import type { Request, Response } from 'express';
-import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit, type Store } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { teamsGatewayErrorCode } from '../utils/teams-error.js';
 
 const MAX_ACTIVITY_BYTES = 1_024 * 1_024;
+
+/** Per-process pre-auth protection, not a distributed tenant quota. Eviction
+ * sheds accounting rather than rejecting unrelated channels at global capacity.
+ * Both entry count and key size are bounded even for arbitrary unauthenticated paths. */
+export class TeamsIngressRateLimitStore implements Store {
+  localKeys = true;
+  private readonly entries = new Map<string, { totalHits: number; resetTime: Date }>();
+  constructor(private readonly capacity = 10_000) {}
+  async increment(key: string) {
+    let entry = this.entries.get(key);
+    if (!entry || entry.resetTime.getTime() <= Date.now()) {
+      if (!entry && this.entries.size >= this.capacity) {
+        this.entries.delete(this.entries.keys().next().value!);
+      }
+      entry = { totalHits: 0, resetTime: new Date(Date.now() + 60_000) };
+    }
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    entry.totalHits += 1;
+    return { ...entry };
+  }
+  async decrement(key: string) {
+    const entry = this.entries.get(key);
+    if (entry) entry.totalHits = Math.max(0, entry.totalHits - 1);
+  }
+  async resetKey(key: string) {
+    this.entries.delete(key);
+  }
+}
 const BOT_FRAMEWORK_ISSUERS = new Set([
   'https://api.botframework.com',
   'https://api.botframework.us',
@@ -178,6 +208,19 @@ export function validateTeamsVerifiedIdentity(
   if (!serviceUrl || !tokenServiceUrl || serviceUrl !== tokenServiceUrl) {
     return 'invalid_service_url';
   }
+  try {
+    const parsed = new URL(serviceUrl);
+    if (
+      serviceUrl !== serviceUrl.trim() ||
+      parsed.protocol !== 'https:' ||
+      parsed.username ||
+      parsed.password ||
+      parsed.hash
+    )
+      return 'invalid_service_url';
+  } catch {
+    return 'invalid_service_url';
+  }
   return null;
 }
 
@@ -211,7 +254,13 @@ export function registerTeamsGatewayIngressRoute(input: {
     limit: 120,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    keyGenerator: (req) => ipKeyGenerator(req.ip ?? 'unknown'),
+    store: new TeamsIngressRateLimitStore(),
+    // Teams shares provider egress IPs across customers. Never let a request
+    // to one channel consume another channel's pre-authentication budget.
+    keyGenerator: (req) =>
+      createHash('sha256')
+        .update(JSON.stringify([req.params.gatewayChannelId, ipKeyGenerator(req.ip ?? 'unknown')]))
+        .digest('hex'),
   });
 
   // @ts-expect-error - FeathersJS app extends Express

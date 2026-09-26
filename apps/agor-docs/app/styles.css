@@ -334,6 +334,34 @@ code span[style*="--shiki-dark:#6A737D"] {
   }
 }
 
+/* Navbar "Talk to Us" CTA — a button that pops the HubSpot meeting scheduler
+ * modal (the same one as the landing page's "Book a demo"). Dressed as a plain
+ * nav item to match the Agor Cloud CTA beside it, and slotted into the same
+ * flex order (1) so the two CTAs sit together, before search. Hidden on phones. */
+.navbar-talk-to-us {
+  order: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(61, 180, 170);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.navbar-talk-to-us:hover {
+  color: var(--agor-teal-light, #7fe8df);
+}
+
+@media (max-width: 767px) {
+  .navbar-talk-to-us {
+    display: none;
+  }
+}
+
 /* Slot the CTA between the nav items and search: nav flex order is
  * [logo(auto) items(0) CTA(1) search(2) github/discord(3) menu(4)].
  * The CTA renders last in the DOM (Navbar children), so everything that
@@ -346,7 +374,10 @@ code span[style*="--shiki-dark:#6A737D"] {
   order: 3;
 }
 
-.nextra-navbar nav > button:not(.navbar-cloud-cta) {
+/* github/discord/menu buttons trail everything. Exclude the two CTA buttons
+ * (Agor Cloud renders as an <a>, but Talk to Us is a real <button>) so this
+ * doesn't shove Talk to Us to the far right after search. */
+.nextra-navbar nav > button:not(.navbar-cloud-cta):not(.navbar-talk-to-us) {
   order: 4;
 }
 
@@ -360,6 +391,34 @@ code span[style*="--shiki-dark:#6A737D"] {
 
 .nextra-navbar nav a.navbar-cloud-cta:hover {
   color: var(--agor-teal-light, #7fe8df);
+}
+
+/* EXPERIMENTAL: horizontally center the search box in the navbar so the logo
+ * stays pinned far left and the links/CTAs group pins right, giving
+ * [logo] ......... [search] ......... [Docs][Blog][Agor Cloud][Talk to Us][GitHub][Discord][menu].
+ *
+ * Technique: take the search container out of flex flow and absolutely center
+ * it in the (now relatively positioned) nav. The logo already carries
+ * margin-inline-end:auto, so with search removed from flow that auto margin
+ * pushes every remaining item to the right edge. The existing `order` values
+ * (Docs/Blog wrapper 0, CTAs 1, github/discord 3, menu 4) already lay the right
+ * group out in the intended sequence, so nothing else needs to move.
+ *
+ * Gated to >= 960px: below that the centered box would collide with the right
+ * group on narrower desktops, so search keeps its current in-flow slot there.
+ * The whole block is easy to revert if the experiment isn't kept. */
+@media (min-width: 960px) {
+  .nextra-navbar nav {
+    position: relative;
+  }
+
+  .nextra-navbar nav > div:has(input) {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    margin: 0;
+  }
 }
 
 /* Docs content headings — adopt the marketing display font (Space Grotesk)

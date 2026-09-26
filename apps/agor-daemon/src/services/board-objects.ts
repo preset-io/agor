@@ -45,6 +45,7 @@ export type BoardObjectParams = QueryParams<{
   card_id?: CardID;
   zone_id?: string;
   entity_type?: BoardEntityType;
+  exclude_archived_branches?: boolean;
 }> & {
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
@@ -60,13 +61,18 @@ export interface NormalizedBoardObjectFindQuery {
 export function normalizeBoardObjectFindQuery(
   query: BoardObjectParams['query'] = {}
 ): NormalizedBoardObjectFindQuery {
-  const { board_id, branch_id, card_id, zone_id, entity_type } = query;
+  const { board_id, branch_id, card_id, zone_id, entity_type, exclude_archived_branches } = query;
   const requestedSkip = Number(query.$skip ?? 0);
   const requestedLimit = typeof query.$limit === 'number' ? query.$limit : undefined;
   const filters = Object.fromEntries(
-    Object.entries({ board_id, branch_id, card_id, zone_id, entity_type }).filter(
-      ([, value]) => value !== undefined
-    )
+    Object.entries({
+      board_id,
+      branch_id,
+      card_id,
+      zone_id,
+      entity_type,
+      exclude_archived_branches,
+    }).filter(([, value]) => value !== undefined)
   ) as BoardObjectFindFilters;
 
   return {
@@ -179,22 +185,28 @@ export class BoardObjectsService {
     data: Partial<BoardEntityObject>,
     _params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
+    // Correlation is response-only and carries no tenant/access authority. Only
+    // copy this bounded field, never arbitrary caller metadata onto a row.
+    const acknowledge = (row: BoardEntityObject): BoardEntityObject =>
+      typeof data.placement_write_id === 'string' && data.placement_write_id.length <= 100
+        ? { ...row, placement_write_id: data.placement_write_id }
+        : row;
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
       // Update both atomically without emitting intermediate events
       await this.boardObjectRepo.updatePosition(id, data.position);
       const boardObject = await this.boardObjectRepo.updateZone(id, data.zone_id);
 
-      return toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject;
+      return acknowledge(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject);
     }
 
     if (data.position) {
-      return this.boardObjectRepo.updatePosition(id, data.position);
+      return acknowledge(await this.boardObjectRepo.updatePosition(id, data.position));
     }
 
     if ('zone_id' in data) {
       const boardObject = await this.boardObjectRepo.updateZone(id, data.zone_id);
-      return toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject;
+      return acknowledge(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject);
     }
 
     throw new Error('Only position and zone_id updates are supported via patch');

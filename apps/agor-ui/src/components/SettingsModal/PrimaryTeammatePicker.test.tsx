@@ -36,8 +36,8 @@ function createClient(current: Branch | null) {
   const getPrimaryTeammateCandidates = vi
     .fn()
     .mockResolvedValue(Array.from(agorStore.getState().branchById.values()));
-  const setPrimaryTeammate = vi.fn((data: { branchId: string }) =>
-    Promise.resolve(teammate(data.branchId, data.branchId))
+  const setPrimaryTeammate = vi.fn((data: { branchId: string | null }) =>
+    Promise.resolve(data.branchId === null ? null : teammate(data.branchId, data.branchId))
   );
   const client = {
     service: (name: string) => {
@@ -234,4 +234,16 @@ describe('PrimaryTeammatePicker', () => {
 
     expect(onPicked).not.toHaveBeenCalled();
   });
+});
+
+it('can clear an inaccessible stored preference without selecting a replacement', async () => {
+  seedStore([]);
+  const { client, setPrimaryTeammate } = createClient(null);
+  setPrimaryTeammate.mockResolvedValueOnce(null);
+  renderPicker(client);
+  await screen.findByText(/No primary assistant set/);
+  fireEvent.click(screen.getByRole('button', { name: 'Clear primary assistant' }));
+  await waitFor(() =>
+    expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: null, expectedUserId: USER_ID })
+  );
 });

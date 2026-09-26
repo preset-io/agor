@@ -44,6 +44,9 @@ function migrationTenantTables(): string[] {
   const mcpOauthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'
   );
+  const mcpOauthClientRegistrationMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'
+  );
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
@@ -56,11 +59,18 @@ function migrationTenantTables(): string[] {
   const codexDeviceAuthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
   );
+  const claudeOauthMigration =
+    readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql') +
+    '\n' +
+    readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql');
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
   const teamsGatewayHaMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0100_slow_virginia_dare.sql'
+    'packages/core/drizzle/postgres/0117_teams_gateway_ha.sql'
+  );
+  const transferMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -72,10 +82,15 @@ function migrationTenantTables(): string[] {
         ...executorTokenMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...mcpOauthClientRegistrationMigration.matchAll(
+          /CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g
+        ),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...discordGatewayHybridMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...teamsGatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
@@ -93,12 +108,16 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0102_mcp_oauth_client_registrations.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0100_slow_virginia_dare.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0117_teams_gateway_ha.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -127,7 +146,7 @@ describe('Postgres multitenancy schema coverage', () => {
   });
 
   it('limits Teams ingress and delivery discovery to explicit read capabilities', () => {
-    const migration = readRepoFile('packages/core/drizzle/postgres/0100_slow_virginia_dare.sql');
+    const migration = readRepoFile('packages/core/drizzle/postgres/0117_teams_gateway_ha.sql');
     expect(migration).toContain('CREATE POLICY "teams_gateway_ingress_discovery"');
     expect(migration).toContain('CREATE POLICY "teams_gateway_inbound_discovery"');
     expect(migration).toContain('CREATE POLICY "teams_message_delivery_discovery"');
@@ -158,6 +177,19 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("IN ('starting', 'running')");
     expect(migration).toContain("= 'environment_health_discovery'");
     expect(migration).not.toContain('WITH CHECK');
+  });
+
+  it('limits API-key host tenant discovery to routing rows and an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0115_api_key_host_tenant_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'api_key_host_tenant_discovery'");
+    expect(migration).toContain(`"namespace" = 'tenant.routing'`);
+    expect(migration).toContain(`"key" = 'public_url'`);
+    expect(migration).not.toContain('WITH CHECK');
+    expect(migration).not.toContain('user_api_keys');
   });
 
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {

@@ -1,4 +1,4 @@
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import type { TenantScopeAwareDatabase, TenantScopedDatabase } from '@agor/core/db';
 import {
   assertTenantWritable,
   bindRepositoryToTenantUnitOfWork,
@@ -10,6 +10,7 @@ import { Unavailable } from '@agor/core/feathers';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { wrapRegisterTool } from './register-tool-proxy.js';
 import type { McpContext } from './server.js';
+import { mcpValidationFailure } from './validation-errors.js';
 
 /**
  * Custom MCP service methods bypass the Feathers around hooks that normally
@@ -28,6 +29,21 @@ export async function runWithMcpTenantDatabaseScope<T>(
   const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
   if (!tenantId) return work(ctx.db);
   return runWithTenantDatabaseScope(ctx.db, tenantId, () => work(ctx.db));
+}
+
+/**
+ * Open one short, positively tenant-bound database unit for helpers whose type
+ * contract requires a {@link TenantScopedDatabase}. Unlike the compatibility
+ * wrapper above, this cannot fall back to an unscoped handle when MCP tenant
+ * identity is absent.
+ */
+export async function runWithMcpTenantDatabaseUnit<T>(
+  ctx: McpContext,
+  work: (db: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
+  if (!tenantId) throw new Error('MCP tenant database unit requires tenant identity');
+  return runWithTenantDatabaseScope(ctx.db, tenantId, work);
 }
 
 /**
@@ -80,7 +96,15 @@ export function tenantScopedToolProxy(server: McpServer, ctx: McpContext): McpSe
   return wrapRegisterTool(server, (register, name, config, handler) =>
     register(name, config, (args, extra) => {
       const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
-      const invoke = () => Promise.resolve(handler(args, extra));
+      const invoke = async () => {
+        try {
+          return await handler(args, extra);
+        } catch (error) {
+          const failure = mcpValidationFailure(error, name);
+          if (failure) return failure;
+          throw error;
+        }
+      };
       return tenantId ? runWithTenantContext(tenantId, invoke) : invoke();
     })
   );

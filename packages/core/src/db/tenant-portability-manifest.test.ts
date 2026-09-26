@@ -47,11 +47,16 @@ describe('buildTenantInsertOrder', () => {
   it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
+      'claude_oauth_attempts',
       'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
+      'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'teams_conversation_addresses',
+      'teams_message_deliveries',
       'user_mcp_oauth_tokens',
+      'user_provider_oauth_grants',
     ]);
     for (const tableName of nonPortable) {
       expect(buildTenantDeletionManifest().map((entry) => entry.name)).toContain(tableName);
@@ -63,9 +68,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    // The current schema retains the Teams gateway HA relations alongside the
-    // main branch's shared-session policy consolidation.
-    expect(foreignKeys).toHaveLength(113);
+    expect(foreignKeys).toHaveLength(110);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -83,31 +86,19 @@ describe('tenantPortabilityForeignKeys', () => {
     }
   });
 
-  it('includes the intentional Teams gateway HA relations', () => {
-    expect(tenantPortabilityForeignKeys()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          childTable: 'teams_conversation_addresses',
-          childColumns: ['gateway_channel_id'],
-          parentTable: 'gateway_channels',
-        }),
-        expect.objectContaining({
-          childTable: 'teams_message_deliveries',
-          childColumns: ['gateway_channel_id'],
-          parentTable: 'gateway_channels',
-        }),
-        expect.objectContaining({
-          childTable: 'teams_message_deliveries',
-          childColumns: ['message_id'],
-          parentTable: 'messages',
-        }),
-        expect.objectContaining({
-          childTable: 'teams_message_deliveries',
-          childColumns: ['thread_session_map_id'],
-          parentTable: 'thread_session_map',
-        }),
-      ])
-    );
+  it('moves import receipts with their owners without requiring surviving targets', () => {
+    expect(
+      tenantPortabilityForeignKeys().filter((fk) => fk.childTable === 'kb_import_receipts')
+    ).toEqual([
+      expect.objectContaining({
+        childTable: 'kb_import_receipts',
+        childColumns: ['owner_user_id'],
+        parentTable: 'users',
+        parentColumns: ['user_id'],
+        onDelete: 'cascade',
+      }),
+    ]);
+    expect(tenantPortabilityTableNames()).toContain('kb_import_receipts');
   });
 
   it('moves normalized board and branch policies with their resources and principals', () => {

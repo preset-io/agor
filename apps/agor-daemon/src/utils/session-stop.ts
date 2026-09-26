@@ -102,9 +102,7 @@ export async function stopSessionPreserveQueue(
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {
-    console.warn(
-      `⚠️  [Stop] No active tasks for session ${shortId(sessionId)}, resetting to IDLE${options.reason ? ` (reason: ${options.reason})` : ''}`
-    );
+    console.warn(`⚠️  [Stop] No active tasks for session ${shortId(sessionId)}, resetting to IDLE`);
     await deps.runInFreshTenantWriteDatabase(() =>
       markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params)
     );
@@ -128,7 +126,7 @@ export async function stopSessionPreserveQueue(
   }
 
   console.log(
-    `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}${options.reason ? ` (reason: ${options.reason})` : ''}`
+    `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}`
   );
 
   requireActiveAgenticTool(session.agentic_tool);

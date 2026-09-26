@@ -49,6 +49,7 @@ import type {
 import {
   GATEWAY_REDACTED_SENTINEL,
   isAgenticToolName,
+  resolveDiscordAgentTools,
   resolveSlackAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
 } from '@agor-live/client';
@@ -87,7 +88,6 @@ import {
   Spin,
   Steps,
   Switch,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -118,6 +118,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
 
@@ -470,6 +471,8 @@ function createStepFields(
   if (type === 'discord' && step === 2) {
     return [
       'discord_allowed_channel_ids',
+      'discord_files',
+      'discord_channel_history',
       'discord_align_users',
       ...(alignDiscordUsers ? ['discord_user_map'] : ['agor_user_id']),
     ];
@@ -518,6 +521,8 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_allowed_role_ids',
   'discord_message_content_enabled',
   'discord_thread_mode',
+  'discord_files',
+  'discord_channel_history',
   'discord_thread_auto_archive_minutes',
   'discord_align_users',
   'discord_user_map',
@@ -1599,6 +1604,13 @@ const DiscordSetupFields: React.FC<{
     (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
     (config?.align_discord_users as boolean | undefined) ??
     false;
+  const filesEnabled =
+    (Form.useWatch('discord_files', form) as boolean | undefined) ??
+    (config?.files as boolean | undefined) ??
+    false;
+  const channelHistoryEnabled =
+    (Form.useWatch('discord_channel_history', form) as boolean | undefined) ??
+    resolveDiscordAgentTools(config?.agent_tools).channel_history;
   const applicationId = Form.useWatch('discord_application_id', form) as string | undefined;
   const allowedUserIds =
     (Form.useWatch('discord_allowed_user_ids', form) as string[] | undefined) ?? [];
@@ -1816,6 +1828,26 @@ const DiscordSetupFields: React.FC<{
               ))}
             </Select>
           </Form.Item>
+          <Form.Item name="discord_files" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Enable inbound PNG/JPEG image attachments (<code>files:true</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Only a message with text and supported PNG/JPEG attachments is admitted. Unsupported or
+            mixed rich payloads are rejected; existing text-only channels remain
+            <code> files:false</code>.
+          </Typography.Text>
+          <Form.Item name="discord_channel_history" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Let session agents read channel history (<code>agent_tools.channel_history</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Agents on this channel's branch can read recent messages from the allowed channels and
+            public threads under them through a tool that never exposes the bot token. Messages are
+            untrusted content and are kept only in the reading session's transcript.
+          </Typography.Text>
           <Typography.Text strong style={{ display: 'block', margin: '16px 0 8px' }}>
             Bounded Discord REST catch-up
           </Typography.Text>
@@ -1894,7 +1926,7 @@ const DiscordSetupFields: React.FC<{
           <CompactAlert
             type="info"
             heading="Capabilities"
-            description="Files: disabled (files:false). Agent tools: none (agent_tools:[])."
+            description={`Files: ${filesEnabled ? 'PNG/JPEG inbound images enabled (files:true)' : 'disabled (files:false)'}. Agent tools: ${channelHistoryEnabled ? 'channel history enabled (agent_tools.channel_history:true)' : 'none'}.`}
             style={{ marginTop: 12 }}
           />
         </div>
@@ -2044,6 +2076,8 @@ function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupD
     agorUserId: alignUsers ? null : readFormString(values.agor_user_id),
     alignUsers,
     userMap: alignUsers ? userMap : undefined,
+    files: readFormBoolean(values.discord_files, false),
+    channelHistory: readFormBoolean(values.discord_channel_history, false),
     outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
     defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
     catchUp: catch_up,
@@ -2276,7 +2310,12 @@ const ChannelFormFields: React.FC<{
             initialValue={mode === 'create' ? 'slack' : undefined}
             rules={[{ required: true }]}
           >
-            <Select onChange={(value: ChannelType) => onChannelTypeChange(value)}>
+            <Select
+              onChange={(value: ChannelType) => {
+                if (mode === 'create') form.setFieldValue('enabled', value !== 'teams');
+                onChannelTypeChange(value);
+              }}
+            >
               {CHANNEL_TYPE_OPTIONS.map((opt) => (
                 <Select.Option key={opt.value} value={opt.value} disabled={opt.comingSoon}>
                   <Space>
@@ -2330,7 +2369,7 @@ const ChannelFormFields: React.FC<{
             label="Enabled"
             name="enabled"
             valuePropName="checked"
-            initialValue={mode === 'create' ? true : undefined}
+            initialValue={mode === 'create' ? channelType !== 'teams' : undefined}
           >
             <Switch />
           </Form.Item>
@@ -4086,13 +4125,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     runConnectionProbe,
   ]);
 
-  // Probe an existing Slack channel via the `gateway-channels/test` service. The
-  // backend resolves the stored decrypted tokens from `gatewayChannelId`, so the
-  // edit form never sends credentials.
+  // Probe an existing Slack channel via the `gateway-channels/test` service.
+  // Tokens typed into the edit form are forwarded as overrides so the probe
+  // tests what the user just entered; fields left blank fall back to the stored
+  // decrypted credentials the backend resolves from `gatewayChannelId`.
   const handleSlackEditTest = useCallback(async () => {
     if (!editingChannel) return;
-    await runConnectionProbe('slack', {}, editingChannel.id);
-  }, [editingChannel, runConnectionProbe]);
+    const values = editForm.getFieldsValue(true);
+    const config: Record<string, unknown> = {};
+    if (values.bot_token && values.bot_token !== GATEWAY_REDACTED_SENTINEL) {
+      config.bot_token = sanitizeSecretValue(values.bot_token);
+    }
+    if (values.app_token && values.app_token !== GATEWAY_REDACTED_SENTINEL) {
+      config.app_token = sanitizeSecretValue(values.app_token);
+    }
+    await runConnectionProbe('slack', config, editingChannel.id);
+  }, [editingChannel, editForm, runConnectionProbe]);
 
   const extractFormData = (
     values: Record<string, unknown>,
@@ -4302,7 +4350,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config,
       agentic_config: agenticConfig,
       mcp_server_ids: (values.mcpServerIds as string[] | undefined) ?? [],
-      enabled: (values.enabled as boolean) ?? true,
+      enabled: (values.enabled as boolean) ?? values.channel_type !== 'teams',
     };
   };
 
@@ -4600,8 +4648,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.discord_catch_up_rate_limit_max_total_delay_ms =
         catchUp.rate_limit_max_total_delay_ms ??
         DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms;
-      formValues.discord_files = false;
-      formValues.discord_agent_tools = [];
+      formValues.discord_files = config?.files === true;
+      formValues.discord_channel_history = resolveDiscordAgentTools(
+        config?.agent_tools
+      ).channel_history;
       formValues.discord_outbound_enabled = config?.outbound_enabled ?? false;
       formValues.discord_default_outbound_target = config?.default_outbound_target;
     }
@@ -4857,7 +4907,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           </Typography.Text>
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
           dataSource={channels}
           columns={columns}
           scroll={{ x: 1050 }}

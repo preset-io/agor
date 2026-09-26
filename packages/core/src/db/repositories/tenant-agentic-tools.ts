@@ -13,6 +13,7 @@ import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
   isProviderConnectionTool,
   PROVIDER_RESOLUTION_POLICIES,
+  TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
 } from '../../types';
 import type { Database } from '../client';
@@ -109,6 +110,19 @@ export class TenantAgenticToolSettingsRepository {
   async find(tool: TenantAgenticToolName): Promise<StoredTenantAgenticToolSettings> {
     const plaintext = await this.variables.getPlain(TENANT_AGENTIC_TOOLS_NAMESPACE, tool);
     return plaintext ? parseSettings(tool, plaintext) : {};
+  }
+
+  async findAll(): Promise<Map<TenantAgenticToolName, StoredTenantAgenticToolSettings>> {
+    const values = await this.variables.getPlainMany(
+      TENANT_AGENTIC_TOOLS_NAMESPACE,
+      TENANT_AGENTIC_TOOL_NAMES
+    );
+    return new Map(
+      TENANT_AGENTIC_TOOL_NAMES.map((tool) => {
+        const plaintext = values.get(tool);
+        return [tool, plaintext ? parseSettings(tool, plaintext) : {}];
+      })
+    );
   }
 
   async isEnabled(tool: TenantAgenticToolName): Promise<boolean> {

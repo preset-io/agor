@@ -22,12 +22,14 @@ const board = {
 } as Board;
 const owner = { user_id: 'owner-1', role: 'member' } as User;
 
-function clientFor({ reject }: { reject?: unknown } = {}) {
+function clientFor({ reject, findResult }: { reject?: unknown; findResult?: unknown } = {}) {
   return {
     service: () => ({
       find: vi
         .fn()
-        .mockImplementation(() => (reject ? Promise.reject(reject) : Promise.resolve([]))),
+        .mockImplementation(() =>
+          reject ? Promise.reject(reject) : Promise.resolve(findResult ?? [])
+        ),
       findAll: vi.fn().mockResolvedValue([]),
     }),
   } as unknown as AgorClient;
@@ -127,6 +129,35 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     expect(modalProps.current?.board).toBe(board);
   });
 
+  it.each(['fallback-board', null])(
+    'keeps the open editor target when access loss navigates to %s',
+    async (fallbackId) => {
+      const client = clientFor();
+      const fallback = { ...board, board_id: 'fallback-board', name: 'Another board' } as Board;
+      const props = {
+        onBoardChange: vi.fn(),
+        branchById: new Map(),
+        client,
+        currentUser: owner,
+      };
+      const { rerender } = render(
+        <BoardSwitcher {...props} boards={[board, fallback]} currentBoardId={board.board_id} />
+      );
+      fireEvent.click(await screen.findByRole('button', { name: /Edit current board:/ }));
+
+      // A private-board transfer removes the old owner's board and may select
+      // a fallback before the command's response/Done interaction completes.
+      rerender(<BoardSwitcher {...props} boards={[fallback]} currentBoardId={fallbackId} />);
+      expect(screen.getByRole('dialog')).toBeVisible();
+      expect(modalProps.current?.board).toBe(board);
+
+      const onClose = modalProps.current?.onClose as () => void;
+      act(onClose);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(modalProps.current?.board).toBeNull();
+    }
+  );
+
   it('overlays the edit action without reserving trigger width', async () => {
     renderSwitcher();
     const edit = await screen.findByRole('button', { name: /Edit current board:/ });
@@ -134,6 +165,14 @@ describe('BoardSwitcher current-board edit shortcut', () => {
 
     expect(trigger).toHaveStyle({ padding: '8px 12px' });
     expect(edit.closest('span[style*="position: absolute"]')).toHaveStyle({ right: '28px' });
+  });
+
+  it('reserves room in the name row so a long name never underlaps the edit action', async () => {
+    renderSwitcher();
+    const edit = await screen.findByRole('button', { name: /Edit current board:/ });
+    const trigger = edit.closest('div')?.querySelector('button.ant-dropdown-trigger');
+    // controlHeightSM (24) + paddingSM (12) with the default antd seed token.
+    expect(trigger?.querySelector('.ant-flex')).toHaveStyle({ marginRight: '36px' });
   });
 
   it('keeps the action keyboard reachable and reveals it on focus-within', async () => {
@@ -150,7 +189,10 @@ describe('BoardSwitcher current-board edit shortcut', () => {
   });
 
   it('hides the action when normalized policy resolution denies management', async () => {
-    renderSwitcher(clientFor(), { user_id: 'member-2', role: 'member' } as User);
+    renderSwitcher(clientFor({ findResult: { capabilities: ['board.view'] } }), {
+      user_id: 'member-2',
+      role: 'member',
+    } as User);
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Edit current board:/ })).not.toBeInTheDocument()
     );

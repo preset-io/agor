@@ -2,6 +2,8 @@ export interface AgorDaemonProbe {
   running: boolean;
   deploymentId?: string;
   managedInstanceId?: string;
+  /** `disabled` when the deployment has no password login (e.g. Google/SSO launch). */
+  localAuth?: 'enabled' | 'disabled';
 }
 
 /** A successful HTTP response alone is not proof that the configured port belongs to Agor. */
@@ -23,8 +25,10 @@ export async function probeAgorDaemon(url: string): Promise<AgorDaemonProbe> {
       typeof db?.ok === 'boolean' &&
       typeof body.timestamp === 'number';
     if (body.service !== 'agor-daemon' && !isLegacyAgorHealth) return { running: false };
+    const localAuth = (auth?.identity as Record<string, unknown> | undefined)?.localAuth;
     return {
       running: true,
+      ...(localAuth === 'enabled' || localAuth === 'disabled' ? { localAuth } : {}),
       ...(typeof body.deploymentId === 'string' ? { deploymentId: body.deploymentId } : {}),
       ...(typeof body.managedInstanceId === 'string'
         ? { managedInstanceId: body.managedInstanceId }

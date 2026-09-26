@@ -43,6 +43,32 @@ async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promis
 }
 
 describe('TasksService.find pagination', () => {
+  dbTest('excludes queued tasks in SQL before the transcript page limit', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const repository = new TaskRepository(db);
+    const completed = await repository.create({
+      session_id: sessionId,
+      status: TaskStatus.COMPLETED,
+      created_by: generateId() as UUID,
+    });
+    for (let i = 0; i < 12; i++)
+      await repository.create({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        created_by: generateId() as UUID,
+      });
+    const result = (await createTasksService(db, feathers()).find({
+      query: {
+        session_id: sessionId,
+        status: { $ne: TaskStatus.QUEUED },
+        $sort: { task_id: -1 },
+        $limit: 10,
+      },
+    })) as Paginated<Task>;
+    expect(result.total).toBe(1);
+    expect(result.data.map((task) => task.task_id)).toEqual([completed.task_id]);
+  });
+
   dbTest('composes filters/order in SQL before returning one bounded page', async ({ db }) => {
     const sessionId = await createTestSession(db);
     const otherSessionId = await createTestSession(db);

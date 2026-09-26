@@ -2,8 +2,10 @@ import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isPostgresDatabase } from './database-wrapper';
 import { type DatadogTracer, instrumentDrizzlePostgresForTracing } from './postgres-tracing';
 import * as postgresSchema from './schema.postgres';
+import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /**
  * Validates the tracing shim against the REAL drizzle-orm/postgres-js internals
@@ -14,11 +16,16 @@ import * as postgresSchema from './schema.postgres';
 const url = process.env.AGOR_TEST_POSTGRES_URL;
 
 describe.skipIf(!url)('postgres-tracing against real Drizzle postgres.js', () => {
-  const calls: { resource?: string }[] = [];
+  const calls: { resource?: string; tags: Record<string, unknown> }[] = [];
   const tracer: DatadogTracer = {
     trace(_name, opts, fn) {
-      calls.push({ resource: opts.resource });
-      return fn();
+      const call = { resource: opts.resource, tags: { ...opts.tags } };
+      calls.push(call);
+      return fn({
+        setTag: (key, value) => {
+          call.tags[key] = value;
+        },
+      });
     },
   };
 
@@ -57,9 +64,47 @@ describe.skipIf(!url)('postgres-tracing against real Drizzle postgres.js', () =>
     expect(calls.some((c) => (c.resource ?? '').includes('13'))).toBe(true);
   });
 
-  // NOTE: transaction-sub-session coverage (the prototype patch reaching the
-  // scoped session drizzle creates for a transactional callback) is proven in
-  // the unit suite (postgres-tracing.test.ts). We don't open a real transaction
-  // here to avoid the raw-Drizzle-transaction multitenancy boundary check for a
-  // test that touches no tenant data.
+  it('records queued acquisition on a one-connection pool and preserves tenant boundaries', async () => {
+    calls.length = 0;
+    const tenantA = '11111111-1111-4111-8111-111111111111';
+    const tenantB = '22222222-2222-4222-8222-222222222222';
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const first = runWithTenantDatabaseScope(db, tenantA, async () => {
+      entered();
+      await held;
+    });
+    await ready;
+    const second = runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      if (!isPostgresDatabase(scoped)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const rows = await scoped.execute(sql`select current_setting('agor.tenant_id') as tenant`);
+      expect((rows as unknown as { tenant: string }[])[0].tenant).toBe(tenantB);
+      await expect(
+        runWithTenantDatabaseScope(db, tenantA, async () => undefined)
+      ).rejects.toThrow();
+    });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const transactions = calls.filter((call) => call.resource === 'postgres.transaction');
+      expect(transactions).toHaveLength(2);
+      expect(transactions[0].tags['db.transaction.acquire_ms']).toBeGreaterThanOrEqual(0);
+      expect(transactions[1].tags).not.toHaveProperty('db.transaction.acquire_ms');
+      expect(calls.filter((call) => call.resource === 'postgres.transaction.work')).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+    expect(calls.filter((call) => call.resource === 'postgres.transaction.work')).toHaveLength(2);
+    expect(
+      calls.filter((call) => call.resource === 'postgres.transaction')[1].tags[
+        'db.transaction.acquire_ms'
+      ]
+    ).toBeGreaterThanOrEqual(0);
+  });
 });

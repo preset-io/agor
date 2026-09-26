@@ -1,7 +1,10 @@
 import type { BranchID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
+import { deleteFrom } from '../database-wrapper';
+import { branches } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { EnvironmentHealthRepository } from './environment-health';
@@ -82,7 +85,8 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
     ).resolves.toEqual({ outcome: 'unavailable' });
 
     const deleted = await seedStartingBranch(db, 'running');
-    await new BranchRepository(db).delete(deleted.branch_id);
+    // Simulate a finalized row only in this disposable fixture.
+    await deleteFrom(db, branches).where(eq(branches.branch_id, deleted.branch_id)).run();
     await expect(
       health.claim({
         branchId: deleted.branch_id,
@@ -308,6 +312,53 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
       claim: { environment_generation: old.claim.environment_generation + 1 },
     });
   });
+
+  dbTest(
+    'invalidates an in-flight result when a Start publishes a new health URL',
+    async ({ db }) => {
+      const branch = await seedStartingBranch(db);
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+      const old = await health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'before-runtime-health-url',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      });
+      if (old.outcome !== 'claimed') throw new Error('Expected initial claim');
+
+      await branches.update(branch.branch_id, {
+        environment_instance: {
+          status: 'starting',
+          health_url: 'https://space-3000.app.github.dev/health',
+        },
+      });
+
+      await expect(
+        health.commit({
+          branchId: branch.branch_id,
+          claimToken: old.claim.claim_token,
+          environmentGeneration: old.claim.environment_generation,
+          observation: {
+            status: 'healthy',
+            message: 'late old HTTP 200',
+            recordWhileStarting: true,
+          },
+        })
+      ).resolves.toEqual({ outcome: 'stale' });
+      await expect(
+        health.claim({
+          branchId: branch.branch_id,
+          claimToken: 'after-runtime-health-url',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+        })
+      ).resolves.toMatchObject({
+        outcome: 'claimed',
+        claim: { environment_generation: old.claim.environment_generation + 1 },
+      });
+    }
+  );
 
   dbTest('invalidates an in-flight result when the branch is archived', async ({ db }) => {
     const branch = await seedStartingBranch(db, 'running');

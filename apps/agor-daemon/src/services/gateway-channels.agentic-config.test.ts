@@ -24,6 +24,29 @@ beforeAll(() => {
 });
 
 describe('GatewayChannelsService exact agentic configuration', () => {
+  dbTest(
+    'display find/get retain metadata and sentinels while runtime reads retain secrets',
+    async ({ db }) => {
+      const { data, owner } = await channelData(db);
+      const repo = new GatewayChannelRepository(db);
+      const created = await repo.create({
+        ...data,
+        created_by: owner.user_id,
+        config: { bot_token: 'synthetic-bot', app_token: 'synthetic-app' },
+      });
+      const service = new GatewayChannelsService(db);
+      const params = { user: owner, query: { id: created.id, $limit: 1 } } as never;
+      const result = await service.find(params);
+      const records = Array.isArray(result) ? result : result.data;
+      expect(records).toHaveLength(1);
+      expect(records[0].config.bot_token).toBe(GATEWAY_REDACTED_SENTINEL);
+      const display = await service.get(created.id, params);
+      expect(display.config.app_token).toBe(GATEWAY_REDACTED_SENTINEL);
+      expect(display.name).toBe(created.name);
+      expect((await repo.findById(created.id))?.config.bot_token).toBe('synthetic-bot');
+    }
+  );
+
   it('rejects My default when execution-owner alignment is unstable', async () => {
     await expect(
       new GatewayChannelsService({} as TenantScopeAwareDatabase).create({

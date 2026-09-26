@@ -14,8 +14,12 @@
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -245,6 +249,7 @@ export class CopilotPromptService {
         url: `${daemonUrl}/mcp`,
         headers: {
           Authorization: `Bearer ${mcpToken}`,
+          [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.copilot,
         },
         tools: ['*'],
       };
@@ -514,7 +519,10 @@ export class CopilotPromptService {
       // Use sendAndWait for blocking execution with timeout
       const timeoutMs = 10 * 60 * 1000; // 10 minutes
       try {
-        await copilotSession.sendAndWait({ prompt }, timeoutMs);
+        await copilotSession.sendAndWait(
+          { prompt: `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}` },
+          timeoutMs
+        );
       } catch (error) {
         // Check for abort
         if (

@@ -31,12 +31,12 @@ export { generateId, IdResolutionError, resolveShortId, shortId } from '../lib/i
 
 // Slug utilities
 export { generateSlug, generateUniqueSlug, identifyUrlParam, isShortId } from '../lib/slugs';
+export * from './branch-admission';
+export { lockBranchReferenceMutation } from './branch-reference-admission';
 // Client and database
 export * from './client';
-
 // Database wrapper utilities (type-safe operations for union Database type)
 export * from './database-wrapper';
-
 // Encryption utilities
 export * from './encryption';
 // First-run admin bootstrap (creates default admin if no users exist; also
@@ -50,9 +50,11 @@ export * from './password-credentials';
 export * from './pending-migrations';
 // Repositories
 export * from './repositories';
+export * from './repositories/branch-deletion';
 export * from './sanitize-error';
 export * from './schema';
 export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
+export { configureSecretKeyDerivationTracing } from './secret-key-derivation';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 // Tenant database lifecycle primitives. Filesystem-backed portability operations

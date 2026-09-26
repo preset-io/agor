@@ -25,6 +25,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ensureCredentialAuthorityLayoutSync,
+  openOrCreatePrivateDirectoryForBindSync,
+  type SyncDirectoryBindSource,
+} from '@agor/core/codex/credential-file';
+import {
   type AgorExecutionSettings,
   buildAllowlistedEnv,
   type ResolvedExecutorResponseConfig,
@@ -180,9 +185,13 @@ export type ExecutorSpawnMode = 'local' | 'templated';
 
 export interface ExecutorSpawnContext {
   mode: ExecutorSpawnMode;
+  /** Terminating signal reported by the OS, when the process was signaled. */
+  signal?: NodeJS.Signals | null;
 }
 
 export interface SpawnExecutorOptions {
+  /** Bounded environment handoff owns/kills its entire local launcher process group. */
+  launcherProcessGroup?: boolean;
   cwd?: string;
   env?: Record<string, string>;
   logPrefix?: string;
@@ -501,6 +510,8 @@ function sandboxLocalExecutorCommand(
   args: string[];
   env: Record<string, string | undefined>;
   inheritedFds?: number[];
+  /** Preflight-owned descriptors closed by the launch chokepoint after spawn. */
+  ownedBindSources?: SyncDirectoryBindSource[];
 } {
   // Sandbox around the WORK directory, never the executor package cwd. The
   // daemon supplies this path and the caller's normalized filesystem access;
@@ -528,36 +539,49 @@ function sandboxLocalExecutorCommand(
     return command;
   }
 
+  const ownerTmpBindSource = prepareLocalSandboxSources(params);
+  const ownedBindSources = ownerTmpBindSource ? [ownerTmpBindSource] : [];
+
   const inheritedFds = localSandboxFileBinds?.map((bind) => bind.sourceFd) ?? [];
   const childCredentialBinds = localSandboxFileBinds?.map((bind, index) => ({
     // Node maps extra stdio entries to child descriptors starting at 3.
     fd: 3 + index,
     destination: bind.destination,
   }));
+  const ownerTmpBindFd = ownerTmpBindSource ? 3 + inheritedFds.length : undefined;
+  if (ownerTmpBindSource) inheritedFds.push(ownerTmpBindSource.fd);
 
   const branchAccess =
     params?.principalBranchAccess === 'read' || params?.principalBranchAccess === 'none'
       ? params.principalBranchAccess
       : 'write';
-  const wrap = buildSandboxWrap({
-    sandbox: configuredExecutorDefaults.sandbox,
-    branchPath: workdir,
-    cmd: command.cmd,
-    args: command.args,
-    baseRepoPath:
-      typeof params?.sandboxBaseRepoPath === 'string' ? params.sandboxBaseRepoPath : undefined,
-    ownerHomeStore:
-      typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined,
-    worktreesRoot:
-      typeof params?.sandboxWorktreesRoot === 'string' ? params.sandboxWorktreesRoot : undefined,
-    branchAccess,
-    branchSdkHomeDir:
-      typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
-    branchSdkCredentialBinds: childCredentialBinds,
-    runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
-  });
+  let wrap: ReturnType<typeof buildSandboxWrap>;
+  try {
+    wrap = buildSandboxWrap({
+      sandbox: configuredExecutorDefaults.sandbox,
+      branchPath: workdir,
+      cmd: command.cmd,
+      args: command.args,
+      baseRepoPath:
+        typeof params?.sandboxBaseRepoPath === 'string' ? params.sandboxBaseRepoPath : undefined,
+      ownerHomeStore:
+        typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined,
+      ownerTmpBindFd,
+      worktreesRoot:
+        typeof params?.sandboxWorktreesRoot === 'string' ? params.sandboxWorktreesRoot : undefined,
+      branchAccess,
+      branchSdkHomeDir:
+        typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
+      branchSdkCredentialBinds: childCredentialBinds,
+      runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
+    });
+  } catch (error) {
+    for (const source of ownedBindSources) source.close();
+    throw error;
+  }
   if (!wrap) {
-    if (inheritedFds.length > 0) {
+    for (const source of ownedBindSources) source.close();
+    if (localSandboxFileBinds?.length) {
       throw new Error('Credential file binds require the fail-closed filesystem sandbox');
     }
     return command;
@@ -568,10 +592,57 @@ function sandboxLocalExecutorCommand(
     args: wrap.args,
     env: { ...command.env, ...wrap.extraEnv },
     ...(inheritedFds.length > 0 ? { inheritedFds } : {}),
+    ...(ownedBindSources.length > 0 ? { ownedBindSources } : {}),
   };
 }
 
+/**
+ * Materialize and pin actor-writable mount sources used by a local per-user
+ * sandbox. Both autonomous and request-mode launches pass through this common
+ * synchronous preflight immediately before bubblewrap argument construction.
+ * The caller keeps returned descriptors open through spawn, then closes them.
+ */
+function prepareLocalSandboxSources(
+  params: { sandboxHomeStore?: unknown } | undefined
+): SyncDirectoryBindSource | undefined {
+  const sandbox = configuredExecutorDefaults.sandbox;
+  if (sandbox?.enabled !== true || sandbox.home_mode !== 'per_user') return undefined;
+
+  const sandboxHomeStore =
+    typeof params?.sandboxHomeStore === 'string' && params.sandboxHomeStore.length > 0
+      ? params.sandboxHomeStore
+      : undefined;
+  if (!sandboxHomeStore) {
+    // Defense in depth before the pure sandbox-policy resolver performs the
+    // same fail-closed check. A per-user launch must never reach a shared-home
+    // or empty-source fallback.
+    throw new Error(
+      'sandbox home_mode=per_user requires an owner home store before credential authority preparation'
+    );
+  }
+
+  if (process.platform !== 'linux') return undefined;
+  // Materialize the immutable-parent mount source and all authority leaves.
+  // The shared credential-file primitive walks directories without following
+  // symlinks and preserves existing bytes/inodes, so a malformed owner store
+  // fails before bwrap can follow an actor-controlled `.claude` symlink.
+  ensureCredentialAuthorityLayoutSync(path.join(sandboxHomeStore, '.claude', '.credentials.json'));
+
+  // Persistent tmp is actor-writable across launches. Walk every component
+  // without following symlinks and retain the opened terminal inode for
+  // bubblewrap's descriptor bind, closing the validation-to-mount race.
+  if (sandbox.include?.tmp === false) return undefined;
+  return openOrCreatePrivateDirectoryForBindSync(path.join(sandboxHomeStore, 'tmp'));
+}
+
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
+  spawnExecutorLocalPrepared(payload, options);
+}
+
+function spawnExecutorLocalPrepared(
+  payload: Record<string, unknown>,
+  options: SpawnExecutorOptions
+): void {
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
   const logPrefix = options.logPrefix ?? '[Executor]';
@@ -612,18 +683,23 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   console.log(`${logPrefix} Command: ${payload.command}`);
 
   let reportedExit = false;
-  const reportExit = (code: number | null): void => {
+  const reportExit = (code: number | null, signal?: NodeJS.Signals | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
+    observeExitCallback(options.onExit, code, { mode: 'local', signal }, logPrefix);
   };
 
-  const executorProcess = spawn(spawnCommand.cmd, spawnCommand.args, {
-    cwd,
-    env: { ...spawnCommand.env },
-    stdio: ['pipe', 'inherit', 'inherit', ...(spawnCommand.inheritedFds ?? [])], // stdin: pipe, stdout/stderr: inherit; extra entries are pinned credential fds
-    detached: process.platform !== 'win32',
-  });
+  let executorProcess: ChildProcess;
+  try {
+    executorProcess = spawn(spawnCommand.cmd, spawnCommand.args, {
+      cwd,
+      env: { ...spawnCommand.env },
+      stdio: ['pipe', 'inherit', 'inherit', ...(spawnCommand.inheritedFds ?? [])], // stdin: pipe, stdout/stderr: inherit; extra entries are pinned sandbox bind fds
+      detached: process.platform !== 'win32',
+    });
+  } finally {
+    for (const source of spawnCommand.ownedBindSources ?? []) source.close();
+  }
 
   const spawnReady = options.onSpawn?.(executorProcess, { mode: 'local' });
 
@@ -635,13 +711,15 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     reportExit(127);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(`${logPrefix} Executor completed successfully`);
     } else {
-      console.error(`${logPrefix} Executor exited with code ${code}`);
+      console.error(
+        `${logPrefix} Executor exited with code ${code}${signal ? ` signal ${signal}` : ''}`
+      );
     }
-    reportExit(code);
+    reportExit(code, signal);
   });
 
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
@@ -665,13 +743,14 @@ function spawnExecutorWithTemplate(
   console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
 
   let reportedExit = false;
-  const reportExit = (code: number | null): void => {
+  const reportExit = (code: number | null, signal?: NodeJS.Signals | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    observeExitCallback(options.onExit, code, { mode: 'templated' }, logPrefix);
+    observeExitCallback(options.onExit, code, { mode: 'templated', signal }, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
+    detached: options.launcherProcessGroup === true,
     env: resolveTemplateLauncherEnvironment(logLevel),
     // Trusted launchers receive the reserved AGOR_CLOUD_* credential namespace.
     // Their output is therefore not a daemon logging channel: discard it at the
@@ -686,17 +765,17 @@ function spawnExecutorWithTemplate(
     reportExit(127);
   });
 
-  executorProcess.on('exit', (code) => {
+  executorProcess.on('exit', (code, signal) => {
     if (code === 0) {
       console.log(
         `${logPrefix} Executor completed successfully (task: ${templateVariables.task_id})`
       );
     } else {
       console.error(
-        `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
+        `${logPrefix} Executor exited with code ${code}${signal ? ` signal ${signal}` : ''} (task: ${templateVariables.task_id})`
       );
     }
-    reportExit(code);
+    reportExit(code, signal);
   });
 
   sendExecutorPayload(executorProcess, payload, spawnReady, logPrefix, reportExit);
@@ -1275,12 +1354,17 @@ function requestExecutorLocal(
 
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
-  const child = spawn(spawnCommand.cmd, spawnCommand.args, {
-    cwd,
-    env: { ...spawnCommand.env },
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: false,
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(spawnCommand.cmd, spawnCommand.args, {
+      cwd,
+      env: { ...spawnCommand.env },
+      stdio: ['pipe', 'pipe', 'pipe', ...(spawnCommand.inheritedFds ?? [])],
+      detached: false,
+    });
+  } finally {
+    for (const source of spawnCommand.ownedBindSources ?? []) source.close();
+  }
 
   let stderrSeen = false;
   response.setFailureCleanup(() => child.kill('SIGTERM'));

@@ -378,18 +378,26 @@ export class TeamsGatewayWorker {
     this.timer.unref?.();
   }
 
+  private idleScans = 0;
+
   private async runLoop(): Promise<void> {
     if (this.running || this.stopped) return;
     this.running = true;
     try {
       const processed = await this.checkOnce();
-      this.schedule(processed >= this.scanBatchSize ? 10 : this.recoveryIntervalMs);
+      this.idleScans = processed === 0 ? Math.min(this.idleScans + 1, 6) : 0;
+      this.schedule(
+        processed >= this.scanBatchSize
+          ? 10
+          : Math.min(60_000, this.recoveryIntervalMs * 2 ** this.idleScans)
+      );
     } catch (error) {
       console.warn(
         '[distributed-work.teams-gateway] event="scan_failed"',
         `code=${teamsGatewayErrorCode(error)}`
       );
-      this.schedule(this.recoveryIntervalMs);
+      this.idleScans = Math.min(this.idleScans + 1, 6);
+      this.schedule(Math.min(60_000, this.recoveryIntervalMs * 2 ** this.idleScans));
     } finally {
       this.running = false;
     }
@@ -599,17 +607,20 @@ export class TeamsGatewayWorker {
     >;
     try {
       result = await this.gatewayService.create(
-        withVerifiedHttpGatewayAuthority({
-          channel_key: channel.channel_key,
-          thread_id: activity.threadId,
-          text: promptText,
-          user_name: activity.userName ?? activity.userId,
-          metadata: teamsInboundMetadata(activity),
-          teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
-          gateway_inbound_event_id: event.id,
-          idempotency_task_id: gatewayInboundTaskId(event.id),
-          idempotency_session_id: gatewayInboundSessionId(event.id),
-        })
+        withVerifiedHttpGatewayAuthority(
+          {
+            channel_key: channel.channel_key,
+            thread_id: activity.threadId,
+            text: promptText,
+            user_name: activity.userName ?? activity.userId,
+            metadata: teamsInboundMetadata(activity),
+            teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
+            gateway_inbound_event_id: event.id,
+            idempotency_task_id: gatewayInboundTaskId(event.id),
+            idempotency_session_id: gatewayInboundSessionId(event.id),
+          },
+          event
+        )
       );
     } catch (error) {
       throw new TeamsTransientError('teams_gateway_service_unavailable', error);

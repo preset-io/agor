@@ -1,4 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createDatabaseAsync,
   MCPServerRepository,
@@ -125,6 +128,94 @@ describe('standalone OAuth token persistence', () => {
     } finally {
       const client = (rawDb as unknown as { $client?: { close(): void } }).$client;
       client?.close();
+    }
+  });
+
+  it('keeps a refresh grant across a database restart and preserves it when Google omits it', async () => {
+    let refreshBody = '';
+    const authorizationServer = await listen((request, response) => {
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => {
+        refreshBody += chunk;
+      });
+      request.on('end', () => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ access_token: 'post-restart-access', expires_in: 3600 }));
+      });
+    });
+    const tokenEndpoint = `${authorizationServer}/oauth/token`;
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), 'agor-google-oauth-restart-'));
+    const databaseUrl = `file:${join(temporaryDirectory, 'agor.db')}`;
+    let rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: databaseUrl });
+
+    try {
+      await runMigrations(rawDb);
+      const user = await new UsersRepository(rawDb).create({
+        email: 'sqlite-google-oauth-restart@example.com',
+        role: 'member',
+      });
+      const server = await new MCPServerRepository(rawDb).create({
+        name: 'sqlite-google-oauth-restart',
+        transport: 'http',
+        url: 'https://gmailmcp.googleapis.com/mcp/v1',
+        scope: 'global',
+        owner_user_id: user.user_id as UserID,
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_client_id: 'configured-google-client',
+        },
+      });
+
+      await persistOAuthToken(
+        rawDb as unknown as TenantScopeAwareDatabase,
+        {
+          access_token: 'pre-restart-access',
+          refresh_token: 'durable-google-refresh',
+          expires_in: 1,
+        },
+        {
+          mcpServerId: server.mcp_server_id,
+          userId: user.user_id,
+          oauthMode: 'per_user',
+          clientId: 'configured-google-client',
+          tokenEndpoint,
+          resourceUri: 'https://gmailmcp.googleapis.com/mcp/v1',
+        },
+        'SQLite Google OAuth restart test'
+      );
+
+      (rawDb as unknown as { $client?: { close(): void } }).$client?.close();
+      rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: databaseUrl });
+      const reopened = new UserMCPOAuthTokenRepository(rawDb);
+      const stored = await reopened.getToken(
+        user.user_id as UserID,
+        server.mcp_server_id as MCPServerID
+      );
+      expect(stored?.oauth_refresh_token).toBe('durable-google-refresh');
+
+      await expect(
+        refreshAndPersistToken({
+          db: rawDb as unknown as TenantScopeAwareDatabase,
+          userId: user.user_id as UserID,
+          mcpServerId: server.mcp_server_id as MCPServerID,
+          observedRefreshVersion: {
+            grantGeneration: stored!.grant_generation,
+            grantBindingFingerprint: stored!.grant_binding_fingerprint,
+            refreshGeneration: stored!.refresh_generation,
+          },
+          validateGrant: async () => true,
+        })
+      ).resolves.toBe('post-restart-access');
+
+      expect(new URLSearchParams(refreshBody).get('refresh_token')).toBe('durable-google-refresh');
+      expect(
+        (await reopened.getToken(user.user_id as UserID, server.mcp_server_id as MCPServerID))
+          ?.oauth_refresh_token
+      ).toBe('durable-google-refresh');
+    } finally {
+      (rawDb as unknown as { $client?: { close(): void } }).$client?.close();
+      await rm(temporaryDirectory, { recursive: true, force: true });
     }
   });
 });

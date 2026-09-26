@@ -1,7 +1,7 @@
 import type { AgorClient, Board, Branch, Repo, UserID } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { App as AntApp, Select, Space, Spin, Typography } from 'antd';
+import { App as AntApp, Button, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
@@ -128,7 +128,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       });
   }, [candidates, boardById, repoById, current]);
 
-  const handleChange = async (branchId: string) => {
+  const handleChange = async (branchId: string | null) => {
     if (!client || !currentUserId) return;
     const operationUserId = currentUserId;
     setSaving(true);
@@ -175,6 +175,12 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         </Typography.Text>
       )}
 
+      <Button
+        disabled={disabled || saving || !client || !currentUserId || loadFailed}
+        onClick={() => void handleChange(null)}
+      >
+        Clear primary assistant
+      </Button>
       <Select
         showSearch
         loading={saving}

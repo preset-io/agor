@@ -29,7 +29,6 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import {
-  asMCPExternalError,
   getMcpServersForSession,
   isMCPAbortError,
   listMcpToolsWithPermission,
@@ -39,10 +38,18 @@ import {
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
-import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
+import {
+  getDefaultPermissionMode,
+  isGatewaySession,
+  MCP_CLIENT_HINT_HEADER,
+  MCP_CLIENT_HINTS,
+} from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -64,6 +71,11 @@ import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import {
+  CODEX_MCP_UNKNOWN_FAILURE,
+  CodexRuntimeDiagnostics,
+  codexRuntimeNotice,
+} from './runtime-diagnostics.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 type CodexSdkReasoningEffort = NonNullable<
@@ -121,11 +133,20 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 type CodexLifecycleFailureCode =
+  | 'authentication_required'
+  | 'completed_without_response'
+  | 'turn_failed'
   | 'stream_start_failed'
   | 'stream_interrupted'
   | 'stream_ended_without_completion';
 
 const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
+  authentication_required:
+    'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
+  completed_without_response:
+    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
+  turn_failed:
+    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
   stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
   stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
   stream_ended_without_completion:
@@ -159,6 +180,7 @@ function projectCodexCompletedEvent(
     usage: {
       input_tokens: count('input_tokens'),
       cached_input_tokens: count('cached_input_tokens'),
+      cache_write_input_tokens: count('cache_write_input_tokens'),
       output_tokens: count('output_tokens'),
       reasoning_output_tokens: count('reasoning_output_tokens'),
     },
@@ -774,6 +796,7 @@ export class CodexPromptService {
       result.agor = {
         url: `${daemonUrl}/mcp`,
         bearer_token_env_var: agorBearerEnvVar,
+        http_headers: { [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.codex },
         ...MCP_AUTO_APPROVE,
       };
       applyGatewayMcpStartupGuard(result.agor as CodexConfigObject, requireMcpServers);
@@ -970,12 +993,16 @@ export class CodexPromptService {
         // This matches Claude's "start/end + payload" visibility model.
         let mcpOutput: string | Array<Record<string, unknown>> | undefined;
         if (status === 'completed') {
-          if (Array.isArray(item.result?.content) && item.result.content.length > 0) {
+          if (item.error) {
+            const safe = sanitizeMCPExternalError(item.error, { stage: 'runtime' });
+            mcpOutput =
+              safe.category === 'unknown'
+                ? CODEX_MCP_UNKNOWN_FAILURE
+                : `${safe.message} Before retrying a write, check whether it already took effect.`;
+          } else if (Array.isArray(item.result?.content) && item.result.content.length > 0) {
             mcpOutput = item.result.content as Array<Record<string, unknown>>;
           } else if (item.result?.structured_content !== undefined) {
             mcpOutput = JSON.stringify(item.result.structured_content, null, 2);
-          } else if (item.error) {
-            mcpOutput = sanitizeMCPExternalError(item.error, { stage: 'runtime' }).message;
           }
         }
         return {
@@ -989,7 +1016,7 @@ export class CodexPromptService {
             output: mcpOutput,
           }),
           ...(status === 'completed' && {
-            status: item.status,
+            status: item.error ? 'failed' : item.status,
           }),
         };
       }
@@ -1335,6 +1362,7 @@ export class CodexPromptService {
       thread = this.getCodexClient().startThread(threadOptions);
     }
 
+    const diagnostics = new CodexRuntimeDiagnostics(sessionId, taskId);
     let receivedTerminalEvent = false;
     const clearFreshThreadResumeState = async () => {
       if (startedFreshThread) {
@@ -1344,7 +1372,8 @@ export class CodexPromptService {
       }
     };
 
-    let runtimePhase: 'starting' | 'streaming' = 'starting';
+    let streamReturned = false;
+    let firstEventObserved = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1367,8 +1396,11 @@ export class CodexPromptService {
       // The signal is passed to Codex SDK which will throw AbortError when aborted
       codexDebug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
-      const { events } = await thread.runStreamed(prompt, turnOptions);
-      runtimePhase = 'streaming';
+      // Refresh model-visible identity even when a fork/resume retains old SDK instructions.
+      // Keep the persisted user prompt and cached client configuration unchanged.
+      const providerPrompt = `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`;
+      const { events } = await thread.runStreamed(providerPrompt, turnOptions);
+      streamReturned = true;
       codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);
 
       const currentMessage: Array<{
@@ -1386,11 +1418,16 @@ export class CodexPromptService {
       let allToolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
       let todoIdsEmittedViaUpdate = new Set<string>();
       let latestContextUsage: ContextUsageSnapshot | undefined;
+      let observedStreamError: unknown;
+      let receivedAssistantMessage = false;
 
       let eventCount = 0;
       let didStop = false;
 
       for await (const event of events) {
+        // runStreamed returns a lazy iterator; even process spawn can fail on
+        // the first next(). Only an observed event establishes streaming here.
+        firstEventObserved = true;
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
 
@@ -1442,6 +1479,7 @@ export class CodexPromptService {
                     ? eventPayload.message
                     : '';
             if (text) {
+              receivedAssistantMessage = true;
               currentMessage.push({ type: 'text', text });
             }
             continue;
@@ -1469,7 +1507,13 @@ export class CodexPromptService {
               (block) => block.type === 'text' && block.text === lastAgentMessage
             );
             if (lastAgentMessage && !hasSameTextContent) {
+              receivedAssistantMessage = true;
               currentMessage.push({ type: 'text', text: lastAgentMessage });
+            }
+
+            if (observedStreamError && !receivedAssistantMessage) {
+              diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
+              throw new CodexLifecycleError('completed_without_response');
             }
 
             codexDebug(
@@ -1538,6 +1582,26 @@ export class CodexPromptService {
               // Emit tool_complete for tool items
               const toolUseComplete = this.itemToToolUse(event.item, 'completed');
               if (toolUseComplete) {
+                if (event.item.type === 'mcp_tool_call' && toolUseComplete.status === 'failed') {
+                  // The SDK retains failed result content (including MCP isError),
+                  // but call errors expose only opaque prose: transport vs JSON-RPC
+                  // cannot safely be inferred from that error field alone.
+                  const failureKind = event.item.error
+                    ? 'call_error'
+                    : event.item.result
+                      ? 'failed_result'
+                      : 'failed_item';
+                  const reference = diagnostics.record(
+                    'mcp_tool_failed',
+                    event.item.error,
+                    failureKind
+                  );
+                  const detail = `MCP call failed; check write outcomes before retrying (reference=${reference}).`;
+                  toolUseComplete.output = Array.isArray(toolUseComplete.output)
+                    ? [...toolUseComplete.output, { type: 'text', text: detail }]
+                    : `${toolUseComplete.output || '[failed]'} ${detail}`;
+                }
+
                 const isDuplicateTodoCompletion =
                   event.item.type === 'todo_list' &&
                   todoIdsEmittedViaUpdate.has(toolUseComplete.id);
@@ -1589,7 +1653,9 @@ export class CodexPromptService {
               // Codex can emit multiple agent_message items per turn, interleaved with tool calls.
               // Yielding them immediately gives a "chatty" UX where users see text as it arrives.
               if ('text' in event.item && event.item.type === 'agent_message') {
-                const textContent = [{ type: 'text', text: event.item.text as string }];
+                const agentMessageText = event.item.text as string;
+                if (agentMessageText) receivedAssistantMessage = true;
+                const textContent = [{ type: 'text', text: agentMessageText }];
 
                 yield {
                   type: 'complete',
@@ -1614,9 +1680,9 @@ export class CodexPromptService {
 
               // Surface non-fatal item-level errors as assistant text so users can see
               // what happened instead of dropping them silently.
-              if ('message' in event.item && event.item.type === 'error') {
-                const safe = sanitizeMCPExternalError(event.item, { stage: 'runtime' });
-                const errorContent = [{ type: 'text', text: `[Codex item error] ${safe.message}` }];
+              if (event.item.type === 'error') {
+                const reference = diagnostics.record('item_notice', event.item);
+                const errorContent = [{ type: 'text', text: codexRuntimeNotice(reference) }];
                 yield {
                   type: 'complete',
                   content: errorContent,
@@ -1630,6 +1696,10 @@ export class CodexPromptService {
           case 'turn.completed': {
             // Turn complete, emit final message
             receivedTerminalEvent = true;
+            if (observedStreamError && !receivedAssistantMessage) {
+              diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
+              throw new CodexLifecycleError('completed_without_response');
+            }
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
             const contextUsage =
@@ -1654,25 +1724,27 @@ export class CodexPromptService {
 
           case 'turn.failed': {
             receivedTerminalEvent = true;
-            const classification = {
-              stage: 'runtime' as const,
-              ...(!this.apiKey && !this.useNativeAuth
-                ? { category: 'configuration_required' as const }
-                : {}),
-            };
-            const safe = sanitizeMCPExternalError(event.error, classification);
-            console.error(
-              `❌ [Codex] Turn failed for session ${shortId(sessionId)} category=${safe.category} type=${safe.diagnostic.type}`
+            const missingAuthentication = !this.apiKey && !this.useNativeAuth;
+            diagnostics.recordFailure(
+              'turn_failed',
+              event.error,
+              missingAuthentication ? 'configuration_required' : undefined
             );
-            throw asMCPExternalError(event.error, classification);
+            throw new CodexLifecycleError(
+              missingAuthentication ? 'authentication_required' : 'turn_failed'
+            );
           }
 
           case 'error': {
-            // The public SDK defines every `error` event as unrecoverable and
-            // exposes only an arbitrary provider/CLI message. It has no typed
-            // reconnect/auth discriminator, so do not parse prose to invent
-            // control flow or recovery state.
-            throw asMCPExternalError(event, { stage: 'runtime' });
+            // Despite the public type's "unrecoverable" wording, Codex exec
+            // keeps its event processor running after this notification. In
+            // particular, retry progress is projected through this same lossy
+            // event shape without the source `will_retry` discriminator. Do
+            // not parse provider prose or terminate early: remember the error
+            // and wait for the authoritative turn.completed / turn.failed / EOF.
+            observedStreamError = event;
+            diagnostics.recordFailure('stream_error_observed', event);
+            break;
           }
 
           default:
@@ -1686,6 +1758,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
     } catch (error) {
@@ -1706,12 +1779,18 @@ export class CodexPromptService {
 
       if (isKnownCodexBoundaryError(error)) throw error;
 
-      // Convert opaque SDK lifecycle failures to local, fixed control-flow
-      // errors. Provider failures emitted as typed events above retain their
-      // closed MCP category/action contract instead of being flattened here.
-      throw new CodexLifecycleError(
-        runtimePhase === 'starting' ? 'stream_start_failed' : 'stream_interrupted'
+      diagnostics.recordFailure(
+        firstEventObserved ? 'stream_interrupted' : 'stream_start_failed',
+        error
       );
+
+      // Convert opaque SDK lifecycle failures to local, fixed control-flow
+      // errors. Codex runtime failures emitted as typed events above have already
+      // been converted to Codex-specific fixed lifecycle errors.
+      // Preserve the existing UI distinction independently of diagnostic phase.
+      throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
+    } finally {
+      diagnostics.finish();
     }
   }
 

@@ -1,7 +1,7 @@
 /**
  * Viewer workspace bootstrap integration.
  *
- * The Marketplace link is only useful if the real workspace bootstrap reaches
+ * The Catalog entry is only useful if the real workspace bootstrap reaches
  * AppHeader. This mounts useAgorData in front of the actual header while the
  * daemon seam enforces the MEMBER floor on users.findAll and board-objects;
  * a direct AppHeader render would miss the full-screen failure this guards.
@@ -9,11 +9,12 @@
 
 import { EventEmitter } from 'node:events';
 import type { AgorClient, Session, User } from '@agor-live/client';
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { AppHeader } from '../components/AppHeader';
 import { ConnectionProvider } from '../contexts/ConnectionContext';
+import { MCPCatalogModalProvider, useMCPCatalogModal } from '../contexts/MCPCatalogModalContext';
 import { agorStore } from '../store/agorStore';
 import { useAgorData } from './useAgorData';
 
@@ -111,16 +112,24 @@ function WorkspaceBootstrap({ client, user }: { client: AgorClient; user: User }
   );
 }
 
+function CatalogControllerProbe() {
+  const catalog = useMCPCatalogModal();
+  return <output data-testid="catalog-controller">{catalog?.open ? 'open' : 'closed'}</output>;
+}
+
 function renderWorkspace(client: AgorClient, user: User) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <WorkspaceBootstrap client={client} user={user} />
+      <MCPCatalogModalProvider>
+        <WorkspaceBootstrap client={client} user={user} />
+        <CatalogControllerProbe />
+      </MCPCatalogModalProvider>
     </MemoryRouter>
   );
 }
 
 describe('viewer-safe workspace bootstrap', () => {
-  it('reaches the real workspace header and Marketplace without member-only bootstrap calls', async () => {
+  it('reaches the real workspace header and Catalog without member-only bootstrap calls', async () => {
     const { client, usersFindAll, boardObjectsFindAll } = makeWorkspaceClient([
       'users',
       'board-objects',
@@ -128,10 +137,8 @@ describe('viewer-safe workspace bootstrap', () => {
 
     renderWorkspace(client, VIEWER);
 
-    expect(await screen.findByRole('link', { name: 'Marketplace' })).toHaveAttribute(
-      'href',
-      '/ui/marketplace'
-    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Open MCP Catalog' }));
+    expect(screen.getByTestId('catalog-controller')).toHaveTextContent('open');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(usersFindAll).not.toHaveBeenCalled();
     expect(boardObjectsFindAll).not.toHaveBeenCalled();
@@ -144,7 +151,7 @@ describe('viewer-safe workspace bootstrap', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('member role required');
     expect(usersFindAll).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('link', { name: 'Marketplace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open MCP Catalog' })).not.toBeInTheDocument();
   });
 
   it('keeps the privileged directory bootstrap for admins', async () => {
@@ -152,7 +159,7 @@ describe('viewer-safe workspace bootstrap', () => {
 
     renderWorkspace(client, { ...VIEWER, user_id: 'admin-1', role: 'admin' } as User);
 
-    expect(await screen.findByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
     expect(usersFindAll).toHaveBeenCalledTimes(1);
   });
 
@@ -162,7 +169,7 @@ describe('viewer-safe workspace bootstrap', () => {
     renderWorkspace(client, VIEWER);
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boards'));
-    expect(screen.queryByRole('link', { name: 'Marketplace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open MCP Catalog' })).not.toBeInTheDocument();
   });
 });
 

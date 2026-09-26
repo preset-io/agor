@@ -11,12 +11,13 @@ function buildTurnCompletedEvent(overrides: Partial<CodexSdkResponse> = {}): Cod
 }
 
 function buildUsage(overrides: Record<string, number | undefined> = {}): CodexSdkResponse['usage'] {
-  // Mirror the real @openai/codex-sdk Usage shape (input/cached_input/output/
-  // reasoning_output). The SDK does NOT include total_tokens — normalizer
-  // derives it as input + output.
+  // Mirror the real @openai/codex-sdk Usage shape (input/cached_input/
+  // cache_write_input/output/reasoning_output). The SDK does NOT include
+  // total_tokens — normalizer derives it as input + output.
   return {
     input_tokens: overrides.input_tokens,
     cached_input_tokens: overrides.cached_input_tokens,
+    cache_write_input_tokens: overrides.cache_write_input_tokens,
     output_tokens: overrides.output_tokens,
     reasoning_output_tokens: overrides.reasoning_output_tokens,
   } as CodexSdkResponse['usage'];
@@ -54,6 +55,7 @@ describe('CodexNormalizer', () => {
         input_tokens: 1_200,
         output_tokens: 800,
         cached_input_tokens: 300,
+        cache_write_input_tokens: 125,
       }),
     });
 
@@ -64,7 +66,7 @@ describe('CodexNormalizer', () => {
       outputTokens: 800,
       totalTokens: 2_000,
       cacheReadTokens: 300,
-      cacheCreationTokens: 0,
+      cacheCreationTokens: 125,
     });
     expect(result.primaryModel).toBeUndefined();
   });

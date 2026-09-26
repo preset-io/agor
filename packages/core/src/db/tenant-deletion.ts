@@ -417,8 +417,15 @@ const STRICT_TENANT_POLICY_EXPRESSION =
 // active; otherwise permissive RLS policies would OR the default-tenant arm
 // with the state-hash capability and broaden callback visibility. Keep this as
 // an exact table-specific contract rather than accepting arbitrary predicates.
+//
 const MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION =
   "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=coalesce(nullif(current_setting('agor.tenant_id',true),''),'default'))";
+// Claude attempts, backend provider grants, and Knowledge import receipts have
+// no unauthenticated callback. Their ordinary tenant arm additionally
+// requires an explicit tenant GUC, including for `default`; the system-scope
+// guard prevents the permissive maintenance policy from being ORed with it.
+const STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION =
+  "(coalesce(current_setting('agor.system_scope',true),'')='')and(tenant_id=nullif(current_setting('agor.tenant_id',true),''))";
 
 function stripOuterParentheses(expression: string): string {
   let current = expression;
@@ -460,11 +467,16 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
   const expectedTenantPolicyExpression =
     relation.tableName === 'mcp_oauth_pending_flows' ||
+    relation.tableName === 'mcp_oauth_client_registrations' ||
     relation.tableName === 'codex_device_auth_attempts'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
-      : relation.tableName === 'github_install_states'
-        ? STRICT_TENANT_POLICY_EXPRESSION
-        : CANONICAL_TENANT_POLICY_EXPRESSION;
+      : relation.tableName === 'claude_oauth_attempts' ||
+          relation.tableName === 'user_provider_oauth_grants' ||
+          relation.tableName === 'kb_import_receipts'
+        ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
+        : relation.tableName === 'github_install_states'
+          ? STRICT_TENANT_POLICY_EXPRESSION
+          : CANONICAL_TENANT_POLICY_EXPRESSION;
 
   const restrictive = relation.policies.filter((policy) => !policy.permissive);
   if (restrictive.length > 0) {

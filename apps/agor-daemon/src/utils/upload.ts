@@ -5,7 +5,7 @@
  */
 
 import path from 'node:path';
-import { Transform } from 'node:stream';
+import { pipeline, Transform } from 'node:stream';
 import { getTenantDataRoot } from '@agor/core/config';
 import type {
   SessionID,
@@ -15,39 +15,16 @@ import type {
   UploadRef,
   UploadStagingStore,
 } from '@agor/core/types';
+import { resolveUploadServeType, UPLOAD_POLICY_ERROR_CONTRACT } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
 /**
- * MIME types accepted by the upload endpoint.
- *
- * Kept narrow on purpose: anything HTML-like, executable, or shell-like is
- * rejected so that an uploaded file cannot be coerced into XSS / drive-by
- * download territory if it is ever served back out of the branch.
- *
- * If you need to add a new type, prefer the most specific MIME possible.
+ * General session uploads accept any file type. A type allowlist is not a
+ * security boundary (archives can carry anything); the controls that matter
+ * are the size/count limits below, server-chosen storage keys with sanitized
+ * display names, and safe serving (see {@link uploadContentHeaders}).
  */
-export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
-  // Images
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  // NOTE: image/svg+xml is intentionally NOT allowed — SVGs can carry script.
-  // Text / docs
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'application/pdf',
-  // Office-style
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  // Archives commonly used to ship logs/artifacts
-  'application/zip',
-  'application/gzip',
-  'application/x-tar',
-]);
 
 /** Max size of a single uploaded file (bytes). */
 export const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -77,9 +54,6 @@ export function configureUploadLimits(maxFileBytes: number): void {
 export function getUploadLimits(): Readonly<UploadIngressPolicy> {
   return uploadLimits;
 }
-
-// Debug logging only in development
-const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
 const LEGACY_IGNORED_UPLOAD_DESTINATIONS = new Set(['branch', 'global']);
 
@@ -148,7 +122,10 @@ export function createUploadStorage(
             done(
               Object.assign(
                 new Error(`Combined upload size exceeds ceiling ${limits.maxTotalBytes}`),
-                { status: 413, code: 'LIMIT_TOTAL_FILE_SIZE' }
+                {
+                  status: UPLOAD_POLICY_ERROR_CONTRACT.totalFileSize.status,
+                  code: UPLOAD_POLICY_ERROR_CONTRACT.totalFileSize.code,
+                }
               )
             );
             return;
@@ -156,7 +133,11 @@ export function createUploadStorage(
           done(null, chunk);
         },
       });
-      file.stream.pipe(aggregateLimiter);
+      // Forward parser errors/disconnects into staging so its own pipeline can
+      // close descriptors and remove partial bytes. Plain pipe() leaves the
+      // staging consumer waiting forever when the source fails. The store owns
+      // the completion callback below, including cleanup on pipeline failure.
+      pipeline(file.stream, aggregateLimiter, () => {});
       void store
         .stage({
           owner,
@@ -201,36 +182,22 @@ export function createUploadStorage(
 export function createUploadMiddleware(store: UploadStagingStore) {
   const limits = getUploadLimits();
   const storage = createUploadStorage(store, limits);
+  // @types/multer 2.2.0 does not yet declare the 2.3+ array-index guard.
+  const multipartLimits: NonNullable<multer.Options['limits']> & {
+    fieldArrayIndexLimit: number;
+  } = {
+    // Per-file ceiling; aggregate bytes are counted by the storage engine.
+    fileSize: limits.maxFileBytes,
+    files: limits.maxFiles,
+    // The browser sends scalar notifyAgent/message fields, not indexed arrays.
+    // This opt-in is required to remediate GHSA-535w-7cp7-47q4: upgrading alone
+    // still permits a sparse array index to consume unbounded CPU.
+    fieldArrayIndexLimit: 0,
+  };
 
   return multer({
     storage,
-    limits: {
-      // Per-file ceiling. Multer aborts the upload with `LIMIT_FILE_SIZE`
-      // if any single file exceeds this.
-      fileSize: limits.maxFileBytes,
-      // Hard ceiling on number of files per request.
-      files: limits.maxFiles,
-      // Aggregate bytes are counted by the streaming storage engine.
-    },
-    fileFilter: (_req, file, cb) => {
-      // Match on the bare MIME (drop any `; charset=...` parameters).
-      const mime = (file.mimetype || '').split(';')[0].trim().toLowerCase();
-      if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) {
-        if (DEBUG_UPLOAD) {
-          console.warn(`🚫 [Upload Storage] Rejecting MIME ${mime} for ${file.originalname}`);
-        }
-        // Pass an Error so the route's error handler returns 4xx with a
-        // clear message instead of silently dropping the file.
-        const err = new Error(`Unsupported file type: ${mime || 'unknown'}`) as Error & {
-          status?: number;
-          code?: string;
-        };
-        err.status = 415;
-        err.code = 'UNSUPPORTED_MEDIA_TYPE';
-        return cb(err);
-      }
-      cb(null, true);
-    },
+    limits: multipartLimits,
   });
 }
 
@@ -247,13 +214,42 @@ export function enforceTotalUploadSize() {
     const { maxTotalBytes } = getUploadLimits();
     const declared = Number.parseInt(req.headers['content-length'] ?? '', 10);
     if (Number.isFinite(declared) && declared > maxTotalBytes) {
-      res.status(413).json({
+      const requestId = (req as Request & { _uploadRequestId?: string })._uploadRequestId;
+      res.locals ??= {};
+      res.locals.uploadFailureCode = UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.code;
+      res.locals.uploadFailureType = 'upload_policy';
+      res.status(UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.status).json({
         error: 'Upload too large',
         details: `Combined upload size ${declared} exceeds ceiling ${maxTotalBytes}`,
-        code: 'PAYLOAD_TOO_LARGE',
+        code: UPLOAD_POLICY_ERROR_CONTRACT.payloadTooLarge.code,
+        ...(requestId && { requestId }),
       });
       return;
     }
     next();
+  };
+}
+
+/**
+ * Response headers for serving staged upload bytes to a browser. Only
+ * {@link resolveUploadServeType}'s inline-safe media types keep their declared
+ * type and render inline; everything else is an opaque attachment, so an
+ * uploaded HTML/SVG/JS file can never execute under the Agor origin. The
+ * sandbox CSP is defense in depth for direct navigation; PDF is exempt because
+ * browser PDF viewers refuse to run inside a sandboxed document.
+ */
+export function uploadContentHeaders(upload: {
+  mimeType: string;
+  displayName: string;
+}): Record<string, string> {
+  const { contentType, inline } = resolveUploadServeType(upload.mimeType);
+  return {
+    'Content-Type': contentType,
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(upload.displayName)}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'private, no-store',
+    ...(contentType === 'application/pdf'
+      ? {}
+      : { 'Content-Security-Policy': "default-src 'none'; sandbox" }),
   };
 }

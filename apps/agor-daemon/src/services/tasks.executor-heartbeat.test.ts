@@ -69,9 +69,7 @@ describe('TasksService executor heartbeat helpers', () => {
       }),
     });
     Reflect.set(service, 'db', { run() {} });
-    Reflect.set(service, 'runtimeAuthorityOptions', {
-      branchRbacEnabled: true,
-    });
+    Reflect.set(service, 'runtimeAuthorityOptions', {});
     Reflect.set(service, 'executorCredentialRevoker', {
       isTaskTokenAuthorityCurrent: vi.fn().mockResolvedValue(true),
     });

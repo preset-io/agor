@@ -30,7 +30,7 @@ export default class BranchArchive extends BaseCommand {
   static flags = {
     filesystem: Flags.string({
       description:
-        'Filesystem action: preserved (keep files), cleaned (remove build artifacts), deleted (remove all files)',
+        'Filesystem action: preserved (keep files), cleaned (run enabled repository cleanup command), deleted (remove all files)',
       options: ['preserved', 'cleaned', 'deleted'],
       default: 'preserved',
     }),
@@ -86,7 +86,11 @@ export default class BranchArchive extends BaseCommand {
         this.log(chalk.red('  ⚠  This will remove all files from the filesystem!'));
         this.log('');
       } else if (flags.filesystem === 'cleaned') {
-        this.log(chalk.yellow('  ⚠  This will clean build artifacts (node_modules, etc.)'));
+        this.log(
+          chalk.yellow(
+            '  ⚠  Runs the enabled repository cleanup command; it may delete valuable files with no undo.'
+          )
+        );
         this.log('');
       }
 
@@ -96,7 +100,11 @@ export default class BranchArchive extends BaseCommand {
         filesystemAction: flags.filesystem,
       });
 
-      this.log(chalk.green(`✓ Archived branch "${branch.name}"`));
+      this.log(
+        chalk.green(
+          `✓ Archive accepted for "${branch.name}"; inspect branch status for filesystem completion`
+        )
+      );
       this.log('');
 
       // Cleanup

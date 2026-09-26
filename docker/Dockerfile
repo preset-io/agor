@@ -7,6 +7,10 @@
 #
 # Or use docker-compose which automatically selects the right target
 
+# Platforms without a --target option can select the final runtime through a
+# build argument. Preserve the historical default; explicit targets are unchanged.
+ARG AGOR_RUNTIME_TARGET=production-source-ha
+
 # ============================================================================
 # Stage 0: Security-pinned bubblewrap
 # ============================================================================
@@ -143,7 +147,7 @@ FROM base AS development
 
 # Source mode resolves OpenCode from PATH; keep its exact development runtime
 # out of the shared production base.
-RUN sudo npm install -g opencode-ai@1.14.33
+RUN sudo npm install -g opencode-ai@1.18.31
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -156,7 +160,9 @@ COPY packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencod
 COPY packages/agentic-tools/package.json ./packages/agentic-tools/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/
-COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
+# pnpm validates every patchedDependencies file before a frozen install.
+# Copy the complete set so new patches also reach managed development builds.
+COPY patches/ ./patches/
 
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
@@ -227,7 +233,8 @@ COPY . .
 # surfaces at startup. CI passes --build-arg AGOR_BUILD_SHA=<github.sha>; left
 # empty (local builds) the stamp falls back to the 'dev' sentinel.
 ARG AGOR_BUILD_SHA=""
-ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
+ARG RAILWAY_GIT_COMMIT_SHA=""
+ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA:-${RAILWAY_GIT_COMMIT_SHA}}
 
 # Install workspace deps (dev deps needed for the turbo build), build the exact
 # release artifacts, then perform a script-disabled install. Supplying the
@@ -296,3 +303,36 @@ RUN install -d -o root -g root -m 0755 /etc/agor \
 USER agor
 
 ENTRYPOINT ["/usr/local/bin/agor-ha-entrypoint"]
+
+# Experimental runtime compilation: reuses the SQLite development dependency
+# layers, but not its watch processes or development authentication defaults.
+# No source COPY: startup fetches the configured public branch into its own
+# persistent checkout and builds once with a persistent Turbo cache.
+FROM development AS runtime-build
+# The watch image builds only core workspaces. A packaged release additionally
+# builds the integration packages, so extend its dependency skeleton (no source).
+COPY --chown=agor:agor packages/agor-live/package.json ./packages/agor-live/
+COPY --chown=agor:agor packages/agor-claude/package.json ./packages/agor-claude/
+COPY --chown=agor:agor packages/agor-codex/package.json ./packages/agor-codex/
+COPY --chown=agor:agor packages/agor-copilot/package.json ./packages/agor-copilot/
+COPY --chown=agor:agor packages/agor-gemini/package.json ./packages/agor-gemini/
+COPY --chown=agor:agor packages/agor-opencode/package.json ./packages/agor-opencode/
+COPY --chown=agor:agor packages/agor-cursor/package.json ./packages/agor-cursor/
+RUN CI=true pnpm install --frozen-lockfile
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends rsync \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /usr/local/lib/agor /opt/agor-runtime \
+  && chown agor:agor /opt/agor-runtime
+COPY docker/runtime-checkout.mjs docker/runtime-watch.mjs /usr/local/lib/agor/
+COPY docker/docker-entrypoint-runtime.sh docker/docker-entrypoint-prod.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint-runtime.sh /usr/local/bin/docker-entrypoint-prod.sh \
+  && node /usr/local/lib/agor/runtime-checkout.mjs fingerprint > /opt/agor-dependency-fingerprint
+USER agor
+ENV NODE_ENV=production HOME=/home/agor
+EXPOSE 3030
+ENTRYPOINT ["docker-entrypoint-runtime.sh"]
+
+# Railway supplies AGOR_RUNTIME_TARGET=production-source as a build argument.
+# This reuses the source-built SQLite runtime, not the npm-latest or HA image.
+FROM ${AGOR_RUNTIME_TARGET} AS runtime

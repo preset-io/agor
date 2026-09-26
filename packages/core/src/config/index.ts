@@ -5,6 +5,7 @@
  */
 
 export * from './agentic-tool-preset-resolver';
+export * from './claude-subscription-oauth';
 export * from './config-manager';
 export * from './constants';
 export * from './deployment';
@@ -14,6 +15,7 @@ export * from './env-locking';
 export * from './env-resolver';
 export * from './env-validation';
 export * from './env-vars';
+export * from './environment-commands';
 export * from './executor-credential-storage';
 export * from './executor-heartbeat';
 export * from './executor-response';

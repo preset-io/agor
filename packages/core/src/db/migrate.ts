@@ -132,6 +132,84 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  [
+    '0117_teams_gateway_ha',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Stop all daemons. Disables existing Teams channels for reviewed opt-in. Old non-Teams inserts remain valid; drain Teams before rollback and never replay ambiguous deliveries',
+      }),
+    },
+  ],
+  [
+    '0113_session_recency_not_null',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'performance',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Backfills missing session recency from creation time and requires updated_at on every session. Enables direct recency sorting; existing writers already supply the timestamp.',
+      }),
+    },
+  ],
+  [
+    '0111_management_ownership_transfer',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'schema',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Removes immutable-owner triggers. Shared application commands validate and authorize management transfers. Existing reference guards and tenant isolation remain; no resource rows are rewritten.',
+      }),
+    },
+  ],
+  [
+    '0107_branch_permanent_deletion',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Adds sticky branch deletion admission. Stop old writers before enabling permanent deletion; older binaries do not honor the fence.',
+      }),
+    },
+  ],
+  [
+    '0105_mcp_oauth_grant_attribution',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Retires unattributed shared MCP OAuth grants; current admins must consent again. Preserves per-user grants. Stop all daemons before migration; older writers cannot supply required attribution.',
+      }),
+    },
+  ],
+  [
+    '0101_environment_command_discovery',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Extends bounded environment discovery to stopping rows. Coordinate homogeneous daemon/executor rollout and external Job deadlines before enabling HA hybrid commands; disable hybrid before rollback.',
+      }),
+    },
+  ],
   ['0030_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
   ['0040_migrate_queued_messages', QUEUED_MESSAGES_MIGRATION_POLICY],
   ...[
@@ -142,6 +220,10 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0095_board_branch_capability_policies',
     '0098_board_branch_capability_policies',
     '0099_shared_session_prompting',
+    '0100_claude_oauth_attempts',
+    '0110_user_provider_oauth_grants',
+    '0102_mcp_oauth_client_registrations',
+    '0103_oauth_authority_watermark_reconciliation',
     '0102_shared_session_prompting',
   ].map(
     (name) =>
@@ -473,20 +555,7 @@ export async function checkMigrationStatus(db: Database): Promise<{
       maxAppliedMillis = row ? Number(row.max_ts ?? 0) : 0;
     }
 
-    // Mirror Drizzle's logic: pending if folderMillis > last applied created_at
-    const pending = journalEntries.filter((e) => e.when > maxAppliedMillis).map((e) => e.tag);
-    const applied = journalEntries.filter((e) => e.when <= maxAppliedMillis).map((e) => e.tag);
-
-    // The database has been migrated by a newer binary than this one when its
-    // watermark is past every migration this binary knows about.
-    const dbAheadOfBinary = maxAppliedMillis > journalMaxWhen;
-
-    return {
-      hasPending: pending.length > 0,
-      pending,
-      applied,
-      dbAheadOfBinary,
-    };
+    return classifyMigrationWatermark(journalEntries, maxAppliedMillis, journalMaxWhen);
   } catch (error) {
     const rootCause = getRootCause(error);
     const rootMsg =
@@ -498,6 +567,35 @@ export async function checkMigrationStatus(db: Database): Promise<{
       error
     );
   }
+}
+
+/** Pure form of Drizzle's timestamp-only status comparison. */
+export function classifyMigrationWatermark(
+  journalEntries: ReadonlyArray<{ tag: string; when: number }>,
+  maxAppliedMillis: number,
+  journalMaxWhen = journalEntries.reduce((max, entry) => Math.max(max, entry.when), 0)
+): {
+  hasPending: boolean;
+  pending: string[];
+  applied: string[];
+  dbAheadOfBinary: boolean;
+} {
+  // Mirror Drizzle's logic: pending if folderMillis > last applied created_at.
+  const pending = journalEntries
+    .filter((entry) => entry.when > maxAppliedMillis)
+    .map((entry) => entry.tag);
+  const applied = journalEntries
+    .filter((entry) => entry.when <= maxAppliedMillis)
+    .map((entry) => entry.tag);
+
+  return {
+    hasPending: pending.length > 0,
+    pending,
+    applied,
+    // This is the daemon downgrade fence: a database migrated past every
+    // watermark known by the binary is unsafe for that binary to interpret.
+    dbAheadOfBinary: maxAppliedMillis > journalMaxWhen,
+  };
 }
 
 /**

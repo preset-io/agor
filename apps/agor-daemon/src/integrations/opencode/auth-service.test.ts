@@ -134,7 +134,7 @@ describe('OpenCode provider auth service', () => {
 
   it('authorizes branch-aware discovery and forwards only the resolved directory', async () => {
     loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'simple', branch_rbac: true },
+      execution: { unix_user_mode: 'simple' },
     } as never);
 
     await runWithTenantContext('tenant-a', () =>
@@ -154,7 +154,7 @@ describe('OpenCode provider auth service', () => {
 
   it('rejects unsupported discovery scope and branch access before executor activity', async () => {
     loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'simple', branch_rbac: true },
+      execution: { unix_user_mode: 'simple' },
     } as never);
     branchRepository.mockImplementationOnce(function repository() {
       return {
@@ -177,7 +177,7 @@ describe('OpenCode provider auth service', () => {
 
   it('does not resolve another tenant branch with the same identifier', async () => {
     loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'simple', branch_rbac: false },
+      execution: { unix_user_mode: 'simple' },
     } as never);
     branchRepository.mockImplementation(function repository() {
       return {
@@ -186,6 +186,11 @@ describe('OpenCode provider auth service', () => {
             ? { id: 'shared-id', path: '/worktrees/tenant-a' }
             : undefined
         ),
+        resolveUserAccess: vi.fn(async () => ({
+          can: 'view',
+          fs_access: 'read',
+          is_owner: false,
+        })),
       };
     } as never);
 

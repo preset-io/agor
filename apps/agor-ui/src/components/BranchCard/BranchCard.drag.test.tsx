@@ -30,6 +30,25 @@ const branch = {
 const repo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as unknown as Repo;
 
 describe('BranchCard drag handle', () => {
+  it('renders complete note Markdown through the non-draggable shared preview', () => {
+    const note = 'A long formatted branch note. '.repeat(12).trim();
+    render(
+      <ConnectionProvider value={connected}>
+        <BranchCard
+          branch={{ ...branch, notes: `**${note}**` }}
+          repo={repo}
+          sessions={[]}
+          userById={new Map()}
+          client={null}
+        />
+      </ConnectionProvider>
+    );
+
+    const content = screen.getByText(note.trim());
+    expect(content.closest(`.${REACT_FLOW_NO_DRAG_CLASS}`)).not.toBeNull();
+    expect(content.closest('.markdown-compact')).not.toBeNull();
+  });
+
   it('lets the branch title participate in the header drag handle', () => {
     render(
       <ConnectionProvider value={connected}>

@@ -75,8 +75,8 @@ Refused before credential resolution/spawn:
 - legacy SSE endpoint handoff;
 - WebSocket;
 - unbounded or unstructured streaming; and
-- a server with any `ask` tool rule, until the canonical permission service can
-  mint a one-shot tenant/task/session/server/tool receipt.
+- a server with any `ask` tool rule; current-turn one-shot approval is deferred,
+  while off/observe retain the pre-existing interactive behavior.
 
 `deny` tool rules are checked again against decoded `tools/call` input. Remote or
 delegated executors fail closed; no mediated path silently projects raw config.
@@ -146,7 +146,66 @@ Enforcement requires explicit confirmation that executors created before the
 rollout were terminated. Emergency downgrade remains possible at any time, with
 an explicit acknowledgement that reusable credentials will again reach
 executors and a security audit log of tenant, actor, previous mode, and new mode.
-There is no quarantine UI or recovery state.
+There is no quarantine UI. Active Tasks may carry the bounded, secret-free MCP
+recovery projection described below; it is not a lease or admission authority.
+
+## Live runtime reprojection (#2500)
+
+The executor-only `POST /tasks/:id/mcp-reprojection` route accepts only the exact
+live executor token whose task, session, principal, and tenant still match. It is
+rate-limited, request-id idempotent, refuses completed/stopping tasks and stale UI
+generations, and returns only daemon gateway URLs plus newly issued opaque
+capabilities. Raw upstream URLs, auth headers, environment, and grants never cross it.
+Mixed projections still return every ready mediated server. Excluded stdio,
+template, OAuth, or `ask` servers remain as per-server durable actions rather
+than blocking transport replacement for the ready subset. Names and server IDs
+are shown only to the session owner/admin audience; broader authorized Task
+viewers receive an affected count and the same action without topology.
+
+Provider support is deliberately narrower than “has an MCP API”:
+
+| Adapter                                  | Current-turn transport rebuild                               | Exact failed-call retry |
+| ---------------------------------------- | ------------------------------------------------------------ | ----------------------- |
+| Claude Agent SDK                         | `setMcpServers`                                              | No                      |
+| Claude Code CLI (legacy stored sessions) | Next turn only                                               | No                      |
+| Copilot                                  | Next turn only; its reload API consumes persisted CLI config | No                      |
+| Codex                                    | Next turn only                                               | No                      |
+| Gemini                                   | Next turn only                                               | No                      |
+| OpenCode                                 | Next turn only; no safe managed-turn boundary                | No                      |
+| Cursor                                   | Next turn only                                               | No                      |
+
+Agor never writes a task capability into provider config on disk to manufacture
+hot reload. Claude can replace its MCP transport without clearing
+`sdk_session_id`; other adapters expose an explicit next-turn state and preserve
+the same conversation handle. No shipped adapter exposes a safe API to replay
+the exact model MCP invocation, so `retries_unstarted_call` is false for every
+adapter. A gateway error records whether provider dispatch is proven unstarted
+or ambiguous, and neither case is replayed automatically. Ambiguous calls are
+called out explicitly.
+
+An `ask` decision is not reprojection authority in this phase. Compatibility and
+enforced projection omit those servers with `approval_not_mediated`; off and
+observe retain the existing permission flow without coupling approval success to
+reprojection.
+
+Attachment mutations persist one generation-numbered recovery state on only the
+affected live Task and send a private executor hint. Multiple tabs render that
+Task state and reconnect using the observed generation, so stale buttons fail.
+Fanout is bounded, paginated, isolated in one short tenant transaction per Task,
+and scheduled after commit; its
+latency or failure cannot change the authoritative mutation's result. Hints are
+availability accelerators: a missed cross-daemon event or restart is
+recovered when gateway admission rejects the stale capability and writes the same
+structured Task projection. There is no tenant-wide correctness fanout.
+
+That signaling contract exists only in `compatibility` and `enforced`. In `off`
+and `observe`, mutations retain the direct-mode next-turn behavior and do not
+request reprojection. An emergency downgrade advances any visited pending
+mediated recovery to a persistent next-turn generation; executor registration
+or a reconnect request performs the same durable degradation if a bounded
+newest-first cleanup page did not reach that Task. Server-removal hooks capture
+the affected newest live Tasks before deletion and reuse that bounded set after
+commit instead of repeating the scan.
 
 Operators always receive a compact status control, including `off` with zero
 calls. To avoid a noisy unusable operator banner, non-admins see nothing for the
@@ -155,6 +214,40 @@ there is mediated or actionable state. Lists are semantic,
 buttons have accessible names, and status/error changes use polite/assertive live
 regions. It never labels stdio, WebSocket, endpoint-handoff SSE, or unbounded
 streaming as mediated.
+
+The bounded reprojection limiter is process-local and capacity is partitioned by
+tenant, so HA nodes do not share one aggregate request budget. Idempotency and
+apply ordering do not depend on it. Its per-tenant key capacity is larger than
+the bounded 500-Task hint fanout, and an exact durable claim retry bypasses the
+local availability budget:
+the exact request, recovery generation, and reprojection claim are persisted and
+compared under the Task row lock, and success retains a monotonic generation
+tombstone, settlement time, and bounded keyed hashes of the installed per-server
+authority. The gateway suppresses a late rejection only when its refresh identity,
+observed time, or captured current-authority hash proves it predates that settlement;
+a first rejection for newer authority can still create recovery when fanout was missed.
+The first route returns one projection; a separate durable pre-apply
+validation operation returns no capabilities. After daemon restart or HA
+routing, a duplicate claim may continue only when the re-derived authority
+matches the immutable projection digest first bound to that claim; authority
+drift fails closed instead of overwriting the installed identity. Claude
+serializes its apply phase and validates the exact durable generation/request
+immediately before `setMcpServers`; a delayed older response therefore fails
+before it can replace a newer successful transport. Executors
+re-read durable recovery state on handler registration/reconnect, gateway
+admission remains authoritative, and no hint or idempotency path replays a
+provider call.
+
+Claude's `setMcpServers` operation is bounded by a timeout. If its outcome is
+uncertain, the executor records a durable `transport_refresh_uncertain` state
+and applies no later live transport refresh in the same turn, preventing a late
+completion from overwriting newer authority. The SDK
+does not expose mutation of the query's `disallowedTools` option: gateway
+permission admission changes immediately, while permission-driven tool
+visibility is explicitly retained as a next-turn action rather than reported as
+a complete current-turn refresh. Opaque capabilities carry a keyed,
+secret-free tool-policy fingerprint, so a gateway backstop can distinguish a
+missed permission hint from an ordinary configuration change.
 
 ## Query shape and budgets
 

@@ -1,5 +1,9 @@
 import { Readable } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { GatewayChannelRepository } from '@agor/core/db';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.restoreAllMocks());
+
 import { gatewaySlackUploadExecutorCommandId } from '../auth/executor-command-ids.js';
 import { ArtifactsService } from './artifacts.js';
 import { GatewayChannelsService } from './gateway-channels.js';
@@ -68,7 +72,7 @@ describe('executor callback boundaries', () => {
   });
 
   it('rejects Slack uploads from a normal member', async () => {
-    const service = new GatewayChannelsService(null as never);
+    const service = new GatewayChannelsService({ run: vi.fn() } as never);
 
     await expect(
       service.uploadFileStreamFromExecutor(
@@ -96,8 +100,11 @@ describe('executor callback boundaries', () => {
     [{ channel_type: 'github' }, 'not configured for Slack'],
     [{ config: { ...gatewayChannel.config, allowed_channel_ids: ['C999'] } }, 'not an allowed'],
   ])('revalidates mutable Slack policy: %j', async (patch, message) => {
-    const service = new GatewayChannelsService(null as never);
-    vi.spyOn(service, 'get').mockResolvedValue({ ...gatewayChannel, ...patch } as never);
+    const service = new GatewayChannelsService({ run: vi.fn() } as never);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...gatewayChannel,
+      ...patch,
+    } as never);
 
     await expect(
       service.uploadFileStreamFromExecutor(
@@ -114,8 +121,10 @@ describe('executor callback boundaries', () => {
   });
 
   it('enforces the upload limit again at the daemon callback', async () => {
-    const service = new GatewayChannelsService(null as never);
-    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
+    const service = new GatewayChannelsService({ run: vi.fn() } as never);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      gatewayChannel as never
+    );
 
     await expect(
       service.uploadFileStreamFromExecutor(
@@ -135,8 +144,10 @@ describe('executor callback boundaries', () => {
     ['session_id', 'gateway.slack-file-upload:wrong:scope'],
     ['branch_id', '019fa07c-b353-7a6b-abd9-9adf1017b990'],
   ])('rejects a Slack callback with a mismatched %s claim', async (claim, value) => {
-    const service = new GatewayChannelsService(null as never);
-    vi.spyOn(service, 'get').mockResolvedValue(gatewayChannel as never);
+    const service = new GatewayChannelsService({ run: vi.fn() } as never);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      gatewayChannel as never
+    );
 
     await expect(
       service.uploadFileStreamFromExecutor(

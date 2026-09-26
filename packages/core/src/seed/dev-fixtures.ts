@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, UUID } from '@agor/core/types';
 import { getBranchesDir, loadConfigSync } from '../config/config-manager';
-import { resolveMultiTenancyConfig } from '../config/multitenancy';
+import { resolveBootstrapTenantId } from '../config/multitenancy';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -78,8 +78,9 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   );
   const db = createTenantScopedDatabaseProxy(createDatabase({ url: databaseUrl }));
   const config = loadConfigSync();
-  const multiTenancy = resolveMultiTenancyConfig(config);
-  const tenantId = multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined;
+  // Dev fixtures seed exactly one tenant: the static tenant (or a clear failure
+  // in required_from_auth, rather than an undefined-tenant scope).
+  const tenantId = resolveBootstrapTenantId(config);
 
   return runWithTenantDatabaseScope(db, tenantId, async () => {
     const repoRepo = new RepoRepository(db);

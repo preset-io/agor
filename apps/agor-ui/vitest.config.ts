@@ -8,12 +8,15 @@ export default defineConfig({
     conditions: ['source'],
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // The repository-backed archive regression imports core source, whose
+      // self-imports Vitest otherwise externalizes to unbuilt dist exports.
+      '@agor/core/types': path.resolve(__dirname, '../../packages/core/src/types/index.ts'),
     },
   },
   test: {
     globals: true,
     environment: 'jsdom',
-    setupFiles: './src/test/setup.ts',
+    setupFiles: ['../../test/isolate-host-env.ts', './src/test/setup.ts'],
     server: {
       deps: {
         // Streamdown dynamically imports KaTeX CSS; inline both packages so

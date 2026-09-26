@@ -1,4 +1,5 @@
 import { Alert, Button, Space, Typography } from 'antd';
+import { MCPOAuthPolicySummary } from './MCPOAuthPolicySummary';
 import type { MCPServerOAuthFailure } from './useMCPServerOAuthStart';
 
 interface MCPOAuthRecoveryAlertProps {
@@ -30,6 +31,17 @@ export const MCPOAuthRecoveryAlert: React.FC<MCPOAuthRecoveryAlertProps> = ({
       description={
         <Space orientation="vertical" size={4}>
           <Typography.Text>{failure.message}</Typography.Text>
+          {failure.recovery?.failure_reason && (
+            <Typography.Text type="secondary">
+              Reason: <Typography.Text code>{failure.recovery.failure_reason}</Typography.Text>
+            </Typography.Text>
+          )}
+          {failure.recovery?.oauth_policy && (
+            <MCPOAuthPolicySummary
+              policy={failure.recovery.oauth_policy}
+              label="Policy at failure"
+            />
+          )}
           <Space>
             {configureLabel && onConfigure && (
               <Button size="small" onClick={onConfigure}>

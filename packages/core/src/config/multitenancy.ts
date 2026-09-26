@@ -26,11 +26,27 @@ export interface TenantResolutionInput {
   headers?: Record<string, unknown>;
 }
 
+/**
+ * `missing`: no tenant identity was presented at all. `invalid`: an identity
+ * was presented but is malformed or conflicts with another source. Callers
+ * that may supply a fallback tenant source (e.g. personal API-key Host
+ * routing) must only do so for `missing`; `invalid` is always terminal.
+ */
+export type TenantResolutionFailure = 'missing' | 'invalid';
+
 export class TenantResolutionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly reason: TenantResolutionFailure = 'invalid'
+  ) {
     super(message);
     this.name = 'TenantResolutionError';
   }
+}
+
+/** True only when no tenant identity was presented (never for bad or conflicting ones). */
+export function isMissingTenantContextError(error: unknown): error is TenantResolutionError {
+  return error instanceof TenantResolutionError && error.reason === 'missing';
 }
 
 function normalizeTenantId(value: unknown): TenantID | null {
@@ -123,6 +139,42 @@ export function resolveMultiTenancyConfig(
     ...(raw.auth_claim ? { auth_claim: raw.auth_claim } : {}),
     ...(raw.trusted_header ? { trusted_header: raw.trusted_header } : {}),
   };
+}
+
+/**
+ * Thrown by {@link resolveBootstrapTenantId} when a single-tenant bootstrap tool
+ * is run under `required_from_auth`. A distinct type so CLI callers can present
+ * this actionable message directly instead of routing it through database-error
+ * sanitization (which would flatten it to a generic "operation failed").
+ */
+export class BootstrapTenantUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BootstrapTenantUnsupportedError';
+  }
+}
+
+/**
+ * Resolve the tenant id for local bootstrap / single-tenant CLI tooling
+ * (`local create-admin`, dev fixtures, admin-id lookup). These tools operate on
+ * exactly one tenant — the static tenant.
+ *
+ * In `required_from_auth` there is no implicit bootstrap tenant: users are
+ * provisioned per authenticated tenant (typically via external launch), so
+ * these tools FAIL CLOSED with a clear {@link BootstrapTenantUnsupportedError}
+ * here rather than entering a tenant database scope with an undefined tenant id.
+ * The latter would trip the armed scope guard mid-operation with an opaque
+ * "Missing tenant database scope" error instead of explaining that the command
+ * is single-tenant only.
+ */
+export function resolveBootstrapTenantId(config: Pick<AgorConfig, 'multi_tenancy'>): TenantID {
+  const resolved = resolveMultiTenancyConfig(config);
+  if (resolved.mode === 'static') return resolved.static_tenant_id;
+  throw new BootstrapTenantUnsupportedError(
+    'This command operates on the static single tenant and is not supported when ' +
+      'multi_tenancy.mode=required_from_auth. Provision users through the authenticated ' +
+      'per-tenant path (external launch) instead.'
+  );
 }
 
 export function assertValidMultiTenancyConfig(
@@ -218,5 +270,8 @@ export function resolveTenantContext(
     return candidates[0];
   }
 
-  throw new TenantResolutionError('Missing tenant context for multi_tenancy.required_from_auth');
+  throw new TenantResolutionError(
+    'Missing tenant context for multi_tenancy.required_from_auth',
+    'missing'
+  );
 }

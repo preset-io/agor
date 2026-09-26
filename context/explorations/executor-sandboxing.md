@@ -146,11 +146,13 @@ permission service.
 Filesystem-only. Snake_case Agor knobs; no network semantics.
 
 **The one-liner switch — `unix_user_mode: sandbox`.** This is the strict replacement operators set.
-It IMPLIES the rest (resolved in memory by `resolveEffectiveConfig`, never rewriting config.yaml):
-`branch_rbac: true`, `sandbox.enabled: true`, `sandbox.home_mode: per_user`, and
-`sandbox.fail_if_unavailable: true` (fails closed), with NO Unix impersonation (runs as the daemon
-user). Explicit `sandbox.*` tunables still apply (e.g. an explicit `home_mode: shared` or
-`fail_if_unavailable: false`), but `enabled` is non-negotiable in this mode.
+It IMPLIES the sandbox filesystem-isolation settings (resolved in memory by
+`resolveEffectiveConfig`, never rewriting config.yaml): `sandbox.enabled: true`,
+`sandbox.home_mode: per_user`, and `sandbox.fail_if_unavailable: true` (fails closed), with NO Unix
+impersonation (runs as the daemon user). Board and branch RBAC is always enabled independently of
+the execution mode — it is not something sandbox mode turns on. Explicit `sandbox.*` tunables still
+apply (e.g. an explicit `home_mode: shared` or `fail_if_unavailable: false`), but `enabled` is
+non-negotiable in this mode.
 
 ```yaml
 execution:

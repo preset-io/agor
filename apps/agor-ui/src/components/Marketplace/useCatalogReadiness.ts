@@ -89,6 +89,7 @@ export function useCatalogReadiness(input: {
     client.io.on('oauth:completed', schedule);
     client.io.on('oauth:disconnected', schedule);
     client.io.on('marketplace:invalidated', schedule);
+    client.io.on('marketplace:changed', schedule);
     window.addEventListener('focus', schedule);
     return () => {
       clearTimeout(debounceTimer.current);
@@ -98,6 +99,7 @@ export function useCatalogReadiness(input: {
       client.io.off('oauth:completed', schedule);
       client.io.off('oauth:disconnected', schedule);
       client.io.off('marketplace:invalidated', schedule);
+      client.io.off('marketplace:changed', schedule);
       window.removeEventListener('focus', schedule);
     };
   }, [authority, client, enabled, refresh]);

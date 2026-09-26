@@ -265,6 +265,8 @@ export type AuthCheckStatus = 'authenticated' | 'unauthenticated' | 'unknown';
  * "couldn't verify" from "no auth" read `status`.
  */
 export interface AuthCheckResult {
+  /** Caller-private saved-state proof, distinct from provider validation. */
+  managedOAuth?: { saved: boolean; usable: boolean };
   status: AuthCheckStatus;
   authenticated: boolean;
   method: 'api-key' | 'oauth' | 'native' | 'none';
@@ -335,6 +337,17 @@ export interface CodexDeviceAuthSealedMaterial {
 }
 
 /**
+ * Result of removing a Claude subscription login via the daemon's
+ * `/claude-auth/logout` endpoint. Delete-only and Agor-scoped: it removes the
+ * managed `~/.claude/.credentials.json` from THIS server and clears the stored
+ * token + auth method; it does NOT revoke the OAuth tokens, so the account stays
+ * signed in elsewhere.
+ */
+export interface ClaudeAuthLogoutResult {
+  status: 'removed';
+}
+
+/**
  * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
  * `/codex-auth/device` endpoints.
  * - `idle`: no attempt exists for this user.
@@ -372,3 +385,98 @@ export interface CodexDeviceAuthStatus {
   planType?: string;
   hint?: string;
 }
+
+/**
+ * Lifecycle of a Claude subscription OAuth sign-in driven by the daemon's
+ * `/claude-auth/oauth` endpoint.
+ *
+ * Unlike Codex, Anthropic exposes no device-authorization endpoint, so the
+ * daemon cannot poll for approval: the user approves in the browser and copies
+ * a `CODE#STATE` string back to Agor. The code travels user→Agor (the reverse
+ * of Codex), which is why there is an `awaiting_code` phase and no poll loop.
+ * See `context/explorations/claude-code-oauth-signin.md`.
+ *
+ * - `idle`: no attempt exists for this user.
+ * - `awaiting_code`: an authorize URL was issued; the daemon is waiting for the
+ *   user to approve and paste the `CODE#STATE` back.
+ * - `exchanging`: a pasted code was accepted and reserved the attempt; the
+ *   daemon is exchanging it and writing credentials. Blocks a concurrent submit.
+ * - `success`: the code was exchanged and `~/.claude/.credentials.json` written.
+ * - `expired`: the daemon-side PKCE/state freshness window elapsed unused.
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type ClaudeOAuthPhase =
+  | 'idle'
+  | 'awaiting_code'
+  | 'exchanging'
+  | 'success'
+  | 'expired'
+  | 'error';
+
+/**
+ * Non-secret status of a Claude OAuth sign-in attempt. The authorize URL is
+ * meant to be displayed; tokens and the PKCE verifier never appear here.
+ */
+export interface ClaudeOAuthStatus {
+  phase: ClaudeOAuthPhase;
+  /** Authorize page the user opens to approve (awaiting_code only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the daemon-side attempt stops accepting a code. */
+  expiresAt?: string;
+  /** Subscription type parsed from the token response after success, when present. */
+  subscriptionType?: string;
+  hint?: string;
+  /**
+   * Identifies the attempt to the client that started it, so a reconnect landing
+   * on another replica can submit against the same attempt. Safe to expose: it
+   * is not the OAuth `state` capability, of which only a SHA-256 fingerprint is
+   * stored.
+   */
+  attemptId?: string;
+}
+
+/**
+ * Identifier of one durable Claude OAuth sign-in attempt.
+ *
+ * Echoed to the initiating client for status reads and resumption. Like the MCP
+ * attempt id it is deliberately NOT the OAuth `state`: the durable row keeps
+ * only a fingerprint of that high-entropy one-time value.
+ */
+export type ClaudeOAuthAttemptID = UUID & { readonly __brand: 'ClaudeOAuthAttemptID' };
+
+/** Durable lifecycle of a Claude subscription OAuth attempt. */
+export type ClaudeOAuthAttemptStatus =
+  | 'pending'
+  | 'exchanging'
+  | 'persisting'
+  | 'succeeded'
+  | 'failed'
+  | 'ambiguous'
+  | 'expired';
+
+/**
+ * Sealed exchange material for a Claude OAuth attempt.
+ *
+ * Only ever produced/consumed inside the daemon's OAuth authority, sealed with
+ * the deployment master secret and AAD-bound to the row it belongs to. The PKCE
+ * verifier lives here; raw OAuth `state` is never persisted, even encrypted.
+ */
+interface ClaudeOAuthSealedMaterialBase {
+  attemptId: ClaudeOAuthAttemptID;
+  tenantId: string;
+  userId: string;
+  attemptGeneration: number;
+  /** PKCE verifier used only for the one-shot provider exchange. */
+  codeVerifier: string;
+}
+
+export type ClaudeOAuthSealedMaterial = ClaudeOAuthSealedMaterialBase &
+  (
+    | { version: 1; delegatedHomeKey: string | null; claudeConfigDir?: string; target?: never }
+    | {
+        version: 2;
+        target: import('./provider-oauth').ClaudeBackendOAuthTarget;
+        delegatedHomeKey?: never;
+        claudeConfigDir?: never;
+      }
+  );

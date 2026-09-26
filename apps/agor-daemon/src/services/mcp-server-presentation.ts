@@ -17,7 +17,10 @@ export async function presentMCPServerOAuthPolicies(
       const policy = await resolveMCPOAuthCompatibilityPolicy(server, catalog);
       return {
         ...server,
-        oauth_compatibility_policy: presentMCPOAuthCompatibilityPolicy(policy),
+        oauth_compatibility_policy: presentMCPOAuthCompatibilityPolicy(
+          policy,
+          server.auth.oauth_dcr_mode
+        ),
       };
     })
   );

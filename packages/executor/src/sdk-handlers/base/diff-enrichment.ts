@@ -20,9 +20,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
+import type { FileDiff, StructuredPatchHunk, TranscriptTruncation } from '@agor/core/types';
 import { structuredPatch } from 'diff';
 import { createGit } from '../../git/index.js';
+import { attachGeneratedDiff } from '../../services/generated-diff.js';
 
 export type { StructuredPatchHunk } from '@agor/core/types';
 
@@ -31,8 +32,6 @@ const MAX_FILE_SIZE_BYTES = 1_048_576;
 
 /** Context lines around changes (same as Claude Code CLI) */
 const CONTEXT_LINES = 3;
-/** Maximum diff lines to persist per file in message JSON. */
-const MAX_STORED_DIFF_LINES_PER_FILE = 200;
 /** Maximum repo files to snapshot at the start of a Codex turn. */
 const MAX_TURN_BASELINE_FILES = 5_000;
 /** Maximum aggregate text bytes to keep in a Codex turn baseline. */
@@ -80,6 +79,7 @@ interface EditFilesBaselineEntry {
 }
 
 interface ContentBlock {
+  transcript_truncation?: TranscriptTruncation;
   type: string;
   id?: string;
   name?: string;
@@ -484,48 +484,6 @@ function enrichBlock(
   }
 }
 
-function countOldLines(lines: string[]): number {
-  return lines.filter((line) => !line.startsWith('+')).length;
-}
-
-function countNewLines(lines: string[]): number {
-  return lines.filter((line) => !line.startsWith('-')).length;
-}
-
-function truncateStructuredPatchHunks(hunks: StructuredPatchHunk[]): StructuredPatchHunk[] {
-  const totalLines = hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0);
-  if (totalLines <= MAX_STORED_DIFF_LINES_PER_FILE) return hunks;
-
-  const truncated: StructuredPatchHunk[] = [];
-  let remaining = MAX_STORED_DIFF_LINES_PER_FILE;
-  let shownLines = 0;
-
-  for (const hunk of hunks) {
-    if (remaining <= 0) break;
-
-    const lines = hunk.lines.slice(0, remaining);
-    remaining -= lines.length;
-    shownLines += lines.length;
-
-    truncated.push({
-      ...hunk,
-      oldLines: countOldLines(lines),
-      newLines: countNewLines(lines),
-      lines,
-    });
-  }
-
-  const notice = ` [diff output was truncated: showing first ${shownLines} of ${totalLines} lines]`;
-  const lastHunk = truncated.at(-1);
-  if (lastHunk) {
-    lastHunk.lines = [...lastHunk.lines, notice];
-    lastHunk.oldLines = countOldLines(lastHunk.lines);
-    lastHunk.newLines = countNewLines(lastHunk.lines);
-  }
-
-  return truncated;
-}
-
 /**
  * Compute structuredPatch for an Edit tool result.
  *
@@ -599,9 +557,8 @@ function enrichEditResult(block: ContentBlock, input: Record<string, unknown>): 
   // Release current content
   currentContent = null;
 
-  hunks = truncateStructuredPatchHunks(hunks);
   if (hunks.length > 0) {
-    block.diff = { structuredPatch: hunks };
+    attachGeneratedDiff(block, { structuredPatch: hunks });
   }
 }
 
@@ -624,9 +581,9 @@ function enrichWriteResult(block: ContentBlock, input: Record<string, unknown>):
     context: 0,
   });
 
-  const hunks = truncateStructuredPatchHunks(patch.hunks);
+  const hunks = patch.hunks;
   if (hunks.length > 0) {
-    block.diff = { structuredPatch: hunks };
+    attachGeneratedDiff(block, { structuredPatch: hunks });
   }
 }
 
@@ -734,7 +691,7 @@ function enrichEditFilesResult(
       const patch = structuredPatch(filePath, filePath, '', content, '', '', {
         context: 0,
       });
-      const hunks = truncateStructuredPatchHunks(patch.hunks);
+      const hunks = patch.hunks;
       if (hunks.length > 0) {
         fileDiffs.push({ path: filePath, kind, structuredPatch: hunks });
       }
@@ -750,10 +707,10 @@ function enrichEditFilesResult(
 
   if (fileDiffs.length > 0) {
     // Also set structuredPatch to the first file's hunks for backward compat
-    block.diff = {
+    attachGeneratedDiff(block, {
       structuredPatch: fileDiffs[0].structuredPatch,
       files: fileDiffs,
-    };
+    });
   }
 }
 
@@ -829,7 +786,7 @@ function enrichFromEditFilesSnapshots(snapshots: EditFilesSnapshot[]): FileDiff[
         }
       );
 
-      const hunks = truncateStructuredPatchHunks(patch.hunks);
+      const hunks = patch.hunks;
       if (hunks.length > 0) {
         fileDiffs.push({
           path: snapshot.path,

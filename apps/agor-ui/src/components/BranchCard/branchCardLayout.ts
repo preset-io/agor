@@ -1,9 +1,14 @@
 import type { Session } from '@agor-live/client';
 import { isGatewaySession } from '@agor-live/client';
 
+// Keep auto-sized card lists and the deferred card's fit-to-view footprint in sync.
+export const BRANCH_SESSION_VIEWPORT_HEIGHT = 400;
+
 const EMPTY_SESSIONS_SHELL_HEIGHT = 72;
 const SECTION_HEADER_HEIGHT = 46;
-const SESSION_ROW_HEIGHT = 42;
+// Single-line rows at AntD's default controlHeight plus the one-size-unit row gap
+// (see sessionRowStyle and rowGap in BranchSessionSections).
+const SESSION_ROW_HEIGHT = 36;
 const SECTION_GAP_HEIGHT = 8;
 
 export function estimateBranchSessionSectionsHeight(
@@ -23,7 +28,9 @@ export function estimateBranchSessionSectionsHeight(
 
   if (manualCount > 0) {
     height += SECTION_HEADER_HEIGHT;
-    if (sessionsExpanded) height += manualCount * SESSION_ROW_HEIGHT;
+    if (sessionsExpanded) {
+      height += Math.min(manualCount * SESSION_ROW_HEIGHT, BRANCH_SESSION_VIEWPORT_HEIGHT);
+    }
   } else {
     // The card still shows a Sessions header with the New Session action when
     // only scheduled/gateway sessions exist.

@@ -44,6 +44,7 @@ const identity: TenantDatabaseIdentity = {
   tenantTables: [],
   nonPortableTenantTables: [
     'executor_session_token_authorities',
+    'mcp_oauth_client_registrations',
     'mcp_oauth_pending_flows',
     'user_mcp_oauth_tokens',
   ],

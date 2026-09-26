@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { tenantUserChannelName } from '../realtime/routing';
 import {
   captureMarketplaceInvalidationTargets,
+  emitMarketplaceChanged,
   emitMarketplaceInvalidation,
   publishCapturedMarketplaceInvalidation,
 } from './marketplace-invalidation';
@@ -34,6 +35,18 @@ describe('Marketplace invalidation routing', () => {
     const app = { io: { to } } as unknown as Application & { io: { to: typeof to } };
     emitMarketplaceInvalidation(app, undefined, ['alice']);
     expect(to).not.toHaveBeenCalled();
+  });
+
+  it('emits an equally private freshness hint for ordinary Marketplace mutations', () => {
+    const emit = vi.fn();
+    const to = vi.fn(() => ({ emit }));
+    const app = { io: { to } } as unknown as Application & { io: { to: typeof to } };
+
+    emitMarketplaceChanged(app, 'tenant-a', ['alice', 'alice']);
+
+    expect(to).toHaveBeenCalledOnce();
+    expect(to).toHaveBeenCalledWith(tenantUserChannelName('tenant-a', 'alice'));
+    expect(emit).toHaveBeenCalledWith('marketplace:changed', {});
   });
 
   it('retains removed owners/group members by snapshotting before the visibility write', async () => {

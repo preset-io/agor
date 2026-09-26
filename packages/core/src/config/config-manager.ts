@@ -7,16 +7,19 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
+import type { Database } from '../db/client';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
-import { DAEMON, MCP_TOKEN } from './constants';
+import { validateAnalyticsHeaders, validateAnalyticsMetadata } from './analytics-validation.js';
+import { DAEMON, ENVIRONMENT, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
   resolveDispatchConnectTimeoutMs,
@@ -48,6 +51,9 @@ import {
   type UnixUserMode,
   type UnknownJson,
 } from './types';
+
+// Set only by the core artifact build; source execution uses ESM imports.
+declare const __AGOR_CORE_CJS__: boolean;
 
 export const RETIRED_CONFIG_KEYS = {
   daemon: ['allowAnonymous', 'requireAuth'],
@@ -435,6 +441,20 @@ function requirePlainConfigRecord(value: unknown, path: string): void {
   }
 }
 
+/**
+ * Board and branch RBAC is always enabled. `execution.branch_rbac: false` is a
+ * retired switch that must fail startup rather than silently reopening the
+ * legacy tenant-wide access mode. Enforced at both the raw-config validation
+ * boundary and effective-config resolution so neither path can drift open.
+ */
+function assertBranchRbacNotDisabled(config: AgorConfig): void {
+  if (config.execution?.branch_rbac === false) {
+    throw new Error(
+      'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
+    );
+  }
+}
+
 function validateConfig(config: AgorConfig): void {
   requirePlainConfigRecord(config, 'config');
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
@@ -513,6 +533,7 @@ function validateConfig(config: AgorConfig): void {
   }
 
   const knownTopLevelKeys = new Set([
+    'environment_disclaimer_markdown',
     'agentic_tools',
     'defaults',
     'display',
@@ -542,6 +563,16 @@ function validateConfig(config: AgorConfig): void {
     );
   }
 
+  const disclaimer = config.environment_disclaimer_markdown;
+  if (
+    disclaimer !== undefined &&
+    (typeof disclaimer !== 'string' || disclaimer.length > ENVIRONMENT.DISCLAIMER_MAX_LENGTH)
+  ) {
+    throw new Error(
+      `Config error: environment_disclaimer_markdown must be a string of at most ${ENVIRONMENT.DISCLAIMER_MAX_LENGTH} UTF-16 code units`
+    );
+  }
+
   const unknownPaths: string[] = [];
   const only = (value: unknown, path: string, allowed: readonly string[]) => {
     if (value === undefined) return;
@@ -552,7 +583,13 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
-  only(config.agentic_tools, 'agentic_tools', ['installed']);
+  only(config.agentic_tools, 'agentic_tools', ['installed', 'claude_subscription_oauth']);
+  if (
+    config.agentic_tools?.claude_subscription_oauth !== undefined &&
+    typeof config.agentic_tools.claude_subscription_oauth !== 'boolean'
+  ) {
+    throw new Error('Config error: agentic_tools.claude_subscription_oauth must be a boolean');
+  }
   if (config.agentic_tools?.installed !== undefined) {
     if (!Array.isArray(config.agentic_tools.installed)) {
       throw new Error("Config error: 'agentic_tools.installed' must be an array");
@@ -813,10 +850,12 @@ function validateConfig(config: AgorConfig): void {
     'permission_timeout_ms',
     'executor_command_template',
     'executor_storage',
+    'delegated_branch_deletion',
     'executor_command_nonzero_may_have_dispatched',
     'required_user_env_vars',
     ...RETIRED_CONFIG_KEYS.execution,
     'managed_envs_execution_mode',
+    'environment_command_job_deadline_ms',
     'branch_storage',
     'sandbox',
   ]);
@@ -877,6 +916,13 @@ function validateConfig(config: AgorConfig): void {
     'home',
   ]);
   if (
+    config.execution?.branch_rbac !== undefined &&
+    typeof config.execution.branch_rbac !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.branch_rbac must be a boolean');
+  }
+  assertBranchRbacNotDisabled(config);
+  if (
     config.execution?.sandbox?.preserve_canonical_home_alias !== undefined &&
     typeof config.execution.sandbox.preserve_canonical_home_alias !== 'boolean'
   ) {
@@ -890,6 +936,12 @@ function validateConfig(config: AgorConfig): void {
     'branch_workspace',
     'base_repository',
   ]);
+  if (
+    config.execution?.delegated_branch_deletion !== undefined &&
+    typeof config.execution.delegated_branch_deletion !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.delegated_branch_deletion must be a boolean');
+  }
   if (
     config.execution?.executor_storage?.user_home !== undefined &&
     !['replica-local', 'shared', 'persistent-per-user'].includes(
@@ -968,9 +1020,10 @@ function validateConfig(config: AgorConfig): void {
   only(legacyConfig.branches, 'branches', RETIRED_CONFIG_KEYS.branches);
   only(config.teammates, 'teammates', ['framework_repo_url']);
   only(config.paths, 'paths', ['data_home']);
-  only(config.analytics, 'analytics', ['enabled', 'client', 'filters', 'plugins']);
+  only(config.analytics, 'analytics', ['enabled', 'client', 'extras', 'filters', 'plugins']);
   only(config.analytics?.client, 'analytics.client', ['app', 'version', 'debug']);
   only(config.analytics?.filters, 'analytics.filters', ['exclude_events']);
+  if (config.analytics) validateAnalyticsMetadata(config.analytics);
   for (const [index, plugin] of (config.analytics?.plugins ?? []).entries()) {
     only(plugin, `analytics.plugins[${index}]`, ['type', 'enabled', 'options']);
     switch (plugin.type) {
@@ -984,7 +1037,9 @@ function validateConfig(config: AgorConfig): void {
           'max_batch_size',
           'timeout_ms',
           'headers',
+          'headers_from_env',
         ]);
+        validateAnalyticsHeaders(plugin.options);
         break;
       default: {
         const unsupported: never = plugin;
@@ -1444,6 +1499,12 @@ export function resolveEffectiveConfig(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
 ): AgorConfig {
+  assertBranchRbacNotDisabled(config);
+  if (env.AGOR_RBAC_ENABLED && env.AGOR_RBAC_ENABLED !== 'true') {
+    throw new Error(
+      'Config error: AGOR_RBAC_ENABLED can no longer disable board and branch RBAC. Remove the environment variable (recommended) or set it to true temporarily.'
+    );
+  }
   const defaults = getDefaultConfig();
   const port = env.PORT ? Number.parseInt(env.PORT, 10) : undefined;
   const statsdEnabled = parseOptionalBooleanEnvironmentValue(
@@ -1531,13 +1592,27 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    deployment: {
+      ...config.deployment,
+      ...(env.AGOR_DEPLOYMENT_MODE
+        ? { mode: env.AGOR_DEPLOYMENT_MODE as 'standalone' | 'ha' }
+        : {}),
+      ha: {
+        ...config.deployment?.ha,
+        ...(env.AGOR_HA_EXECUTION_TOPOLOGY
+          ? { execution_topology: env.AGOR_HA_EXECUTION_TOPOLOGY as 'shared-local' | 'external' }
+          : {}),
+      },
+    },
     identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
       ...defaults.execution,
       ...config.execution,
       ...(resolvedExecutorResponse ? { executor_response: resolvedExecutorResponse } : {}),
-      ...(env.AGOR_RBAC_ENABLED === 'true' ? { branch_rbac: true } : {}),
+      // Keep the deprecated read-model field true for old clients and internal
+      // consumers during the compatibility window. It is no longer a switch.
+      branch_rbac: true,
       ...(env.AGOR_UNIX_USER_MODE
         ? {
             unix_user_mode: env.AGOR_UNIX_USER_MODE as NonNullable<
@@ -1549,9 +1624,6 @@ export function resolveEffectiveConfig(
       // isolation-mode implications). Computed above. AGOR_SANDBOX_ENABLED /
       // AGOR_SANDBOX_HOME_MODE are used by the `sandbox` .agor.yml env variants.
       ...(resolvedSandbox ? { sandbox: resolvedSandbox } : {}),
-      // `sandbox` isolation mode requires RBAC to be active (branch authorization
-      // is what the mount policy enforces). Force it on last so it wins.
-      ...(sandboxIsolation ? { branch_rbac: true } : {}),
     },
     paths: {
       ...defaults.paths,
@@ -1596,12 +1668,13 @@ export function resolveEffectiveConfig(
 }
 
 /**
- * Reject execution combinations that the local filesystem sandbox cannot
- * enforce. Call this on the resolved effective config so environment-derived
- * settings are covered as well as YAML settings.
+ * Reject execution and authorization combinations that cannot satisfy the
+ * selected deployment contract. Call this on the resolved effective config so
+ * environment-derived settings are covered as well as YAML settings.
  */
 export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   const execution = config.execution;
+
   if (!execution) return;
 
   const response = resolveExecutorResponseConfig(execution.executor_response);
@@ -1621,6 +1694,15 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
   if (execution.unix_user_mode === 'delegated' && !execution.executor_command_template) {
     throw new Error(
       "execution.unix_user_mode 'delegated' requires execution.executor_command_template so execution is actually delegated to an external substrate."
+    );
+  }
+
+  if (
+    execution.delegated_branch_deletion &&
+    (execution.unix_user_mode !== 'delegated' || !execution.executor_command_template)
+  ) {
+    throw new Error(
+      'execution.delegated_branch_deletion requires delegated mode and an external executor command template'
     );
   }
 
@@ -1816,11 +1898,11 @@ function constructDaemonLocalUrl(config: AgorConfig): string {
 }
 
 /**
- * Shared base URL resolver for browser-reachable URLs.
+ * Shared deployment-config resolver for browser-reachable URLs.
  *
- * All three public resolvers ({@link getBaseUrl}, {@link getDaemonBaseUrl},
- * {@link requirePublicBaseUrl}) differ only in which config key they prefer
- * and whether a missing explicit URL should throw.
+ * Used by {@link getDaemonBaseUrl}, {@link requirePublicBaseUrl}, and the
+ * static/local path of {@link getBaseUrl}. Hosted entity links instead resolve
+ * trusted tenant routing from the database and never use this fallback.
  *
  * @param prefer - `'ui'` checks `ui.base_url` first (for browser entity links),
  *   `'daemon'` checks `daemon.base_url` first (for API endpoints / OAuth).
@@ -1877,7 +1959,26 @@ export async function getDaemonBaseUrl(): Promise<string> {
  * Used to generate clickable URLs to sessions, boards, and other resources
  * that are sent to external platforms like Slack, email, etc.
  *
- * Resolution order:
+ * Hosted (`required_from_auth`): use durable routing from the current trusted
+ * tenant's verified launch. Missing metadata returns an empty string, so entity
+ * projections omit the link until someone opens the workspace through Cloud.
+ * No deployment origin fallback is safe in that mode.
+ *
+ * `db` is REQUIRED, and that is the whole point of the parameter. It was
+ * optional until the Slack MCP connect lane shipped two callers that simply
+ * omitted it: in hosted mode the handle is what
+ * {@link getTenantPublicBaseUrl} opens its short tenant read on, and the only
+ * other source is an ambient tenant database scope that background work —
+ * a deferred after-commit job, a repair sweep, a timer, an `identity-only`
+ * route — does not have. Those callers threw
+ * "Tenant public links require a tenant database" on their first line, which
+ * no SQLite/single-tenant suite can reproduce because the hosted branch is
+ * never taken there. Optional meant "forgot to pass it" compiled; required
+ * means it does not. A caller inside an open scope passes
+ * `getCurrentTenantDatabase()` rather than nothing, so the reliance is
+ * written down at the call site.
+ *
+ * Static/local resolution order (the handle is untouched):
  * 1. AGOR_BASE_URL environment variable (highest priority)
  * 2. ui.base_url from config.yaml
  * 3. daemon.base_url from config.yaml
@@ -1885,11 +1986,23 @@ export async function getDaemonBaseUrl(): Promise<string> {
  *
  * @returns Base URL without trailing slash (e.g., "https://agor.sandbox.preset.zone")
  */
-export async function getBaseUrl(): Promise<string> {
+export async function getBaseUrl(db: Database): Promise<string> {
+  const config = await loadConfig();
+  if (config.multi_tenancy?.mode === 'required_from_auth') {
+    // Use the canonical DB entrypoint: separately bundled config/DB artifacts
+    // must not create separate AsyncLocalStorage instances for tenant identity.
+    // Native import() in CJS would select the ESM DB and lose the CJS caller's
+    // scope. Keep loading lazy, but select the matching package export format.
+    const { getTenantPublicBaseUrl } =
+      typeof __AGOR_CORE_CJS__ !== 'undefined' && __AGOR_CORE_CJS__
+        ? (createRequire(import.meta.url)('@agor/core/db') as typeof import('@agor/core/db'))
+        : await import('@agor/core/db');
+    return getTenantPublicBaseUrl(db);
+  }
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-  return resolveBaseUrl(await loadConfig(), 'ui');
+  return resolveBaseUrl(config, 'ui');
 }
 
 /**
@@ -1990,8 +2103,6 @@ export function loadConfigSync(): AgorConfig {
 }
 
 export interface ResolvedExecutionSecurityMode {
-  /** App-layer branch ownership/visibility/action enforcement. */
-  appRbacEnabled: boolean;
   /** Configured Unix execution mode with default applied. */
   unixUserMode: import('./types').UnixUserMode;
   /**
@@ -2004,9 +2115,8 @@ export interface ResolvedExecutionSecurityMode {
 /**
  * Resolve the execution security posture from config.
  *
- * Keep this as the single semantic boundary between app-layer RBAC and
- * OS/filesystem isolation:
- * - `branch_rbac` controls Agor app permissions only.
+ * App-layer RBAC is always enabled and remains distinct from OS/filesystem
+ * isolation:
  * - `delegated` requires per-user `unix_username` but performs no OS-level
  *   work on the daemon host — identity
  *   enforcement is delegated to the execution substrate.
@@ -2016,7 +2126,6 @@ export function resolveExecutionSecurityMode(
 ): ResolvedExecutionSecurityMode {
   const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
   return {
-    appRbacEnabled: config.execution?.branch_rbac === true,
     unixUserMode,
     requiresExecutionHomeKey: unixUserModeRequiresExecutionHomeKey(unixUserMode),
   };
@@ -2030,23 +2139,6 @@ export function unixUserModeRequiresExecutionHomeKey(
   mode: import('./types').UnixUserMode
 ): boolean {
   return mode === 'delegated';
-}
-
-/**
- * Check if logical branch RBAC is enabled.
- *
- * This controls app-level branch ownership/visibility. It does not necessarily
- * imply local filesystem isolation; simple mode may enable branch RBAC while
- * running filesystem work as the daemon user.
- *
- * @returns true if branch_rbac is enabled in config
- */
-export function isBranchRbacEnabled(): boolean {
-  try {
-    return resolveExecutionSecurityMode().appRbacEnabled;
-  } catch {
-    return false;
-  }
 }
 
 /**

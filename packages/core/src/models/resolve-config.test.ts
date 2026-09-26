@@ -122,7 +122,7 @@ describe('resolveModelConfigPrecedence', () => {
 describe('getDefaultModelForTool', () => {
   it('returns the static default for tools that have one', () => {
     expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-5');
-    expect(getDefaultModelForTool('codex')).toBe('gpt-5.6-sol');
+    expect(getDefaultModelForTool('codex')).toBe('gpt-6-astra');
     expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
     expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
   });
@@ -149,7 +149,7 @@ describe('resolveModelConfigWithFallback', () => {
     const result = resolveModelConfigWithFallback('codex', [undefined, null], { now });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-astra',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
   });

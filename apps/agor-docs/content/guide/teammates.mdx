@@ -28,12 +28,29 @@ The teammate framework is heavily inspired by [OpenClaw](https://github.com/rick
 
 An AI teammate is a special branch backed by the **framework repository**, a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
 
-1. Forks the framework repo into a new branch
+1. Creates a home from your selected persona (or Blank, using your chosen repository’s default branch)
 2. Tags the branch with teammate metadata (name, framework version)
 3. Creates a dedicated board for the teammate's work
 4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
 
 From there, every session in that branch picks up the teammate's accumulated memory and context.
+
+New teammates using the canonical public framework get independent, full-history
+clone homes with no `origin`. No Git token or private repository is needed to start.
+Home files survive only while installation storage survives; Knowledge is the
+primary memory and document store. Existing teammates and private/custom sources
+are unchanged. The Create dialog offers the same persona gallery as onboarding.
+
+Private backup is optional after useful work: with your explicit authorization,
+an additional private remote can back up this isolated home without reassigning
+its Agor repository. Never publicly push, fork, or PR personal state. No `origin`
+blocks ordinary default/origin pushes, not explicit URL pushes or GitHub API calls.
+Git backup does not include Knowledge.
+
+Operators must allow clone storage and provide persistent branch storage for
+external executors. A missing local home is an error, not silently recreated
+personal state. Restore its files from your own backup. Fresh creation requires
+Git and network access to the public framework; no offline starter is bundled.
 
 ## Key concepts
 

@@ -325,7 +325,44 @@ describe('normalizeTeamsActivity', () => {
     expect(normalized.hasMention).toBe(true);
     expect(normalized.text).toBe('please review');
     expect(normalized.metadata.teams_channel_type).toBe('standard');
-    expect(normalized.providerEventId).toBe('teams:activity:activity-1');
+    expect(normalized.providerEventId).toBe(
+      'teams:activity:["19:channel@thread.tacv2","activity-1"]'
+    );
+  });
+
+  it('deduplicates by base conversation and activity, not activity alone or reply-chain suffix', () => {
+    const eventId = (conversationId: string, id = 'same-activity') =>
+      normalizeTeamsActivity(
+        activity({
+          id,
+          conversation: { id: conversationId, conversationType: 'channel' },
+          replyToId: 'root',
+        }),
+        config
+      ).providerEventId;
+    expect(eventId('first')).toBe(eventId('first'));
+    expect(eventId('first')).not.toBe(eventId('second'));
+    expect(eventId('first;messageid=root')).toBe(eventId('first'));
+    expect(eventId('first', 'next-activity')).not.toBe(eventId('first'));
+  });
+
+  it('does not collide when opaque IDs contain delimiters or JSON characters', () => {
+    const pairs = [
+      ['a|b', 'c'],
+      ['a', 'b|c'],
+      ['a:b', 'c'],
+      ['a', 'b:c'],
+      ['a"', 'b\\c'],
+    ];
+    const eventIds = pairs.map(
+      ([conversationId, id]) =>
+        normalizeTeamsActivity(
+          activity({ id, conversation: { id: conversationId, conversationType: 'personal' } }),
+          config
+        ).providerEventId
+    );
+    expect(new Set(eventIds).size).toBe(pairs.length);
+    expect(eventIds.map((id) => JSON.parse(id.slice('teams:activity:'.length)))).toEqual(pairs);
   });
 
   it('matches only the exact Teams app ID forms in structured mentions', () => {

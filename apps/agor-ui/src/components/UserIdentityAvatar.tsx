@@ -31,7 +31,7 @@ export function getUserInitials(user?: Pick<User, 'name' | 'email'> | null): str
     if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     return parts[0].slice(0, 2).toUpperCase();
   }
-  const local = user?.email?.trim().split('@')[0];
+  const local = user?.email?.trim()?.split('@')[0];
   if (local) return local.slice(0, 2).toUpperCase();
   return '?';
 }

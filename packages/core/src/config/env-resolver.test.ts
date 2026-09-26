@@ -12,8 +12,9 @@
 import type { BranchID, Session, SessionID, UserID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { select, update } from '../db/database-wrapper';
+import * as encryption from '../db/encryption';
 import { encryptApiKey } from '../db/encryption';
 import { BranchRepository } from '../db/repositories/branches';
 import { RepoRepository } from '../db/repositories/repos';
@@ -106,6 +107,8 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
   const session = await sessionRepo.create(data);
   return session.session_id as SessionID;
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
   dbTest('global-scope vars are always included', async ({ db }) => {
@@ -220,6 +223,37 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
     }
   );
 });
+
+dbTest(
+  'environment hydration opens only selected fields serially and retains corruption logging',
+  async ({ db }) => {
+    const userId = await createUserWithEnv(db, {
+      FIRST: encEntry('first', 'global'),
+      SECOND: encEntry('second', 'global'),
+      UNSELECTED: { value_encrypted: 'unreadable', scope: 'session' },
+      BAD: { value_encrypted: 'unreadable', scope: 'global' },
+    });
+    const native = encryption.decryptApiKeyAsync;
+    let active = 0;
+    let peak = 0;
+    const open = vi.spyOn(encryption, 'decryptApiKeyAsync').mockImplementation(async (...args) => {
+      peak = Math.max(peak, ++active);
+      try {
+        return await native(...args);
+      } finally {
+        active--;
+      }
+    });
+    const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const env = await resolveUserEnvironment(userId, db);
+    expect(env).toMatchObject({ FIRST: 'first', SECOND: 'second' });
+    expect(env).not.toHaveProperty('BAD');
+    expect(env).not.toHaveProperty('UNSELECTED');
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(1);
+    expect(logs).toHaveBeenCalledTimes(1);
+  }
+);
 
 describe('buildAllowlistedEnv — daemon credential capabilities', () => {
   it('forwards only explicit runtime metadata, never ambient account context', () => {

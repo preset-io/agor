@@ -78,10 +78,10 @@ describe('Marketplace catalog card', () => {
   it('explains the connection status in a tooltip', () => {
     render(<CatalogCard entry={ENTRY} onOpen={vi.fn()} />);
 
-    expect(screen.getByText('No account needed')).toBeInTheDocument();
+    expect(screen.getByText('Catalog says no account')).toBeInTheDocument();
     expect(screen.getByTestId('status-tooltip')).toHaveAttribute(
       'data-tooltip',
-      'This server needs no account, so connecting it takes one step.'
+      'Catalog metadata says this server needs no account. Agor checks the live endpoint before connecting.'
     );
   });
 

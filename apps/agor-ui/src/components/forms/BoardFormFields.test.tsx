@@ -22,7 +22,7 @@ function BoardFormHarness({
         owner_ids: ['user-1'],
       }}
     >
-      <BoardFormFields form={form} rbacEnabled canEditGeneral={canEditGeneral} />
+      <BoardFormFields form={form} canEditGeneral={canEditGeneral} />
       <button type="button" onClick={() => onRead(extractBoardFormValues(form))}>
         Read values
       </button>
@@ -74,7 +74,7 @@ describe('BoardFormFields general-settings permission gating', () => {
     expect(screen.queryByLabelText('Background mode')).not.toBeInTheDocument();
   });
 
-  it('leaves name and description editable by default (legacy/non-RBAC path)', () => {
+  it('leaves name and description editable by default (create flow)', () => {
     renderWithApp(<BoardFormHarness onRead={vi.fn()} />);
 
     expect(screen.getByPlaceholderText('My Board')).not.toBeDisabled();

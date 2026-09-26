@@ -1,3 +1,4 @@
+import { resolveUploadServeType } from '@agor/core/types';
 import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Empty, Popconfirm, Space, Table, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
@@ -5,6 +6,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { getAuthHeaders } from '../../utils/authHeaders';
 import { useThemedMessage } from '../../utils/message';
+import { openUploadBlob } from '../../utils/uploadBlob';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface UploadRow {
@@ -85,18 +87,9 @@ export function UploadsTab({
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     try {
-      const url = URL.createObjectURL(await fetchContent(upload));
-      if (!operation.isCurrent()) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      if (download) anchor.download = upload.displayName;
-      else anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const blob = await fetchContent(upload);
+      if (!operation.isCurrent()) return;
+      openUploadBlob(blob, upload.displayName, download);
     } catch (error) {
       if (!operation.isCurrent()) return;
       showError(error instanceof Error ? error.message : 'Upload is unavailable');
@@ -191,15 +184,17 @@ export function UploadsTab({
             key: 'actions',
             render: (_, row) => (
               <SettingsActionGroup>
-                <Tooltip title="Preview upload">
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label={`Preview ${row.displayName}`}
-                    icon={<EyeOutlined />}
-                    onClick={() => void openBlob(row, false)}
-                  />
-                </Tooltip>
+                {resolveUploadServeType(row.mimeType).inline && (
+                  <Tooltip title="Preview upload">
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label={`Preview ${row.displayName}`}
+                      icon={<EyeOutlined />}
+                      onClick={() => void openBlob(row, false)}
+                    />
+                  </Tooltip>
+                )}
                 <Tooltip title="Download upload">
                   <Button
                     type="text"

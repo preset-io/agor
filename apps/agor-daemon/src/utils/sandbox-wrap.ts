@@ -23,6 +23,7 @@
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '@agor/core/codex/credential-file';
 import {
   type AgorSandboxSettings,
   resolveBwrapArgs,
@@ -72,7 +73,7 @@ function bwrapAvailable(): boolean {
 // once so operators know the /proc process-side vector isn't closed on this
 // host (in a container the container itself is the isolation boundary).
 let pidNsCache: boolean | undefined;
-function pidNamespaceAvailable(): boolean {
+export function sandboxPidNamespaceAvailable(): boolean {
   if (pidNsCache === undefined) {
     pidNsCache = probeBwrapPidNamespace();
     if (!pidNsCache) {
@@ -85,6 +86,11 @@ function pidNamespaceAvailable(): boolean {
     }
   }
   return pidNsCache;
+}
+
+/** Host capability required before a managed Claude token may enter a runtime. */
+export function sandboxManagedCredentialIsolationAvailable(): boolean {
+  return process.platform === 'linux' && bwrapAvailable() && sandboxPidNamespaceAvailable();
 }
 
 /**
@@ -105,6 +111,8 @@ export function buildSandboxWrap(params: {
   args: string[];
   baseRepoPath?: string;
   ownerHomeStore?: string;
+  /** Child fd for the no-follow-preflighted per-user tmp directory. */
+  ownerTmpBindFd?: number;
   /** Tenant-scoped worktrees root resolved from the immutable config. */
   worktreesRoot?: string;
   /** RBAC-resolved fs access of the current prompt actor. Default 'write'. */
@@ -126,6 +134,7 @@ export function buildSandboxWrap(params: {
     args,
     baseRepoPath,
     ownerHomeStore,
+    ownerTmpBindFd,
     worktreesRoot,
     branchAccess,
     branchSdkHomeDir,
@@ -155,22 +164,6 @@ export function buildSandboxWrap(params: {
   const dataHome = runtimePaths.dataHome;
 
   const perUser = sandbox.home_mode === 'per_user' && !!ownerHomeStore;
-  if (perUser) {
-    // The overlay `--bind`s the store over the passwd home; bwrap aborts if the
-    // source is missing, so guarantee it exists (a fresh owner gets an empty
-    // home; tools seed their own state, and migration pre-populates it).
-    try {
-      mkdirSync(ownerHomeStore as string, { recursive: true });
-      // /tmp is bound to <store>/tmp (on-disk, per-user). bwrap `--bind` aborts
-      // if the source is missing, so ensure it exists alongside the store.
-      mkdirSync(join(ownerHomeStore as string, 'tmp'), { recursive: true });
-    } catch (err) {
-      throw new Error(
-        `execution.sandbox.home_mode=per_user but the owner home store ` +
-          `${ownerHomeStore} could not be created: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
 
   if (branchSdkHomeDir) {
     // The branch home is `--bind`ed at its own real path; bwrap aborts on a
@@ -192,24 +185,55 @@ export function buildSandboxWrap(params: {
     branchAccess,
     branchSdkHomeDir,
     branchSdkCredentialBinds,
-    pidNamespace: pidNamespaceAvailable(),
+    pidNamespace: sandboxPidNamespaceAvailable(),
     homeDir: home,
     canonicalHomeDir: canonicalizeExistingPath(home),
     dataHome,
     canonicalDataHome: canonicalizeExistingPath(dataHome),
-    protectedDataRoots: runtimePaths.protectedDataRoots.flatMap((root) => [
-      root,
-      canonicalizeExistingPath(root),
-    ]),
+    protectedDataRoots: [...new Set(runtimePaths.protectedDataRoots.map(canonicalizeExistingPath))],
     worktreesRoot: worktreesRoot ?? runtimePaths.worktreesRoot,
     baseRepoPath,
     ownerHomeStore: perUser ? ownerHomeStore : undefined,
+    ownerTmpBindFd: perUser ? ownerTmpBindFd : undefined,
+    canonicalOwnerHomeStore: perUser
+      ? canonicalizeExistingPath(ownerHomeStore as string)
+      : undefined,
+    canonicalExtraAllowWritePaths: (sandbox.extra_allow_write ?? []).map(canonicalizeExistingPath),
     agenticToolsPath: perUser ? runtimePaths.agenticToolsPath : undefined,
     agorConfigPath: runtimePaths.agorConfigPath,
     agorDbPath: runtimePaths.agorDbPath,
   };
 
-  const bwrapArgs = dropMasksForMissingTargets(resolveBwrapArgs(sandbox, ctx));
+  // These destinations are created inside the writable per-user overlay even
+  // when they do not exist in the daemon's host home. They must survive the
+  // generic missing-host-target filter or an absent host-side file would
+  // silently remove the Claude credential containment boundary.
+  const materializedFileMasks = new Set<string>();
+  if (perUser) {
+    const authorityFilenames = [
+      '.credentials.json',
+      ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+    ] as const;
+    const authorityDirectories = [
+      join(home, '.claude'),
+      join(ownerHomeStore as string, '.claude'),
+      ...(ctx.canonicalOwnerHomeStore && ctx.canonicalOwnerHomeStore !== ownerHomeStore
+        ? [join(ctx.canonicalOwnerHomeStore, '.claude')]
+        : []),
+    ];
+    if (sandbox.preserve_canonical_home_alias === true && ctx.canonicalHomeDir) {
+      authorityDirectories.push(join(ctx.canonicalHomeDir, '.claude'));
+    }
+    for (const directory of authorityDirectories) {
+      for (const filename of authorityFilenames) {
+        materializedFileMasks.add(join(directory, filename));
+      }
+    }
+  }
+  const bwrapArgs = dropMasksForMissingTargets(
+    resolveBwrapArgs(sandbox, ctx),
+    materializedFileMasks
+  );
   return {
     cmd: 'bwrap',
     args: [...bwrapArgs, '--', cmd, ...args],
@@ -224,7 +248,10 @@ export function buildSandboxWrap(params: {
  * abort. Drop such entries — a path that doesn't exist has nothing to hide.
  * (Real targets like /tmp and the worktrees root exist and are kept.)
  */
-function dropMasksForMissingTargets(args: string[]): string[] {
+function dropMasksForMissingTargets(
+  args: string[],
+  materializedFileMasks: ReadonlySet<string> = new Set()
+): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; ) {
     const a = args[i];
@@ -234,7 +261,9 @@ function dropMasksForMissingTargets(args: string[]): string[] {
       i += 2;
     } else if ((a === '--ro-bind' || a === '--ro-bind-try') && args[i + 1] === '/dev/null') {
       const dest = args[i + 2];
-      if (dest && existsSync(dest)) out.push(a, '/dev/null', dest);
+      if (dest && (existsSync(dest) || materializedFileMasks.has(dest))) {
+        out.push(a, '/dev/null', dest);
+      }
       i += 3;
     } else {
       out.push(a);

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -37,6 +37,31 @@ afterEach(async () => {
 });
 
 describe('LocalUploadStagingStore boundary B', () => {
+  it('retains ownership metadata when byte deletion fails and permits a forward retry', async () => {
+    const store = await setup();
+    const stored = await stage(store);
+    const prefix = join(root, tenantA, 'objects', stored.ref.slice(4, 6), stored.ref);
+    const input = { tenantId: tenantA, sessionId: sessionA, branchId: branchA, ref: stored.ref };
+    const sidecar = await readFile(`${prefix}.json`, 'utf8');
+    await rm(`${prefix}.data`);
+    await mkdir(`${prefix}.data`); // deterministic failure without depending on uid/root permissions
+    await expect(store.delete(input)).rejects.toThrow();
+    expect(await readFile(`${prefix}.json`, 'utf8')).toBe(sidecar);
+    await rm(`${prefix}.data`, { recursive: true });
+    await expect(store.delete(input)).resolves.toBeUndefined();
+    await expect(readFile(`${prefix}.json`)).rejects.toThrow();
+  });
+
+  it('does not report successful deletion for historical bytes with a missing ownership sidecar', async () => {
+    const store = await setup();
+    const stored = await stage(store);
+    const prefix = join(root, tenantA, 'objects', stored.ref.slice(4, 6), stored.ref);
+    await rm(`${prefix}.json`);
+    await expect(
+      store.delete({ tenantId: tenantA, sessionId: sessionA, branchId: branchA, ref: stored.ref })
+    ).rejects.toThrow('reconciliation');
+    expect(await readFile(`${prefix}.data`, 'utf8')).toBe('hello');
+  });
   it('returns only an opaque ref and sanitized logical metadata', async () => {
     const stored = await stage(await setup());
     expect(stored.ref).toMatch(/^upl_[0-9a-f-]{36}$/);

@@ -2,6 +2,7 @@ import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertSafeOAuthUrl,
+  assertSafeOutboundUrl,
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
   UnsafeOutboundUrlError,
@@ -35,6 +36,20 @@ afterEach(async () => {
 });
 
 describe('safe OAuth outbound URL policy', () => {
+  it.each([204, 205, 304])(
+    'settles null-body status %s rather than escaping the response callback',
+    async (status) => {
+      const { url } = await listen((_request, response) => {
+        response.writeHead(status);
+        response.end();
+      });
+      const result = await safeOutboundFetch(url, { allowLocalhostHttp: true, timeoutMs: 1000 });
+      expect(result.status).toBe(status);
+      expect(result.body).toBeNull();
+      await expect(result.json()).rejects.toThrow();
+    }
+  );
+
   it('requires HTTPS except for the explicit loopback development exception', () => {
     expect(() => assertSafeOAuthUrl('http://example.com/token')).toThrow(UnsafeOutboundUrlError);
     expect(() =>
@@ -77,6 +92,14 @@ describe('safe OAuth outbound URL policy', () => {
     await expect(safeOutboundFetch(url, { timeoutMs: 50 })).rejects.toBeInstanceOf(
       UnsafeOutboundUrlError
     );
+  });
+
+  it('applies the production DNS/public-address boundary without opening a socket', async () => {
+    await expect(
+      assertSafeOutboundUrl('https://registration.example.com/register', {
+        resolveDns: async () => [{ address: '10.0.0.8', family: 4 }],
+      })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
   });
 
   it('connects to exact loopback only when the development exception is enabled', async () => {

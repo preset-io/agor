@@ -55,6 +55,60 @@ async function seedBranch(db: Database) {
 }
 
 describe('GatewayChannelRepository', () => {
+  dbTest(
+    'listener discovery preserves enabled filtering, ID order and keyset pagination',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channels = [];
+      for (const enabled of [true, false, true]) {
+        channels.push(
+          await repo.create({
+            name: `Discovery ${channels.length}`,
+            created_by: generateId() as UUID,
+            target_branch_id: branch.branch_id as UUID,
+            enabled,
+            config: { bot_token: 'bot-test', app_token: 'app-test' },
+          })
+        );
+      }
+      const expected = channels
+        .filter((channel) => channel.enabled)
+        .map((channel) => channel.id)
+        .sort();
+      expect(await repo.findEnabledListenerCandidateIds(1)).toEqual(expected.slice(0, 1));
+      expect(await repo.findEnabledListenerCandidateIds(1, expected[0])).toEqual(expected.slice(1));
+      expect(await repo.findEnabledListenerCandidateIds(1, expected[1])).toEqual([]);
+      for (const limit of [0, -1, 1.5, 1001]) {
+        await expect(repo.findEnabledListenerCandidateIds(limit)).rejects.toThrow(
+          'between 1 and 1000'
+        );
+      }
+    }
+  );
+
+  dbTest('Teams defaults to a disabled draft and requires explicit activation', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const repo = new GatewayChannelRepository(db);
+    const input = {
+      name: 'Teams opt-in',
+      created_by: generateId() as UUID,
+      target_branch_id: branch.branch_id as UUID,
+      channel_type: 'teams' as const,
+      agor_user_id: generateId() as UUID,
+      config: { app_id: 'teams-default-app', microsoft_tenant_id: 'tenant-1' },
+    };
+    const draft = await repo.create(input);
+    expect(draft.enabled).toBe(false);
+    await expect(repo.update(draft.id, { enabled: true })).rejects.toThrow('app_password');
+    const enabled = await repo.update(draft.id, {
+      enabled: true,
+      config: { app_password: 'test-secret' },
+    });
+    expect(enabled.enabled).toBe(true);
+    expect(enabled.provider_installation_id).toBe(input.config.app_id);
+  });
+
   dbTest('create throws when created_by is missing', async ({ db }) => {
     const repo = new GatewayChannelRepository(db);
     await expect(repo.create({ name: 'Test Channel' })).rejects.toThrow(
@@ -638,6 +692,7 @@ describe('GatewayChannelRepository', () => {
       const repo = new GatewayChannelRepository(db);
       const channel = await repo.create({
         name: 'Teams credential rotation',
+        enabled: true,
         created_by: generateId() as UUID,
         target_branch_id: branch.branch_id as UUID,
         channel_type: 'teams',
@@ -678,16 +733,20 @@ describe('GatewayChannelRepository', () => {
           ...discordConfig,
           allowed_user_ids: [],
           allowed_role_ids: [],
-          files: true,
+          files: 'true',
           agent_tools: ['history'],
         }).errors
       ).toEqual(
         expect.arrayContaining([
           'at least one allowed_user_ids or allowed_role_ids entry is required',
-          'files must be false',
-          'agent_tools must be an empty array',
+          'files must be a boolean',
+          'agent_tools must be [] or an object of capability toggles',
         ])
       );
+      expect(validateDiscordConfig({ ...discordConfig, files: true })).toEqual({
+        ok: true,
+        errors: [],
+      });
       expect(validateDiscordConfig({ ...discordConfig, user_map: {} }).errors).toContain(
         'user_map is only allowed when align_discord_users is true'
       );

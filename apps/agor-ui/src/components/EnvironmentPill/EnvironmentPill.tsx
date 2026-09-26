@@ -1,3 +1,4 @@
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { Branch, Repo } from '@agor-live/client';
 import {
   EditOutlined,
@@ -9,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
+import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -54,8 +56,9 @@ export function EnvironmentPill({
     ? undefined
     : "Requires branch 'all' permission or admin access";
 
-  // Get static app_url (user-editable, initialized from template)
-  const environmentUrl = branch.app_url;
+  // Prefer reported access links, retaining the user-editable static fallback.
+  const environmentUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
+  const commandActive = hasActiveEnvironmentCommand(env);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one
@@ -110,8 +113,11 @@ export function EnvironmentPill({
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
-  const canStop = status === 'running' || status === 'starting';
+  const canStop =
+    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
+  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
   const startDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -120,6 +126,7 @@ export function EnvironmentPill({
     isStopping ||
     isRunning;
   const stopDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -147,8 +154,8 @@ export function EnvironmentPill({
           : `Unhealthy - check failed${healthMessage}`;
       case 'running':
         return environmentUrl
-          ? `Running - ${environmentUrl} (health check not configured)`
-          : 'Running (health check not configured)';
+          ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
+          : `Started (health unavailable${healthMessage})`;
       case 'starting':
         return environmentUrl ? `Starting... - ${environmentUrl}` : 'Starting...';
       case 'stopping':
@@ -196,8 +203,8 @@ export function EnvironmentPill({
         style={{ width: '100%', display: 'inline-flex', alignItems: 'center' }}
         orientation="horizontal"
       >
-        {/* Left section - clickable to open URL (when running) */}
-        {env?.status === 'running' && environmentUrl ? (
+        {/* The static fallback remains useful while Start discovers a runtime URL. */}
+        {canOpenEnvironment && environmentUrl ? (
           <Tooltip title={`${variantPrefix}Open environment - ${environmentUrl}`}>
             <a
               href={environmentUrl}
@@ -289,7 +296,9 @@ export function EnvironmentPill({
                       ? 'Stop environment (cancel startup)'
                       : status === 'stopping'
                         ? 'Environment is stopping'
-                        : 'Environment not running')
+                        : status === 'error' && env?.command_attempt
+                          ? 'Retry Stop (previous outcome unconfirmed)'
+                          : 'Environment not running')
                 }
               >
                 <Button
@@ -362,7 +371,7 @@ export function EnvironmentPill({
                       confirmNuke(() => onNukeEnvironment(branch.branch_id));
                     }
                   }}
-                  disabled={connectionDisabled || !resolvedCanControlEnvironment}
+                  disabled={commandActive || connectionDisabled || !resolvedCanControlEnvironment}
                   style={{
                     height: 22,
                     width: 22,

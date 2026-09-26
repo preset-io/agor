@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, PermissionScope } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -37,8 +37,8 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
-import { findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
@@ -64,19 +64,19 @@ import {
   selectFirstBoardId,
   selectSessionById,
 } from '../../store/selectors';
+import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
-import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
+import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import { getTemplateForFrameworkSource } from '../../utils/teammateTemplates';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -95,7 +95,7 @@ import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
-import { SettingsModal, UserSettingsModal } from '../SettingsModal';
+import { SettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
@@ -236,6 +236,14 @@ export interface AppProps {
     updates: UpdateUserInput,
     shouldApply?: () => boolean
   ) => void | Promise<void>;
+  /**
+   * Re-syncs the authenticated user's own directory row after a self-edit.
+   * `onUpdateUser` only persists the patch; the caller's `useAuth()` snapshot
+   * (`user`/`currentUser` here) is a separate one-time-fetched copy that
+   * `onUpdateUser` never touches, so without this the Settings modal reverts
+   * to stale values on next open (e.g. a cleared API key still shows "Set").
+   */
+  onRefreshCurrentUser?: (shouldApply: () => boolean) => Promise<unknown>;
   onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateMCPServer?: (
     data: CreateMCPServerInput,
@@ -357,6 +365,7 @@ export const App: React.FC<AppProps> = ({
   onExecuteScheduleNow,
   onCreateUser,
   onUpdateUser,
+  onRefreshCurrentUser,
   onDeleteUser,
   onCreateMCPServer,
   onDeleteMCPServer,
@@ -394,9 +403,10 @@ export const App: React.FC<AppProps> = ({
     branchShortId?: string;
     artifactShortId?: string;
   }>();
-  const isRootHomePath = location.pathname === '/';
+  // Settings owns the address bar, not the surface behind its modal.
+  // Preserve the Home/board background recorded by useSettingsRoute.
+  const isRootHomePath = getShellSurfacePath(location) === '/';
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
-  const [pendingHomeNavigation, setPendingHomeNavigation] = useState(false);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   // Set instead of creating a session immediately when quick-start can't
@@ -437,9 +447,7 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeSessionExistsSelector(selectedSessionId), [selectedSessionId])
   );
   const effectiveSelectedSessionId =
-    !isRootHomePath && !pendingHomeNavigation && selectedSessionId && selectedSessionExists
-      ? selectedSessionId
-      : null;
+    !isRootHomePath && selectedSessionId && selectedSessionExists ? selectedSessionId : null;
 
   // A real selected session always wins; the pending tool-choice empty state
   // only matters when there's no real session to show yet (see
@@ -531,7 +539,7 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
-  const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
+  const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
@@ -566,26 +574,17 @@ export const App: React.FC<AppProps> = ({
     setHomeExitPanelDetailsDeferred(false);
   }, []);
 
-  // Home is route-authoritative. Do not clear board/session state while the
-  // old `/b/...` URL is still active — that creates a transient no-board
-  // canvas render. Instead, render Home immediately via `pendingHomeNavigation`
-  // during the route transition, then clean stale board/session state only once
-  // the `/` route has committed. Layout timing keeps the header/board picker
-  // from painting stale board identity on Home.
+  // Let the committed route choose Home before clearing stale selection.
+  // Optimistically hiding the session at the OLD path lets URL self-healing
+  // cancel the Home navigation. A separate pending flag can also outlive a
+  // superseded navigation. Route-derived rendering avoids both races and a
+  // boardless canvas flash; layout cleanup keeps stale identity off Home.
   useLayoutEffect(() => {
     if (!isRootHomePath || hasExplicitEntityTarget) return;
     if (currentBoardId) setCurrentBoardIdInternal('');
     if (selectedSessionId) setSelectedSessionId(null);
     if (activeUrlTarget) setActiveUrlTarget(null);
-    if (pendingHomeNavigation) setPendingHomeNavigation(false);
-  }, [
-    activeUrlTarget,
-    currentBoardId,
-    hasExplicitEntityTarget,
-    isRootHomePath,
-    pendingHomeNavigation,
-    selectedSessionId,
-  ]);
+  }, [activeUrlTarget, currentBoardId, hasExplicitEntityTarget, isRootHomePath, selectedSessionId]);
 
   const leftPanelCollapsed =
     commentsPanelCollapsed ||
@@ -1048,6 +1047,7 @@ export const App: React.FC<AppProps> = ({
         repoId,
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
+        sourceRemoteUrl: result.sourceRemoteUrl,
       },
       { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
     );
@@ -1057,12 +1057,6 @@ export const App: React.FC<AppProps> = ({
         'AI teammate branch could not be created. Please check the branch details and try again.'
       );
     }
-
-    const template = getTemplateForFrameworkSource({
-      sourceBranch: result.sourceBranch,
-      selectedRepoId: result.repoId,
-      frameworkRepoId: findFrameworkRepo(agorStore.getState().repoById)?.[0],
-    });
 
     const sessionConfig: NewSessionConfig = {
       branch_id: branch.branch_id,
@@ -1075,9 +1069,8 @@ export const App: React.FC<AppProps> = ({
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
-        // This path carries no explicit template id, so recover the persona
-        // only when the source belongs to the detected framework repository.
-        templateId: template?.id,
+        templateId: result.templateId,
+        localHome: getTeammateConfig(branch)?.localHome,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,
@@ -1156,32 +1149,7 @@ export const App: React.FC<AppProps> = ({
     [client, navigation]
   );
 
-  const handlePermissionDecision = useCallback(
-    async (
-      sessionId: string,
-      requestId: string,
-      taskId: string,
-      allow: boolean,
-      scope: PermissionScope
-    ) => {
-      if (!client) return;
-
-      try {
-        // Call the permission decision endpoint
-        await client.service(`sessions/${sessionId}/permission-decision`).create({
-          requestId,
-          taskId,
-          allow,
-          reason: allow ? 'Approved by user' : 'Denied by user',
-          remember: scope !== PermissionScope.ONCE, // Only remember if not 'once'
-          scope,
-        });
-      } catch (error) {
-        console.error('❌ Failed to send permission decision:', error);
-      }
-    },
-    [client]
-  );
+  const handlePermissionDecision = usePermissionDecision(client);
 
   // Narrow per-id subscriptions: only patches to the SELECTED session (and
   // its branch) wake the shell — those renders are needed to feed
@@ -1423,10 +1391,7 @@ export const App: React.FC<AppProps> = ({
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
-  const handleHomeClick = useStableCallback(() => {
-    setPendingHomeNavigation(true);
-    navigation.goHome();
-  });
+  const handleHomeClick = useStableCallback(() => navigation.goHome());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
@@ -1909,7 +1874,7 @@ export const App: React.FC<AppProps> = ({
           />
         )}
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
-        <UserSettingsModal
+        <SharedUserSettingsModal
           open={effectiveUserSettingsOpen}
           initialTab={userSettingsInitialTool ?? initialUserSettingsTab}
           onClose={() => {
@@ -1918,9 +1883,9 @@ export const App: React.FC<AppProps> = ({
             onUserSettingsClose?.();
           }}
           user={user || null}
-          currentUser={user || null}
           client={client}
-          onUpdate={onUpdateUser}
+          onUpdateUser={onUpdateUser}
+          onRefreshCurrentUser={onRefreshCurrentUser}
           onReopenOnboarding={async (mode, shouldApply) => {
             if (shouldApply && !shouldApply()) return;
             await onReopenOnboarding?.(mode, shouldApply);

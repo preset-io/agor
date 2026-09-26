@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { KNOWLEDGE_DOCUMENT_PAGINATION, PAGINATION } from '../config/constants';
+import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 import {
   boardObjectQueryValidator,
+  boardQueryValidator,
   branchQueryValidator,
+  knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   messageQueryValidator,
@@ -10,6 +14,51 @@ import {
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
+
+describe('boardQueryValidator', () => {
+  const id = '019e8e1c-1234-7123-8123-123456789abc';
+
+  it.each([id, '019e8e1c', { $in: [id, '019e8e1d'] }, { $in: [] }])(
+    'preserves scalar and bounded set filters with REST coercion',
+    async (board_id) => {
+      const query = { board_id, lean: 'true', archived: 'false', $limit: '512', $skip: '0' };
+      expect(await boardQueryValidator(query)).toEqual({
+        board_id,
+        lean: true,
+        archived: false,
+        $limit: 512,
+        $skip: 0,
+      });
+    }
+  );
+
+  it('accepts the maximum presence set without dropping the ID restriction', async () => {
+    const query = { board_id: { $in: Array(MAX_PRESENCE_BOARD_SUBSCRIPTIONS).fill(id) } };
+    expect(await boardQueryValidator(structuredClone(query))).toEqual(query);
+  });
+
+  it.each([
+    { board_id: { $in: ['not-a-uuid'] } },
+    { board_id: { $in: [id, { $ne: id }] } },
+    { board_id: { $in: id } },
+    { board_id: { $in: Array(MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 1).fill(id) } },
+    { board_id: { $ne: id } },
+    { board_id: {} },
+    { board_id: 'not-a-uuid' },
+    { $limit: 10001 },
+    { $skip: 10001 },
+    { $skip: -1 },
+    { lean: 'invalid' },
+  ])('rejects malformed or unbounded board queries: %j', async (query) => {
+    await expect(boardQueryValidator(query)).rejects.toThrow();
+  });
+
+  it('retains the existing unknown-property stripping contract without widening a set filter', async () => {
+    expect(
+      await boardQueryValidator({ board_id: { $in: [id], unexpected: true }, unexpected: true })
+    ).toEqual({ board_id: { $in: [id] } });
+  });
+});
 
 describe('boardObjectQueryValidator', () => {
   it('preserves supported board-object filters through Feathers query validation', async () => {
@@ -21,6 +70,7 @@ describe('boardObjectQueryValidator', () => {
           card_id: '019e8e1e',
           zone_id: 'zone-review',
           entity_type: 'branch',
+          exclude_archived_branches: 'true',
           $limit: 25,
           $skip: 5,
           unknown: 'removed',
@@ -36,6 +86,7 @@ describe('boardObjectQueryValidator', () => {
       card_id: '019e8e1e',
       zone_id: 'zone-review',
       entity_type: 'branch',
+      exclude_archived_branches: true,
       $limit: 25,
       $skip: 5,
     });
@@ -99,6 +150,16 @@ describe('userQueryValidator', () => {
 });
 
 describe('sessionQueryValidator', () => {
+  it.each([false, 'false', true, 'true'])('preserves and coerces $count=%s', async ($count) => {
+    const context = { params: { query: { $count } } };
+    await typedValidateQuery(sessionQueryValidator)(context);
+    expect(context.params.query.$count).toBe($count === true || $count === 'true');
+  });
+
+  it('rejects invalid count options', async () => {
+    await expect(sessionQueryValidator({ $count: 'sometimes' })).rejects.toThrow();
+  });
+
   it('preserves the _swapReplace marker so the switch-tool guard can see it', async () => {
     // Regression: `removeAdditional: 'all'` silently stripped `_swapReplace`
     // before it reached SessionsService.remove, making the swap-safety guard
@@ -124,6 +185,35 @@ describe('sessionQueryValidator', () => {
 });
 
 describe('messageQueryValidator', () => {
+  it('preserves bounded task batches and rejects oversized sets', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          task_id: { $in: ['019e8e1d', '019e8e1e'] },
+          transcript: 'lean',
+        },
+      },
+    };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.task_id.$in).toHaveLength(2);
+    await expect(
+      typedValidateQuery(messageQueryValidator)({
+        params: {
+          query: { session_id: '019e8e1c', task_id: { $in: Array(101).fill('019e8e1d') } },
+        },
+      })
+    ).rejects.toThrow();
+  });
+
+  it('preserves the explicit lean transcript projection', async () => {
+    const context = { params: { query: { session_id: '019e8e1c', transcript: 'lean' } } };
+    await typedValidateQuery(messageQueryValidator)(context);
+    expect(context.params.query.transcript).toBe('lean');
+    await expect(
+      typedValidateQuery(messageQueryValidator)({ params: { query: { transcript: 'anything' } } })
+    ).rejects.toThrow();
+  });
   it('coerces supported pagination and preserves a bounded session set', async () => {
     const context = {
       params: {
@@ -241,5 +331,73 @@ describe('mcpCatalogQueryValidator', () => {
 
     await expect(typedValidateQuery(mcpCatalogQueryValidator)(context)).resolves.not.toThrow();
     expect(context.params.query).toEqual({});
+  });
+});
+
+it('preserves transcript queue exclusion and opt-in session accounting', async () => {
+  const tasks = { params: { query: { session_id: '019e8e1c', status: { $ne: 'queued' } } } };
+  await typedValidateQuery(taskQueryValidator)(tasks);
+  expect(tasks.params.query.status).toEqual({ $ne: 'queued' });
+  const session = { params: { query: { include_usage: 'true' } } };
+  await typedValidateQuery(sessionQueryValidator)(session);
+  expect(session.params.query.include_usage).toBe(true);
+});
+
+describe('knowledgeDocumentQueryValidator', () => {
+  it('coerces REST list and hydration params', async () => {
+    expect(
+      await knowledgeDocumentQueryValidator({
+        namespace_slug: 'team',
+        kind: 'memory',
+        archived: 'false',
+        include_content: 'true',
+        version: '3',
+        $limit: '50',
+        $skip: '100',
+        $sort: { updated_at: '-1', path: '1' },
+      })
+    ).toMatchObject({
+      namespace_slug: 'team',
+      kind: 'memory',
+      archived: false,
+      include_content: true,
+      $limit: 50,
+      $skip: 100,
+      $sort: { updated_at: -1, path: 1 },
+    });
+  });
+
+  it('strips unknown filters and unsupported sort columns instead of widening them', async () => {
+    expect(
+      await knowledgeDocumentQueryValidator({
+        uri: 'agor://kb/team/a.md',
+        $sort: { content_text: 1, title: 1 },
+      })
+    ).toEqual({ $sort: { title: 1 } });
+  });
+
+  it('accepts findAll() continuation offsets past the shared skip ceiling', async () => {
+    const continuation = PAGINATION.MAX_SKIP + KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT;
+    await expect(
+      knowledgeDocumentQueryValidator({
+        $limit: String(KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT),
+        $skip: String(continuation),
+      })
+    ).resolves.toEqual({ $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT, $skip: continuation });
+    // Schemas without an override keep the shared ceiling.
+    await expect(boardQueryValidator({ $skip: continuation })).rejects.toThrow();
+  });
+
+  it.each([
+    { $limit: -1 },
+    { $limit: 'all' },
+    { $limit: 10001 },
+    { $skip: 1.5 },
+    { $skip: -1 },
+    { $sort: { path: 0 } },
+    { kind: 'unknown' },
+    { include_content: 'maybe' },
+  ])('rejects malformed document queries: %j', async (query) => {
+    await expect(knowledgeDocumentQueryValidator(query)).rejects.toThrow();
   });
 });

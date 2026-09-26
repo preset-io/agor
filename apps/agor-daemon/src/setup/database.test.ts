@@ -13,6 +13,7 @@ const configMocks = vi.hoisted(() => ({
 
 const dbMocks = vi.hoisted(() => ({
   checkMigrationStatus: vi.fn(),
+  configureSecretKeyDerivationTracing: vi.fn(),
   createDatabaseAsync: vi.fn(),
   createTenantScopedDatabaseProxy: vi.fn(),
   runWithSystemDatabaseScope: vi.fn(),
@@ -22,6 +23,12 @@ const dbMocks = vi.hoisted(() => ({
 const adminMocks = vi.hoisted(() => ({
   runFirstRunAdminBootstrap: vi.fn(),
   logFirstRunAdminBootstrap: vi.fn(),
+}));
+
+const tracingMocks = vi.hoisted(() => ({ resolveDatadogTracer: vi.fn() }));
+vi.mock('@agor/core/tracing/datadog', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...tracingMocks,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
@@ -47,6 +54,7 @@ describe('initializeDatabase logging', () => {
   beforeEach(() => {
     const rawDb = {};
     const scopedDb = {};
+    tracingMocks.resolveDatadogTracer.mockReturnValue(null);
 
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     fsMocks.access.mockResolvedValue(undefined);
@@ -70,6 +78,22 @@ describe('initializeDatabase logging', () => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     logSpy.mockRestore();
+  });
+
+  it('uses the same startup APM gate and tracer for database and crypto timing', async () => {
+    const tracer = { trace: vi.fn() };
+    tracingMocks.resolveDatadogTracer.mockReturnValue(tracer);
+    const url = 'file::memory:';
+    await initializeDatabase(url, { skipFirstRunAdminBootstrap: true, traceServices: 'off' });
+    expect(tracingMocks.resolveDatadogTracer).not.toHaveBeenCalled();
+    expect(dbMocks.configureSecretKeyDerivationTracing).toHaveBeenLastCalledWith(null);
+    await initializeDatabase(url, {
+      skipFirstRunAdminBootstrap: true,
+      traceServices: 'entrypoint',
+    });
+    expect(tracingMocks.resolveDatadogTracer).toHaveBeenCalledTimes(1);
+    expect(dbMocks.configureSecretKeyDerivationTracing).toHaveBeenLastCalledWith(tracer);
+    expect(dbMocks.createDatabaseAsync).toHaveBeenLastCalledWith({ url }, { tracer });
   });
 
   it.each([
@@ -103,6 +127,7 @@ describe('initializeDatabase logging', () => {
       for (const sentinel of sentinels) expect(logged).not.toContain(sentinel);
 
       expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
+      expect(dbMocks.configureSecretKeyDerivationTracing).toHaveBeenCalledWith(null);
       expect(dbMocks.checkMigrationStatus).toHaveBeenCalledTimes(1);
       expect(dbMocks.seedInitialData).not.toHaveBeenCalled();
     }

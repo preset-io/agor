@@ -14,12 +14,63 @@
  */
 
 /** Minimal surface of the dd-trace singleton we depend on. */
+export interface DatadogSpan {
+  setTag(name: string, value: unknown): unknown;
+}
+
 export interface DatadogTracer {
   trace<T>(
     name: string,
-    options: { resource?: string; type?: string; tags?: Record<string, unknown> },
-    fn: () => T
+    options: {
+      resource?: string;
+      type?: string;
+      measured?: boolean;
+      tags?: Record<string, unknown>;
+    },
+    fn: (span?: DatadogSpan) => T
   ): T;
+}
+
+/** Instrumentation must not prevent, retry, or replace the underlying work. */
+export function traceBestEffort<T>(
+  tracer: DatadogTracer | null,
+  name: string,
+  tags: Record<string, unknown>,
+  work: (span?: DatadogSpan) => T,
+  options: { resource?: string; measured?: boolean } = {}
+): T {
+  if (!tracer) return work();
+  let ran = false;
+  let failed = false;
+  let failure: unknown;
+  let result: T;
+  const invoke = (span?: DatadogSpan): T => {
+    ran = true;
+    try {
+      result = work(span);
+      return result;
+    } catch (error) {
+      failed = true;
+      failure = error;
+      throw error;
+    }
+  };
+  try {
+    return tracer.trace(name, { resource: name, ...options, tags }, invoke);
+  } catch {
+    if (failed) throw failure;
+    if (ran) return result!;
+    return invoke();
+  }
+}
+
+/** Optional tracer bridges and tag failures must not affect application work. */
+export function setSpanTag(span: DatadogSpan | undefined, name: string, value: unknown): void {
+  try {
+    span?.setTag(name, value);
+  } catch {
+    // Best-effort telemetry only.
+  }
 }
 
 /**

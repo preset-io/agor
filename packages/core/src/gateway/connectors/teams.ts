@@ -209,7 +209,9 @@ export function normalizeTeamsActivity(
 
   return {
     activityId,
-    providerEventId: `teams:activity:${activityId}`,
+    // Activity IDs are conversation-scoped. A tuple preserves delimiters in
+    // either component, and the base conversation ignores the reply-chain suffix.
+    providerEventId: `teams:activity:${JSON.stringify([baseConversationId, activityId])}`,
     threadId,
     conversationId: baseConversationId,
     rootMessageId,

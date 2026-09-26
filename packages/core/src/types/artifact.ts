@@ -377,9 +377,19 @@ export interface SandpackError {
   column?: number;
 }
 
-/**
- * Full artifact status returned to agents via MCP
- */
+/** Compiler completion, independent of the Sandpack provider lifecycle. */
+export const ARTIFACT_COMPILATION_STATUSES = ['pending', 'compiling', 'success', 'error'] as const;
+export type ArtifactCompilationStatus = (typeof ARTIFACT_COMPILATION_STATUSES)[number];
+
+/** Viewer-scoped browser report; compilation completion is separate from provider lifecycle. */
+export interface ArtifactSandpackReport {
+  error: SandpackError | null;
+  status?: string;
+  compilation_status?: ArtifactCompilationStatus;
+  content_hash?: string;
+}
+
+/** Full artifact status returned to agents via MCP. */
 export interface ArtifactStatus {
   artifact_id: ArtifactID;
   /** Reflects file validation AND Sandpack runtime state.
@@ -389,8 +399,10 @@ export interface ArtifactStatus {
   build_errors?: string[];
   /** Sandpack bundler/runtime error from the browser iframe (null = no error) */
   sandpack_error?: SandpackError | null;
-  /** Sandpack bundler status: 'idle', 'running', 'timeout', etc. */
+  /** Sandpack provider lifecycle, NOT compilation readiness. */
   sandpack_status?: string;
+  /** Explicit compiler completion from this viewer; absent for older clients. Not DOM validation. */
+  compilation_status?: ArtifactCompilationStatus;
   /** ISO timestamp for the latest current-content browser runtime report from this viewer. */
   runtime_observed_at?: string;
   console_logs: ArtifactConsoleEntry[];

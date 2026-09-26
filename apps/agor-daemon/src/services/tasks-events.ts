@@ -11,4 +11,5 @@ export const TASKS_SERVICE_CUSTOM_EVENTS = [
   'thinking:chunk',
   'failed',
   'termination_requested',
+  'mcp_refresh_requested',
 ] as const;

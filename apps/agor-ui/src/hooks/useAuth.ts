@@ -16,7 +16,7 @@ import {
   getLaunchCodeFromSearch,
   removeLaunchCodeFromCurrentUrl,
 } from '../utils/launchAuth';
-import { discardMarketplaceOAuthStateForAuthority } from '../utils/marketplaceOAuthPrompt';
+import { discardPromptDraftSeed } from '../utils/promptDrafts';
 import {
   dispatchTokensRefreshed,
   RefreshUnrecoverableError,
@@ -128,7 +128,7 @@ export function useAuth(): UseAuthReturn {
   });
   const authStateRef = useRef(state);
   authStateRef.current = state;
-  const previousMarketplaceAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
+  const previousDraftAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
   // Only the latest local-login attempt may install credentials or own the
   // global loading bit. Other auth establishments explicitly supersede it.
   const localLoginAttemptRef = useRef<object | null>(null);
@@ -174,15 +174,15 @@ export function useAuth(): UseAuthReturn {
 
   // Identity replacement can also happen through token refresh/reconnect,
   // without an explicit logout and without any SessionPanel mounted. Clear
-  // only the departing authority's tab-local Marketplace state before child
+  // only the departing authority's tab-local Catalog draft seed before child
   // layout effects can observe the replacement identity.
   useLayoutEffect(() => {
     const next = state.user ? { userId: state.user.user_id, role: state.user.role } : null;
-    const previous = previousMarketplaceAuthorityRef.current;
+    const previous = previousDraftAuthorityRef.current;
     if (previous && (!next || previous.userId !== next.userId || previous.role !== next.role)) {
-      discardMarketplaceOAuthStateForAuthority(previous);
+      discardPromptDraftSeed(previous.userId);
     }
-    previousMarketplaceAuthorityRef.current = next;
+    previousDraftAuthorityRef.current = next;
   }, [state.user]);
 
   /**
@@ -777,10 +777,7 @@ export function useAuth(): UseAuthReturn {
   const logout = async () => {
     const currentUser = authStateRef.current.user;
     if (currentUser) {
-      discardMarketplaceOAuthStateForAuthority({
-        userId: currentUser.user_id,
-        role: currentUser.role,
-      });
+      discardPromptDraftSeed(currentUser.user_id);
     }
     localLoginAttemptRef.current = null;
     invalidateAuthentication();
@@ -804,10 +801,7 @@ export function useAuth(): UseAuthReturn {
     // Token clearing and the React authority update are synchronous together;
     // no await boundary exists where a replacement identity can slip between
     // the guard and the mutation.
-    discardMarketplaceOAuthStateForAuthority({
-      userId: authorityCycle.userId,
-      role: authorityCycle.role,
-    });
+    discardPromptDraftSeed(authorityCycle.userId);
     localLoginAttemptRef.current = null;
     clearTokens();
     const nextState: AuthState = {

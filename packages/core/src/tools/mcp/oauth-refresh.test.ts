@@ -7,6 +7,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Database } from '../../db/client';
+import { getCurrentTenantDatabaseScope } from '../../db/tenant-context';
 
 const { MockOutboundPreDispatchAuthorityError } = vi.hoisted(() => ({
   MockOutboundPreDispatchAuthorityError: class OutboundPreDispatchAuthorityError extends Error {
@@ -49,8 +51,10 @@ import type { MCPServerID, UserID } from '../../types';
 import {
   __refreshMutexSizeForTests,
   __resetRefreshMutexForTests,
+  classifyFailedRefreshClaimStatus,
   GrantConfigurationChangedError,
   InvalidGrantError,
+  isReplaySafeRefreshTokenEndpoint,
   MissingClientIdError,
   MissingRefreshTokenError,
   MissingTokenEndpointError,
@@ -60,6 +64,34 @@ import {
   refreshAndPersistToken,
   refreshMCPToken,
 } from './oauth-refresh';
+
+describe('refresh-token replay safety', () => {
+  it.each(['https://oauth2.googleapis.com/token', 'https://www.googleapis.com/oauth2/v4/token'])(
+    'recognizes the exact Google token endpoint %s',
+    (endpoint) => {
+      expect(isReplaySafeRefreshTokenEndpoint(endpoint)).toBe(true);
+    }
+  );
+
+  it.each([
+    'https://oauth2.googleapis.com.attacker.example/token',
+    'http://oauth2.googleapis.com/token',
+    'https://auth.example.test/token',
+    'not a URL',
+  ])('does not broaden retry safety to %s', (endpoint) => {
+    expect(isReplaySafeRefreshTokenEndpoint(endpoint)).toBe(false);
+  });
+
+  it('keeps ambiguous rotating-token failures fenced while releasing Google and known failures', () => {
+    expect(classifyFailedRefreshClaimStatus(true, 'https://auth.example.test/token')).toBe(
+      'ambiguous'
+    );
+    expect(classifyFailedRefreshClaimStatus(true, 'https://oauth2.googleapis.com/token')).toBe(
+      'idle'
+    );
+    expect(classifyFailedRefreshClaimStatus(false, 'https://auth.example.test/token')).toBe('idle');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Repo mocks.
@@ -73,12 +105,14 @@ import {
 const {
   mockGetToken,
   mockCompleteStandaloneRefresh,
+  mockSetStandaloneRefreshState,
   mockDeleteGrantVersion,
   mockFindById,
   mockUserFindById,
 } = vi.hoisted(() => ({
   mockGetToken: vi.fn(),
   mockCompleteStandaloneRefresh: vi.fn(),
+  mockSetStandaloneRefreshState: vi.fn(),
   mockDeleteGrantVersion: vi.fn(),
   mockFindById: vi.fn(),
   // Persisting a refreshed token now requires the grant's subject to still be
@@ -93,6 +127,7 @@ vi.mock('../../db/repositories', () => ({
     return {
       getToken: mockGetToken,
       completeStandaloneRefresh: mockCompleteStandaloneRefresh,
+      setStandaloneRefreshState: mockSetStandaloneRefreshState,
       deleteGrantVersion: mockDeleteGrantVersion,
     };
   },
@@ -174,6 +209,62 @@ describe('refreshMCPToken', () => {
     expect(body.get('client_id')).toBe('public-client-42');
     expect(body.get('refresh_token')).toBe('rt-abc');
     expect(body.get('grant_type')).toBe('refresh_token');
+  });
+
+  it.each([
+    null,
+    [],
+    { access_token: 'synthetic', error: {} },
+    { access_token: 'synthetic', refresh_token: 'rotated', error: 'server_error' },
+    { access_token: 'synthetic', refresh_token: 42 },
+    { access_token: 'synthetic', expires_in: 'nonsense' },
+    { access_token: 'synthetic', expires_in: 0 },
+    { access_token: 'synthetic', expires_in: null },
+    { access_token: 'synthetic', expires_in: true },
+  ])(
+    'quarantines malformed or mixed token responses rather than allowing replay: %j',
+    async (response) => {
+      mockFetchOnce(response);
+      await expect(
+        refreshMCPToken({
+          tokenEndpoint: 'https://gitlab.example.test/oauth/token',
+          clientId: 'synthetic-client',
+          refreshToken: 'synthetic-refresh',
+        })
+      ).rejects.toMatchObject({ category: 'response_ambiguous', ambiguous: true });
+    }
+  );
+
+  it('sends the original GitLab redirect with client authentication and preserves its rotating pair', async () => {
+    mockFetchOnce({
+      access_token: 'synthetic-next-access',
+      refresh_token: 'synthetic-next-refresh',
+      expires_in: 7200,
+      token_type: 'bearer',
+      created_at: 1788950000,
+    });
+    await expect(
+      refreshMCPToken({
+        tokenEndpoint: 'https://gitlab.example.test/oauth/token',
+        clientId: 'synthetic-client',
+        clientSecret: 'synthetic-secret',
+        refreshToken: 'synthetic-old-refresh',
+        redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+        resourceUri: 'https://gitlab.example.test/api/v4/mcp',
+      })
+    ).resolves.toMatchObject({
+      access_token: 'synthetic-next-access',
+      refresh_token: 'synthetic-next-refresh',
+      expires_in: 7200,
+    });
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    const form = new URLSearchParams(init?.body as string);
+    expect(form.get('redirect_uri')).toBe('https://agor.example.test/mcp-servers/oauth-callback');
+    expect(form.get('resource')).toBe('https://gitlab.example.test/api/v4/mcp');
+    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      `Basic ${Buffer.from('synthetic-client:synthetic-secret').toString('base64')}`
+    );
+    expect(form.has('scope')).toBe(false);
   });
 
   it('surfaces invalid_grant as InvalidGrantError', async () => {
@@ -335,6 +426,7 @@ describe('refreshAndPersistToken', () => {
 
     mockGetToken.mockReset();
     mockCompleteStandaloneRefresh.mockReset().mockResolvedValue(true);
+    mockSetStandaloneRefreshState.mockReset().mockResolvedValue(true);
     mockDeleteGrantVersion.mockReset();
     mockFindById.mockReset();
 
@@ -371,18 +463,28 @@ describe('refreshAndPersistToken', () => {
     mockFetchJson({ access_token: 'new-a', expires_in: 3600 });
 
     const token = await refreshAndPersistToken({
-      db: { run: () => undefined } as any,
+      db: { run: () => undefined } as unknown as Database,
+      tenantId: 'tenant-a',
       userId: USER_ID,
       mcpServerId: SERVER_ID,
       observedRefreshVersion: observedVersion(),
-      validateGrant: async () => true,
+      validateGrant: async () => {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'tenant',
+          tenantId: 'tenant-a',
+        });
+        return true;
+      },
+      assertCurrent: async () => {
+        expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+      },
     });
 
     expect(token).toBe('new-a');
     expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
       USER_ID,
       SERVER_ID,
-      { grantGeneration: 0, grantBindingFingerprint: undefined },
+      { grantGeneration: 0, grantBindingFingerprint: undefined, refreshGeneration: 0 },
       {
         accessToken: 'new-a',
         expiresAt: expect.any(Date), // resolved from expires_in: 3600 → ~now+1h
@@ -459,7 +561,7 @@ describe('refreshAndPersistToken', () => {
     expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
       USER_ID,
       SERVER_ID,
-      { grantGeneration: 7, grantBindingFingerprint: 'binding-7' },
+      { grantGeneration: 7, grantBindingFingerprint: 'binding-7', refreshGeneration: 0 },
       expect.objectContaining({ accessToken: 'stale-refresh-result' })
     );
   });
@@ -678,6 +780,45 @@ describe('refreshAndPersistToken', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it('never joins another tenant refresh flight for the same subject and server IDs', async () => {
+    mockGetToken.mockResolvedValue({
+      user_id: USER_ID,
+      mcp_server_id: SERVER_ID,
+      oauth_access_token: 'synthetic-old',
+      oauth_refresh_token: 'synthetic-refresh',
+      oauth_client_id: 'synthetic-client',
+    });
+    mockFindById.mockResolvedValue({
+      auth: { oauth_token_url: 'https://provider.example.test/token' },
+    });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            access_token: 'synthetic-next',
+            expires_in: 7200,
+          }),
+          { headers: { 'content-type': 'application/json' } }
+        )
+    );
+    await Promise.all(
+      ['tenant-a', 'tenant-b'].map((tenantId) =>
+        refreshAndPersistToken({
+          db: { run: () => undefined } as unknown as Parameters<
+            typeof refreshAndPersistToken
+          >[0]['db'],
+          tenantId,
+          userId: USER_ID,
+          mcpServerId: SERVER_ID,
+          observedRefreshVersion: observedVersion(),
+          validateGrant: async () => true,
+        })
+      )
+    );
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledTimes(2);
+  });
+
   it('mutex: concurrent refreshes for same key collapse to ONE HTTP call', async () => {
     mockGetToken.mockResolvedValue({
       user_id: USER_ID,
@@ -824,8 +965,9 @@ describe('refreshAndPersistToken', () => {
     expect(__refreshMutexSizeForTests()).toBe(0);
   });
 
-  it('mutex: different keys refresh independently', async () => {
-    const SERVER_ID_2 = 'srv-2' as MCPServerID;
+  it('refreshes Gmail and Calendar grants independently', async () => {
+    const GMAIL_SERVER_ID = 'gmail-mcp' as MCPServerID;
+    const CALENDAR_SERVER_ID = 'calendar-mcp' as MCPServerID;
 
     mockGetToken.mockImplementation((_u, s) => ({
       user_id: USER_ID,
@@ -835,39 +977,55 @@ describe('refreshAndPersistToken', () => {
       oauth_client_id: 'cid',
     }));
     mockFindById.mockResolvedValue({
-      url: 'https://srv.example.com/mcp',
-      auth: { oauth_token_url: 'https://auth.example.com/token' },
+      url: 'https://gmailmcp.googleapis.com/mcp/v1',
+      auth: { oauth_token_url: 'https://oauth2.googleapis.com/token' },
     });
     // `mockImplementation` returns a fresh Response per call — `Response.text()`
     // consumes the body, so reusing a single instance across two calls throws
     // "Body has already been read" on the second read.
-    globalThis.fetch = vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ access_token: 'a', expires_in: 3600 }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      )
-    ) as typeof globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((_input, init: RequestInit) => {
+      const refreshToken = new URLSearchParams(String(init.body)).get('refresh_token');
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ access_token: `access-for-${refreshToken}`, expires_in: 3600 }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      );
+    }) as typeof globalThis.fetch;
 
     await Promise.all([
       refreshAndPersistToken({
         db: { run: () => undefined } as any,
         userId: USER_ID,
-        mcpServerId: SERVER_ID,
+        mcpServerId: GMAIL_SERVER_ID,
         observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       }),
       refreshAndPersistToken({
         db: { run: () => undefined } as any,
         userId: USER_ID,
-        mcpServerId: SERVER_ID_2,
+        mcpServerId: CALENDAR_SERVER_ID,
         observedRefreshVersion: observedVersion(),
         validateGrant: async () => true,
       }),
     ]);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
+      USER_ID,
+      GMAIL_SERVER_ID,
+      expect.any(Object),
+      expect.objectContaining({ accessToken: 'access-for-rt-gmail-mcp' })
+    );
+    expect(mockCompleteStandaloneRefresh).toHaveBeenCalledWith(
+      USER_ID,
+      CALENDAR_SERVER_ID,
+      expect.any(Object),
+      expect.objectContaining({ accessToken: 'access-for-rt-calendar-mcp' })
+    );
   });
 
   it('mutex: in-flight map is cleared after completion (success)', async () => {

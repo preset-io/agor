@@ -90,7 +90,8 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
       const key = `${name}:get`;
       fetchCounts.set(key, (fetchCounts.get(key) ?? 0) + 1);
       fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), id]);
-      return Promise.resolve(seed[key] ?? null);
+      const gate = fetchHooks.get(key)?.(fetchCounts.get(key)!);
+      return Promise.resolve(gate).then(() => seed[key] ?? null);
     }),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
@@ -134,6 +135,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     emit: (svc: string, event: string, payload: unknown) => {
       for (const fn of serviceListeners.get(svc)?.get(event) ?? []) fn(payload);
     },
+    listeners: (svc: string, event: string) => [...(serviceListeners.get(svc)?.get(event) ?? [])],
     // Fire an `io` event (e.g. `connect`) so tests can drive the reconnect
     // refetch path.
     emitIo: (event: string, payload?: unknown) => {
@@ -143,7 +145,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     // `method` is invoked (receives the 1-based call count). The hook fires
     // BEFORE the returned promise resolves, so emitting a live event here lands
     // a write DURING the fetch window — exactly the race the hydration guards.
-    onFetch: (name: string, method: 'findAll' | 'find', fn: (call: number) => unknown) =>
+    onFetch: (name: string, method: 'findAll' | 'find' | 'get', fn: (call: number) => unknown) =>
       fetchHooks.set(`${name}:${method}`, fn),
     fetchCount: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
@@ -224,6 +226,24 @@ function deferred() {
   return { promise, resolve };
 }
 
+it('does not rescan OAuth grants on an idle 60-second timer', async () => {
+  const { client, fetchCount } = makeMockClient();
+  const { result, unmount } = renderHook(() => useAgorData(client));
+  try {
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(fetchCount('mcp-servers/oauth-status', 'find')).toBeGreaterThan(0));
+    const initial = fetchCount('mcp-servers/oauth-status', 'find');
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(fetchCount('mcp-servers/oauth-status', 'find')).toBe(initial);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
 describe('useAgorData — socket-event bailouts', () => {
   it('scopes the real cold mobile board load before fetching board entities', async () => {
     const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
@@ -247,7 +267,7 @@ describe('useAgorData — socket-event bailouts', () => {
     }
   });
 
-  it('heals a cold mobile session outside the recent slice before resolving board scope', async () => {
+  it('opens a cold mobile session without waiting for a stalled branch get', async () => {
     const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
     const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
     const branchId = '01a012d8-3e4f-7b21-8c99-5d2e6f708a1b';
@@ -258,24 +278,43 @@ describe('useAgorData — socket-event bailouts', () => {
     });
     const directBranch = makeBranch({ branch_id: branchId, board_id: boardId });
     const boardObject = makeBoardObject({ board_id: boardId, branch_id: branchId });
-    const { client, fetchArguments } = makeMockClient({
+    const { client, fetchArguments, fetchCount, onFetch } = makeMockClient({
       sessions: [],
       boards: [{ board_id: boardId, slug: 'delivery' }],
+      branches: [directBranch],
       'sessions:get': directSession,
       'branches:get': directBranch,
       'board-objects': [boardObject],
     });
+    onFetch('branches', 'get', () => new Promise(() => {}));
     window.history.pushState({}, '', `/m/session/${sessionId}`);
 
     const { result } = renderHook(() => useAgorData(client, { directSessionId: sessionId }));
     await waitForInitialLoad(result);
 
     expect(agorStore.getState().sessionById.get(sessionId)).toMatchObject({ branch_id: branchId });
+    expect(fetchCount('branches', 'get')).toBe(0);
+    expect(agorStore.getState().branchById.get(branchId)).toMatchObject({ board_id: boardId });
     expect(agorStore.getState().boardObjectById.get('bo-1')).toMatchObject({ board_id: boardId });
     expect(fetchArguments('board-objects', 'findAll')).toContainEqual({
       query: expect.objectContaining({ board_id: boardId }),
     });
     window.history.pushState({}, '', '/');
+  });
+
+  it('opens a legacy session without board metadata or granting access to its missing branch', async () => {
+    const session = makeSession({ session_id: 'legacy-session', branch_id: 'hidden-branch' });
+    const { client, onFetch, fetchCount } = makeMockClient({
+      sessions: [],
+      branches: [],
+      'sessions:get': session,
+    });
+    onFetch('branches', 'get', () => new Promise(() => {}));
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: 'legacy-session' }));
+    await waitForInitialLoad(result);
+    expect(agorStore.getState().sessionById.has('legacy-session')).toBe(true);
+    expect(agorStore.getState().branchById.has('hidden-branch')).toBe(false);
+    expect(fetchCount('branches', 'get')).toBe(0);
   });
 
   it('hydrates a direct archived session by id without broadening active board lists', async () => {
@@ -800,7 +839,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const s2 = makeSession({ session_id: 's-2', branch_id: 'b-1' });
     const b1 = makeBranch({ branch_id: 'b-1' });
-    const { client } = makeMockClient({
+    const { client, fetchArguments } = makeMockClient({
       // Gated first paint sees only the recent slice; hydration sees the full set.
       'sessions:find': [s1],
       'sessions:findAll': [s1, s2],
@@ -808,6 +847,17 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
+    expect(fetchArguments('sessions', 'find')).toContainEqual({
+      query: {
+        archived: false,
+        $limit: 50,
+        $count: false,
+        $sort: { updated_at: -1 },
+      },
+    });
+    for (const args of fetchArguments('sessions', 'findAll')) {
+      expect((args as { query: Record<string, unknown> }).query.$count).toBeUndefined();
+    }
 
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     // s-2 was absent from first paint and only arrives via the hydration.
@@ -1213,4 +1263,103 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       window.history.pushState({}, '', '/');
     }
   });
+});
+
+describe('session MCP initialization events', () => {
+  it('replaces attachments immediately, preserves unrelated sessions, and clears explicit empty selection', async () => {
+    const { client, emit, listeners } = makeMockClient({
+      'session-mcp-servers': [
+        { session_id: 's-1', mcp_server_id: 'old-server' },
+        { session_id: 's-2', mcp_server_id: 'other-server' },
+      ],
+    });
+    const { result, unmount } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await waitFor(() =>
+      expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['old-server'])
+    );
+
+    const patch = { session_id: 's-1', mcp_server_ids: ['selected-server'] };
+    act(() => emit('session-mcp-servers', 'patched', patch));
+    expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['selected-server']);
+    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
+
+    const before = agorStore.getState().sessionMcpServerIds;
+    act(() => emit('session-mcp-servers', 'patched', patch));
+    expect(agorStore.getState().sessionMcpServerIds).toBe(before);
+
+    act(() => emit('session-mcp-servers', 'patched', { ...patch, mcp_server_ids: [] }));
+    expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual([]);
+    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
+    unmount();
+    expect(listeners('session-mcp-servers', 'patched')).toHaveLength(0);
+  });
+
+  it.each([[['selected-server']], [[]]])(
+    'discards a stale snapshot racing replacement %j',
+    async (serverIds) => {
+      const seed = { 'session-mcp-servers': [{ session_id: 's-1', mcp_server_id: 'old-server' }] };
+      const { client, emit, onFetch, fetchCount } = makeMockClient(seed);
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
+      const { result } = renderHook(() => useAgorData(client));
+      await waitForInitialLoad(result);
+      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(1));
+
+      act(() =>
+        emit('session-mcp-servers', 'patched', { session_id: 's-1', mcp_server_ids: serverIds })
+      );
+      seed['session-mcp-servers'] = serverIds.map((mcp_server_id) => ({
+        session_id: 's-1',
+        mcp_server_id,
+      }));
+      await act(async () => {
+        release();
+        await pending;
+      });
+      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(2));
+      expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual(serverIds);
+    }
+  );
+
+  it.each(['tenant-a-user', 'tenant-b-user'])(
+    'rejects previous-auth events and snapshots after reauthentication as %s',
+    async (userId) => {
+      const seed = {
+        'session-mcp-servers': [{ session_id: 'session-a', mcp_server_id: 'server-a' }],
+      };
+      const { client, listeners, onFetch } = makeMockClient(seed);
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
+      const { result, rerender } = renderHook(
+        ({ userId, generation, ready }) =>
+          useAgorData(client, {
+            authenticatedUserId: userId,
+            authenticatedUserRole: 'member',
+            authGeneration: generation,
+            connectionReady: ready,
+          }),
+        { initialProps: { userId: 'tenant-a-user', generation: 1, ready: true } }
+      );
+      await waitForInitialLoad(result);
+      const oldListeners = listeners('session-mcp-servers', 'patched');
+      expect(oldListeners).toHaveLength(1);
+      seed['session-mcp-servers'] = [];
+      rerender({ userId, generation: 2, ready: true });
+      await act(async () => {
+        for (const listener of oldListeners) {
+          listener({ session_id: 'session-a', mcp_server_ids: ['server-a'] });
+        }
+        release();
+        await pending;
+      });
+      expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
+    }
+  );
 });

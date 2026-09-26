@@ -8,7 +8,7 @@ import {
 } from '@agor/core/db';
 import type { BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
 import { createUsersService } from './users';
 
 const CALLER = 'caller-user' as UUID;
@@ -189,31 +189,6 @@ describe('UsersService primary teammate', () => {
     ).rejects.toThrow(/active teammate/);
   });
 
-  dbTest(
-    'open-access mode permits any active teammate regardless of branch ACL',
-    async ({ db }) => {
-      await ensureCaller(db);
-      const branchId = await createBranch(db, {
-        created_by: generateId() as UUID,
-        others_can: 'none',
-      });
-      const app = {
-        get: () => ({ execution: { branch_rbac: false } }),
-        service: () => ({ emit: vi.fn() }),
-      } as never;
-      const service = createUsersService(db, app);
-
-      await expect(
-        service.setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS)
-      ).resolves.toMatchObject({
-        branch_id: branchId,
-      });
-      await expect(service.getPrimaryTeammate(undefined, CALLER_PARAMS)).resolves.toMatchObject({
-        branch_id: branchId,
-      });
-    }
-  );
-
   dbTest('primary teammate methods require an authenticated caller', async ({ db }) => {
     const service = createUsersService(db);
     await expect(service.getPrimaryTeammate(undefined, {} as never)).rejects.toThrow();
@@ -246,3 +221,27 @@ describe('UsersService primary teammate', () => {
     }
   );
 });
+
+dbTest(
+  'caller can explicitly clear a primary even after losing access to the teammate',
+  async ({ db }) => {
+    await ensureCaller(db);
+    const owner = generateId();
+    const branchId = await createBranch(db, { created_by: owner });
+    await setTestBranchUserRole(db, branchId, CALLER, 'collaborator', 'write', owner);
+    const service = createUsersService(db);
+    await service.setPrimaryTeammate(teammateMutation(branchId), CALLER_PARAMS);
+    await setTestBranchUserRole(db, branchId, CALLER, 'viewer', 'none', owner);
+    expect(await service.getPrimaryTeammate(undefined, CALLER_PARAMS)).toBeNull();
+    await expect(
+      service.setPrimaryTeammate(
+        { branchId: null, expectedUserId: generateId() as UUID },
+        CALLER_PARAMS
+      )
+    ).rejects.toThrow(/authority/i);
+    expect(
+      await service.setPrimaryTeammate({ branchId: null, expectedUserId: CALLER }, CALLER_PARAMS)
+    ).toBeNull();
+    expect(await new UserPrimaryTeammateRepository(db).getBranchId(CALLER)).toBeNull();
+  }
+);

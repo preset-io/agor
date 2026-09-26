@@ -1,6 +1,7 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DistributedWorkIdentity } from '../../coordination';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
+import { hasActiveEnvironmentCommand } from '../../types/environment-command';
 import type { Database, SystemDatabase } from '../client';
 import {
   isPostgresDatabase,
@@ -94,7 +95,11 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
+        and(
+          eq(branches.archived, false),
+          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'stopping')),
+          after
+        )
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -360,7 +365,11 @@ export class EnvironmentHealthRepository {
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting;
         const nextStatus =
-          status === 'starting' && input.observation.status === 'healthy' ? 'running' : status;
+          status === 'starting' &&
+          input.observation.status === 'healthy' &&
+          !hasActiveEnvironmentCommand(activeEnvironment)
+            ? 'running'
+            : status;
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&

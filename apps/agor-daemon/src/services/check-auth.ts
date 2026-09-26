@@ -35,8 +35,10 @@ import type {
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
+import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
+import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
 import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
@@ -335,9 +337,51 @@ async function probeCodexAuthFile(
   );
 }
 
+/**
+ * Probe the managed `~/.claude/.credentials.json` for the Unix identity that
+ * runs Claude for this user. A genuinely absent file is the positive "no login"
+ * signal (drives the disconnected banner); permission/transport failures mean we
+ * could not look and stay inconclusive. File contents never leave the daemon.
+ */
+async function probeClaudeAuthFile(
+  userId: UserID | undefined,
+  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
+  config: DeepReadonly<AgorConfig>
+): Promise<AuthCheckResult> {
+  const identity = await resolveCodexCredentialRoute(userId, withTenantDatabase, config);
+  if (!identity.ok) {
+    if (identity.reason === 'missing-username') {
+      return unauthenticated(
+        'none',
+        'Claude subscription login needs a Unix account — ask an admin to set your unix_username.'
+      );
+    }
+    if (identity.reason === 'unsupported-mode') return unknown(identity.message);
+    return unknown('Could not resolve the Unix account that holds the Claude login.');
+  }
+
+  const inspection = await inspectClaudeAuthViaExecutor({
+    delegatedHomeKey: identity.delegatedHomeKey,
+    userId: identity.userId,
+    ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+  });
+  if (inspection.ok) return authed('oauth', 'Claude subscription login found.');
+  // Only a genuinely absent/malformed file proves "no login"; an unreadable
+  // result means we could not look, which must not surface as disconnected.
+  return inspection.reason === 'not-found'
+    ? unauthenticated('none', 'No Claude login found on this server — sign in with Claude again.')
+    : inspection.reason === 'malformed'
+      ? unauthenticated(
+          'none',
+          'The Claude login file on this server is malformed — sign in with Claude again.'
+        )
+      : unknown('Could not inspect the Claude login file — check executor availability.');
+}
+
 export function createCheckAuthService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  backend?: ClaudeBackendOAuth
 ) {
   return {
     async create(
@@ -392,15 +436,33 @@ export function createCheckAuthService(
       }
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
-      const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
-        (tenantDb) =>
+      const { apiKey, decryptionFailed, connection, useNativeAuth, managedOAuth } =
+        await withTenantDatabase((tenantDb) =>
           resolveApiKey(keyName, {
             userId,
             db: tenantDb,
             tool,
           })
-      );
+        );
 
+      if (managedOAuth) {
+        if (!backend || !userId)
+          return unauthenticated('none', 'Saved Claude login is unavailable.');
+        try {
+          await backend.authorize(String(getCurrentTenantId()), userId, true);
+          const status = await backend.status(String(getCurrentTenantId()), userId);
+          // No polling-triggered refresh, bearer response, SDK/helper process,
+          // or false claim of a successful provider validation.
+          return {
+            ...(status.usable ? unknown(status.hint) : unauthenticated('none', status.hint)),
+            managedOAuth: { saved: status.saved, usable: status.usable },
+          };
+        } catch {
+          return unknown(
+            'Saved Claude login is unavailable under current deployment or workspace policy.'
+          );
+        }
+      }
       if (decryptionFailed) {
         return unauthenticated(
           'none',
@@ -420,6 +482,20 @@ export function createCheckAuthService(
         return data.validateNative
           ? probeCodexAuthFile(userId, withTenantDatabase, config)
           : unknown('ChatGPT login is configured but has not been validated.');
+      }
+
+      // The in-app Claude subscription sign-in writes a managed
+      // ~/.claude/.credentials.json and clears any pasted token, so the resolver
+      // routes this user to native auth with no stored key to probe. The
+      // persisted method is the cheap default used by app-shell banners;
+      // confirming the file actually exists can require an ephemeral Cloud
+      // executor, so it is reserved for an explicit user action. Without the
+      // file probe a disconnected user (file deleted) would still read as
+      // connected here and the banner would never return.
+      if (tool === 'claude-code' && useNativeAuth) {
+        return data.validateNative
+          ? probeClaudeAuthFile(userId, withTenantDatabase, config)
+          : unknown('Claude subscription login is configured but has not been validated.');
       }
 
       if (tool === 'claude-code') {

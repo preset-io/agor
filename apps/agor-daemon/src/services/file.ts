@@ -7,25 +7,41 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { type Application, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   FileDetail,
   FileListItem,
+  GitFileStatusSource,
   Id,
   QueryParams,
   RBACParams,
   ServiceMethods,
+  UserID,
   UserRole,
 } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { ensureMinimumRole } from '../utils/authorization';
+import {
+  type BranchExecutorSandboxMounts,
+  resolveBranchExecutorSandboxMounts,
+} from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
-export type FileParams = QueryParams<{ branch_id?: string }> & Partial<AuthenticatedParams>;
+export type FileParams = QueryParams<{
+  branch_id?: string;
+  git_status_source?: GitFileStatusSource;
+}> &
+  Partial<AuthenticatedParams>;
+
+function resolveGitStatusSource(value: unknown): GitFileStatusSource {
+  if (value === undefined) return 'combined';
+  if (value === 'combined' || value === 'workingTree' || value === 'staged') return value;
+  throw new BadRequest('git_status_source must be combined, workingTree, or staged');
+}
 
 function extractFiles(data: unknown): FileListItem[] {
   if (!data || typeof data !== 'object') return [];
@@ -60,7 +76,8 @@ export class FileService
       resolved.userId,
       resolved.delegatedHomeKey,
       resolved.branchPath,
-      resolved.fsAccess
+      resolved.fsAccess,
+      resolved.sandboxMounts
     );
     if (!result.success) {
       throw new Error(
@@ -74,6 +91,7 @@ export class FileService
     ensureMinimumRole(params, ROLES.MEMBER, 'read file');
     const branchId = params?.query?.branch_id;
     if (!branchId) throw new Error('branch_id query parameter is required');
+    const gitStatusSource = resolveGitStatusSource(params?.query?.git_status_source);
     const resolved = await this.resolveBranchRead(branchId, params);
 
     const result = await this.runCommand(
@@ -83,8 +101,10 @@ export class FileService
       resolved.delegatedHomeKey,
       resolved.branchPath,
       resolved.fsAccess,
+      resolved.sandboxMounts,
       {
         filePath: id.toString(),
+        gitStatusSource,
       }
     );
     if (!result.success) {
@@ -102,6 +122,7 @@ export class FileService
     delegatedHomeKey: string | undefined,
     branchPath: string,
     fsAccess: 'read' | 'write',
+    sandboxMounts: BranchExecutorSandboxMounts,
     extraParams: Record<string, unknown> = {}
   ) {
     const sessionToken = await issueExecutorCommandToken(this.app, command, userId, branchId);
@@ -115,6 +136,7 @@ export class FileService
           ...extraParams,
           cwd: branchPath,
           principalBranchAccess: fsAccess,
+          ...sandboxMounts,
         },
       },
       {
@@ -156,12 +178,22 @@ export class FileService
         userId,
         this.app.get('config')
       );
+      // Branch browsing is stateless executor work. Its private home belongs
+      // to the authenticated caller, never the branch or Session owner.
+      const sandboxMounts = await resolveBranchExecutorSandboxMounts({
+        config: this.app.get('config'),
+        tenantId,
+        executionUserId: userId as UserID,
+        branch,
+        db: this.db,
+      });
       return {
         branchId: branch.branch_id,
         branchPath: branch.path,
         delegatedHomeKey,
         fsAccess,
         userId,
+        sandboxMounts,
       };
     });
   }

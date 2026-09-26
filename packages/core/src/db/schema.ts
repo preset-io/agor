@@ -54,6 +54,8 @@ export const sessionRelationships = schema.sessionRelationships;
 export const sessionEnvSelections = schema.sessionEnvSelections;
 export const userMcpOauthTokens = schema.userMcpOauthTokens;
 export const mcpOauthPendingFlows = schema.mcpOauthPendingFlows;
+export const userProviderOauthGrants = schema.userProviderOauthGrants;
+export const claudeOauthAttempts = schema.claudeOauthAttempts;
 export const codexDeviceAuthAttempts = schema.codexDeviceAuthAttempts;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
@@ -76,3 +78,5 @@ export const kbGraphEdges = schema.kbGraphEdges;
 
 // Re-export all types
 export type * from './schema.sqlite';
+
+export const kbImportReceipts = schema.kbImportReceipts;

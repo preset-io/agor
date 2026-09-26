@@ -219,7 +219,7 @@ Per-work branch namespaces can still exist for project docs (`kind: "branch"`, `
 
 ### Access coupling
 
-Current KB permissions are document-level `visibility` plus owner/admin/public-edit. Namespaces have `owner_user_id`, `repo_id`, `branch_id`, and visibility defaults, but no ACL table. Branch RBAC has richer semantics behind `execution.branch_rbac`.
+Current KB permissions are document-level `visibility` plus owner/admin/public-edit. Namespaces have `owner_user_id`, `repo_id`, `branch_id`, and visibility defaults, but no ACL table. Always-on Branch RBAC has richer semantics.
 
 **Recommendation:** do **not** virtualize KB ACLs entirely through branch RBAC. Use branch context to seed namespace ACLs and for helpful UI affordances, but let KB have its own durable security model.
 

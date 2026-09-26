@@ -21,7 +21,7 @@ import type {
   ToolPermission,
   UserID,
 } from '@agor/core/types';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { jsonExtract, select } from '../database-wrapper';
 import { branches, mcpServers, sessionMcpServers, sessions, userMcpOauthTokens } from '../schema';
@@ -40,6 +40,7 @@ type SafeServerRow = {
   display_name: unknown;
   description: unknown;
   tools_json: unknown;
+  capabilities_discovered_at: unknown;
   permissions_json: unknown;
   auth_type: unknown;
   credential_configured: unknown;
@@ -47,7 +48,14 @@ type SafeServerRow = {
   credential_updated_at: Date | string | number | null;
   credential_expires_at: Date | string | number | null;
   credential_refresh_status: unknown;
+  credential_has_access_token: unknown;
+  credential_has_refresh_token: unknown;
 };
+
+export type MCPMarketplaceOAuthAuthorityResolver = (
+  userId: UserID,
+  serverIds: readonly MCPServerID[]
+) => Promise<ReadonlyMap<MCPServerID, boolean>>;
 
 type SafeAttachmentRow = {
   session_id: string;
@@ -110,7 +118,11 @@ function readTools(toolsValue: unknown, permissionsValue: unknown): MCPMarketpla
   return tools;
 }
 
-function credentialFrom(row: SafeServerRow, now: number): MCPMarketplaceCredential | undefined {
+function credentialFrom(
+  row: SafeServerRow,
+  now: number,
+  oauthAuthority: ReadonlyMap<MCPServerID, boolean>
+): MCPMarketplaceCredential | undefined {
   const method = row.auth_type;
   if (method !== 'oauth' && method !== 'bearer' && method !== 'jwt') return undefined;
 
@@ -130,13 +142,51 @@ function credentialFrom(row: SafeServerRow, now: number): MCPMarketplaceCredenti
   const grantUpdatedAt = iso(row.credential_updated_at);
   const expiresAt = iso(row.credential_expires_at);
   const expiresAtMs = expiresAt ? Date.parse(expiresAt) : undefined;
-  const status = !grantCreatedAt
-    ? 'not_connected'
-    : row.credential_refresh_status !== 'idle'
+  let detailStatus: NonNullable<MCPMarketplaceCredential['detail_status']>;
+  if (!grantCreatedAt) {
+    detailStatus = 'not_connected';
+  } else {
+    // This callback is the daemon's canonical binding/mode authority. When it
+    // is unavailable or fails, the closed projection fails safe rather than
+    // advertising a credential on the strength of timestamps alone.
+    const authorized = oauthAuthority.get(row.mcp_server_id as MCPServerID) === true;
+    const refreshStatus =
+      row.credential_refresh_status === 'refreshing' ||
+      row.credential_refresh_status === 'ambiguous'
+        ? row.credential_refresh_status
+        : row.credential_refresh_status === 'idle'
+          ? 'idle'
+          : 'invalid';
+    const accessUsable = Boolean(
+      row.credential_has_access_token &&
+        refreshStatus === 'idle' &&
+        (expiresAtMs === undefined || expiresAtMs > now)
+    );
+    const refreshable = Boolean(
+      row.credential_has_refresh_token &&
+        refreshStatus !== 'ambiguous' &&
+        refreshStatus !== 'invalid'
+    );
+
+    detailStatus = !authorized
+      ? 'reauthentication_required'
+      : refreshStatus === 'refreshing' && refreshable
+        ? 'refreshing'
+        : accessUsable
+          ? 'active'
+          : refreshable
+            ? 'refreshable'
+            : 'reauthentication_required';
+  }
+
+  const status: MCPMarketplaceCredential['status'] =
+    detailStatus === 'refreshing' || detailStatus === 'reauthentication_required'
       ? 'attention'
-      : expiresAtMs !== undefined && expiresAtMs <= now
-        ? 'expired'
-        : 'active';
+      : detailStatus === 'refreshable'
+        ? expiresAtMs !== undefined && expiresAtMs <= now
+          ? 'expired'
+          : 'active'
+        : detailStatus;
 
   return {
     mcp_server_id: row.mcp_server_id as MCPServerID,
@@ -146,6 +196,7 @@ function credentialFrom(row: SafeServerRow, now: number): MCPMarketplaceCredenti
       : {}),
     method,
     status,
+    detail_status: detailStatus,
     ...(expiresAt ? { expires_at: expiresAt } : {}),
     ...(grantCreatedAt ? { created_at: grantCreatedAt } : {}),
     ...(grantUpdatedAt ? { updated_at: grantUpdatedAt } : {}),
@@ -153,15 +204,24 @@ function credentialFrom(row: SafeServerRow, now: number): MCPMarketplaceCredenti
 }
 
 export class MCPMarketplaceRepository {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly isOAuthGrantAuthorized?: MCPMarketplaceOAuthAuthorityResolver
+  ) {}
 
   async overviewForUser(userId: UserID, now = Date.now()): Promise<MCPMarketplaceOverview> {
     try {
       const displayName = jsonExtract(this.db, mcpServers.data, 'display_name');
       const description = jsonExtract(this.db, mcpServers.data, 'description');
       const tools = jsonExtract(this.db, mcpServers.data, 'tools');
+      const capabilitiesDiscoveredAt = jsonExtract(
+        this.db,
+        mcpServers.data,
+        'capabilities_discovered_at'
+      );
       const permissions = jsonExtract(this.db, mcpServers.data, 'tool_permissions');
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
+      const oauthMode = jsonExtract(this.db, mcpServers.data, 'auth.oauth_mode');
       // Boolean presence only: SQL evaluates the secret-bearing fields but
       // their values never enter a row returned to JavaScript.
       const credentialConfigured = sql<boolean>`case
@@ -183,27 +243,36 @@ export class MCPMarketplaceRepository {
         display_name: displayName,
         description,
         tools_json: tools,
+        capabilities_discovered_at: capabilitiesDiscoveredAt,
         permissions_json: permissions,
         auth_type: authType,
         credential_configured: credentialConfigured,
-        // OAuth metadata only. The access/refresh token, client registration,
-        // binding, resource, issuer, and endpoint columns are intentionally
-        // absent from this selection.
+        // OAuth metadata only. Token bytes, client registration, binding,
+        // resource, issuer, and endpoint columns are intentionally absent.
         credential_created_at: userMcpOauthTokens.created_at,
         credential_updated_at: userMcpOauthTokens.updated_at,
         credential_expires_at: userMcpOauthTokens.oauth_token_expires_at,
         credential_refresh_status: userMcpOauthTokens.refresh_status,
+        // Boolean presence only. Token bytes never enter this result row.
+        credential_has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null`,
+        credential_has_refresh_token: sql<boolean>`${userMcpOauthTokens.oauth_refresh_token} is not null`,
       })
         .from(mcpServers)
         .leftJoin(
           userMcpOauthTokens,
           and(
             eq(userMcpOauthTokens.mcp_server_id, mcpServers.mcp_server_id),
-            eq(userMcpOauthTokens.user_id, userId)
+            or(
+              and(eq(oauthMode, 'shared'), isNull(userMcpOauthTokens.user_id)),
+              and(
+                or(isNull(oauthMode), ne(oauthMode, 'shared')),
+                eq(userMcpOauthTokens.user_id, userId)
+              )
+            )
           )
         )
-        // Deliberately no admin exception and no ownerless row: Marketplace
-        // personal inventory means the current caller's private rows.
+        // Deliberately no admin exception; ownerless/global rows are excluded.
+        // Marketplace personal inventory means the current caller's private rows.
         .where(eq(mcpServers.owner_user_id, userId))
         .orderBy(desc(mcpServers.updated_at), desc(mcpServers.created_at))
         .all()) as SafeServerRow[];
@@ -270,14 +339,36 @@ export class MCPMarketplaceRepository {
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
           enabled: Boolean(row.enabled),
           tools: readTools(row.tools_json, row.permissions_json),
+          ...(iso(row.capabilities_discovered_at as string | number | Date | null)
+            ? {
+                capabilities_discovered_at: iso(
+                  row.capabilities_discovered_at as string | number | Date
+                ),
+              }
+            : {}),
           session_count: countByServer.get(row.mcp_server_id) ?? 0,
           created_at: createdAt,
           updated_at: iso(row.updated_at) ?? createdAt,
         };
       });
 
+      const oauthServerIds = serverRows
+        .filter((row) => row.auth_type === 'oauth')
+        .map((row) => row.mcp_server_id as MCPServerID);
+      // One closed batch crosses into the daemon's canonical authority
+      // resolver. The overview never fans out repository/HMAC work per row.
+      if (oauthServerIds.length > 0 && !this.isOAuthGrantAuthorized) {
+        throw new Error('OAuth grant authority resolver is unavailable');
+      }
+      // An authority-read failure is not evidence that every saved grant was
+      // revoked. Let the overview fail so clients retain their last good
+      // projection during stale-while-refresh instead of showing a definite
+      // reconnect requirement.
+      const oauthAuthority = this.isOAuthGrantAuthorized
+        ? await this.isOAuthGrantAuthorized(userId, oauthServerIds)
+        : new Map<MCPServerID, boolean>();
       const credentials = serverRows
-        .map((row) => credentialFrom(row, now))
+        .map((row) => credentialFrom(row, now, oauthAuthority))
         .filter((item): item is MCPMarketplaceCredential => item !== undefined);
 
       return {

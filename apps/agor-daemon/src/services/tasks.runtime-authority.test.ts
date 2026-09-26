@@ -64,9 +64,7 @@ function serviceHarness(input: {
   Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
   const db = input.postgres ? { transaction() {} } : { run() {} };
   Reflect.set(service, 'db', db);
-  Reflect.set(service, 'runtimeAuthorityOptions', {
-    branchRbacEnabled: true,
-  });
+  Reflect.set(service, 'runtimeAuthorityOptions', {});
   Reflect.set(service, 'executorCredentialRevoker', { isTaskTokenAuthorityCurrent });
   Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => false });
   Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });

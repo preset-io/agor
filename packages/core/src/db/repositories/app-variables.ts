@@ -1,9 +1,9 @@
 import type { UserID } from '@agor/core/types';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { decryptApiKey, encryptApiKey } from '../encryption';
+import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
 import { type AppVariableInsert, type AppVariableRow, appVariables } from '../schema';
 import { currentTenantInsert, RepositoryError } from './base';
 
@@ -60,14 +60,38 @@ export class AppVariableRepository {
 
   async getPlain(namespace: string, key: string): Promise<string | null> {
     const variable = await this.find(namespace, key);
+    return this.plainValue(variable);
+  }
+
+  /** A caller-bounded key set, read under the same ambient tenant scope as find(). */
+  async getPlainMany(
+    namespace: string,
+    keys: readonly string[]
+  ): Promise<Map<string, string | null>> {
+    if (keys.length === 0) return new Map();
+    const rows = await select(this.db)
+      .from(appVariables)
+      .where(and(eq(appVariables.namespace, namespace), inArray(appVariables.key, [...keys])))
+      .all();
+    const variables = new Map<string, AppVariable>(
+      rows.map((row: AppVariableRow) => [row.key, this.rowToVariable(row)])
+    );
+    const values = new Map<string, string | null>();
+    // Preserve caller order and bound native KDF concurrency independently of inventory size.
+    for (const key of new Set(keys))
+      values.set(key, await this.plainValue(variables.get(key) ?? null));
+    return values;
+  }
+
+  private async plainValue(variable: AppVariable | null): Promise<string | null> {
     if (!variable) return null;
     if (!variable.is_encrypted) return variable.value_text ?? null;
     if (!variable.value_encrypted) return null;
     try {
-      return decryptApiKey(variable.value_encrypted);
+      return await decryptApiKeyAsync(variable.value_encrypted);
     } catch (error) {
       throw new RepositoryError(
-        `Failed to decrypt app variable ${namespace}.${key}: ${
+        `Failed to decrypt app variable ${variable.namespace}.${variable.key}: ${
           error instanceof Error ? error.message : String(error)
         }`,
         error

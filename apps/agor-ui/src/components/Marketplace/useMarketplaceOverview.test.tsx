@@ -1,4 +1,4 @@
-import type { MCPMarketplaceOverview } from '@agor/core/types';
+import type { MCPMarketplaceOverview, MCPServerID } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -22,6 +22,91 @@ function emitter() {
 }
 
 describe('useMarketplaceOverview live recovery', () => {
+  it('reports initial loading while a cold standalone route is authenticating', () => {
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client: null,
+        connected: false,
+        connecting: true,
+        authGeneration: 0,
+      })
+    );
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.overview.servers).toEqual([]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('keeps a cold route loading before socket authentication has started', () => {
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client: null,
+        connected: false,
+        connecting: false,
+        authGeneration: 0,
+      })
+    );
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.overview.servers).toEqual([]);
+  });
+
+  it('revalidates expiry using inventory only, and cancels the timer on identity change', async () => {
+    vi.useFakeTimers();
+    try {
+      const find = vi.fn(
+        async (): Promise<MCPMarketplaceOverview> => ({
+          servers: [],
+          attachments: [],
+          generated_at: new Date().toISOString(),
+          credentials: [
+            {
+              mcp_server_id: 'gitlab' as MCPServerID,
+              server_name: 'GitLab',
+              method: 'oauth',
+              status: 'active',
+              detail_status: 'active',
+              expires_at: new Date(Date.now() + 7200_000).toISOString(),
+            },
+          ],
+        })
+      );
+      const service = vi.fn((path: string) => (path === 'mcp-marketplace' ? { find } : emitter()));
+      const client = { service, io: emitter() } as unknown as AgorClient;
+      const { rerender, unmount } = renderHook(
+        ({ userId }) =>
+          useMarketplaceOverview({
+            client,
+            connected: true,
+            connecting: false,
+            authGeneration: 1,
+            userId,
+            role: 'member',
+          }),
+        { initialProps: { userId: 'alice' as string | undefined } }
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(find).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7200_025);
+      });
+      expect(find).toHaveBeenCalledTimes(2);
+      expect(
+        service.mock.calls.filter(([path]) => path.includes('discover') || path.includes('refresh'))
+      ).toEqual([]);
+      rerender({ userId: undefined });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(7200_025);
+      });
+      expect(find).toHaveBeenCalledTimes(2);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refetches for authoritative row events and window focus', async () => {
     const serviceEvents = emitter();
     const io = emitter();
@@ -59,6 +144,53 @@ describe('useMarketplaceOverview live recovery', () => {
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(3));
     expect(result.current.error).toBeNull();
+  });
+
+  it('keeps the last good projection and initial-loading false during focus refresh', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    const populated = {
+      servers: [
+        {
+          mcp_server_id: 'server-1',
+          name: 'kept-visible',
+          source: 'user',
+          transport: 'http',
+          enabled: true,
+          tools: [],
+          session_count: 0,
+          created_at: new Date(0).toISOString(),
+          updated_at: new Date(0).toISOString(),
+        },
+      ],
+      attachments: [],
+      credentials: [],
+      generated_at: new Date(0).toISOString(),
+    } as MCPMarketplaceOverview;
+    const held = new Promise<MCPMarketplaceOverview>(() => undefined);
+    const find = vi.fn().mockResolvedValueOnce(populated).mockReturnValueOnce(held);
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client,
+        connected: true,
+        connecting: false,
+        authGeneration: 1,
+        userId: 'alice',
+        role: 'member',
+      })
+    );
+    await waitFor(() => expect(result.current.overview.servers).toHaveLength(1));
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(result.current.overview.servers).toHaveLength(1);
+    expect(result.current.loading).toBe(false);
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    expect(result.current.overview.servers[0]?.name).toBe('kept-visible');
   });
 
   it('clears visible rows immediately on the user-targeted revocation signal', async () => {
@@ -105,6 +237,53 @@ describe('useMarketplaceOverview live recovery', () => {
 
     expect(result.current.overview.servers).toHaveLength(0);
     expect(result.current.error).toBeNull();
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the last good projection during an ordinary Marketplace mutation hint', async () => {
+    const serviceEvents = emitter();
+    const io = emitter();
+    const populated = {
+      servers: [
+        {
+          mcp_server_id: 'server-private',
+          name: 'private',
+          source: 'user',
+          transport: 'http',
+          enabled: true,
+          tools: [],
+          session_count: 0,
+          created_at: new Date(0).toISOString(),
+          updated_at: new Date(0).toISOString(),
+        },
+      ],
+      attachments: [],
+      credentials: [],
+      generated_at: new Date(0).toISOString(),
+    } as MCPMarketplaceOverview;
+    const held = new Promise<MCPMarketplaceOverview>(() => undefined);
+    const find = vi.fn().mockResolvedValueOnce(populated).mockReturnValueOnce(held);
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-marketplace' ? { find } : { ...serviceEvents, find: vi.fn() },
+      io,
+    } as unknown as AgorClient;
+    const { result } = renderHook(() =>
+      useMarketplaceOverview({
+        client,
+        connected: true,
+        connecting: false,
+        authGeneration: 1,
+        userId: 'alice',
+        role: 'member',
+      })
+    );
+    await waitFor(() => expect(result.current.overview.servers).toHaveLength(1));
+
+    act(() => io.emit('marketplace:changed'));
+
+    expect(result.current.overview.servers).toHaveLength(1);
+    expect(result.current.loading).toBe(false);
     await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
   });
 

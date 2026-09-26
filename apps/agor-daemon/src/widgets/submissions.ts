@@ -1,17 +1,22 @@
 /**
- * Widget submission / dismissal route handlers.
+ * Widget resolution route handlers.
  *
- * Two custom REST routes:
+ * Three custom REST routes, one resolver:
  *   POST /widgets/:widget_id/submit
  *   POST /widgets/:widget_id/dismiss
+ *   POST /widgets/:widget_id/oauth-resolve
  *
- * Both follow the same resolution path:
+ * All three follow the same resolution path:
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
  *   2. Authorize through the canonical session prompt authority resolver.
- *   3. Idempotency: status MUST be 'pending'.
+ *   3. Idempotency: status MUST be 'pending' — unless the widget type declared
+ *      `recovery: 'reclaimable'`, which lets its own lane finish a resolution
+ *      that was interrupted rather than refusing it forever.
  *   4. Durably claim `pending -> resolving` with an opaque token.
- *   5. The sole claimant dispatches to the registry (`applySubmit` for
- *      submit; no external side-effect for dismiss).
+ *   5. The sole claimant dispatches to the registry — `applySubmit` for an
+ *      entry that takes a body, `resolveFromDaemonVerification` for one that
+ *      takes none, no external side-effect for dismiss. Either handler may
+ *      return the sanitized `result_meta`; `buildResultMeta` is the fallback.
  *   6. Queue a system-authored auto-resume task via the existing
  *      `/sessions/:id/prompt` route (the "Never lose a prompt" #1068 path),
  *      unless `auto_resume === false`.
@@ -22,6 +27,15 @@
  * the raw submit body reaches; from `result_meta` onward, no
  * caller-supplied values flow back into the agent context. See §5.1 of the
  * design doc for the path-by-path enumeration.
+ *
+ * The OAuth lane strengthens that rather than widening it: it has no submit
+ * body at all. `resolveFromDaemonVerification` receives only an advisory attempt
+ * id and re-derives the outcome from durable daemon state, so the
+ * `result_meta` it returns is composed from rows the daemon read, never from
+ * the request. A handler-returned `result_meta` on the submit side is under the
+ * same rule: it is what the side-effect established, never the body echoed
+ * back. Steps 1-3 and 5-8 are byte-identical for all three actions; only step
+ * 4's dispatch differs.
  */
 
 import { generateId } from '@agor/core/db';
@@ -39,7 +53,13 @@ import type {
 import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
-import { getWidget, type WidgetSubmitCtx } from './registry.js';
+import {
+  getWidget,
+  type WidgetDaemonVerifiedEvidence,
+  type WidgetSubmitCtx,
+  widgetAcceptsSubmitBody,
+  widgetRecoveryPolicy,
+} from './registry.js';
 import type { WidgetResolutionStore } from './resolution-store.js';
 
 /**
@@ -79,12 +99,47 @@ export interface AuthenticatedCaller {
 
 export type WidgetResolutionAction =
   | { kind: 'submit'; body: Record<string, unknown> }
-  | { kind: 'dismiss' };
+  | { kind: 'dismiss' }
+  /**
+   * The browser finished the MCP OAuth flow and is asking the daemon to check.
+   * `evidence` is correlation material only — see
+   * {@link WidgetDaemonVerifiedEvidence}.
+   */
+  | { kind: 'oauth_callback'; evidence: WidgetDaemonVerifiedEvidence };
 
 export interface WidgetResolutionResult {
   widget_id: MessageID;
   status: 'submitted' | 'dismissed';
   auto_resume_queued: boolean;
+  /**
+   * The widget was already in this terminal state when the request arrived and
+   * nothing was done again.
+   *
+   * Only a `reclaimable` lane can produce it (see
+   * {@link widgetRecoveryPolicy}); every other lane still refuses a repeat
+   * outright. It is what lets a recovery surface say "this is finished"
+   * without the caller having to tell a `Forbidden` that means "you already
+   * succeeded" apart from one that means "you may not".
+   */
+  already_resolved?: boolean;
+}
+
+/**
+ * How long an OAuth resolution claim must be held before another authenticated
+ * attempt may take it over.
+ *
+ * The handler behind that claim performs database reads, an idempotent attach,
+ * and one prompt admission keyed by a durable task id — no provider call, no
+ * secret write — so it either finishes in well under this or the browser that
+ * owned it is gone. Long enough that two browsers racing the same card do not
+ * reclaim from each other; short enough that a user who closed the tab and
+ * came back is not told to wait.
+ */
+export const WIDGET_RECLAIM_ABANDONED_AFTER_MS = 60_000;
+
+/** Terminal status a resolution action lands the widget on. */
+function terminalStatusFor(kind: WidgetResolutionAction['kind']): 'submitted' | 'dismissed' {
+  return kind === 'dismiss' ? 'dismissed' : 'submitted';
 }
 
 /**
@@ -175,16 +230,55 @@ async function doResolveWidget(
     throw new Forbidden(sessionPromptDeniedMessage(authority));
   }
 
+  // The registry entry, read before the idempotency check rather than with
+  // the step-4 dispatch, because the entry is what says whether this lane can
+  // recover an interrupted resolution at all. An unregistered type has no
+  // recovery policy and therefore gets the generic one.
+  const entry = getWidget(widget.widget_type);
+  const recovery = widgetRecoveryPolicy(entry);
+
   // 3. Idempotency: only 'pending' widgets can be resolved.
+  //
+  // A `reclaimable` lane answers two of the non-pending states differently,
+  // and neither is a widening of what may be granted — every question this
+  // path asks is still asked, of the same caller, against state read now.
+  //
+  //  - `submitted`: the work this request asks for is done. The generic lane
+  //    calls that a conflict because a second submit would be a second
+  //    external effect; here there is no effect and no payload, so the honest
+  //    answer to "finish connecting" is that it is finished. Reporting
+  //    `Forbidden` instead is what made a recovery surface indistinguishable
+  //    from a refusal.
+  //  - `resolving` with an abandoned claim: see
+  //    {@link WIDGET_RECLAIM_ABANDONED_AFTER_MS}. Taking it over is the only
+  //    way a widget whose resolver died between the claim and the completion
+  //    can ever reach a terminal state.
   if (widget.status !== 'pending') {
-    throw new Forbidden(
-      `Widget ${widgetId} is already ${widget.status}; cannot ${action.kind} again.`
-    );
+    const finished = recovery === 'reclaimable' && widget.status === 'submitted';
+    if (finished) {
+      return {
+        widget_id: widget.widget_id,
+        status: 'submitted',
+        auto_resume_queued: false,
+        already_resolved: true,
+      };
+    }
+    // `already_present` is deliberately not included: that status is minted
+    // terminal by a short-circuit that never offered a button, so no recovery
+    // surface can reach it, and answering "submitted" for it would report a
+    // resolution that never happened.
+    const reclaimable =
+      recovery === 'reclaimable' &&
+      widget.status === 'resolving' &&
+      widget.resolution_claim?.action === action.kind;
+    if (!reclaimable) {
+      throw new Forbidden(
+        `Widget ${widgetId} is already ${widget.status}; cannot ${action.kind} again.`
+      );
+    }
   }
 
-  // 4. Dispatch to the registry. Unknown widget types fail loudly — the
-  //    client should know the daemon doesn't speak this widget type.
-  const entry = getWidget(widget.widget_type);
+  // 4. Dispatch to the entry read above.
   // (We tolerate a missing registry entry for the dismiss path because
   // dismissal needs no side-effect — but we still need the entry for the
   // dismissed-prompt builder. If no entry exists, fall back to a generic
@@ -193,6 +287,7 @@ async function doResolveWidget(
   let resultMeta: unknown | undefined;
   let autoResumePrompt: string | undefined;
   let parsedSubmit: unknown;
+  let oauthEvidence: WidgetDaemonVerifiedEvidence | undefined;
 
   // Context for the registry hooks, built for BOTH paths so a widget can gate
   // who may dismiss it (authorizeDismiss), not just who may submit.
@@ -203,20 +298,48 @@ async function doResolveWidget(
     submitterUserId: caller.user_id,
     submitterRole: caller.role,
     sessionCreatorUserId: session.created_by as UserID,
+    runInTenantDatabaseScope: deps.runInTenantDatabaseScope,
   };
 
-  if (action.kind === 'submit') {
+  if (action.kind === 'submit' || action.kind === 'oauth_callback') {
     if (!entry) {
       throw new NotFound(
         `Widget type '${widget.widget_type}' is not registered on this daemon. ` +
           `Update the daemon or use a known widget type.`
       );
     }
-    const parsed = entry.submitSchema.safeParse(action.body);
-    if (!parsed.success) {
-      throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
+    // Does this entry accept a body, and did this endpoint bring one? They
+    // must agree. An entry that takes a body, reached through
+    // `/oauth-resolve`, would skip its payload validation entirely; one that
+    // takes none, reached through `/submit`, would be resolved on a client's
+    // say-so with no grant check. Both are refusals, not fallbacks.
+    const registeredKind = entry.resolution ?? 'submit';
+    const requestedKind = action.kind === 'oauth_callback' ? 'daemon_verified' : 'submit';
+    if (widgetAcceptsSubmitBody(entry) !== (action.kind === 'submit')) {
+      throw new Forbidden(
+        `Widget type '${widget.widget_type}' is resolved by '${registeredKind}', ` +
+          `not '${requestedKind}'.`
+      );
     }
-    parsedSubmit = parsed.data;
+    if (action.kind === 'oauth_callback') {
+      // No payload to validate: there is nothing in the request this path
+      // trusts. The handler reads durable state instead.
+      oauthEvidence = action.evidence;
+    } else if (widgetAcceptsSubmitBody(entry)) {
+      const parsed = entry.submitSchema.safeParse(action.body);
+      if (!parsed.success) {
+        throw new Forbidden(`Invalid submit payload: ${parsed.error.message}`);
+      }
+      parsedSubmit = parsed.data;
+    }
+    // Re-ask whatever the widget type required in order to be MINTED. A
+    // pending widget has no expiry, so the world can change arbitrarily far
+    // between the two; the widget type owns the question so a resolve path
+    // cannot answer it differently from the mint path. Before the claim, so a
+    // refusal leaves the row pending rather than needing to be released.
+    if (entry.authorizeResolve) {
+      await entry.authorizeResolve(ctx, widget.params);
+    }
   } else {
     // dismiss — an admin-only widget gates this so a member-level dismissal
     // can't terminally decline a flow its submit path would have rejected.
@@ -232,24 +355,55 @@ async function doResolveWidget(
   // No DB transaction remains open while the registry handler, prompt
   // admission, or any other external/service work runs.
   const claimToken = generateId();
-  const claim = await deps.resolutionStore.claim(widget.widget_id, {
-    token: claimToken,
-    action: action.kind,
-    claimedAt: new Date().toISOString(),
-    claimedBy: caller.user_id,
-  });
+  const claim = await deps.resolutionStore.claim(
+    widget.widget_id,
+    {
+      token: claimToken,
+      action: action.kind,
+      claimedAt: new Date().toISOString(),
+      claimedBy: caller.user_id,
+    },
+    // Passed only for a lane that declared its handler replay-safe, and the
+    // store still decides: a claim younger than the cutoff is refused here
+    // exactly as an unreclaimable one is, which is what keeps two browsers
+    // racing the same card from stealing from each other.
+    recovery === 'reclaimable'
+      ? { action: action.kind, afterMs: WIDGET_RECLAIM_ABANDONED_AFTER_MS }
+      : undefined
+  );
+  if (claim.outcome === 'claimed' && claim.reclaimed) {
+    console.warn(
+      `[widgets] event=widget_resolution_reclaimed widget_id=${widget.widget_id} ` +
+        `type=${widget.widget_type} action=${action.kind} by=${caller.user_id}`
+    );
+  }
   if (claim.outcome !== 'claimed') {
     const status = claim.message.metadata?.widget?.status ?? 'unavailable';
     throw new Forbidden(`Widget ${widgetId} is already ${status}; cannot ${action.kind} again.`);
   }
 
-  if (action.kind === 'submit') {
+  if (action.kind !== 'dismiss') {
     // The registry entry and parsed payload are established before the claim;
     // only the durable winner reaches this external-work boundary. A handler
     // that explicitly reports failure is the sole safe case for reopening the
     // widget: no later admission/completion failure may replay this effect.
+    const resolved = entry!;
+    // Either handler may return the sanitized `result_meta`. The bodiless one
+    // must — nothing else knows what its durable read found — while a
+    // body-taking handler returns one only when the outcome depends on what
+    // its side-effect did, which is why `buildResultMeta` below stays as the
+    // fallback rather than being replaced.
+    let handlerResultMeta: unknown;
     try {
-      await entry!.applySubmit(ctx, parsedSubmit, widget.params);
+      if (widgetAcceptsSubmitBody(resolved)) {
+        handlerResultMeta = await resolved.applySubmit(ctx, parsedSubmit, widget.params);
+      } else {
+        handlerResultMeta = await resolved.resolveFromDaemonVerification(
+          ctx,
+          oauthEvidence ?? {},
+          widget.params
+        );
+      }
     } catch (error) {
       await deps.resolutionStore.fail(widget.widget_id, claimToken, {
         failedAt: new Date().toISOString(),
@@ -257,7 +411,18 @@ async function doResolveWidget(
       });
       throw error;
     }
-    resultMeta = entry!.buildResultMeta(parsedSubmit);
+    // OUTSIDE the catch on purpose. `resolutionStore.fail` reopens the widget
+    // to `pending`, which is only ever safe for a handler that reported failure
+    // BEFORE its external effect ran. `buildResultMeta` runs after
+    // `applySubmit` has already written env vars or restarted a connector, so a
+    // throwing builder must not be able to invite a replay of that
+    // (`resolution-store.ts`). Unreachable with today's pure builders; the
+    // ordering is the guarantee, not their purity.
+    if (handlerResultMeta === undefined && widgetAcceptsSubmitBody(resolved)) {
+      resultMeta = resolved.buildResultMeta?.(parsedSubmit);
+    } else {
+      resultMeta = handlerResultMeta;
+    }
     autoResumePrompt = entry!.buildAutoResumePrompt(resultMeta, widget.params);
   }
 
@@ -303,8 +468,7 @@ async function doResolveWidget(
   }
 
   // 7. Only the claim token can publish the terminal resolution.
-  const newStatus: WidgetMessageMetadata['status'] =
-    action.kind === 'submit' ? 'submitted' : 'dismissed';
+  const newStatus: WidgetMessageMetadata['status'] = terminalStatusFor(action.kind);
   const resolvedAt = new Date().toISOString();
   const finished = await deps.resolutionStore.complete(widget.widget_id, claimToken, {
     status: newStatus,

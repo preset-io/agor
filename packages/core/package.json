@@ -178,6 +178,18 @@
       "import": "./dist/environment/render-snapshot.js",
       "require": "./dist/environment/render-snapshot.cjs"
     },
+    "./environment/lifecycle-result": {
+      "source": "./src/environment/lifecycle-result.ts",
+      "types": "./dist/environment/lifecycle-result.d.ts",
+      "import": "./dist/environment/lifecycle-result.js",
+      "require": "./dist/environment/lifecycle-result.cjs"
+    },
+    "./utils/pinned-fetch": {
+      "source": "./src/utils/pinned-fetch.ts",
+      "types": "./dist/utils/pinned-fetch.d.ts",
+      "import": "./dist/utils/pinned-fetch.js",
+      "require": "./dist/utils/pinned-fetch.cjs"
+    },
     "./utils/errors": {
       "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",
@@ -448,6 +460,12 @@
       "import": "./dist/git/exec.js",
       "require": "./dist/git/exec.cjs"
     },
+    "./environment/access-urls": {
+      "source": "./src/environment/access-urls.ts",
+      "types": "./dist/environment/access-urls.d.ts",
+      "import": "./dist/environment/access-urls.js",
+      "require": "./dist/environment/access-urls.cjs"
+    },
     "./environment/webhook": {
       "source": "./src/environment/webhook.ts",
       "types": "./dist/environment/webhook.d.ts",
@@ -483,6 +501,12 @@
       "types": "./dist/agentic-integrations.d.ts",
       "import": "./dist/agentic-integrations.js",
       "require": "./dist/agentic-integrations.cjs"
+    },
+    "./oauth/rotating-grant-refresh": {
+      "source": "./src/oauth/rotating-grant-refresh.ts",
+      "types": "./dist/oauth/rotating-grant-refresh.d.ts",
+      "import": "./dist/oauth/rotating-grant-refresh.js",
+      "require": "./dist/oauth/rotating-grant-refresh.cjs"
     }
   },
   "scripts": {
@@ -490,6 +514,8 @@
     "dev": "concurrently -k -n js,dts -c cyan,magenta \"TSUP_CLEAN=false NODE_OPTIONS='--max-old-space-size=4096' tsup --watch\" \"tsc -p tsconfig.build.json --emitDeclarationOnly --noEmit false --watch --preserveWatchOutput\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:packaged": "node scripts/packaged-entry-import-smoke.mjs && node scripts/packaged-tenant-scope-smoke.mjs",
+    "test:runtime": "node --test test/tenant-public-url.runtime.mjs test/oauth-refresh.runtime.mjs",
     "test:postgres": "tsx src/db/scripts/test-postgres.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -505,20 +531,20 @@
   },
   "dependencies": {
     "@agor/git": "workspace:*",
-    "@anthropic-ai/sdk": "^0.109.0",
+    "@anthropic-ai/sdk": "^0.125.0",
     "@discordjs/rest": "^2.6.3",
     "@discordjs/ws": "^2.0.4",
-    "@feathersjs/authentication": "^5.0.46",
-    "@feathersjs/authentication-client": "^5.0.46",
-    "@feathersjs/authentication-local": "^5.0.46",
-    "@feathersjs/errors": "^5.0.46",
-    "@feathersjs/express": "^5.0.46",
-    "@feathersjs/feathers": "^5.0.46",
-    "@feathersjs/rest-client": "^5.0.46",
-    "@feathersjs/schema": "^5.0.46",
-    "@feathersjs/socketio": "^5.0.46",
-    "@feathersjs/socketio-client": "^5.0.46",
-    "@feathersjs/typebox": "^5.0.46",
+    "@feathersjs/authentication": "^5.0.50",
+    "@feathersjs/authentication-client": "^5.0.50",
+    "@feathersjs/authentication-local": "^5.0.50",
+    "@feathersjs/errors": "^5.0.50",
+    "@feathersjs/express": "^5.0.50",
+    "@feathersjs/feathers": "^5.0.50",
+    "@feathersjs/rest-client": "^5.0.50",
+    "@feathersjs/schema": "^5.0.50",
+    "@feathersjs/socketio": "^5.0.50",
+    "@feathersjs/socketio-client": "^5.0.50",
+    "@feathersjs/typebox": "^5.0.50",
     "@libsql/client": "^0.17.4",
     "@microsoft/agents-activity": "1.8.1",
     "@microsoft/agents-hosting": "1.8.1",
@@ -526,39 +552,40 @@
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",
     "bcryptjs": "^2.4.3",
-    "cron-parser": "^5.7.0",
-    "cronstrue": "^3.24.0",
-    "discord-api-types": "^0.38.53",
+    "cron-parser": "^5.10.1",
+    "cronstrue": "^3.26.0",
+    "discord-api-types": "^0.38.55",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^5.2.3",
+    "js-yaml": "^4.3.2",
+    "mdast-util-from-markdown": "^2.0.2",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
     "socket.io-client": "^4.8.3",
-    "uuid": "^14.0.1",
-    "zod": "^4.4.3"
+    "uuid": "^14.0.2",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
-    "@google/gemini-cli-core": "^0.40.0",
-    "@google/genai": "^1.43.0",
-    "@octokit/auth-app": "^8.3.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.280",
+    "@google/gemini-cli-core": "0.59.0",
+    "@google/genai": "^1.52.0",
+    "@octokit/auth-app": "^8.3.1",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "^0.144.0",
+    "@openai/codex-sdk": "0.156.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.1",
     "analytics": "^0.8.19",
     "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.10",
     "handlebars": "^4.7.8",
-    "open": "^11.0.0",
+    "open": "^11.0.4",
     "tsup": "^8.5.1",
-    "tsx": "4.23.11",
+    "tsx": "4.23.13",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.1"
   },
   "peerDependencies": {
     "handlebars": "^4.7.8"

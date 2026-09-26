@@ -292,7 +292,7 @@ function createPostgresDatabase(
     // postgres.js plugin, so without this the daemon's DB layer is invisible in
     // Datadog. Best-effort and additive — a no-op unless the daemon injected a
     // tracer, and it can never break a query (see postgres-tracing.ts).
-    instrumentDrizzlePostgresForTracing(db, { tracer });
+    instrumentDrizzlePostgresForTracing(db, { tracer, poolMax: options.max });
     return db;
   } catch (error) {
     throw new DatabaseConnectionError(

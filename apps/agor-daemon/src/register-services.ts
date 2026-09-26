@@ -1,3 +1,5 @@
+import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
+import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 /**
  * Service Registration
  *
@@ -12,14 +14,18 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
-import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
+import {
+  ensureEmptyCredentialMountpoint,
+  openCredentialFileForBind,
+} from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
   getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
+  PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
-  requirePublicBaseUrl,
+  resolveClaudeOAuthCapability,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -29,6 +35,7 @@ import {
   and,
   BoardRepository,
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
   enqueueAfterTenantDatabaseCommit,
@@ -38,14 +45,17 @@ import {
   getCurrentTenantId,
   getMCPEgressGatewayMode,
   inArray,
+  isMCPSlackConnectCardEnabled,
   isPostgresDatabaseHandle,
   MCPCatalogCandidateRepository,
   MCPMarketplaceRepository,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
+  MessagesRepository,
   mcpServers,
   RepoRepository,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   type SaveTokenInput,
@@ -55,9 +65,11 @@ import {
   sessionMcpServers,
   sessions,
   shortId,
+  TaskRepository,
   TeamsMessageDeliveryRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  ThreadSessionMapRepository,
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -68,39 +80,66 @@ import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/fe
 import {
   hasTemplateMarker,
   isMCPServerUsableBy,
+  isMCPServerWriteValidationError,
+  type MCPExternalErrorCategory,
+  type MCPExternalErrorReason,
   type MCPExternalErrorStage,
+  type MCPExternalErrorType,
+  normalizeDiscoveredMCPCapabilities,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type {
+  MCPOAuthDynamicClientRegistrationRequest,
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
-import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  OAuthCodeExchangeError,
+  OAuthConfigurationError,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
+  MCPAuthRecovery,
+  MCPDiscoveryRequest,
+  MCPDiscoveryResult,
   MCPOAuthAttemptID,
   MCPOAuthBrowserEventRequest,
   MCPOAuthBrowserOperation,
   MCPOAuthBrowserReservation,
   MCPOAuthBrowserReservationRequest,
+  MCPOAuthClientRegistrationResetRequest,
+  MCPOAuthClientRegistrationResetResult,
+  MCPOAuthConnectTokenClaims,
   MCPOAuthDCRMode,
+  MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
   MCPServer,
   MCPServerID,
+  MCPSlackConnectDelivery,
+  MCPSlackOAuthConnectContext,
+  MCPSlackOAuthRecoveryContext,
+  MCPSlackRecoveryNotice,
+  MCPSlackRecoveryTokenClaims,
+  MessageID,
   MessageSource,
   Params,
+  PromptOrigin,
   SessionID,
   UserID,
   UUID,
+  WidgetMessageMetadata,
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  BRANCH_CLEANUP_REPORT_SERVICE,
+  BRANCH_DELETION_REPORT_SERVICE,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -128,6 +167,7 @@ import type {
 } from './declarations.js';
 import {
   containExecutorProcess,
+  isShutdownContainmentActive,
   markExecutorProcessExited,
   retainExecutorContainmentFence,
   trackExecutorProcess,
@@ -156,15 +196,31 @@ import {
   ARTIFACTS_SERVICE_TRANSPORT_METHODS,
   createArtifactsService,
 } from './services/artifacts.js';
+import { createBoardBranchMover } from './services/board-branch-move.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { BranchDeletionStepsService } from './services/branch-deletion-steps.js';
 import { createBranchesService } from './services/branches.js';
 import { setupCapabilityPolicyServices } from './services/capability-policies.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
+import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
+import { ClaudeBackendOAuth } from './services/claude-backend-oauth.js';
+import {
+  canManageClaudeCredentialRoute,
+  createClaudeUserCredentialPatchCoordinator,
+  needsUserCredentialRouteCoordinator,
+} from './services/claude-credential-mutation.js';
 import { createClaudeModelsService } from './services/claude-models.js';
+import { createClaudeOAuthService } from './services/claude-oauth.js';
+import { ClaudeOAuthAttemptAuthority } from './services/claude-oauth-attempt-authority.js';
+import {
+  DurableClaudeOAuthAttemptStore,
+  InMemoryClaudeOAuthAttemptStore,
+} from './services/claude-oauth-attempt-store.js';
+import { ClaudeRuntimeCredentialResolver } from './services/claude-runtime-credential.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { resolveCodexCredentialRoute } from './services/codex-auth-shared.js';
@@ -174,11 +230,12 @@ import { createDurableCodexDeviceAuthService } from './services/codex-device-aut
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { EnvironmentCommandReportsService } from './services/environment-command-reports.js';
 import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
-import { createGatewayService } from './services/gateway.js';
+import { createGatewayService, taskMayNeedMcpSlackRecoverySync } from './services/gateway.js';
 import {
   createGatewayChannelsService,
   GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
@@ -207,10 +264,12 @@ import { createKnowledgeNamespacesService } from './services/knowledge-namespace
 import { createKnowledgeReindexService } from './services/knowledge-reindex.js';
 import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
+import { KnowledgeTransfersService } from './services/knowledge-transfers.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
 import {
   classifyMCPAuthRecovery,
+  MCPLinkAdmissionError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
@@ -220,10 +279,18 @@ import {
   MCPMarketplaceRemoveServerService,
   MCPMarketplaceToolPermissionService,
 } from './services/mcp-marketplace-actions.js';
+import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
   logMCPOAuthCompatibilityPolicy,
+  presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
 } from './services/mcp-oauth-compatibility.js';
+import {
+  gatewaySourceMatchesConnectClaims,
+  mutateSlackConnectDelivery,
+  readOAuthConnectWidget,
+  readPendingOAuthConnectWidget,
+} from './services/mcp-oauth-connect-delivery.js';
 import {
   classifyMCPOAuthCompletionFailure,
   OAuthFlowAuthorizationChangedError,
@@ -231,23 +298,44 @@ import {
 import {
   isCurrentMCPOAuthGrantAuthorized,
   isMCPOAuthGrantAuthorizedForServer,
+  resolveMCPMarketplaceOAuthGrantAuthority,
 } from './services/mcp-oauth-grant-authority.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
   grantBindingVersionForCompatibilityMode,
   hasMCPOAuthRelevantServerConfigurationChanged,
-  isMCPOAuthGrantBoundToServer,
   lockMCPOAuthGrantConfiguration,
-  shouldVerifyMCPOAuthGrantBinding,
 } from './services/mcp-oauth-grant-binding.js';
+import {
+  mcpOAuthGrantIsConnected,
+  resolveMCPOAuthGrantLiveness,
+} from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import {
+  MCP_OAUTH_START_BUDGET_MS,
+  mcpOAuthStartPhaseRunner,
+} from './services/mcp-oauth-start-phases.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
+import {
+  acquireMCPOAuthGrant,
+  MCPClientCredentialsConfigurationError,
+  MCPOAuthRefreshBusyError,
+  missingMCPOAuthGrantError,
+} from './services/mcp-oauth-use.js';
 import {
   createMCPServersService,
   runWithMCPServerMutationDatabase,
 } from './services/mcp-servers.js';
+import { mcpSlackConnectRenderedState } from './services/mcp-slack-connect-card.js';
+import {
+  readSlackMCPOAuthAuthority,
+  type SlackMCPOAuthAuthorityRepositories,
+  type SlackMCPOAuthAuthoritySnapshot,
+  slackThreadReturnUrl,
+} from './services/mcp-slack-oauth-authority.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
+import { setupOwnershipTransferServices } from './services/ownership-transfer.js';
 import { createReposService } from './services/repos.js';
 import {
   createSchedulesService,
@@ -277,12 +365,13 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
-import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
+import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import {
   bindMCPDiscoveryOAuthGrant,
   bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
+  type DiscoveredMCPCapabilities,
   type MCPDiscoveryAuthoritySnapshot,
   persistDiscoveredMCPCapabilities,
 } from './utils/mcp-discovered-capabilities.js';
@@ -290,13 +379,27 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import { logOAuthAuthorizeBuilt } from './utils/mcp-oauth-authorize-log.js';
+import {
+  mcpOAuthConnectClaimsMatchCaller,
+  mcpOAuthConnectClaimsMatchDelivery,
+  verifyMCPOAuthConnectToken,
+} from './utils/mcp-oauth-connect-token.js';
+import { isMcpRuntimeRecoveryEnabled, scheduleMcpRuntimeHint } from './utils/mcp-runtime-hints.js';
 import {
   isMcpGrantOwnerEntitled,
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
   registerMcpCapabilityRoleFloor,
+  resolveMcpCaller,
 } from './utils/mcp-server-authorization.js';
+import {
+  mcpSlackRecoveryClaimsMatchCaller,
+  mcpSlackRecoveryClaimsMatchNotice,
+  verifyMCPSlackRecoveryToken,
+} from './utils/mcp-slack-recovery-token.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
+import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 import {
   AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
   readSocketAuthorityId,
@@ -304,6 +407,7 @@ import {
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
+import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -318,16 +422,25 @@ export interface RegisterServicesContext {
   bundledUiAvailable: boolean;
   DAEMON_PORT: number;
   UI_PORT: number;
-  branchRbacEnabled: boolean;
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
+  /** Startup-resolved callback URL from the frozen effective configuration. */
+  mcpOAuthCallbackUrl?: string;
   /** Injectable durable authority for boundary tests; production derives it from PostgreSQL. */
   mcpOAuthPendingFlowAuthority?: MCPOAuthPendingFlowAuthority;
+  /** Injectable fleet-wide DCR authority paired with PostgreSQL pending flows. */
+  mcpOAuthClientRegistrationAuthority?: MCPOAuthClientRegistrationAuthority;
   /** Injectable transaction-lock boundary paired with the durable authority. */
   lockMcpOAuthGrantConfiguration?: typeof lockMCPOAuthGrantConfiguration;
   /** Injectable DNS boundary for adversarial Socket.io authority tests. */
   mcpOutboundDnsLookup?: OutboundDnsLookup;
+  /** Injectable provider boundary for service-level HA tests. Production uses pinned fetch. */
+  mcpOAuthFetch?: (
+    input: string | URL | Request,
+    init?: RequestInit,
+    assertCurrent?: () => void
+  ) => Promise<Response>;
 }
 
 /**
@@ -347,11 +460,51 @@ export interface RegisteredServices {
   boardCommentsService: unknown;
 }
 
+type OAuthPostCommitTailCode =
+  | 'completion_hint'
+  | 'runtime_authority_hint'
+  | 'completion_notification'
+  | 'completion_waiter'
+  | 'disconnect_hint'
+  | 'disconnect_notification'
+  | 'failure_notification'
+  | 'slack_recovery_projection'
+  | 'slack_recovery_failure_projection'
+  | 'slack_connect_projection'
+  | 'slack_connect_failure_projection';
+
+export async function preserveCommittedOAuthResult<T>(
+  result: T,
+  tails: ReadonlyArray<{ code: OAuthPostCommitTailCode; run: () => unknown | Promise<unknown> }>
+): Promise<T> {
+  for (const tail of tails) {
+    const dispatch = () => {
+      try {
+        void Promise.resolve(tail.run()).catch(() => {
+          console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+        });
+      } catch {
+        console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+      }
+    };
+    try {
+      // When the service still owns an outer tenant transaction, defer native
+      // notifications and hints until commit so clients cannot refetch the old
+      // grant. Identity-only routes have no active transaction and dispatch
+      // immediately after their already-committed authoritative mutation.
+      if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
+    } catch {
+      console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+    }
+  }
+  return result;
+}
+
 /**
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
+  const { db, app, config, daemonUrl, allowSuperadmin } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
 
   const _superadminOpts = { allowSuperadmin };
@@ -398,9 +551,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
-  const tasksService = createTasksService(db, app, sessionTokenService, {
-    branchRbacEnabled,
-  });
+  const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
@@ -441,12 +592,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/leaderboard', createLeaderboardService(db));
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
   const teamsDeliveryRepository = new TeamsMessageDeliveryRepository(db);
-  const messagesService = createMessagesService(db, (tx, message) =>
-    Promise.all([
-      deliveryRepository.enqueueForMessageInTransaction(tx, message),
-      teamsDeliveryRepository.enqueueForMessageInTransaction(tx, message),
-    ]).then(() => undefined)
-  ) as unknown as MessagesServiceImpl;
+  const messagesService = createMessagesService(db, async (tx, message) => {
+    await deliveryRepository.enqueueForMessageInTransaction(tx, message);
+    await teamsDeliveryRepository.enqueueForMessageInTransaction(tx, message);
+  }) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },
@@ -529,11 +678,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
+  const branchesService = createBranchesService(db, app);
   app.use(
     '/boards',
-    createBoardsService(
-      db,
-      (boardObject, params) => {
+    createBoardsService(db, {
+      moveBranch: createBoardBranchMover(app, branchesService),
+      emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',
           event: 'patched',
@@ -542,8 +692,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           id: boardObject.object_id,
         });
       },
-      (event) => emitServiceEvent(app, { path: 'boards', ...event })
-    ),
+      emitBoardEvent: (event) => emitServiceEvent(app, { path: 'boards', ...event }),
+      emitBoardCommentPatched: (comment, params) =>
+        emitServiceEvent(app, {
+          path: 'board-comments',
+          event: 'patched',
+          data: comment,
+          params,
+          id: comment.comment_id,
+        }),
+    }),
     {
       methods: [
         'find',
@@ -589,7 +747,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+  app.use('/branches', branchesService, {
     methods: [
       'find',
       'get',
@@ -597,12 +755,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'update',
       'patch',
       'remove',
-      'updateEnvironment',
       'ensureTeammateKnowledgeNamespace',
+      'clean',
     ],
   });
 
-  console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
+  console.log('[RBAC] Board and branch RBAC enabled (always on)');
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
   app.use('/groups', createGroupsService(db), {
@@ -616,6 +774,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
   setupCapabilityPolicyServices(app, db, { allowSuperadmin });
+  setupOwnershipTransferServices(app, db);
 
   // `createBranch` is deliberately NOT a transport method: it takes `(id, data)`,
   // which is not the Feathers custom-method contract, and it is already exposed as
@@ -633,6 +792,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
   // Knowledge (backend/data foundations)
   // ============================================================================
+
+  app.use(KNOWLEDGE_TRANSFER.path, new KnowledgeTransfersService(db, app), {
+    methods: ['find', 'get', 'create'],
+  });
 
   app.use('/kb/namespaces', createKnowledgeNamespacesService(db, app), {
     methods: [
@@ -687,16 +850,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // The OAuth callback middleware is registered in boot.ts; here we set the handler
   {
     const mcpResult = await registerMCPServices(ctx);
-    oauthCallbackHandler = isConstrainedHa(ctx.deployment)
-      ? (_req, res) => {
-          res.status(503).json({
-            code: 'HA_FEATURE_UNSUPPORTED',
-            feature: 'mcpOAuth',
-            message:
-              'MCP OAuth callbacks are unavailable in HA support profile constrained-active-active',
-          });
-        }
-      : mcpResult.oauthCallbackHandler;
+    oauthCallbackHandler = mcpResult.oauthCallbackHandler;
   }
 
   // ============================================================================
@@ -736,13 +890,25 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
+    const gatewayService = createGatewayService(db, app);
+    app.use('/gateway', gatewayService, {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
       // bypass the gateway service's normal channel_key auth model.
       methods: ['create', 'routeMessage'],
     });
+    // Structured Task recovery is authoritative. This listener is only a
+    // post-commit Slack availability projection; lost events are repaired by
+    // the bounded gateway startup/task reads and every later Task mutation.
+    const syncSlackRecovery = (task: unknown, hook?: { params?: unknown }) => {
+      if (!taskMayNeedMcpSlackRecoverySync(task)) return;
+      const taskId = (task as { task_id?: unknown } | null)?.task_id;
+      if (typeof taskId !== 'string') return;
+      gatewayService.syncMcpSlackRecoveryNoticeAfterCommit(taskId, hook?.params);
+    };
+    app.service('tasks').on('patched', syncSlackRecovery);
+    app.service('tasks').on('updated', syncSlackRecovery);
 
     const uiUrl = ctx.bundledUiAvailable ? `${daemonUrl}/ui` : `http://localhost:${ctx.UI_PORT}`;
     registerGitHubAppSetupRoutes(app, {
@@ -757,7 +923,36 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db, config);
+  // One authority owns OAuth completion, logout, user source/route changes,
+  // and task-time refresh. Provider refresh I/O happens outside this boundary;
+  // only the final source/route re-read and generation CAS run inside it. HA
+  // uses the same durable tenant/user authority as paste-back finalization.
+  const claudeOAuthAuthority = isPostgresDatabaseHandle(db)
+    ? new ClaudeOAuthAttemptAuthority(db)
+    : undefined;
+  const claudeOAuthStore = claudeOAuthAuthority
+    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
+    : new InMemoryClaudeOAuthAttemptStore();
+  const claudeCapability = () =>
+    resolveClaudeOAuthCapability(config, ctx.deployment, {
+      postgres: isPostgresDatabaseHandle(db),
+      encryption: !!process.env.AGOR_MASTER_SECRET,
+      localIsolation: sandboxManagedCredentialIsolationAvailable(),
+    });
+  const claudeBackendOAuth = isPostgresDatabaseHandle(db)
+    ? new ClaudeBackendOAuth(db, claudeCapability)
+    : undefined;
+  const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
+    db,
+    config,
+    claudeOAuthStore
+  );
+  const configService = createConfigService(
+    db,
+    config,
+    claudeRuntimeCredentials,
+    claudeBackendOAuth
+  );
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
@@ -779,11 +974,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  app.use('/check-auth', createCheckAuthService(db, config));
+  app.use('/check-auth', createCheckAuthService(db, config, claudeBackendOAuth));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
 
   registerOpenCodeServices(ctx);
 
+  // Claude's store also supplies standalone Codex's credential route authority:
+  // a process-global queue on SQLite, short tenant transactions on PostgreSQL.
+  // In HA, Codex uses its own durable attempt authority over the same advisory
+  // tenant/user lock. Standalone provider polling must remain outside that lock.
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
@@ -798,27 +997,30 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       ? invalidateLiveBranchCodexCredentialBinds({ app, db, ...input })
       : Promise.resolve();
 
-  app.use(
-    '/codex-auth/import',
-    createCodexAuthImportService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
-  );
-  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
-
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
   // URL back to the UI, daemon polls OpenAI for approval); find reports the
   // caller's attempt status. Tokens stay daemon-side end to end.
+  const standaloneCodexDeviceService = codexDeviceAttempts
+    ? undefined
+    : createCodexDeviceAuthService(app, db, claudeOAuthStore, invalidateCodexCredentialBinds);
+  const codexDeviceService = codexDeviceAttempts
+    ? createDurableCodexDeviceAuthService(
+        app,
+        db,
+        codexDeviceAttempts,
+        undefined,
+        invalidateCodexCredentialBinds
+      )
+    : standaloneCodexDeviceService!;
+  const codexCredentialMutations = codexDeviceAttempts ?? standaloneCodexDeviceService!;
+
   app.use(
-    '/codex-auth/device',
-    codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(
-          app,
-          db,
-          codexDeviceAttempts,
-          undefined,
-          invalidateCodexCredentialBinds
-        )
-      : createCodexDeviceAuthService(app, db, invalidateCodexCredentialBinds)
+    '/codex-auth/import',
+    createCodexAuthImportService(app, db, codexCredentialMutations, invalidateCodexCredentialBinds)
   );
+  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
+
+  app.use('/codex-auth/device', codexDeviceService);
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
   });
@@ -829,9 +1031,53 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // grant, so other machines stay signed in.
   app.use(
     '/codex-auth/logout',
-    createCodexAuthLogoutService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+    createCodexAuthLogoutService(app, db, codexCredentialMutations, invalidateCodexCredentialBinds)
   );
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Claude subscription OAuth sign-in. Anthropic has no device endpoint,
+  // so this is authorization-code + PKCE with a paste-back code: create({})
+  // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
+  // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
+  // reports status. Tokens stay daemon-side end to end.
+  // See context/explorations/claude-code-oauth-signin.md.
+  if (claudeOAuthAuthority) {
+    const maintenance = setInterval(() => {
+      void claudeOAuthAuthority.maintain().catch((error) => {
+        console.error(
+          `[ClaudeOAuth] Attempt maintenance failed: ${
+            error instanceof Error ? error.constructor.name : 'unknown error'
+          }`
+        );
+      });
+    }, 60_000);
+    maintenance.unref?.();
+  }
+  app.use(
+    '/claude-auth/oauth',
+    createClaudeOAuthService(
+      app,
+      db,
+      claudeOAuthStore,
+      sandboxManagedCredentialIsolationAvailable,
+      claudeBackendOAuth
+    )
+  );
+  app
+    .service('/claude-auth/oauth')
+    .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+
+  // Removes the caller's Claude subscription login — deletes their
+  // ~/.claude/.credentials.json as the right Unix identity and clears the stored
+  // token + claude auth method (emitting `patched` so the UI re-probes to
+  // disconnected). Deployment credential-home only; does not revoke the OAuth grant.
+  app.use(
+    '/claude-auth/logout',
+    createClaudeAuthLogoutService(app, db, claudeOAuthStore, claudeBackendOAuth, () =>
+      canManageClaudeCredentialRoute(ctx.deployment, config)
+    )
+  );
+  app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)
@@ -979,7 +1225,25 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db, app);
+  // SQLite users mutations share the in-process store's credential queue;
+  // PostgreSQL mutations share the durable tenant/user authority whenever either
+  // provider admits a credential-file writer. A delegated Codex-only profile
+  // still needs unix_username lifecycle coordination, but must not gain Claude
+  // path deletion when exact-home Claude auth is capability-gated.
+  const userCredentialRouteCoordinator =
+    claudeBackendOAuth || needsUserCredentialRouteCoordinator(ctx.deployment)
+      ? createClaudeUserCredentialPatchCoordinator(
+          app,
+          db,
+          claudeOAuthStore,
+          codexDeviceAttempts ?? standaloneCodexDeviceService,
+          {
+            manageClaudeRoute: canManageClaudeCredentialRoute(ctx.deployment, config),
+            backend: claudeBackendOAuth,
+          }
+        )
+      : undefined;
+  const usersService = createUsersService(db, app, config, userCredentialRouteCoordinator);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
@@ -991,6 +1255,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // the exact daemon-issued Git executor command acting as its token owner.
   app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
     methods: ['create'],
+  });
+  app.use(ENVIRONMENT_COMMAND_REPORT_SERVICE, new EnvironmentCommandReportsService(db, app), {
+    methods: ['create'],
+    events: [],
+  });
+  app.use(BRANCH_CLEANUP_REPORT_SERVICE, new BranchCleanupStepsService(db, app), {
+    methods: ['create'],
+    events: [],
+  });
+  app.use(BRANCH_DELETION_REPORT_SERVICE, new BranchDeletionStepsService(db, app), {
+    methods: ['create'],
+    events: [],
   });
 
   // Bootstrap superadmin users
@@ -1056,6 +1332,7 @@ function createExecuteHandler(
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      promptOrigin?: PromptOrigin;
     },
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
@@ -1128,8 +1405,7 @@ function createExecuteHandler(
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
     // Effective fs access of the prompt actor on the branch: write/read/none.
-    // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
-    // to 'write' when RBAC is off (open-access behavior).
+    // Drives whether the sandbox binds the branch rw / ro / not at all.
     const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
@@ -1280,9 +1556,10 @@ function createExecuteHandler(
           // Bubblewrap requires an existing file mountpoint. Keep the
           // branch-owned inode deliberately empty: the caller credential is
           // visible only as a per-executor mount and is never copied into
-          // shared branch state. The capability-based writer refuses symlinked
-          // parent directories and replaces an adversarial final symlink.
-          await mutateCredentialFile({ target: destination, content: '' });
+          // shared branch state. Never replace this dentry: existing executors
+          // on this branch have their caller overlays attached to it. Unsafe
+          // or nonempty mountpoints fail closed rather than being repaired live.
+          await ensureEmptyCredentialMountpoint(destination);
           branchCodexAuthBind = {
             source: join(credentialRoute.codexHome, 'auth.json'),
             destination,
@@ -1483,6 +1760,7 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        promptOrigin: data.promptOrigin,
         // Authoritative sandbox mount inputs (consumed in spawn-executor →
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,
@@ -1589,7 +1867,16 @@ function createExecuteHandler(
           mode: spawnContext.mode,
           outcome: code === 0 ? 'success' : code === null ? 'unknown' : 'failure',
         });
-        console.log(`${logPrefix} Exited with code ${code}`);
+        // One structured line per prompt-executor exit. A matching
+        // `[task.termination] event=request_committed cause=heartbeat_lost`
+        // for the same task means this exit interrupted an active turn.
+        console.log(
+          `[executor.exit] event=process_exited task_id=${shortId(taskId)} ` +
+            `session_id=${shortId(sessionId)} mode=${spawnContext.mode} ` +
+            `pid=${localExecutorPid ?? 'none'} code=${code ?? 'none'} ` +
+            `signal=${spawnContext.signal ?? 'none'} ` +
+            `daemon_shutdown=${isShutdownContainmentActive(app)}`
+        );
 
         if (spawnContext.mode === 'local') {
           markExecutorProcessExited(sessionId, localExecutorPid, app);
@@ -1729,17 +2016,57 @@ export async function registerMCPServices(
   const durableOAuthFlows =
     ctx.mcpOAuthPendingFlowAuthority ??
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
+  const durableOAuthClientRegistrations =
+    ctx.mcpOAuthClientRegistrationAuthority ??
+    (postgresOAuthDeployment ? new MCPOAuthClientRegistrationAuthority(db) : null);
   const lockOAuthGrantConfiguration =
     ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
-  const externalFailure = (event: string, stage: MCPExternalErrorStage, error: unknown) => {
-    const safe = sanitizeMCPExternalError(error, { stage });
-    const { type, code } = safe.diagnostic;
+  const externalFailure = (
+    event: string,
+    stage: MCPExternalErrorStage,
+    error: unknown,
+    options: {
+      category?: MCPExternalErrorCategory;
+      type?: MCPExternalErrorType;
+      reason?: MCPExternalErrorReason;
+    } = {}
+  ) => {
+    const safe = sanitizeMCPExternalError(error, { stage, ...options });
+    const { type, code, status, reason } = safe.diagnostic;
     console.error(
-      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${status !== undefined ? ` status=${status}` : ''}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
     );
     return safe;
   };
-  const oauthFetch = async (
+  const externalFailureOptionsForRecovery = (
+    recovery: MCPAuthRecovery
+  ): Parameters<typeof externalFailure>[3] => {
+    if (recovery.category === 'redirect_configuration_required') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_redirect_configuration_required',
+      };
+    }
+    if (recovery.category === 'metadata_incompatible') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_metadata_incompatible',
+      };
+    }
+    if (
+      recovery.category === 'provider_unavailable' ||
+      recovery.category === 'provider_rejected' ||
+      recovery.category === 'invalid_response' ||
+      recovery.category === 'storage_policy_rejected' ||
+      recovery.category === 'configuration_required'
+    ) {
+      return { category: recovery.category };
+    }
+    return {};
+  };
+  const pinnedOAuthFetch = async (
     input: string | URL | Request,
     init: RequestInit = {},
     assertCurrent?: () => void
@@ -1767,6 +2094,7 @@ export async function registerMCPServices(
       resolveDns: ctx.mcpOutboundDnsLookup,
     });
   };
+  const oauthFetch = ctx.mcpOAuthFetch ?? pinnedOAuthFetch;
   const refreshGrantValidator =
     (tenantId: string | undefined, serverId: MCPServerID) =>
     async (
@@ -1817,6 +2145,10 @@ export async function registerMCPServices(
     localGrantBinding?: NonNullable<SaveTokenInput['grantBinding']>;
     /** Subject key whose temporary generation reservation this flow owns. */
     localGrantSubjectKey?: string;
+    /** Exact Slack notice that launched this canonical OAuth attempt. */
+    slackRecovery?: import('@agor/core/types').MCPSlackOAuthRecoveryContext;
+    /** Exact Slack connect delivery that launched this canonical OAuth attempt. */
+    slackConnect?: import('@agor/core/types').MCPSlackOAuthConnectContext;
   };
 
   // Store pending OAuth flow contexts
@@ -1891,7 +2223,10 @@ export async function registerMCPServices(
           tenantId: flow.tenantId,
           mcpServerId: flow.mcpServerId,
           oauthMode: flow.oauthMode,
-          failureCode: 'authorization_timed_out',
+          // The flow was still pending: no callback ever reached Agor. See the
+          // durable sweep in `mcp-oauth-pending-flows.ts` for why that is the
+          // only proxy a front-channel rejection leaves behind.
+          failureCode: 'authorization_never_returned',
           updatedAt: now,
         });
         releaseLocalGrantGeneration(flow);
@@ -1923,6 +2258,12 @@ export async function registerMCPServices(
         // PostgreSQL remains authoritative; another daemon or the next sweep
         // retries. Never log DB errors that may carry bound sealed material.
         console.warn('[OAuth Maintenance] Pending-flow maintenance failed');
+      });
+    }
+    if (durableOAuthClientRegistrations) {
+      runWithoutTenantDatabaseScope(() => durableOAuthClientRegistrations.maintain()).catch(() => {
+        // Fleet maintenance is idempotent; retain no database/provider detail.
+        console.warn('[OAuth Maintenance] Client-registration maintenance failed');
       });
     }
   }, 60_000);
@@ -1966,8 +2307,12 @@ export async function registerMCPServices(
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
   async function resolveMCPOAuthRedirectUri(): Promise<string> {
-    const baseUrl = await requirePublicBaseUrl();
-    return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
+    if (!ctx.mcpOAuthCallbackUrl) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'The effective startup configuration does not provide a safe browser-reachable OAuth callback URL.'
+      );
+    }
+    return ctx.mcpOAuthCallbackUrl;
   }
 
   type OAuthBrowserReservationClaim = {
@@ -2021,6 +2366,8 @@ export async function registerMCPServices(
     scope?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
+    /** Reports the exact policy after the authoritative saved-row reload. */
+    onPolicyResolved?: (policy: MCPOAuthEffectivePolicy) => void;
     socketId?: string;
     browserReservation?: OAuthBrowserReservationClaim;
     /**
@@ -2028,6 +2375,11 @@ export async function registerMCPServices(
      * not use a browser-event reservation (notably oauth-start).
      */
     requestAuthority?: () => void;
+    slackRecovery?: import('@agor/core/types').MCPSlackOAuthRecoveryContext;
+    slackConnect?: import('@agor/core/types').MCPSlackOAuthConnectContext;
+    attemptId?: MCPOAuthAttemptID;
+    /** Renews and fences the exact one-use Slack start lease before persistence. */
+    assertStartAuthority?: () => Promise<void>;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -2063,10 +2415,24 @@ export async function registerMCPServices(
     )) as StartTwoPhaseOAuthAndAwaitResult;
   }
 
+  const assertMcpOAuthCapability = (): void => {
+    if (
+      isConstrainedHa(ctx.deployment) &&
+      (!ctx.deployment.capabilities.mcpOAuth ||
+        !ctx.deployment.mcpOAuthCallbackUrl ||
+        ctx.deployment.mcpOAuthCallbackUrl !== ctx.mcpOAuthCallbackUrl)
+    ) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'HA MCP OAuth requires an explicitly configured public HTTPS base URL.'
+      );
+    }
+  };
+
   async function startTwoPhaseMCPOAuthFlowInternal(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
+    assertMcpOAuthCapability();
     const assertFlowAuthority =
       opts.requestAuthority || opts.browserReservation
         ? () => {
@@ -2180,13 +2546,42 @@ export async function registerMCPServices(
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
     // the pending-flow authority below instead.
-    const localAttemptId = durableOAuthFlows ? undefined : (generateId() as MCPOAuthAttemptID);
+    const localAttemptId = durableOAuthFlows
+      ? undefined
+      : (opts.attemptId ?? (generateId() as MCPOAuthAttemptID));
 
     // Metadata discovery and DCR are the first provider-owned side effects in
     // this helper. Re-check the live socket authority immediately before they
     // begin; consuming a valid A reservation is not enough if that same socket
     // has since authenticated as B.
     assertFlowAuthority?.();
+    const assertDurableClientRegistrationAuthority = durableBinding
+      ? async (): Promise<void> => {
+          await runInOAuthTenantScope(db, durableBinding.tenantId, async () => {
+            const currentServer = await new MCPServerRepository(db).findById(
+              durableBinding.mcpServerId
+            );
+            const currentUser = await new UsersRepository(db).findById(durableBinding.userId);
+            if (
+              !currentUser ||
+              !currentServer?.enabled ||
+              currentServer.auth?.type !== 'oauth' ||
+              !isMCPServerUsableBy(currentServer, durableBinding.userId) ||
+              (currentServer.config_version ?? 1) !== (savedServerAuthority?.config_version ?? 1) ||
+              hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer) ||
+              (durableBinding.oauthMode === 'shared' &&
+                !hasMinimumRole(currentUser.role, ROLES.ADMIN))
+            ) {
+              throw new Forbidden(
+                'MCP OAuth client-registration authority changed. Restart OAuth.'
+              );
+            }
+          });
+        }
+      : undefined;
+    opts.onPolicyResolved?.(
+      presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
+    );
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
@@ -2202,6 +2597,28 @@ export async function registerMCPServices(
         // Process-global DCR credentials are not a tenant/user/server namespace.
         // Daemon flows never share them, including in SQLite deployments.
         reuseDynamicClientRegistration: false,
+        resolveDynamicClientRegistration:
+          durableBinding && durableOAuthClientRegistrations && savedServerAuthority
+            ? (
+                request: MCPOAuthDynamicClientRegistrationRequest,
+                register: () => Promise<
+                  import('@agor/core/tools/mcp/oauth-mcp-transport').DynamicClientRegistrationResponse
+                >
+              ) =>
+                durableOAuthClientRegistrations.resolve(
+                  {
+                    ...request,
+                    tenantId: durableBinding.tenantId,
+                    mcpServerId: durableBinding.mcpServerId,
+                    serverConfigVersion: savedServerAuthority.config_version ?? 1,
+                  },
+                  register,
+                  {
+                    assertCurrent: assertFlowAuthority,
+                    assertServerCurrent: assertDurableClientRegistrationAuthority,
+                  }
+                )
+            : undefined,
         resourceUri: effectiveMcpUrl,
         compatibilityMode: effectiveCompatibilityMode,
         dcrMode: effectiveDcrMode,
@@ -2212,6 +2629,7 @@ export async function registerMCPServices(
       })
     );
     assertFlowAuthority?.();
+    await opts.assertStartAuthority?.();
 
     const resolvedGrantBinding = {
       resourceUri: context.resourceUri,
@@ -2312,6 +2730,7 @@ export async function registerMCPServices(
             assertFlowAuthority?.();
             if (
               !currentServer ||
+              (currentServer.config_version ?? 1) !== (savedServerAuthority?.config_version ?? 1) ||
               hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer)
             ) {
               throw new Error(
@@ -2319,10 +2738,29 @@ export async function registerMCPServices(
               );
             }
             assertFlowAuthority?.();
+            if (context.clientRegistrationId) {
+              const exactRegistration = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+                durableOAuthClientRegistrations!.lockExactCurrentForAttempt({
+                  tenantId: durableBinding.tenantId,
+                  serverId: durableBinding.mcpServerId,
+                  registrationId: context.clientRegistrationId!,
+                  serverConfigVersion: currentServer.config_version ?? 1,
+                })
+              );
+              assertFlowAuthority?.();
+              if (!exactRegistration) {
+                throw new Error(
+                  'The MCP OAuth client registration changed while OAuth was starting. Restart OAuth.'
+                );
+              }
+            }
             const createdAttempt = await runWithinOAuthAuthority(assertFlowAuthority, () =>
               durableOAuthFlows!.create({
                 context,
                 ...durableBinding,
+                ...(opts.attemptId ? { attemptId: opts.attemptId } : {}),
+                ...(opts.slackRecovery ? { slackRecovery: opts.slackRecovery } : {}),
+                ...(opts.slackConnect ? { slackConnect: opts.slackConnect } : {}),
                 configFingerprint: fingerprintMCPOAuthGrantConfiguration(
                   process.env.AGOR_MASTER_SECRET!,
                   currentServer,
@@ -2335,6 +2773,11 @@ export async function registerMCPServices(
           })
         )
       : localAttemptId!;
+
+    // One line per attempt, after the attempt has a durable id to correlate on.
+    // A redirect-URI mismatch is rejected front-channel and never comes back,
+    // so this is the only place Agor can state the binding it used.
+    logOAuthAuthorizeBuilt({ mcpServerId: opts.mcpServerId, attemptId, context });
 
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
     let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;
@@ -2366,7 +2809,9 @@ export async function registerMCPServices(
                 tenantId: opts.tenantId,
                 mcpServerId: opts.mcpServerId,
                 oauthMode: effectiveOAuthMode,
-                failureCode: 'authorization_timed_out',
+                // Still pending when the request gave up, and dropped here, so
+                // no callback reached Agor or ever can for this attempt.
+                failureCode: 'authorization_never_returned',
                 updatedAt: Date.now(),
               });
             }
@@ -2408,6 +2853,8 @@ export async function registerMCPServices(
         savedServerAuthority,
         localGrantBinding,
         localGrantSubjectKey,
+        ...(opts.slackRecovery ? { slackRecovery: opts.slackRecovery } : {}),
+        ...(opts.slackConnect ? { slackConnect: opts.slackConnect } : {}),
       });
       localOAuthAttemptStatuses.set(attemptId, {
         status: 'pending',
@@ -2821,6 +3268,181 @@ export async function registerMCPServices(
     }
   };
 
+  /**
+   * Tenant-scoped repositories for the shared Slack MCP OAuth authority read.
+   *
+   * Built per call rather than hoisted: `db` is a tenant-scope-aware proxy and
+   * these repositories are cheap wrappers, so constructing them inside the
+   * caller's scope keeps every read bound to the scope that authorized it.
+   */
+  const slackOAuthAuthorityRepositories = (): SlackMCPOAuthAuthorityRepositories => ({
+    sessions: sessionsRepository,
+    users: new UsersRepository(db),
+    channels: new GatewayChannelRepository(db),
+    servers: new MCPServerRepository(db),
+    threadMap: new ThreadSessionMapRepository(db),
+  });
+
+  const assertSlackRecoveryFlowStillAuthorized = async (
+    pendingFlow: PendingOAuthFlow
+  ): Promise<void> => {
+    const recovery = pendingFlow.slackRecovery;
+    const tenantId = pendingFlow.durableRecord?.tenantId ?? pendingFlow.tenantId;
+    const userId = pendingFlow.durableRecord?.userId ?? pendingFlow.userId;
+    if (!recovery) return;
+    if (!tenantId || !userId) throw new Error('Slack MCP recovery authority is unavailable');
+    await runInOAuthTenantScope(db, tenantId, async () => {
+      const tasks = new TaskRepository(db);
+      const authority = await tasks.mutateMCPSlackRecoveryNotice(
+        recovery.task_id,
+        (notice, task) => {
+          const runtimeRecovery = task.metadata?.mcp_recovery;
+          return notice?.notice_id === recovery.notice_id &&
+            notice.oauth_attempt_id === pendingFlow.attemptId &&
+            notice.principal_user_id === userId &&
+            notice.credential_user_id === userId &&
+            task.created_by === userId &&
+            task.session_id === recovery.session_id &&
+            [
+              TaskStatus.RUNNING,
+              TaskStatus.AWAITING_PERMISSION,
+              TaskStatus.AWAITING_INPUT,
+            ].includes(task.status as never) &&
+            runtimeRecovery?.code === 'oauth_reauth_required' &&
+            runtimeRecovery.status === 'action_required' &&
+            runtimeRecovery.mcp_server_id === recovery.mcp_server_id &&
+            runtimeRecovery.generation === recovery.recovery_generation &&
+            runtimeRecovery.request_id === recovery.recovery_request_id
+            ? notice
+            : null;
+        }
+      );
+      const task = authority.task;
+      const notice = task.metadata?.mcp_slack_recovery_notice;
+      if (!authority.changed || !notice) {
+        throw new Error('Slack MCP recovery request is no longer current');
+      }
+      const [sharedAuthority, mode] = await Promise.all([
+        readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+          principalUserId: notice.principal_user_id,
+          credentialUserId: notice.credential_user_id,
+          sessionId: recovery.session_id,
+          gatewayChannelId: notice.gateway_channel_id,
+          gatewayConfigGeneration: notice.gateway_config_generation,
+          slackChannelId: notice.slack_channel_id,
+          slackThreadId: notice.slack_thread_id,
+          mcpServerId: recovery.mcp_server_id,
+          mcpServerConfigVersion: notice.mcp_server_config_version,
+        }),
+        getMCPEgressGatewayMode(db),
+      ]);
+      const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(db);
+      const attached = (
+        await new SessionMCPServerRepository(db).listServers(recovery.session_id, true)
+      ).some((candidate) => candidate.mcp_server_id === recovery.mcp_server_id);
+      if (
+        !sharedAuthority ||
+        sharedAuthority.session.created_by !== userId ||
+        !attached ||
+        !recoveryEnabled ||
+        (mode !== 'compatibility' && mode !== 'enforced')
+      ) {
+        throw new Error('Slack MCP recovery authority changed');
+      }
+    });
+  };
+
+  /**
+   * Re-prove the Slack connect authority mid-callback.
+   *
+   * Runs before the provider exchange and again after it, through
+   * `assertPendingFlowStillAuthorized`. The CAS is the fence: it only reports
+   * `changed` while this exact attempt still owns the exact delivery
+   * generation on a still-pending widget, so a newer link, a resolved widget,
+   * or a failed delivery stops the flow instead of letting it persist a grant
+   * nobody is waiting for any more.
+   *
+   * The operator kill switch is asked here as well as at delivery and
+   * redemption, which is what makes §7.1.4's claim — that switching the lane
+   * off stops it GRANTING, not merely repainting — true of a flow already in
+   * the air. Without it, a link redeemed a second before the switch was thrown
+   * still came back through the provider and persisted a grant, which is the
+   * one outcome an operator reaching for a kill switch is trying to stop. The
+   * window is a single provider round-trip, so this is a small correction to
+   * make and a strange one to have to explain during an incident.
+   *
+   * Turning it back on loses nothing: the refusal collapses into the lane's
+   * generic failure, the delivery records a durable `oauth_failed_at`, and the
+   * card that stamp produces may be re-offered once with a fresh link (§7.2).
+   */
+  const assertSlackConnectFlowStillAuthorized = async (
+    pendingFlow: PendingOAuthFlow
+  ): Promise<void> => {
+    const connect = pendingFlow.slackConnect;
+    const tenantId = pendingFlow.durableRecord?.tenantId ?? pendingFlow.tenantId;
+    const userId = pendingFlow.durableRecord?.userId ?? pendingFlow.userId;
+    if (!connect) return;
+    if (!tenantId || !userId) throw new Error('Slack MCP connect authority is unavailable');
+    await runInOAuthTenantScope(db, tenantId, async () => {
+      if (!(await isMCPSlackConnectCardEnabled(db))) {
+        throw new Error('Slack MCP connect projection is disabled');
+      }
+      const fenced = await mutateSlackConnectDelivery(
+        new MessagesRepository(db),
+        connect.widget_id,
+        (current, widget, message) =>
+          current?.delivery_id === connect.delivery_id &&
+          current.delivery_generation === connect.delivery_generation &&
+          current.oauth_attempt_id === pendingFlow.attemptId &&
+          current.token_consumed_at &&
+          !current.oauth_failed_at &&
+          // Terminal by design (§7.2): the projection records that the
+          // channel, alignment, or server moved under this card, and a card
+          // that may no longer offer a link may not complete one either.
+          !current.binding_invalidated_at &&
+          widget.status === 'pending' &&
+          widget.widget_type === 'oauth' &&
+          message.session_id === connect.session_id
+            ? current
+            : null
+      );
+      if (!fenced.changed) throw new Error('Slack MCP connect request is no longer current');
+
+      const message = fenced.message;
+      const task = message.task_id ? await new TaskRepository(db).findById(message.task_id) : null;
+      const source = task?.metadata?.gateway_task_source;
+      const authority =
+        source?.channel_type === 'slack' && source.slack_channel_id
+          ? await readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+              principalUserId: userId as UserID,
+              credentialUserId: userId as UserID,
+              sessionId: connect.session_id,
+              gatewayChannelId: connect.gateway_channel_id,
+              // Sealed at redemption, never re-read: the authority read
+              // refuses when the STORED version differs from the expected
+              // one, so passing today's stored value would compare it to
+              // itself and admit a flow the workspace has since revoked.
+              gatewayConfigGeneration: connect.gateway_config_generation,
+              slackChannelId: source.slack_channel_id,
+              slackThreadId: source.thread_id,
+              mcpServerId: connect.mcp_server_id,
+              mcpServerConfigVersion: connect.mcp_server_config_version,
+            })
+          : null;
+      if (
+        !task ||
+        !authority ||
+        source?.gateway_channel_id !== connect.gateway_channel_id ||
+        task.created_by !== userId ||
+        task.session_id !== connect.session_id ||
+        authority.channel.config.align_slack_users !== true ||
+        !isMCPServerUsableBy(authority.server, userId)
+      ) {
+        throw new Error('Slack MCP connect authority changed');
+      }
+    });
+  };
+
   const assertPendingFlowStillAuthorized = async (
     pendingFlow: PendingOAuthFlow,
     afterProviderExchange = false
@@ -2832,6 +3454,8 @@ export async function registerMCPServices(
         record?.tenantId ?? pendingFlow.tenantId,
         record?.oauthMode ?? pendingFlow.oauthMode ?? 'per_user'
       );
+      await assertSlackRecoveryFlowStillAuthorized(pendingFlow);
+      await assertSlackConnectFlowStillAuthorized(pendingFlow);
       if (!record) {
         if (!pendingFlow.mcpServerId) return;
         const savedAuthority = pendingFlow.savedServerAuthority;
@@ -3046,7 +3670,10 @@ export async function registerMCPServices(
     }
   };
 
-  const emitOAuthCompletion = (pendingFlow: PendingOAuthFlow, success: boolean) => {
+  const emitOAuthCompletion = async (
+    pendingFlow: PendingOAuthFlow,
+    success: boolean
+  ): Promise<void> => {
     if (!app.io) return;
     const event = {
       attempt_id: pendingFlow.attemptId,
@@ -3059,12 +3686,97 @@ export async function registerMCPServices(
         event.oauth_mode === 'per_user' && pendingFlow.userId
           ? tenantUserChannelName(pendingFlow.tenantId, pendingFlow.userId)
           : tenantChannelName(pendingFlow.tenantId);
-      emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event);
+      await Promise.resolve(emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event));
     } else if (pendingFlow.socketId) {
       // Standalone defensive fallback: exact originating socket only. Never
       // globally broadcast OAuth attempt metadata or authorization URLs.
-      app.io.local.to(pendingFlow.socketId).emit('oauth:completed', event);
+      await Promise.resolve(app.io.local.to(pendingFlow.socketId).emit('oauth:completed', event));
     }
+  };
+
+  const projectSlackRecoveryOAuthResult = async (
+    pendingFlow: PendingOAuthFlow,
+    success: boolean
+  ): Promise<void> => {
+    const recovery = pendingFlow.slackRecovery;
+    if (!recovery || !pendingFlow.tenantId) return;
+    await runWithTenantContext(pendingFlow.tenantId, async () => {
+      const gateway = app.service('gateway') as unknown as {
+        markMcpSlackOAuthResult(input: {
+          taskId: string;
+          noticeId: string;
+          attemptId: string;
+          success: boolean;
+        }): Promise<void>;
+      };
+      await gateway.markMcpSlackOAuthResult({
+        taskId: recovery.task_id,
+        noticeId: recovery.notice_id,
+        attemptId: pendingFlow.attemptId,
+        success,
+      });
+    });
+  };
+
+  /**
+   * Stamp the provider outcome onto the widget's delivery record.
+   *
+   * This is durable state, not a notification: the landing page polls the
+   * attempt, and the widget itself is still only resolved when the browser
+   * POSTs `/widgets/:id/oauth-resolve` and the daemon re-reads the grant. What
+   * this gives is a record of what the provider round-trip did, which the
+   * preflight renders and which the Slack projection reads — through
+   * `mcpSlackConnectRenderedState` — to decide what the thread should now say.
+   */
+  const projectSlackConnectOAuthResult = async (
+    pendingFlow: PendingOAuthFlow,
+    success: boolean
+  ): Promise<void> => {
+    const connect = pendingFlow.slackConnect;
+    if (!connect || !pendingFlow.tenantId) return;
+    const stampedAt = new Date().toISOString();
+    const stamped = await runWithTenantContext(pendingFlow.tenantId, () =>
+      runInOAuthTenantScope(db, pendingFlow.tenantId!, () =>
+        mutateSlackConnectDelivery(new MessagesRepository(db), connect.widget_id, (current) =>
+          current?.delivery_id === connect.delivery_id &&
+          current.delivery_generation === connect.delivery_generation &&
+          current.oauth_attempt_id === pendingFlow.attemptId &&
+          !current.oauth_succeeded_at &&
+          !current.oauth_failed_at
+            ? {
+                ...current,
+                ...(success ? { oauth_succeeded_at: stampedAt } : { oauth_failed_at: stampedAt }),
+                oauth_start_claim_expires_at: undefined,
+                // The nudge below is no longer awaited, so the sweep — not the
+                // provider's redirect response — has to be what guarantees the
+                // repaint. This is the same `next_repair_at = now` the recovery
+                // lane's `projectMcpSlackRecoveryOAuthResult` has always
+                // written, and what `markConnectStartFailed` writes on the
+                // start path.
+                next_repair_at: stampedAt,
+              }
+            : null
+        )
+      )
+    );
+    // The provider round-trip is the one transition the widget row does not
+    // record, so the card is told about it explicitly. `mutateSlackConnectDelivery`
+    // deliberately emits no service event — the projection's own writes must
+    // not wake the projection — which is why this is not covered by the
+    // widget-store hook.
+    if (!stamped.changed) return;
+    // Deliberately NOT awaited. This runs on the provider's redirect response:
+    // the user is sitting on a blank callback page waiting for it. The nudge
+    // is a Slack write, and `.catch()` only handles a REJECTION — a Slack call
+    // that never answers held the redirect open for as long as it stalled.
+    // The CAS above sets `next_repair_at = now`, so the card is the sweep's
+    // (≤30s) whether or not this returns.
+    void runWithTenantContext(pendingFlow.tenantId, async () => {
+      const gateway = app.service('gateway') as unknown as {
+        syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
+      };
+      await gateway.syncMcpSlackConnectCard(connect.widget_id);
+    }).catch(() => undefined);
   };
 
   const pendingFromDurableClaim = (
@@ -3078,6 +3790,8 @@ export async function registerMCPServices(
     tenantId: claimed.record.tenantId,
     createdAt: claimed.record.createdAt.getTime(),
     durableRecord: claimed.record,
+    ...(claimed.slackRecovery ? { slackRecovery: claimed.slackRecovery } : {}),
+    ...(claimed.slackConnect ? { slackConnect: claimed.slackConnect } : {}),
   });
 
   const terminalMessageForStatus = (status: MCPOAuthPendingFlowStatus): string => {
@@ -3088,6 +3802,30 @@ export async function registerMCPServices(
       return 'OAuth exchange outcome is uncertain. Start a new OAuth flow; the previous authorization code will not be replayed.';
     }
     return 'OAuth flow did not complete. Please start a new flow.';
+  };
+
+  const invalidateTokenEndpointRejectedClient = async (
+    pendingFlow: PendingOAuthFlow,
+    error: unknown
+  ): Promise<void> => {
+    // OAuthCodeExchangeError's invalid-client bit is set only by the pinned
+    // token-endpoint response parser. Never feed browser query parameters into
+    // this boundary.
+    if (
+      !(error instanceof OAuthCodeExchangeError) ||
+      !error.invalidClientRegistration ||
+      !durableOAuthClientRegistrations ||
+      !pendingFlow.tenantId ||
+      !pendingFlow.mcpServerId ||
+      !pendingFlow.context.clientRegistrationId
+    ) {
+      return;
+    }
+    await durableOAuthClientRegistrations.invalidateRegistration(
+      pendingFlow.tenantId,
+      pendingFlow.mcpServerId as MCPServerID,
+      pendingFlow.context.clientRegistrationId
+    );
   };
 
   const sendOAuthResultPage = (
@@ -3119,11 +3857,56 @@ export async function registerMCPServices(
         // caller (discover / test-oauth) can surface the failure.
         if (state) {
           if (durableOAuthFlows) {
-            await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
+            // This browser-controlled response is not authenticated evidence
+            // from the token endpoint. Even invalid_client/unauthorized_client
+            // may therefore consume only this exact state capability; fleet
+            // DCR authority is invalidated exclusively from the pinned
+            // server-to-server exchange path below.
+            const claimed = await durableOAuthFlows.claimForCallback(state);
+            if (claimed.outcome === 'claimed') {
+              try {
+                const denied = pendingFromDurableClaim(
+                  durableOAuthFlows.openClaim(claimed.flow, state)
+                );
+                await durableOAuthFlows.finish(claimed.flow, 'failed', 'authorization_denied');
+                await preserveCommittedOAuthResult(undefined, [
+                  {
+                    code: 'slack_recovery_failure_projection',
+                    run: () => projectSlackRecoveryOAuthResult(denied, false),
+                  },
+                  {
+                    code: 'slack_connect_failure_projection',
+                    run: () => projectSlackConnectOAuthResult(denied, false),
+                  },
+                  {
+                    code: 'failure_notification',
+                    run: () => emitOAuthCompletion(denied, false),
+                  },
+                ]);
+              } catch {
+                await durableOAuthFlows.finish(claimed.flow, 'failed', 'authorization_denied');
+              }
+            }
           } else {
             const pending = pendingOAuthFlows.get(state);
             pending?.tokenReject?.(new Error('Authorization was not completed'));
-            if (pending) markLocalOAuthAttempt(pending, 'failed', 'authorization_denied');
+            if (pending) {
+              markLocalOAuthAttempt(pending, 'failed', 'authorization_denied');
+              await preserveCommittedOAuthResult(undefined, [
+                {
+                  code: 'slack_recovery_failure_projection',
+                  run: () => projectSlackRecoveryOAuthResult(pending, false),
+                },
+                {
+                  code: 'slack_connect_failure_projection',
+                  run: () => projectSlackConnectOAuthResult(pending, false),
+                },
+                {
+                  code: 'failure_notification',
+                  run: () => emitOAuthCompletion(pending, false),
+                },
+              ]);
+            }
             pendingOAuthFlows.delete(state);
           }
         }
@@ -3205,18 +3988,82 @@ export async function registerMCPServices(
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
         if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');
-        emitOAuthCompletion(pendingFlow, true);
-
-        // Notify any awaitToken() callers (discover / test-oauth) that the
-        // token has been exchanged + persisted so their HTTP request can
-        // complete with a real result instead of timing out.
-        pendingFlow.tokenResolve?.(tokenResponse);
+        await preserveCommittedOAuthResult(undefined, [
+          {
+            code: 'slack_recovery_projection',
+            run: () => projectSlackRecoveryOAuthResult(pendingFlow, true),
+          },
+          {
+            code: 'slack_connect_projection',
+            run: () => projectSlackConnectOAuthResult(pendingFlow, true),
+          },
+          {
+            code: 'runtime_authority_hint',
+            run: () => {
+              if (!pendingFlow.tenantId || !pendingFlow.mcpServerId) return;
+              const hintParams = {
+                tenant: {
+                  tenant_id: pendingFlow.tenantId as import('@agor/core/types').TenantID,
+                  source: 'explicit' as const,
+                },
+              } as AuthenticatedParams;
+              scheduleMcpRuntimeHint(
+                db,
+                pendingFlow.tenantId,
+                'oauth_browser_authority_changed',
+                () =>
+                  (
+                    app as unknown as {
+                      signalMcpServerAuthorityChange?: (
+                        serverId: string,
+                        params: AuthenticatedParams,
+                        affectedCredentialUserId?: string
+                      ) => Promise<void>;
+                    }
+                  ).signalMcpServerAuthorityChange?.(
+                    pendingFlow.mcpServerId!,
+                    hintParams,
+                    (pendingFlow.oauthMode ?? 'per_user') === 'per_user'
+                      ? pendingFlow.userId
+                      : undefined
+                  ) ?? Promise.resolve()
+              );
+            },
+          },
+          {
+            code: 'completion_notification',
+            run: () => emitOAuthCompletion(pendingFlow, true),
+          },
+          {
+            code: 'completion_waiter',
+            // Notify any awaitToken() callers (discover / test-oauth) that the
+            // token has been exchanged + persisted. This is post-commit
+            // availability only and cannot rewrite the callback result.
+            run: () => pendingFlow.tokenResolve?.(tokenResponse),
+          },
+        ]);
 
         console.log('[OAuth Callback] Flow completed successfully');
-        sendOAuthResultPage(res, true, 'OAuth authentication was successful.');
+        sendOAuthResultPage(
+          res,
+          true,
+          pendingFlow.slackRecovery
+            ? 'OAuth authentication was successful. You can close this tab and return to Slack; Agor will update the original thread.'
+            : 'OAuth authentication was successful.'
+        );
       } catch (innerErr) {
+        try {
+          await invalidateTokenEndpointRejectedClient(pendingFlow, innerErr);
+        } catch {
+          console.warn('[OAuth Callback] Client-registration invalidation could not be persisted');
+        }
         const classification = classifyMCPOAuthCompletionFailure(innerErr);
         const { ambiguous } = classification;
+        // The provider exchange did succeed in this typed case, but current
+        // Agor authority prevented the grant from being committed. Project it
+        // as superseded rather than falsely describing provider auth failure.
+        const slackProviderSucceeded =
+          innerErr instanceof OAuthFlowAuthorizationChangedError && innerErr.afterProviderExchange;
         if (pendingFlow.durableRecord) {
           try {
             await durableOAuthFlows!.finish(
@@ -3231,7 +4078,20 @@ export async function registerMCPServices(
         } else {
           markLocalOAuthAttempt(pendingFlow, classification.status, classification.failureCode);
         }
-        emitOAuthCompletion(pendingFlow, false);
+        await preserveCommittedOAuthResult(undefined, [
+          {
+            code: 'slack_recovery_failure_projection',
+            run: () => projectSlackRecoveryOAuthResult(pendingFlow, slackProviderSucceeded),
+          },
+          {
+            code: 'slack_connect_failure_projection',
+            run: () => projectSlackConnectOAuthResult(pendingFlow, slackProviderSucceeded),
+          },
+          {
+            code: 'failure_notification',
+            run: () => emitOAuthCompletion(pendingFlow, false),
+          },
+        ]);
         pendingFlow.tokenReject?.(
           new Error(
             ambiguous
@@ -3395,6 +4255,7 @@ export async function registerMCPServices(
       await new UserMCPOAuthTokenRepository(scopedDb).deleteAllForServer(serverId);
       if (durableOAuthFlows && tenantId) {
         await durableOAuthFlows.invalidateForServer(tenantId, serverId);
+        await durableOAuthClientRegistrations?.invalidateForServer(tenantId, serverId);
       } else {
         const affectedLocalFlows = [...pendingOAuthFlows].filter(
           ([, flow]) => flow.mcpServerId === serverId
@@ -3441,26 +4302,80 @@ export async function registerMCPServices(
     }),
     { methods: ['get'] }
   );
-  app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
-    methods: ['find'],
-  });
+  const marketplaceServerRepository = new MCPServerRepository(db);
+  const marketplaceTokenRepository = new UserMCPOAuthTokenRepository(db);
+  app.use(
+    '/mcp-marketplace',
+    new MCPMarketplaceService(
+      new MCPMarketplaceRepository(db, async (userId, serverIds) => {
+        // Marketplace receives only this closed boolean map. The daemon reuses the same
+        // mode/binding authority as execution and refresh; no token, client,
+        // issuer, resource, or binding material crosses the service boundary.
+        return resolveMCPMarketplaceOAuthGrantAuthority({
+          db,
+          userId,
+          serverIds,
+          serverRepository: marketplaceServerRepository,
+          tokenRepository: marketplaceTokenRepository,
+        });
+      })
+    ),
+    { methods: ['find'] }
+  );
   app.use(
     '/mcp-marketplace/remove-unattached',
-    new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
-    ),
+    new MCPMarketplaceRemoveServerService(db, (userIds, params, serverId) => {
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds);
+      scheduleMcpRuntimeHint(
+        db,
+        params.tenant?.tenant_id,
+        'marketplace_server_removed',
+        () =>
+          (
+            app as unknown as {
+              signalMcpServerAuthorityChange?: (
+                serverId: string,
+                params: AuthenticatedParams
+              ) => Promise<void>;
+            }
+          ).signalMcpServerAuthorityChange?.(serverId, params) ?? Promise.resolve()
+      );
+    }),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
-    new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
-    ),
+    new MCPMarketplaceToolPermissionService(db, (userIds, params, serverId) => {
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds);
+      scheduleMcpRuntimeHint(
+        db,
+        params.tenant?.tenant_id,
+        'tool_permission_changed',
+        () =>
+          (
+            app as unknown as {
+              signalMcpServerAuthorityChange?: (
+                serverId: string,
+                params: AuthenticatedParams,
+                affectedCredentialUserId?: string,
+                exactTasks?: import('@agor/core/types').Task[],
+                code?: 'stale_capability' | 'tool_permission_changed'
+              ) => Promise<void>;
+            }
+          ).signalMcpServerAuthorityChange?.(
+            serverId,
+            params,
+            undefined,
+            undefined,
+            'tool_permission_changed'
+          ) ?? Promise.resolve()
+      );
+    }),
     { methods: ['create'] }
   );
   // Action replies are private acknowledgements. These services mutate through
   // repository transactions, so they explicitly emit the user-targeted empty
-  // Marketplace invalidation rather than pretending the ordinary MCP CRUD
+  // Marketplace freshness hint rather than pretending the ordinary MCP CRUD
   // service emitted a lifecycle event.
   for (const path of [
     'mcp-marketplace/remove-unattached',
@@ -4010,7 +4925,9 @@ export async function registerMCPServices(
                   data.mcp_server_id ?? '<unsaved>',
                   (params as AuthenticatedParams | undefined)?.user?.user_id ?? '<unknown-user>',
                 ].join(':'),
-                cache: !durableOAuthFlows,
+                // A client-credentials test is probe-only, not durable consent.
+                // Never retain its token outside this request in either dialect.
+                cache: false,
                 assertCurrent: assertInitialRequestAuthority,
               },
               true
@@ -4087,15 +5004,684 @@ export async function registerMCPServices(
 
   app.service('mcp-servers/test-oauth').hooks({ before: { create: [ctx.requireAuth] } });
 
+  type SlackRecoveryBinding = {
+    claims: MCPSlackRecoveryTokenClaims;
+    notice: MCPSlackRecoveryNotice;
+    oauthContext: MCPSlackOAuthRecoveryContext;
+  };
+
+  const loadSlackRecoveryBinding = async (
+    rawToken: unknown,
+    params: AuthenticatedParams | undefined,
+    consume: boolean,
+    attemptId?: MCPOAuthAttemptID
+  ): Promise<SlackRecoveryBinding> => {
+    const genericFailure = 'This MCP recovery action is invalid, expired, or superseded.';
+    try {
+      if (typeof rawToken !== 'string') throw new Error(genericFailure);
+      const claims = verifyMCPSlackRecoveryToken(rawToken, process.env.AGOR_MASTER_SECRET ?? '');
+      const tenantId = tenantIdFromParams(params);
+      const callerId = params?.user?.user_id;
+      if (
+        !tenantId ||
+        !callerId ||
+        !mcpSlackRecoveryClaimsMatchCaller(claims, tenantId, callerId)
+      ) {
+        throw new Error(genericFailure);
+      }
+      // Every read and the consume CAS below run inside one tenant database
+      // scope, opened here for the same reason the connect lane opens its
+      // own: `/mcp-slack-recovery` and `/mcp-servers/oauth-start` are both
+      // registered outside `TENANT_OWNED_SERVICE_PATHS`, so nothing upstream
+      // arms a scope for them, and against the production guard the very
+      // first repository read throws — which this lane reports as its single
+      // generic refusal, so a valid link looks revoked. Entering a scope that
+      // is already open is a no-op.
+      return await runInOAuthTenantScope(db, tenantId, async () => {
+        const taskRepo = new TaskRepository(db);
+        const task = await taskRepo.findById(claims.task_id);
+        const notice = task?.metadata?.mcp_slack_recovery_notice;
+        const recovery = task?.metadata?.mcp_recovery;
+        const source = task?.metadata?.gateway_task_source;
+        if (
+          !task ||
+          !notice ||
+          !mcpSlackRecoveryClaimsMatchNotice(claims, notice, tenantId) ||
+          task.session_id !== claims.session_id ||
+          task.created_by !== callerId ||
+          ![TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
+            task.status as never
+          ) ||
+          !recovery ||
+          recovery.code !== 'oauth_reauth_required' ||
+          recovery.status !== 'action_required' ||
+          recovery.action !== 'reauthenticate' ||
+          recovery.generation !== claims.recovery_generation ||
+          recovery.request_id !== claims.recovery_request_id ||
+          recovery.mcp_server_id !== claims.mcp_server_id ||
+          source?.gateway_channel_id !== claims.gateway_channel_id ||
+          source.channel_type !== 'slack' ||
+          source.thread_id !== claims.slack_thread_id ||
+          source.provider_user_id !== claims.slack_user_id ||
+          source.slack_team_id !== claims.slack_team_id ||
+          source.slack_channel_id !== claims.slack_channel_id
+        ) {
+          throw new Error(genericFailure);
+        }
+        // Shared with the connect lane. Only the lane-specific predicates below
+        // differ; the channel/thread/server/user authority is one implementation
+        // so neither lane can quietly drop a check the other keeps.
+        const [authority, mode] = await Promise.all([
+          readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+            principalUserId: claims.sub,
+            credentialUserId: claims.credential_user_id,
+            sessionId: claims.session_id,
+            gatewayChannelId: claims.gateway_channel_id,
+            gatewayConfigGeneration: claims.gateway_config_generation,
+            slackChannelId: claims.slack_channel_id,
+            slackThreadId: claims.slack_thread_id,
+            mcpServerId: claims.mcp_server_id,
+            mcpServerConfigVersion: claims.mcp_server_config_version,
+          }),
+          getMCPEgressGatewayMode(db),
+        ]);
+        const recoveryEnabled = await isMcpRuntimeRecoveryEnabled(db);
+        const attached = await new SessionMCPServerRepository(db)
+          .listServers(claims.session_id, true)
+          .then((servers) =>
+            servers.some((candidate) => candidate.mcp_server_id === claims.mcp_server_id)
+          );
+        if (
+          !authority ||
+          authority.session.created_by !== claims.credential_user_id ||
+          !attached ||
+          !recoveryEnabled ||
+          (mode !== 'compatibility' && mode !== 'enforced')
+        ) {
+          throw new Error(genericFailure);
+        }
+        if (consume) {
+          const consumedAt = new Date();
+          const consumed = await taskRepo.mutateMCPSlackRecoveryNotice(
+            task.task_id,
+            (current, lockedTask) => {
+              const lockedRecovery = lockedTask.metadata?.mcp_recovery;
+              if (
+                !current ||
+                !mcpSlackRecoveryClaimsMatchNotice(claims, current, tenantId) ||
+                current.token_consumed_at ||
+                new Date(current.expires_at).getTime() <= consumedAt.getTime() ||
+                !lockedRecovery ||
+                lockedRecovery.code !== 'oauth_reauth_required' ||
+                lockedRecovery.status !== 'action_required' ||
+                lockedRecovery.generation !== claims.recovery_generation ||
+                lockedRecovery.request_id !== claims.recovery_request_id ||
+                lockedRecovery.mcp_server_id !== claims.mcp_server_id
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                token_consumed_at: consumedAt.toISOString(),
+                ...(attemptId
+                  ? {
+                      oauth_attempt_id: attemptId,
+                      oauth_start_claimed_at: consumedAt.toISOString(),
+                      oauth_start_claim_expires_at: new Date(
+                        consumedAt.getTime() + 30_000
+                      ).toISOString(),
+                      next_repair_at: new Date(consumedAt.getTime() + 30_000).toISOString(),
+                    }
+                  : { next_repair_at: consumedAt.toISOString() }),
+              };
+            }
+          );
+          if (!consumed.changed) throw new Error(genericFailure);
+        }
+        return {
+          claims,
+          notice,
+          oauthContext: {
+            notice_id: notice.notice_id,
+            task_id: notice.task_id,
+            session_id: notice.session_id,
+            mcp_server_id: notice.mcp_server_id,
+            recovery_generation: notice.recovery_generation,
+            recovery_request_id: notice.recovery_request_id,
+          },
+        };
+      });
+    } catch {
+      // A refusal to admit this link, which `classifyMCPAuthRecovery` must not
+      // report as the user's authority having changed. Still a `Forbidden`,
+      // still this one message: the marker is in-process only.
+      throw new MCPLinkAdmissionError(genericFailure);
+    }
+  };
+
+  // Authenticated, secret-free browser preflight. The fragment token never
+  // enters an HTTP URL or referrer; the SPA posts it in the request body.
+  app.use('/mcp-slack-recovery', {
+    async create(data: { token?: unknown }, params?: AuthenticatedParams) {
+      const binding = await loadSlackRecoveryBinding(data?.token, params, false);
+      return {
+        state: binding.notice.oauth_failed_at
+          ? 'failed'
+          : binding.notice.oauth_started_at || binding.notice.token_consumed_at
+            ? 'sign_in_pending'
+            : 'reconnect_required',
+        provider_dispatch: binding.notice.provider_dispatch,
+        expires_at: binding.notice.expires_at,
+        return_to_slack_url: slackThreadReturnUrl(
+          binding.claims.slack_team_id,
+          binding.claims.slack_channel_id,
+          binding.claims.slack_thread_id
+        ),
+      };
+    },
+  });
+  app.service('mcp-slack-recovery').hooks({ before: { create: [ctx.requireAuth] } });
+  app.service('mcp-slack-recovery').publish?.(() => []);
+
+  type MCPOAuthConnectBinding = {
+    claims: MCPOAuthConnectTokenClaims;
+    delivery: MCPSlackConnectDelivery;
+    widget: WidgetMessageMetadata;
+    params: OAuthWidgetParams;
+    authority: SlackMCPOAuthAuthoritySnapshot;
+    oauthContext: MCPSlackOAuthConnectContext;
+  };
+
+  /**
+   * Redeem a Slack-delivered MCP connect link.
+   *
+   * Shaped like `loadSlackRecoveryBinding` on purpose — verify, match the
+   * caller, re-read every authority, optionally consume once — but bound to a
+   * widget rather than a recovery notice. The differences are the whole reason
+   * this is a separate token type:
+   *
+   *  - The record is a pending `oauth` widget, not a live Task's recovery
+   *    state. There is no Task-status predicate: the turn that minted the
+   *    widget ended long before anyone tapped the link.
+   *  - The server precondition is `isMCPServerUsableBy`, NOT the recovery
+   *    lane's "already attached" check, because this feature attaches only
+   *    after the grant lands. The pure predicate is deliberate: the
+   *    params-shaped `isMcpServerUsableByCaller` reads `params.provider` and
+   *    returns true unconditionally for a provider-less daemon-side call.
+   *  - `slack_user_id` is verified against the originating Task's durable
+   *    `gateway_task_source`, because alignment at mint proves the channel
+   *    resolves senders — not that the person who tapped is the person who
+   *    asked.
+   *
+   * Every failure collapses to one message. A redeemer learns only that the
+   * link no longer works, never which of a dozen bindings moved.
+   */
+  const loadMCPOAuthConnectBinding = async (
+    rawToken: unknown,
+    params: AuthenticatedParams | undefined,
+    consume: boolean,
+    attemptId?: MCPOAuthAttemptID,
+    /**
+     * Read a widget that is no longer `pending` as well.
+     *
+     * ONLY the preflight passes this, and the preflight grants nothing: it
+     * answers names and a state. Every other binding this function proves
+     * still runs, and the consume CAS below re-checks `status === 'pending'`
+     * under the row lock, so a resolved widget can be DESCRIBED here and still
+     * cannot be started or consumed.
+     *
+     * It exists because a page that refuses to describe a finished request
+     * tells the person who just finished it that their link is "invalid,
+     * expired, or superseded" — and the whole point of B1 is that returning to
+     * this page has to say which milestone was reached.
+     */
+    options?: { allowResolved?: boolean }
+  ): Promise<MCPOAuthConnectBinding> => {
+    const genericFailure = 'This MCP connect action is invalid, expired, or superseded.';
+    try {
+      if (typeof rawToken !== 'string') throw new Error(genericFailure);
+      const claims = verifyMCPOAuthConnectToken(rawToken, process.env.AGOR_MASTER_SECRET ?? '');
+      const tenantId = tenantIdFromParams(params);
+      const callerId = params?.user?.user_id;
+      // No delegation: the redeemer must be signed in as BOTH the principal
+      // and the credential owner. A chat-delivered link never authenticates.
+      if (!tenantId || !callerId || !mcpOAuthConnectClaimsMatchCaller(claims, tenantId, callerId)) {
+        throw new Error(genericFailure);
+      }
+      // Every read and the consume CAS below run inside one tenant database
+      // scope, opened here at the call site. `/mcp-oauth-connect` and
+      // `/mcp-servers/oauth-start` are registered outside the
+      // `TENANT_OWNED_SERVICE_PATHS` inventory — deliberately, because they
+      // cross the provider boundary and must not hold an HTTP-long
+      // transaction — so nothing upstream arms the scope for them. Without
+      // this, the scope guard refuses the very first repository read and the
+      // lane answers a valid link with its generic `Forbidden`. Entering a
+      // scope that is already open is a no-op, so the `oauth-start` call site
+      // (which opens its own) is unaffected. Found by driving the real lane.
+      return await runInOAuthTenantScope(db, tenantId, async () => {
+        // The operator kill switch, applied where it actually stops something:
+        // a link already in a thread stops granting, not just stops being
+        // repainted. Same placement as the recovery lane's
+        // `isMcpRuntimeRecoveryEnabled` check, and it collapses into the same
+        // generic failure as every other binding that moved.
+        if (!(await isMCPSlackConnectCardEnabled(db))) throw new Error(genericFailure);
+        const messagesRepository = new MessagesRepository(db);
+        const message = await messagesRepository.findById(claims.widget_id);
+        const pending = options?.allowResolved
+          ? readOAuthConnectWidget(message)
+          : readPendingOAuthConnectWidget(message);
+        if (
+          !message ||
+          !pending ||
+          message.session_id !== claims.session_id ||
+          message.task_id !== claims.task_id ||
+          pending.params.mcpServerId !== claims.mcp_server_id ||
+          pending.params.oauthMode !== claims.oauth_mode ||
+          !mcpOAuthConnectClaimsMatchDelivery(claims, pending.widget.slack_connect, tenantId)
+        ) {
+          throw new Error(genericFailure);
+        }
+        const delivery = pending.widget.slack_connect as MCPSlackConnectDelivery;
+
+        const task = await new TaskRepository(db).findById(claims.task_id);
+        if (!gatewaySourceMatchesConnectClaims(task, claims)) throw new Error(genericFailure);
+
+        const authority = await readSlackMCPOAuthAuthority(slackOAuthAuthorityRepositories(), {
+          principalUserId: claims.sub,
+          credentialUserId: claims.credential_user_id,
+          sessionId: claims.session_id,
+          gatewayChannelId: claims.gateway_channel_id,
+          gatewayConfigGeneration: claims.gateway_config_generation,
+          slackChannelId: claims.slack_channel_id,
+          slackThreadId: claims.slack_thread_id,
+          mcpServerId: claims.mcp_server_id,
+          mcpServerConfigVersion: claims.mcp_server_config_version,
+        });
+        if (
+          !authority ||
+          authority.session.created_by !== claims.session_owner_user_id ||
+          (authority.server.auth?.oauth_mode ?? 'per_user') !== claims.oauth_mode ||
+          !isMCPServerUsableBy(authority.server, claims.credential_user_id)
+        ) {
+          throw new Error(genericFailure);
+        }
+
+        if (consume) {
+          const consumedAt = new Date();
+          const consumed = await mutateSlackConnectDelivery(
+            messagesRepository,
+            claims.widget_id,
+            (current, widget) => {
+              if (
+                !current ||
+                widget.status !== 'pending' ||
+                !mcpOAuthConnectClaimsMatchDelivery(claims, current, tenantId) ||
+                current.token_consumed_at ||
+                new Date(current.expires_at).getTime() <= consumedAt.getTime()
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                token_consumed_at: consumedAt.toISOString(),
+                ...(attemptId
+                  ? {
+                      oauth_attempt_id: attemptId,
+                      oauth_start_claimed_at: consumedAt.toISOString(),
+                      oauth_start_claim_expires_at: new Date(
+                        consumedAt.getTime() + 30_000
+                      ).toISOString(),
+                    }
+                  : {}),
+              };
+            }
+          );
+          if (!consumed.changed) throw new Error(genericFailure);
+        }
+
+        return {
+          claims,
+          delivery,
+          widget: pending.widget,
+          params: pending.params,
+          authority,
+          oauthContext: {
+            delivery_id: delivery.delivery_id,
+            delivery_generation: delivery.delivery_generation,
+            widget_id: claims.widget_id,
+            session_id: claims.session_id,
+            mcp_server_id: claims.mcp_server_id,
+            gateway_channel_id: claims.gateway_channel_id,
+            // Carried, not re-read. These are the versions this redemption
+            // just proved the workspace still agrees with; the callback has
+            // nothing else to compare against, and comparing the stored value
+            // to itself is the same as not comparing at all.
+            gateway_config_generation: claims.gateway_config_generation,
+            mcp_server_config_version: claims.mcp_server_config_version,
+          },
+        };
+      });
+      // Deliberately silent, exactly as `loadSlackRecoveryBinding` is. Which
+      // of the dozen bindings moved is the oracle this lane's single generic
+      // message exists to withhold, and a `debug` line still writes it to
+      // daemon stdout. `context/guidelines/logging.md` keeps debug for a
+      // recurring operator problem the lifecycle stream cannot diagnose; a
+      // refused one-use link is not one, and the durable delivery record on
+      // the widget already says what the lane did.
+    } catch {
+      // A refusal to admit this link, which `classifyMCPAuthRecovery` must not
+      // report as the user's authority having changed. Still a `Forbidden`,
+      // still this one message: the marker is in-process only.
+      throw new MCPLinkAdmissionError(genericFailure);
+    }
+  };
+
+  // Authenticated, secret-free browser preflight for the connect lane. Mirrors
+  // `mcp-slack-recovery`: the fragment token never enters an HTTP URL or
+  // referrer, and the response carries names and states only.
+  app.use('/mcp-oauth-connect', {
+    async create(data: { token?: unknown }, params?: AuthenticatedParams) {
+      const binding = await loadMCPOAuthConnectBinding(data?.token, params, false, undefined, {
+        allowResolved: true,
+      });
+      // The page and the Slack card answer from ONE state machine, over the
+      // same durable rows. They used to answer from two, and disagreed exactly
+      // where it mattered: the card kept a finished round-trip in
+      // `sign_in_pending` while this page mapped it straight to "connected",
+      // which was a milestone the widget had not reached and the agent had
+      // certainly not woken for.
+      const grantConnected = await runInOAuthTenantScope(db, binding.claims.tid, () =>
+        resolveMCPOAuthGrantLiveness(
+          db,
+          binding.claims.mcp_server_id,
+          binding.claims.credential_user_id
+        )
+      )
+        .then(mcpOAuthGrantIsConnected)
+        .catch(() => false);
+      const state = mcpSlackConnectRenderedState(
+        { widget: binding.widget, delivery: binding.delivery, grantConnected },
+        Date.now()
+      );
+      return {
+        state,
+        widget_id: binding.claims.widget_id,
+        server_name: binding.params.serverName,
+        oauth_mode: binding.claims.oauth_mode,
+        reason: binding.params.reason,
+        ...(binding.params.permissionDisclosure
+          ? { permission_disclosure: binding.params.permissionDisclosure }
+          : {}),
+        expires_at: binding.delivery.expires_at,
+        return_to_slack_url: slackThreadReturnUrl(
+          binding.claims.slack_team_id,
+          binding.claims.slack_channel_id,
+          binding.claims.slack_thread_id
+        ),
+      };
+    },
+  });
+  app.service('mcp-oauth-connect').hooks({ before: { create: [ctx.requireAuth] } });
+  app.service('mcp-oauth-connect').publish?.(() => []);
+
   // OAuth start endpoint
   app.use('/mcp-servers/oauth-start', {
     async create(
-      data: { mcp_url?: string; mcp_server_id?: string; client_id?: string },
+      data: {
+        mcp_url?: string;
+        mcp_server_id?: string;
+        client_id?: string;
+        slack_recovery_token?: string;
+        /** Sealed, one-use entry token from a Slack-delivered connect link. */
+        connect_token?: string;
+      },
       params?: AuthenticatedParams
     ) {
       const assertRequestAuthority = requestAuthorityAssertion(params);
+      let oauthPolicy: MCPOAuthEffectivePolicy | undefined;
+      let slackRecoveryBinding: SlackRecoveryBinding | undefined;
+      let connectBinding: MCPOAuthConnectBinding | undefined;
+      let slackStartLeaseTimer: NodeJS.Timeout | undefined;
+      let slackStartLeaseLost = false;
+      const operationDeadline = Date.now() + MCP_OAUTH_START_BUDGET_MS;
+      const runStartPhase = mcpOAuthStartPhaseRunner(operationDeadline);
+      // The two Slack lanes are mutually exclusive. Each pins its own server
+      // and consumes its own one-use record; accepting both would leave the
+      // daemon choosing which binding governs the attempt.
+      if (data.slack_recovery_token && data.connect_token) {
+        throw new MCPLinkAdmissionError(
+          'Only one Slack MCP action token may be redeemed per sign-in.'
+        );
+      }
+      const reservedSlackAttemptId =
+        data.slack_recovery_token || data.connect_token
+          ? (generateId() as MCPOAuthAttemptID)
+          : undefined;
+      /**
+       * Durable state for the two Slack redemption lanes, on short tenant
+       * units of work.
+       *
+       * This endpoint is on `TENANT_IDENTITY_ONLY_SERVICE_PATHS`: it carries
+       * tenant identity for the whole request and must never hold an HTTP-long
+       * transaction across provider I/O, so nothing upstream arms a tenant
+       * database scope for it. Both lanes then reach durable state from three
+       * places that are not the request body — the 10s lease renewal timer,
+       * the failure marker, and the post-discovery `oauth_started_at` stamp —
+       * and the binding loader's own scope has closed before any of them runs.
+       *
+       * Binding the repositories makes the scope a property of the handle
+       * rather than of each call site, which is the same seam `GatewayService`
+       * uses for every one of its deferred writers. A touch added to this
+       * handler later is scoped by construction instead of by remembering a
+       * wrapper — and it picks up the per-tenant write gate, which a deferred
+       * writer never gets from the request hook chain.
+       *
+       * The tenant is pinned rather than read from ambient identity: the
+       * request's own tenant is what the binding loaders verify the sealed
+       * claims against (`mcpOAuthConnectClaimsMatchCaller`), so it is the
+       * strongest value available, and the renewal timer fires on a callback
+       * whose identity is re-entered separately.
+       */
+      const slackLaneTenantId = tenantIdFromParams(params);
+      const slackLaneMessages = bindRepositoryToTenantUnitOfWork(
+        db,
+        new MessagesRepository(db),
+        slackLaneTenantId
+      );
+      const slackLaneTasks = bindRepositoryToTenantUnitOfWork(
+        db,
+        new TaskRepository(db),
+        slackLaneTenantId
+      );
+      const stopSlackStartLeaseRenewal = (): void => {
+        if (slackStartLeaseTimer) clearInterval(slackStartLeaseTimer);
+        slackStartLeaseTimer = undefined;
+      };
+      const renewSlackStartLease = async (): Promise<void> => {
+        const binding = slackRecoveryBinding;
+        if (!binding || !reservedSlackAttemptId || slackStartLeaseLost) {
+          throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
+        }
+        const now = new Date();
+        const renewed = await slackLaneTasks.mutateMCPSlackRecoveryNotice(
+          binding.notice.task_id,
+          (current) => {
+            if (
+              !current ||
+              current.notice_id !== binding.notice.notice_id ||
+              current.oauth_attempt_id !== reservedSlackAttemptId ||
+              !current.token_consumed_at ||
+              current.oauth_started_at ||
+              current.oauth_failed_at ||
+              !current.oauth_start_claim_expires_at ||
+              new Date(current.oauth_start_claim_expires_at).getTime() <= now.getTime()
+            ) {
+              return null;
+            }
+            return {
+              ...current,
+              oauth_start_claim_expires_at: new Date(now.getTime() + 30_000).toISOString(),
+              next_repair_at: new Date(now.getTime() + 30_000).toISOString(),
+            };
+          }
+        );
+        if (!renewed.changed) {
+          slackStartLeaseLost = true;
+          stopSlackStartLeaseRenewal();
+          throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
+        }
+      };
+      /**
+       * Renew the connect lane's start lease.
+       *
+       * Same fencing contract as the recovery lease: the one-use consume CAS
+       * is deliberately short, so the attempt keeps proving it still owns the
+       * delivery for as long as provider discovery/DCR runs. Losing the lease
+       * is terminal for this attempt — a newer link was issued, or the widget
+       * resolved underneath it.
+       */
+      const renewConnectStartLease = async (): Promise<void> => {
+        const binding = connectBinding;
+        if (!binding || !reservedSlackAttemptId || slackStartLeaseLost) {
+          throw new Conflict('This MCP connect action was superseded before sign-in opened.');
+        }
+        const now = new Date();
+        const renewed = await mutateSlackConnectDelivery(
+          slackLaneMessages,
+          binding.claims.widget_id,
+          (current, widget) => {
+            if (
+              !current ||
+              widget.status !== 'pending' ||
+              current.delivery_id !== binding.delivery.delivery_id ||
+              current.delivery_generation !== binding.delivery.delivery_generation ||
+              current.oauth_attempt_id !== reservedSlackAttemptId ||
+              !current.token_consumed_at ||
+              current.oauth_started_at ||
+              current.oauth_failed_at ||
+              !current.oauth_start_claim_expires_at ||
+              new Date(current.oauth_start_claim_expires_at).getTime() <= now.getTime()
+            ) {
+              return null;
+            }
+            return {
+              ...current,
+              oauth_start_claim_expires_at: new Date(now.getTime() + 30_000).toISOString(),
+            };
+          }
+        );
+        if (!renewed.changed) {
+          slackStartLeaseLost = true;
+          stopSlackStartLeaseRenewal();
+          throw new Conflict('This MCP connect action was superseded before sign-in opened.');
+        }
+      };
+      /**
+       * Record that this attempt's sign-in never opened.
+       *
+       * The one-use token is already spent by the time anything can call this,
+       * so the delivery record is the only thing that can tell the card — and
+       * the user — that the link is gone. A burned token with no
+       * `oauth_failed_at` renders as a live Connect button that can never work
+       * again, which is unrecoverable from Slack: the card offers the only
+       * affordance the thread has.
+       *
+       * So the write is best effort but never silent. It cannot throw — every
+       * caller is already handling an earlier failure, and replacing that
+       * diagnosis with this one would hide the actual cause — but a failure
+       * here is an operator-visible degraded outcome, not a nothing.
+       */
+      const markConnectStartFailed = async (): Promise<void> => {
+        const binding = connectBinding;
+        if (!binding) return;
+        const failed = await mutateSlackConnectDelivery(
+          slackLaneMessages,
+          binding.claims.widget_id,
+          (current) =>
+            current?.delivery_id === binding.delivery.delivery_id &&
+            current.delivery_generation === binding.delivery.delivery_generation &&
+            current.oauth_attempt_id === reservedSlackAttemptId
+              ? {
+                  ...current,
+                  oauth_failed_at: new Date().toISOString(),
+                  oauth_start_claim_expires_at: undefined,
+                  next_repair_at: new Date().toISOString(),
+                }
+              : null
+        ).catch(() => {
+          console.warn(
+            '[OAuth Start] event=mcp_slack_connect_failure_unrecorded lane=connect ' +
+              'outcome=delivery_write_failed'
+          );
+          return undefined;
+        });
+        if (!failed?.changed) return;
+        // `mutateSlackConnectDelivery` deliberately emits no service event, so
+        // the projection is told explicitly; otherwise the thread keeps its
+        // live button until the repair sweep next looks at the row.
+        //
+        // Deliberately NOT awaited. The repaint is a Slack write, and this
+        // runs on a request path that is already reporting an earlier failure
+        // — awaiting it made one stalled `chat.update` hang the whole handler.
+        // The CAS above set `next_repair_at = now`, so the sweep owns the card
+        // regardless: the nudge only buys the thread a repaint sooner than the
+        // next pass (≤30s), and is worth nothing at the price of the request.
+        // This matches the recovery lane below, which has always been
+        // fire-and-forget.
+        // The lookup and the dispatch stay guarded — this helper is documented
+        // as unable to throw, and a gateway that cannot repaint must not
+        // become the error the caller sees.
+        try {
+          const gateway = app.service('gateway') as unknown as {
+            syncMcpSlackConnectCard(widgetId: MessageID): Promise<void>;
+          };
+          void Promise.resolve(gateway.syncMcpSlackConnectCard(binding.claims.widget_id)).catch(
+            () => {
+              console.warn(
+                '[OAuth Start] event=mcp_slack_connect_card_unwoken lane=connect outcome=sync_failed'
+              );
+            }
+          );
+        } catch {
+          console.warn(
+            '[OAuth Start] event=mcp_slack_connect_card_unwoken lane=connect outcome=sync_failed'
+          );
+        }
+      };
+      const markSlackRecoveryStartFailed = async (): Promise<void> => {
+        stopSlackStartLeaseRenewal();
+        await markConnectStartFailed();
+        const binding = slackRecoveryBinding;
+        if (!binding) return;
+        const failed = await slackLaneTasks
+          .mutateMCPSlackRecoveryNotice(binding.notice.task_id, (current) =>
+            current?.notice_id === binding.notice.notice_id &&
+            current.oauth_attempt_id === reservedSlackAttemptId
+              ? {
+                  ...current,
+                  oauth_failed_at: new Date().toISOString(),
+                  oauth_start_claim_expires_at: undefined,
+                  next_repair_at: new Date().toISOString(),
+                }
+              : null
+          )
+          .catch(() => {
+            console.warn(
+              '[OAuth Start] event=mcp_slack_connect_failure_unrecorded lane=recovery ' +
+                'outcome=notice_write_failed'
+            );
+            return null;
+          });
+        if (failed?.changed) {
+          const gateway = app.service('gateway') as unknown as {
+            syncMcpSlackRecoveryNoticeAfterCommit(taskId: string, params?: unknown): void;
+          };
+          gateway.syncMcpSlackRecoveryNoticeAfterCommit(binding.notice.task_id, params);
+        }
+      };
       try {
         assertRequestAuthority?.();
+        assertMcpOAuthCapability();
         console.log('[OAuth Start] Starting two-phase OAuth flow');
         const userId = params?.user?.user_id;
         const tenantId = tenantIdFromParams(params);
@@ -4108,7 +5694,65 @@ export async function registerMCPServices(
         let scopeOverride: string | undefined;
         let compatibilityMode: MCPOAuthRuntimeCompatibilityMode = 'strict';
         let dcrMode: MCPOAuthDCRMode | undefined;
-        const savedServerId = data.mcp_server_id;
+        if (data.slack_recovery_token) {
+          slackRecoveryBinding = await loadSlackRecoveryBinding(
+            data.slack_recovery_token,
+            params,
+            true,
+            reservedSlackAttemptId
+          );
+          // The Task consume CAS is intentionally short. Re-read every related
+          // authority immediately afterward and before metadata discovery/DCR,
+          // so a concurrent revocation cannot begin provider work on the
+          // strength of the pre-CAS snapshot.
+          await loadSlackRecoveryBinding(data.slack_recovery_token, params, false);
+          await renewSlackStartLease();
+          slackStartLeaseTimer = setInterval(() => {
+            const tenantId = slackRecoveryBinding?.claims.tid;
+            if (!tenantId) return;
+            void runWithTenantContext(tenantId, renewSlackStartLease).catch(() => undefined);
+          }, 10_000);
+          slackStartLeaseTimer.unref();
+          if (
+            data.mcp_server_id &&
+            data.mcp_server_id !== slackRecoveryBinding.claims.mcp_server_id
+          ) {
+            throw new MCPLinkAdmissionError(
+              'This MCP recovery action does not match the requested server.'
+            );
+          }
+        }
+        if (data.connect_token) {
+          connectBinding = await loadMCPOAuthConnectBinding(
+            data.connect_token,
+            params,
+            true,
+            reservedSlackAttemptId
+          );
+          // Same discipline as the recovery lane: the consume CAS is short, so
+          // re-prove every authority immediately after it and before any
+          // provider metadata discovery or DCR begins. A channel that was
+          // reconfigured, a widget that resolved, or a server that was
+          // disabled in that window must stop the flow here, not after Agor
+          // has already talked to the provider.
+          await loadMCPOAuthConnectBinding(data.connect_token, params, false);
+          await renewConnectStartLease();
+          slackStartLeaseTimer = setInterval(() => {
+            const tenantId = connectBinding?.claims.tid;
+            if (!tenantId) return;
+            void runWithTenantContext(tenantId, renewConnectStartLease).catch(() => undefined);
+          }, 10_000);
+          slackStartLeaseTimer.unref();
+          if (data.mcp_server_id && data.mcp_server_id !== connectBinding.claims.mcp_server_id) {
+            throw new MCPLinkAdmissionError(
+              'This MCP connect action does not match the requested server.'
+            );
+          }
+        }
+        const savedServerId =
+          slackRecoveryBinding?.claims.mcp_server_id ??
+          connectBinding?.claims.mcp_server_id ??
+          data.mcp_server_id;
         // Its stored OAuth client configuration belongs to whoever owns the
         // row; a caller who may not use the server may not borrow it either.
         const savedServer = savedServerId
@@ -4130,6 +5774,7 @@ export async function registerMCPServices(
               'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
             ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
           };
+          await markSlackRecoveryStartFailed();
           return {
             success: false,
             error: recovery.message,
@@ -4146,6 +5791,7 @@ export async function registerMCPServices(
             new OAuthConfigurationError('metadata_unavailable'),
             { mcpServerId: savedServerId }
           );
+          await markSlackRecoveryStartFailed();
           return {
             success: false,
             error: recovery.message,
@@ -4170,6 +5816,7 @@ export async function registerMCPServices(
               'The saved MCP server changed before OAuth could start. Reload it, save the intended configuration, then retry.',
             ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
           };
+          await markSlackRecoveryStartFailed();
           return {
             success: false,
             error: recovery.message,
@@ -4194,6 +5841,7 @@ export async function registerMCPServices(
             compatibilityPolicy
           );
           dcrMode = savedServer.auth.oauth_dcr_mode;
+          oauthPolicy = presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
@@ -4209,20 +5857,33 @@ export async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(
-          effectiveMcpUrl,
-          {
-            method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-            signal: AbortSignal.timeout(15_000),
-          },
-          assertRequestAuthority
+        oauthPolicy ??= presentMCPOAuthEffectivePolicy(compatibilityMode, dcrMode);
+
+        // Resolve the deployment-owned callback only after the saved row and
+        // caller have been authorized, but before entering provider metadata
+        // discovery. The flow helper validates it again at the side-effect
+        // boundary; this earlier check ensures a missing/unsafe deployment
+        // origin cannot trigger discovery or DCR first.
+        await runWithinOAuthAuthority(assertRequestAuthority, resolveMCPOAuthRedirectUri);
+
+        let probeResponse = await runStartPhase('probe', () =>
+          oauthFetch(
+            effectiveMcpUrl,
+            {
+              method: 'POST',
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
+              signal: AbortSignal.timeout(15_000),
+            },
+            assertRequestAuthority
+          )
         );
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await runWithinOAuthAuthority(assertRequestAuthority, () =>
-            probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl, assertRequestAuthority)
+          const fallbackProbe = await runStartPhase('probe', () =>
+            runWithinOAuthAuthority(assertRequestAuthority, () =>
+              probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl, assertRequestAuthority)
+            )
           );
           if (fallbackProbe) {
             console.log(
@@ -4241,6 +5902,7 @@ export async function registerMCPServices(
               'This MCP server did not request OAuth authentication. Verify the saved MCP URL and authentication type, then retry.',
             ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
           };
+          await markSlackRecoveryStartFailed();
           return {
             success: false,
             error: recovery.message,
@@ -4253,20 +5915,27 @@ export async function registerMCPServices(
           assertRequestAuthority,
           () => import('@agor/core/tools/mcp/oauth-mcp-transport')
         );
-        const discovery = await runWithinOAuthAuthority(assertRequestAuthority, () =>
-          resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
-            compatibilityMode,
-            allowLocalhostHttp: !postgresOAuthDeployment,
-            assertCurrent: assertRequestAuthority,
-          })
+        // The stage `marketplace` mode widens to four candidate URLs: ~60s of
+        // entirely legitimate work that used to look identical, from outside,
+        // to a hang.
+        const discovery = await runStartPhase('discovery', () =>
+          runWithinOAuthAuthority(assertRequestAuthority, () =>
+            resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
+              compatibilityMode,
+              allowLocalhostHttp: !postgresOAuthDeployment,
+              assertCurrent: assertRequestAuthority,
+            })
+          )
         );
         if (!discovery) {
           const recovery = classifyMCPAuthRecovery(
             new OAuthConfigurationError('metadata_unavailable'),
             {
               mcpServerId: savedServerId,
+              oauthPolicy,
             }
           );
+          await markSlackRecoveryStartFailed();
           return {
             success: false,
             error: recovery.message,
@@ -4278,33 +5947,57 @@ export async function registerMCPServices(
 
         let result: StartTwoPhaseOAuthResult;
         try {
-          result = await startTwoPhaseMCPOAuthFlow({
-            mcpUrl: effectiveMcpUrl,
-            wwwAuthenticate,
-            resourceMetadataUrl:
-              discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
-            prefetchedAuthServerMetadata:
-              discovery.kind === 'authorization-server' ? discovery.authServerMetadata : undefined,
-            mcpServerId: savedServerId,
-            userId,
-            oauthMode,
-            clientId: savedServer ? clientIdFromConfig : data.client_id,
-            clientSecret: clientSecretOverride,
-            authorizationUrlOverride,
-            tokenUrlOverride,
-            scope: scopeOverride,
-            tenantId,
-            socketId,
-            compatibilityMode,
-            dcrMode,
-            requestAuthority: assertRequestAuthority,
-          });
+          // Covers DCR (its own `registration` / `lease_wait` boundaries are
+          // logged from inside) plus the authorization-request construction.
+          result = await runStartPhase('flow_create', () =>
+            startTwoPhaseMCPOAuthFlow({
+              mcpUrl: effectiveMcpUrl,
+              wwwAuthenticate,
+              resourceMetadataUrl:
+                discovery.kind === 'resource-metadata' ? discovery.metadataUrl : undefined,
+              prefetchedAuthServerMetadata:
+                discovery.kind === 'authorization-server'
+                  ? discovery.authServerMetadata
+                  : undefined,
+              mcpServerId: savedServerId,
+              userId,
+              oauthMode,
+              clientId: savedServer ? clientIdFromConfig : data.client_id,
+              clientSecret: clientSecretOverride,
+              authorizationUrlOverride,
+              tokenUrlOverride,
+              scope: scopeOverride,
+              tenantId,
+              socketId,
+              compatibilityMode,
+              dcrMode,
+              onPolicyResolved: (policy) => {
+                oauthPolicy = policy;
+              },
+              requestAuthority: assertRequestAuthority,
+              slackRecovery: slackRecoveryBinding?.oauthContext,
+              slackConnect: connectBinding?.oauthContext,
+              attemptId: reservedSlackAttemptId,
+              assertStartAuthority: slackRecoveryBinding
+                ? renewSlackStartLease
+                : connectBinding
+                  ? renewConnectStartLease
+                  : undefined,
+            })
+          );
         } catch (err) {
           const recovery = classifyMCPAuthRecovery(err, {
             mcpServerId: data.mcp_server_id,
+            oauthPolicy,
           });
           if (recovery.category === 'redirect_configuration_required') {
-            console.error('[OAuth Start] Failed category=PublicBaseUrlNotConfiguredError');
+            externalFailure(
+              'OAuth Start',
+              'oauth',
+              err,
+              externalFailureOptionsForRecovery(recovery)
+            );
+            await markSlackRecoveryStartFailed();
             return {
               success: false,
               error: recovery.message,
@@ -4315,52 +6008,186 @@ export async function registerMCPServices(
         }
 
         assertRequestAuthority?.();
+        if (connectBinding) {
+          if (result.attemptId !== reservedSlackAttemptId) {
+            throw new Conflict('This MCP connect action was superseded before sign-in opened.');
+          }
+          const opened = await mutateSlackConnectDelivery(
+            slackLaneMessages,
+            connectBinding.claims.widget_id,
+            (current, widget) => {
+              const openedAt = new Date();
+              if (
+                !current ||
+                widget.status !== 'pending' ||
+                current.delivery_id !== connectBinding?.delivery.delivery_id ||
+                current.delivery_generation !== connectBinding.delivery.delivery_generation ||
+                current.oauth_attempt_id !== reservedSlackAttemptId ||
+                !current.token_consumed_at ||
+                current.oauth_failed_at ||
+                !current.oauth_start_claim_expires_at ||
+                new Date(current.oauth_start_claim_expires_at).getTime() <= openedAt.getTime()
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                oauth_started_at: openedAt.toISOString(),
+                oauth_start_claim_expires_at: undefined,
+              };
+            }
+          );
+          if (!opened.changed) {
+            // The authorization URL exists but nothing owns it. Cancel the
+            // attempt rather than leaving a live provider flow whose callback
+            // would land on a delivery that no longer expects it.
+            if (durableOAuthFlows) {
+              const cancelled = await durableOAuthFlows.failPendingCallback(
+                result.state,
+                'superseded_by_newer_attempt'
+              );
+              if (!cancelled) {
+                console.warn('[OAuth Start] Slack connect orphan attempt was already terminal');
+              }
+            } else {
+              const orphan = pendingOAuthFlows.get(result.state);
+              if (orphan?.attemptId === result.attemptId) {
+                pendingOAuthFlows.delete(result.state);
+                releaseLocalGrantGeneration(orphan);
+                markLocalOAuthAttempt(orphan, 'failed', 'superseded_by_newer_attempt');
+                orphan.tokenReject?.(
+                  new Error('The Slack MCP connect start lease expired before sign-in opened')
+                );
+              }
+            }
+            throw new Conflict('This MCP connect action was superseded before sign-in opened.');
+          }
+          stopSlackStartLeaseRenewal();
+        }
+        if (slackRecoveryBinding) {
+          if (result.attemptId !== reservedSlackAttemptId) {
+            throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
+          }
+          const opened = await slackLaneTasks.mutateMCPSlackRecoveryNotice(
+            slackRecoveryBinding.notice.task_id,
+            (current) => {
+              const openedAt = new Date();
+              if (
+                !current ||
+                current.notice_id !== slackRecoveryBinding?.notice.notice_id ||
+                current.oauth_attempt_id !== reservedSlackAttemptId ||
+                !current.token_consumed_at ||
+                current.oauth_failed_at ||
+                !current.oauth_start_claim_expires_at ||
+                new Date(current.oauth_start_claim_expires_at).getTime() <= openedAt.getTime()
+              ) {
+                return null;
+              }
+              return {
+                ...current,
+                oauth_started_at: openedAt.toISOString(),
+                oauth_start_claim_expires_at: undefined,
+                next_repair_at: new Date(openedAt.getTime() + 60_000).toISOString(),
+              };
+            }
+          );
+          if (!opened.changed) {
+            if (durableOAuthFlows) {
+              const cancelled = await durableOAuthFlows.failPendingCallback(
+                result.state,
+                'superseded_by_newer_attempt'
+              );
+              if (!cancelled) {
+                console.warn('[OAuth Start] Slack recovery orphan attempt was already terminal');
+              }
+            } else {
+              const orphan = pendingOAuthFlows.get(result.state);
+              if (orphan?.attemptId === result.attemptId) {
+                pendingOAuthFlows.delete(result.state);
+                releaseLocalGrantGeneration(orphan);
+                markLocalOAuthAttempt(orphan, 'failed', 'superseded_by_newer_attempt');
+                orphan.tokenReject?.(
+                  new Error('The Slack MCP recovery start lease expired before sign-in opened')
+                );
+              }
+            }
+            throw new Conflict('This MCP recovery action was superseded before sign-in opened.');
+          }
+          const gateway = app.service('gateway') as unknown as {
+            syncMcpSlackRecoveryNoticeAfterCommit(taskId: string, params?: unknown): void;
+          };
+          gateway.syncMcpSlackRecoveryNoticeAfterCommit(
+            slackRecoveryBinding.notice.task_id,
+            params
+          );
+          stopSlackStartLeaseRenewal();
+        }
         return {
           success: true,
           authorizationUrl: result.authorizationUrl,
           attempt_id: result.attemptId,
-          state: result.state,
           message:
             'Browser opened for authentication. After signing in, copy the callback URL and paste it below.',
         };
       } catch (error) {
-        // A live-authority failure must never be normalized into an ordinary
-        // provider diagnostic; callers may otherwise continue an obsolete
-        // flow under the replacement identity on the same socket.
-        assertRequestAuthority?.();
-        const preliminaryRecovery = classifyMCPAuthRecovery(error, {
-          mcpServerId: data.mcp_server_id,
-        });
-        let redirectUri: string | null = null;
-        if (
-          preliminaryRecovery.category === 'client_registration_required' ||
-          preliminaryRecovery.category === 'client_registration_failed'
-        ) {
-          try {
-            redirectUri = await runWithinOAuthAuthority(
-              assertRequestAuthority,
-              resolveMCPOAuthRedirectUri
-            );
-          } catch {
-            assertRequestAuthority?.();
+        // Classify and LOG before touching anything durable. The repaint used
+        // to run first, and `markConnectStartFailed` ends in a Slack call: one
+        // stalled `chat.update` took the only account of what went wrong down
+        // with it, so a hung start produced no URL, no error and no category
+        // at all. The account of a failure must not depend on the provider
+        // that caused it still answering.
+        //
+        // The durable write stays in a `finally` so it is still reached when
+        // the authority assert below throws — that path never logged, and
+        // still does not, but it has always stamped the attempt failed.
+        try {
+          // A live-authority failure must never be normalized into an ordinary
+          // provider diagnostic; callers may otherwise continue an obsolete
+          // flow under the replacement identity on the same socket.
+          assertRequestAuthority?.();
+          const preliminaryRecovery = classifyMCPAuthRecovery(error, {
+            mcpServerId: data.mcp_server_id,
+            oauthPolicy,
+          });
+          let redirectUri: string | null = null;
+          if (
+            preliminaryRecovery.category === 'client_registration_required' ||
+            preliminaryRecovery.category === 'client_registration_failed'
+          ) {
+            try {
+              redirectUri = await runWithinOAuthAuthority(
+                assertRequestAuthority,
+                resolveMCPOAuthRedirectUri
+              );
+            } catch {
+              assertRequestAuthority?.();
+            }
           }
+          assertRequestAuthority?.();
+          const recovery = redirectUri
+            ? classifyMCPAuthRecovery(error, {
+                mcpServerId: data.mcp_server_id,
+                oauthPolicy,
+                redirectUri,
+              })
+            : preliminaryRecovery;
+          // This is deliberately the final consumer of the original unknown.
+          // Response construction below uses only the closed recovery contract.
+          externalFailure(
+            'OAuth Start',
+            'oauth',
+            error,
+            externalFailureOptionsForRecovery(recovery)
+          );
+          return {
+            success: false,
+            error: recovery.message,
+            recovery,
+            ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+          } satisfies MCPOAuthStartFailure;
+        } finally {
+          await markSlackRecoveryStartFailed();
         }
-        assertRequestAuthority?.();
-        const recovery = redirectUri
-          ? classifyMCPAuthRecovery(error, {
-              mcpServerId: data.mcp_server_id,
-              redirectUri,
-            })
-          : preliminaryRecovery;
-        // This is deliberately the final consumer of the original unknown.
-        // Response construction below uses only the closed recovery contract.
-        externalFailure('OAuth Start', 'oauth', error);
-        return {
-          success: false,
-          error: recovery.message,
-          recovery,
-          ...(redirectUri ? { redirect_uri: redirectUri } : {}),
-        } satisfies MCPOAuthStartFailure;
       }
     },
   });
@@ -4399,11 +6226,13 @@ export async function registerMCPServices(
         let code: string;
         let state: string;
         let issuer: string | undefined;
+        let authorizationRejected = false;
         if ('callback_url' in data) {
           const parsed = parseOAuthCallback(data.callback_url);
-          code = parsed.code;
+          code = parsed.code ?? '';
           state = parsed.state;
           issuer = parsed.issuer;
+          authorizationRejected = parsed.authorizationRejected;
         } else {
           code = data.code;
           state = data.state;
@@ -4456,19 +6285,100 @@ export async function registerMCPServices(
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
 
+        if (authorizationRejected) {
+          if (pendingFlow.durableRecord) {
+            await durableOAuthFlows!.finish(
+              pendingFlow.durableRecord,
+              'failed',
+              'authorization_denied'
+            );
+          } else {
+            markLocalOAuthAttempt(pendingFlow, 'failed', 'authorization_denied');
+          }
+          emitOAuthCompletion(pendingFlow, false);
+          pendingFlow.tokenReject?.(new Error('Authorization was not completed'));
+          return oauthCompletionFailure('authorization_denied', pendingFlow.mcpServerId);
+        }
+
         await assertPendingFlowStillAuthorized(pendingFlow);
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
           cacheToken: false,
           issuer,
         });
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
-        if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');
-        emitOAuthCompletion(pendingFlow, true);
-        return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
+        const completedFlow = pendingFlow;
+        const completedServerId = completedFlow.mcpServerId;
+        const completedTenantId = completedFlow.tenantId ?? tenantIdFromParams(params);
+        if (!completedFlow.durableRecord) markLocalOAuthAttempt(completedFlow, 'succeeded');
+        return preserveCommittedOAuthResult(
+          { success: true, message: 'OAuth authentication successful!', tokenObtained: true },
+          [
+            {
+              code: 'slack_recovery_projection',
+              run: () => projectSlackRecoveryOAuthResult(completedFlow, true),
+            },
+            {
+              code: 'slack_connect_projection',
+              run: () => projectSlackConnectOAuthResult(completedFlow, true),
+            },
+            {
+              code: 'completion_hint',
+              run: () => {
+                if (!completedServerId || !completedTenantId) return;
+                scheduleMcpRuntimeHint(
+                  db,
+                  completedTenantId,
+                  'oauth_authority_changed',
+                  async () => {
+                    const affectedCredentialUserId = await runWithTenantDatabaseScope(
+                      db,
+                      completedTenantId,
+                      async (tenantDb) => {
+                        const completedServer = await new MCPServerRepository(tenantDb).findById(
+                          completedServerId
+                        );
+                        return completedServer?.auth?.type === 'oauth' &&
+                          (completedServer.auth.oauth_mode ?? 'per_user') !== 'shared'
+                          ? completedFlow.userId
+                          : undefined;
+                      }
+                    );
+                    await ((
+                      app as unknown as {
+                        signalMcpServerAuthorityChange?: (
+                          serverId: string,
+                          params: AuthenticatedParams,
+                          affectedCredentialUserId?: string
+                        ) => Promise<void>;
+                      }
+                    ).signalMcpServerAuthorityChange?.(
+                      completedServerId,
+                      params ?? {},
+                      affectedCredentialUserId
+                    ) ?? Promise.resolve());
+                  }
+                );
+              },
+            },
+            {
+              code: 'completion_notification',
+              run: () => emitOAuthCompletion(completedFlow, true),
+            },
+          ]
+        );
       } catch (error) {
         if (pendingFlow) {
+          try {
+            await invalidateTokenEndpointRejectedClient(pendingFlow, error);
+          } catch {
+            console.warn(
+              '[OAuth Complete] Client-registration invalidation could not be persisted'
+            );
+          }
           const classification = classifyMCPOAuthCompletionFailure(error);
           const { ambiguous, failureCode } = classification;
+          const slackProviderSucceeded =
+            error instanceof OAuthFlowAuthorizationChangedError && error.afterProviderExchange;
           completionFailureCode = failureCode;
           completionStatus = classification.status;
           if (pendingFlow.durableRecord) {
@@ -4482,7 +6392,20 @@ export async function registerMCPServices(
           } else {
             markLocalOAuthAttempt(pendingFlow, completionStatus, failureCode);
           }
-          emitOAuthCompletion(pendingFlow, false);
+          await preserveCommittedOAuthResult(undefined, [
+            {
+              code: 'slack_recovery_failure_projection',
+              run: () => projectSlackRecoveryOAuthResult(pendingFlow!, slackProviderSucceeded),
+            },
+            {
+              code: 'slack_connect_failure_projection',
+              run: () => projectSlackConnectOAuthResult(pendingFlow!, slackProviderSucceeded),
+            },
+            {
+              code: 'failure_notification',
+              run: () => emitOAuthCompletion(pendingFlow!, false),
+            },
+          ]);
           pendingFlow.tokenReject?.(
             new Error(
               ambiguous
@@ -4510,6 +6433,68 @@ export async function registerMCPServices(
   });
   app.service('mcp-servers/oauth-complete').hooks({ before: { create: [ctx.requireAuth] } });
 
+  // Admin recovery for providers that invalidate a DCR client before a usable
+  // callback can report the closed invalid_client/unauthorized_client error.
+  // Resetting also retires pending attempts and grants so the next reconnect
+  // must resolve a fresh client instead of continuing under stale material.
+  app.use('/mcp-servers/oauth-client-registration-reset', {
+    async create(
+      data: MCPOAuthClientRegistrationResetRequest,
+      params?: AuthenticatedParams
+    ): Promise<MCPOAuthClientRegistrationResetResult> {
+      const tenantId = tenantIdFromParams(params);
+      const userId = params?.user?.user_id as UserID | undefined;
+      if (!tenantId || !userId) throw new NotAuthenticated('OAuth reset requires authentication');
+      if (!durableOAuthClientRegistrations || !durableOAuthFlows) {
+        throw new BadRequest(
+          'Durable OAuth client-registration reset is available only on PostgreSQL deployments'
+        );
+      }
+      await runInOAuthTenantWriteScope(db, tenantId, async () => {
+        const currentUser = await new UsersRepository(db).findById(userId);
+        if (!hasMinimumRole(currentUser?.role, ROLES.ADMIN)) {
+          throw new Forbidden('OAuth client-registration reset requires an administrator');
+        }
+        const authorized = await loadMcpServerForCaller(db, data.mcp_server_id, params);
+        await lockOAuthGrantConfiguration(db, tenantId, authorized.mcp_server_id);
+        // The request claim is only an early rejection. Lock the users row and
+        // re-read role after grant-lock contention so a demotion cannot wait
+        // behind reset admission and then leave stale administrator authority
+        // in charge of credential destruction.
+        const lockedUser = await new UsersRepository(db).getWriteAuthorityProjectionForUpdate(
+          userId
+        );
+        if (!hasMinimumRole(lockedUser?.role, ROLES.ADMIN)) {
+          throw new Forbidden('OAuth client-registration reset requires an administrator');
+        }
+        const serverRepository = new MCPServerRepository(db);
+        const currentServer = await serverRepository.findById(authorized.mcp_server_id);
+        if (!currentServer) {
+          throw new Forbidden('MCP server authority changed before OAuth reset');
+        }
+        // config_version is the reset epoch shared by DCR resolution and
+        // pending-attempt publication. Advancing it under the grant lock means
+        // an older start can neither publish its resolved client nor make it
+        // reusable after this transaction commits. Admin authority is a
+        // same-tenant control-plane override; it intentionally does not apply
+        // the owner's private-server runtime usability rule.
+        await serverRepository.update(authorized.mcp_server_id, {
+          expected_config_version: currentServer.config_version ?? 1,
+        });
+        await new UserMCPOAuthTokenRepository(db).deleteAllForServer(authorized.mcp_server_id);
+        await durableOAuthFlows.invalidateForServer(tenantId, authorized.mcp_server_id);
+        await durableOAuthClientRegistrations.invalidateForServer(
+          tenantId,
+          authorized.mcp_server_id
+        );
+      });
+      return { success: true };
+    },
+  });
+  app.service('mcp-servers/oauth-client-registration-reset').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
+
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {
     async create(data: { mcp_server_id: string }, params?: AuthenticatedParams) {
@@ -4532,13 +6517,44 @@ export async function registerMCPServices(
       // Tenant-qualified hint only; every receiving tab refetches durable
       // status before changing its auth UI.
       if (result.success && params?.user?.user_id && tenantId) {
+        const disconnectedUserId = params.user.user_id;
         const room =
           result.oauthMode === 'shared'
             ? tenantChannelName(tenantId)
-            : tenantUserChannelName(tenantId, params.user.user_id);
-        emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
-          mcp_server_id: data.mcp_server_id as MCPServerID,
-        });
+            : tenantUserChannelName(tenantId, disconnectedUserId);
+        return preserveCommittedOAuthResult(result, [
+          {
+            code: 'disconnect_notification',
+            run: () =>
+              emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
+                mcp_server_id: data.mcp_server_id as MCPServerID,
+              }),
+          },
+          {
+            code: 'disconnect_hint',
+            run: () => {
+              scheduleMcpRuntimeHint(
+                db,
+                tenantId,
+                'oauth_disconnected',
+                () =>
+                  (
+                    app as unknown as {
+                      signalMcpServerAuthorityChange?: (
+                        serverId: string,
+                        params: AuthenticatedParams,
+                        affectedCredentialUserId?: string
+                      ) => Promise<void>;
+                    }
+                  ).signalMcpServerAuthorityChange?.(
+                    data.mcp_server_id,
+                    params,
+                    result.oauthMode === 'shared' ? undefined : disconnectedUserId
+                  ) ?? Promise.resolve()
+              );
+            },
+          },
+        ]);
       }
 
       return result;
@@ -4556,9 +6572,9 @@ export async function registerMCPServices(
         const serverRepo = new MCPServerRepository(db);
         const authenticatedServerIds = await resolveAuthenticatedServerIds({
           viewer: { user_id: userId as UserID, role: params?.user?.role },
-          listForUser: (id) => userTokenRepo.listForUser(id),
-          listShared: () => userTokenRepo.listShared(),
-          findServer: (serverId) => serverRepo.findById(serverId),
+          listForUser: (id) => userTokenRepo.listStatusForSubject(id),
+          listShared: () => userTokenRepo.listStatusForSubject(null),
+          findServers: (serverIds) => serverRepo.findByIds(serverIds),
           requireGrantBinding: true,
           isGrantBoundToServer: (server, grant) =>
             isMCPOAuthGrantAuthorizedForServer(db, server, grant),
@@ -4649,10 +6665,13 @@ export async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; force_refresh?: boolean },
       params?: AuthenticatedParams
     ): Promise<{
-      headers: Record<string, { authorization?: string; error?: string }>;
+      headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      >;
     }> {
       const userId = params?.user?.user_id;
       if (!userId && params?.provider) {
@@ -4660,7 +6679,10 @@ export async function registerMCPServices(
       }
 
       const serverIds = Array.isArray(data?.mcp_server_ids) ? data.mcp_server_ids : [];
-      const headers: Record<string, { authorization?: string; error?: string }> = {};
+      const headers: Record<
+        string,
+        { authorization?: string; error?: string; recovery?: MCPAuthRecovery }
+      > = {};
 
       if (serverIds.length === 0) {
         return { headers };
@@ -4674,6 +6696,13 @@ export async function registerMCPServices(
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
+      // `force_refresh` is an internal accelerator for the egress gateway's
+      // post-401 retry, not a capability request data controls: only the
+      // trusted internal/service caller may set it. A session executor's own
+      // request data is otherwise agent-directed, and forcing a refresh has
+      // real side effects (provider rate limits, refresh-token rotation,
+      // fencing pressure on concurrent callers of the same grant).
+      const forceRefresh = trustedInternalOrService && data?.force_refresh === true;
       const tenantId = tenantIdFromParams(params);
       if (!tenantId) throw new NotAuthenticated('oauth-auth-headers requires tenant identity');
       const mcpEgressAssertCurrent = (
@@ -4730,30 +6759,11 @@ export async function registerMCPServices(
         }
       }
       const {
-        needsRefresh,
-        refreshAndPersistToken,
-        InvalidGrantError,
+        AmbiguousRefreshError,
+        FailedRefreshError,
+        OAuthRefreshExchangeError,
         OAuthRefreshAuthorityCancelledError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
-
-      /**
-       * The grant owner's current standing, for the refresh paths below.
-       *
-       * A refresh is not a read: `refreshAndPersistToken` obtains and stores a
-       * *new* access token, which is issuance by the same definition the rest of
-       * this file uses. A delegated task executor already carries its user's
-       * identity; an explicit daemon service account does not. In either case,
-       * the standing that matters belongs to the user the grant is keyed on.
-       *
-       * Resolved once. Every per-user grant in one request belongs to the same
-       * user: `tokenUserId` is the caller's own id, and cross-user lookup is
-       * reserved for service accounts by `resolveForUserIdWithGate`.
-       */
-      let perUserGrantOwnerEntitled: Promise<boolean> | undefined;
-      const isPerUserGrantOwnerEntitled = (): Promise<boolean> => {
-        perUserGrantOwnerEntitled ??= isMcpGrantOwnerEntitled(db, tenantId, userId, 'per_user');
-        return perUserGrantOwnerEntitled;
-      };
 
       await Promise.all(
         serverIds.map(async (serverId) => {
@@ -4778,132 +6788,48 @@ export async function registerMCPServices(
             }
             const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
 
-            const row = await runInOAuthTenantScope(db, tenantId, () =>
-              new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
-            );
-            if (!row) {
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-            const compatibilityMode = (await resolveMCPOAuthCompatibilityPolicy(server)).mode;
-            if (
-              shouldVerifyMCPOAuthGrantBinding(
-                isPostgresDatabaseHandle(db),
-                row.grant_binding_version
-              ) &&
-              !isMCPOAuthGrantBoundToServer(
-                process.env.AGOR_MASTER_SECRET!,
-                server,
-                row,
-                compatibilityMode
-              )
-            ) {
-              await runInOAuthTenantWriteScope(db, tenantId, () =>
-                new UserMCPOAuthTokenRepository(db).deleteGrantVersion(
-                  tokenUserId,
-                  serverId as MCPServerID,
-                  row.grant_generation,
-                  row.grant_binding_fingerprint
-                )
-              );
-              console.warn('[OAuth AuthHeaders] grant_rejected category=binding_mismatch');
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-            if (row.refresh_status === 'ambiguous') {
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-
-            /**
-             * Refuse to *extend* a grant whose owner no longer stands where they
-             * did, while still vending one that is already valid.
-             *
-             * That is deliberately where the line falls. A demoted user's
-             * running session keeps its MCP tools until the access token
-             * expires, then reports `needs_reauth` — an error the executor
-             * already surfaces and a person can act on, and which is literally
-             * true: re-authorizing needs member standing back. The alternative,
-             * cutting a running task off the moment its owner is demoted, fails
-             * mid-tool-call with nothing the agent or the user can do about it,
-             * and revoking a credential is not what a role change has ever meant
-             * here (#2301 — demotion is still a column write that revokes
-             * nothing).
-             *
-             * `shared` grants are out of scope: they belong to the tenant rather
-             * than to a person, are admin-only to establish, and have no owner
-             * whose demotion this could describe.
-             */
-            const refreshWouldRun =
-              row.refresh_status === 'refreshing' ||
-              (needsRefresh(row.oauth_token_expires_at) && !!row.oauth_refresh_token);
-            if (refreshWouldRun && mode === 'per_user' && !(await isPerUserGrantOwnerEntitled())) {
-              console.warn('[OAuth AuthHeaders] refresh_refused category=grant_owner_role');
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
-            }
-
-            if (row.refresh_status === 'refreshing') {
-              try {
-                const observed = await refreshAndPersistToken({
-                  db,
-                  tenantId,
-                  userId: tokenUserId,
-                  mcpServerId: serverId as MCPServerID,
-                  observedRefreshVersion: {
-                    grantGeneration: row.grant_generation,
-                    grantBindingFingerprint: row.grant_binding_fingerprint,
-                    refreshGeneration: row.refresh_generation,
-                  },
-                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
-                  assertCurrent: mcpEgressAssertCurrent,
-                });
-                headers[serverId] = { authorization: `Bearer ${observed}` };
-              } catch (refreshErr) {
-                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
-                headers[serverId] = { error: 'needs_reauth' };
-              }
-              return;
-            }
-
-            let accessToken = row.oauth_access_token;
-            if (needsRefresh(row.oauth_token_expires_at) && row.oauth_refresh_token) {
-              try {
-                accessToken = await refreshAndPersistToken({
-                  db,
-                  tenantId,
-                  userId: tokenUserId,
-                  mcpServerId: serverId as MCPServerID,
-                  observedRefreshVersion: {
-                    grantGeneration: row.grant_generation,
-                    grantBindingFingerprint: row.grant_binding_fingerprint,
-                    refreshGeneration: row.refresh_generation,
-                  },
-                  validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
-                  assertCurrent: mcpEgressAssertCurrent,
-                });
-              } catch (refreshErr) {
-                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
-                if (refreshErr instanceof InvalidGrantError) {
+            try {
+              const grant = await acquireMCPOAuthGrant({
+                db,
+                tenantId,
+                userId: tokenUserId,
+                mcpServerId: serverId as MCPServerID,
+                validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                assertCurrent: mcpEgressAssertCurrent,
+                forceRefresh,
+                resolveDns: ctx.mcpOutboundDnsLookup,
+              });
+              if (!grant) throw missingMCPOAuthGrantError(server.auth);
+              headers[serverId] = { authorization: `Bearer ${grant.oauth_access_token}` };
+            } catch (error) {
+              if (error instanceof OAuthRefreshAuthorityCancelledError) throw error;
+              if (error instanceof AmbiguousRefreshError) {
+                // Match manual refresh: durable quarantine cannot recover by
+                // replay, whereas a still-running observer can retry later.
+                const saved = await runInOAuthTenantScope(db, tenantId, () =>
+                  new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
+                );
+                if (!saved || saved.refresh_status === 'ambiguous') {
                   headers[serverId] = { error: 'needs_reauth' };
                   return;
                 }
-                // A failed/ambiguous rotating-token exchange must not fall back
-                // to a stale token that may already be invalid.
-                console.warn('[OAuth AuthHeaders] refresh_failed category=reauth_or_retry');
-                headers[serverId] = { error: 'needs_reauth' };
-                return;
               }
-            } else if (
-              !accessToken ||
-              (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
-            ) {
-              // Expired with no refresh_token → must re-auth.
-              headers[serverId] = { error: 'needs_reauth' };
-              return;
+              headers[serverId] =
+                error instanceof MCPOAuthRefreshBusyError ||
+                error instanceof MCPClientCredentialsConfigurationError
+                  ? {
+                      error:
+                        error instanceof MCPOAuthRefreshBusyError
+                          ? 'refresh_in_progress'
+                          : 'client_credentials_configuration_required',
+                      recovery: classifyMCPAuthRecovery(error, { mcpServerId: serverId }),
+                    }
+                  : error instanceof FailedRefreshError ||
+                      error instanceof AmbiguousRefreshError ||
+                      error instanceof OAuthRefreshExchangeError
+                    ? { error: 'token_refresh_failed' }
+                    : { error: 'needs_reauth' };
             }
-
-            headers[serverId] = { authorization: `Bearer ${accessToken}` };
           } catch (err) {
             if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
             externalFailure('OAuth AuthHeaders', 'oauth', err);
@@ -4962,9 +6888,11 @@ export async function registerMCPServices(
         GrantConfigurationChangedError,
       } = await import('@agor/core/tools/mcp/oauth-refresh');
 
+      let refreshSubject: { userId: UserID | null } | undefined;
       try {
-        // In `shared` mode this refreshes a token nobody in particular owns,
-        // so the server row is the only thing that says who may ask.
+        // Shared refresh is authorized by server access and the caller's role;
+        // it retains the original consenter attribution rather than adopting
+        // the refreshing caller.
         const server = await runInOAuthTenantScope(db, tenantId, () =>
           loadMcpServerForCaller(db, serverId, params)
         );
@@ -4980,6 +6908,7 @@ export async function registerMCPServices(
           }
         }
         const tokenUserId: UserID | null = mode === 'per_user' ? (userId as UserID) : null;
+        refreshSubject = { userId: tokenUserId };
 
         const currentGrant = await runInOAuthTenantScope(db, tenantId, () =>
           new UserMCPOAuthTokenRepository(db).getToken(tokenUserId, serverId as MCPServerID)
@@ -5025,15 +6954,27 @@ export async function registerMCPServices(
           if (
             err instanceof InvalidGrantError ||
             err instanceof MissingRefreshTokenError ||
-            err instanceof AmbiguousRefreshError ||
             err instanceof GrantConfigurationChangedError
           ) {
             return { success: false, error: 'needs_reauth' };
           }
-          // A peer observed a known, non-ambiguous owner failure. Match the
-          // owner's retryable response rather than forcing one daemon's caller
-          // to reconnect for the same refresh generation.
-          if (err instanceof FailedRefreshError) {
+          if (err instanceof AmbiguousRefreshError && refreshSubject) {
+            // A still-running observer timeout is retryable, but main's durable
+            // rotating-token quarantine cannot recover by replaying the grant.
+            const { userId: subjectUserId } = refreshSubject;
+            const saved = await runInOAuthTenantScope(db, tenantId, () =>
+              new UserMCPOAuthTokenRepository(db).getToken(subjectUserId, serverId as MCPServerID)
+            );
+            if (!saved || saved.refresh_status === 'ambiguous') {
+              return { success: false, error: 'needs_reauth' };
+            }
+          }
+          // A peer observed a known, non-ambiguous owner failure, or the
+          // outcome of a concurrent refresh could not be observed in time.
+          // Neither means the grant itself is invalid, so match the
+          // auth-headers path's retryable response rather than forcing the
+          // caller to reconnect for the same refresh generation.
+          if (err instanceof FailedRefreshError || err instanceof AmbiguousRefreshError) {
             return { success: false, error: 'token_refresh_failed' };
           }
           if (err instanceof MissingTokenEndpointError) {
@@ -5090,42 +7031,27 @@ export async function registerMCPServices(
     server: MCPServer,
     params?: AuthenticatedParams
   ): { success: false; error: string } | null => {
-    if (!params?.provider || !params.user) return null;
-    if (hasMinimumRole(params.user.role?.toLowerCase(), ROLES.ADMIN)) return null;
-    if (server.owner_user_id && server.owner_user_id === params.user.user_id) return null;
-    return {
-      success: false,
+    const caller = resolveMcpCaller(params);
+    if (caller.kind === 'internal') return null;
+    const denial = {
+      success: false as const,
       error: 'Access denied: only an admin or the server owner can discover this MCP server',
     };
+    // Read visibility is not discovery authority: service accounts carry no
+    // membership or ownership and must not exercise a saved credential here.
+    if (caller.kind === 'anonymous' || caller.kind === 'service-account') return denial;
+    const user = caller.user;
+    if (hasMinimumRole(user.role?.toLowerCase(), ROLES.ADMIN)) return null;
+    if (server.owner_user_id && server.owner_user_id === user.user_id) return null;
+    return denial;
   };
 
   // Discover endpoint
   app.use('/mcp-servers/discover', {
     async create(
-      data: {
-        mcp_server_id?: string;
-        url?: string;
-        transport?: 'http' | 'sse';
-        auth?: {
-          type: 'none' | 'bearer' | 'jwt' | 'oauth';
-          token?: string;
-          api_url?: string;
-          api_token?: string;
-          api_secret?: string;
-          oauth_token_url?: string;
-          oauth_client_id?: string;
-          oauth_client_secret?: string;
-          oauth_scope?: string;
-          oauth_grant_type?: string;
-          oauth_mode?: 'per_user' | 'shared';
-          oauth_compatibility_mode?: 'strict' | 'legacy';
-          oauth_dcr_mode?: MCPOAuthDCRMode;
-        };
-        headers?: Record<string, string>;
-        oauth_browser_event?: MCPOAuthBrowserEventRequest;
-      },
+      data: MCPDiscoveryRequest,
       params?: AuthenticatedParams
-    ) {
+    ): Promise<MCPDiscoveryResult> {
       try {
         const browserReservation = consumeOAuthBrowserReservation(
           data.oauth_browser_event,
@@ -5151,7 +7077,7 @@ export async function registerMCPServices(
         const { mergeMCPRemoteHeaders } = await import('@agor/core/tools/mcp/http-headers');
         const tenantId = tenantIdFromParams(params);
 
-        const validateUrl = (url: string): { valid: boolean; error?: string } => {
+        const validateUrl = (url: string): { valid: true } | { valid: false; error: string } => {
           try {
             const parsed = new URL(url);
             if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -5346,14 +7272,25 @@ export async function registerMCPServices(
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
 
         assertBrowserReservation?.();
-        let authHeaders = await runWithinOAuthBrowserReservation(browserReservation, () =>
-          resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
-            allowLocalhostHttp: !postgresOAuthDeployment,
-            cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
-            disableProcessTokenCache: !!durableOAuthFlows,
-            assertCurrent: assertRequestAuthority,
-          })
-        );
+        // In HA, only a caller-scoped durable grant may make an OAuth server
+        // usable for this capability probe. Do not let client-credentials
+        // compatibility code create an unpersisted token; the durable grant
+        // lookup/browser-attempt path below remains authoritative.
+        let authHeaders =
+          serverConfig.auth?.type === 'oauth' && (serverId || isConstrainedHa(ctx.deployment))
+            ? undefined
+            : await runWithinOAuthBrowserReservation(browserReservation, () =>
+                resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
+                  allowLocalhostHttp: !postgresOAuthDeployment,
+                  cacheNamespace: [
+                    tenantId ?? '<standalone>',
+                    serverId ?? '<unsaved>',
+                    userId,
+                  ].join(':'),
+                  disableProcessTokenCache: !!durableOAuthFlows,
+                  assertCurrent: assertRequestAuthority,
+                })
+              );
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
@@ -5372,6 +7309,8 @@ export async function registerMCPServices(
             );
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
             if (probeResponse.status !== 401) return undefined;
+            // A 401 is the boundary where this probe may promote its one-shot
+            // browser reservation into the durable DCR + pending-attempt path.
             // Provider discovery and dynamic client registration can create
             // durable state outside Agor. Never begin either unless this
             // exact socket/caller/operation already consumed a server-issued
@@ -5485,7 +7424,12 @@ export async function registerMCPServices(
             ) {
               throw error;
             }
-            externalFailure('MCP Discovery OAuth token acquisition', 'discovery', error);
+            externalFailure(
+              'MCP Discovery OAuth token acquisition',
+              'discovery',
+              error,
+              externalFailureOptionsForRecovery(recovery)
+            );
             return undefined;
           }
         };
@@ -5494,55 +7438,22 @@ export async function registerMCPServices(
           // Durable token rows are the only daemon authority. The old cache
           // keyed solely by MCP origin could cross tenant/server/user grants.
           let oauthToken: string | undefined;
-          let selectedGrant: UserMCPOAuthToken | undefined;
+          let selectedGrant: UserMCPOAuthToken | null | undefined;
           const lookupUserId = serverConfig.auth?.oauth_mode === 'shared' ? null : userId;
           if (serverId) {
             selectedGrant = await runWithinOAuthBrowserReservation(browserReservation, () =>
-              runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
-                const tokenRepo = new UserMCPOAuthTokenRepository(scopedDb);
-                const grant = await runWithinOAuthBrowserReservation(browserReservation, () =>
-                  tokenRepo.getToken(lookupUserId, serverId as MCPServerID)
-                );
-                if (!grant) return undefined;
-                const compatibilityPolicy = await runWithinOAuthBrowserReservation(
-                  browserReservation,
-                  () =>
-                    resolveMCPOAuthCompatibilityPolicy(
-                      authoritativeServer ?? {
-                        ...serverConfig,
-                        source: serverConfig.source ?? 'user',
-                      }
-                    )
-                );
-                if (
-                  shouldVerifyMCPOAuthGrantBinding(
-                    isPostgresDatabaseHandle(db),
-                    grant.grant_binding_version
-                  ) &&
-                  !isMCPOAuthGrantBoundToServer(
-                    process.env.AGOR_MASTER_SECRET!,
-                    {
-                      mcp_server_id: serverId as MCPServerID,
-                      enabled: true,
-                      transport: serverConfig.transport,
-                      url: serverConfig.url,
-                      source: serverConfig.source ?? 'user',
-                      catalog_entry_name: serverConfig.catalog_entry_name,
-                      headers: serverConfig.headers,
-                      auth: serverConfig.auth,
-                    },
-                    grant,
-                    compatibilityPolicy.mode
-                  )
-                ) {
-                  return undefined;
-                }
-                if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
-                  return undefined;
-                }
-                return grant;
+              acquireMCPOAuthGrant({
+                db,
+                tenantId,
+                userId: lookupUserId,
+                mcpServerId: serverId as MCPServerID,
+                validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                assertCurrent: assertRequestAuthority,
+                resolveDns: ctx.mcpOutboundDnsLookup,
               })
             );
+            if (!selectedGrant && !browserReservation)
+              throw missingMCPOAuthGrantError(serverConfig.auth);
             oauthToken = selectedGrant?.oauth_access_token;
             if (selectedGrant && discoveryAuthority) {
               discoveryAuthority = bindMCPDiscoveryOAuthGrant(
@@ -5596,7 +7507,15 @@ export async function registerMCPServices(
             mcpTransport: InstanceType<typeof StreamableHTTPClientTransport>
           ) => {
             const timeout = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+              setTimeout(
+                () =>
+                  reject(
+                    Object.assign(new Error('Connection timeout after 10 seconds'), {
+                      code: 'ETIMEDOUT' as const,
+                    })
+                  ),
+                10000
+              );
             });
             await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               Promise.race([mcpClient.connect(mcpTransport), timeout])
@@ -5634,7 +7553,12 @@ export async function registerMCPServices(
 
           const listTimeout = new Promise<never>((_, reject) => {
             setTimeout(
-              () => reject(new Error('List capabilities timeout after 10 seconds')),
+              () =>
+                reject(
+                  Object.assign(new Error('List capabilities timeout after 10 seconds'), {
+                    code: 'ETIMEDOUT' as const,
+                  })
+                ),
               10000
             );
           });
@@ -5679,35 +7603,38 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
+          const discovered: DiscoveredMCPCapabilities = {
+            tools: toolsResult.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.inputSchema,
+            })),
+            resources: resourcesResult.resources.map((r) => ({
+              uri: r.uri,
+              name: r.name,
+              description: r.description,
+              mimeType: r.mimeType,
+            })),
+            prompts: promptsResult.prompts.map((p) => ({
+              name: p.name,
+              description: p.description,
+              arguments: p.arguments?.map((a) => ({
+                name: a.name,
+                description: a.description,
+                required: a.required,
+              })),
+            })),
+          };
+          let normalizedDiscovery: ReturnType<typeof normalizeDiscoveredMCPCapabilities>;
+
           if (serverId && discoveryAuthority) {
-            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            normalizedDiscovery = await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
                 persistDiscoveredMCPCapabilities(
                   scopedDb,
                   tenantId,
                   discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
-                  {
-                    tools: toolsResult.tools.map((t) => ({
-                      name: t.name,
-                      description: t.description,
-                      input_schema: t.inputSchema,
-                    })),
-                    resources: resourcesResult.resources.map((r) => ({
-                      uri: r.uri,
-                      name: r.name,
-                      description: r.description,
-                      mimeType: r.mimeType,
-                    })),
-                    prompts: promptsResult.prompts.map((p) => ({
-                      name: p.name,
-                      description: p.description,
-                      arguments: p.arguments?.map((a) => ({
-                        name: a.name,
-                        description: a.description,
-                        required: a.required,
-                      })),
-                    })),
-                  },
+                  discovered,
                   process.env.AGOR_MASTER_SECRET ?? ''
                 )
               )
@@ -5716,30 +7643,35 @@ export async function registerMCPServices(
             // than the generic MCP service. Refresh every device belonging to
             // the actor and durable owner with the same empty, tenant-targeted
             // control event used by Marketplace actions.
-            emitMarketplaceInvalidation(
+            emitMarketplaceChanged(
               app,
               tenantId,
               [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
             );
+          } else {
+            normalizedDiscovery = normalizeDiscoveredMCPCapabilities(discovered);
           }
 
           return {
             success: true,
             capabilities: {
-              tools: toolsResult.tools.length,
-              resources: resourcesResult.resources.length,
-              prompts: promptsResult.prompts.length,
+              tools: normalizedDiscovery.capabilities.tools.length,
+              resources: normalizedDiscovery.capabilities.resources.length,
+              prompts: normalizedDiscovery.capabilities.prompts.length,
             },
-            tools: toolsResult.tools.map((t) => ({
+            metadata: {
+              descriptions_truncated: normalizedDiscovery.truncatedDescriptions,
+            },
+            tools: normalizedDiscovery.capabilities.tools.map((t) => ({
               name: t.name,
               description: t.description || '',
             })),
-            resources: resourcesResult.resources.map((r) => ({
+            resources: normalizedDiscovery.capabilities.resources.map((r) => ({
               name: r.name,
               uri: r.uri,
               mimeType: r.mimeType,
             })),
-            prompts: promptsResult.prompts.map((p) => ({
+            prompts: normalizedDiscovery.capabilities.prompts.map((p) => ({
               name: p.name,
               description: p.description || '',
             })),
@@ -5762,12 +7694,25 @@ export async function registerMCPServices(
         if (
           recovery.category === 'authentication_required' ||
           recovery.category === 'permission_changed' ||
-          recovery.category === 'configuration_changed'
+          recovery.category === 'configuration_changed' ||
+          recovery.category === 'configuration_required'
         ) {
           return { success: false, error: recovery.message, recovery };
         }
-        const safe = externalFailure('MCP Discovery', 'discovery', error);
-        return { success: false, error: safe.message, category: safe.category };
+        const persistenceRejected = isMCPServerWriteValidationError(error);
+        const safe = externalFailure('MCP Discovery', 'discovery', error, {
+          ...externalFailureOptionsForRecovery(recovery),
+          ...(persistenceRejected ? { category: 'storage_policy_rejected' as const } : {}),
+          ...(persistenceRejected
+            ? { reason: 'capability_persistence_validation_rejected' as const }
+            : {}),
+        });
+        return {
+          success: false,
+          error: safe.message,
+          category: safe.category,
+          ...(persistenceRejected ? { action: safe.action } : {}),
+        };
       }
     },
   });

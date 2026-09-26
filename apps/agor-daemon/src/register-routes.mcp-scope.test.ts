@@ -81,14 +81,18 @@ describe('Session MCP executor read scope', () => {
     ).resolves.toBe(false);
   });
 
-  it('keeps every MCP relationship mutation behind the owner/admin boundary', () => {
+  it('keeps every MCP relationship mutation behind the owner/admin and projection boundary', () => {
     const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
     const routeStart = source.indexOf("'/sessions/:id/mcp-servers'");
     const routeEnd = source.indexOf('// MCP member policy', routeStart);
     const route = source.slice(routeStart, routeEnd);
 
     expect(routeStart).toBeGreaterThan(0);
-    expect(route.match(/requireSessionScopedConfigOwnerOrAdmin\(id, params\)/g)).toHaveLength(4);
-    expect(route.match(/authorizeAndLoadSessionForMcpConfig\(id, params\)/g)).toHaveLength(1);
+    expect(route.match(/authorizeAndLoadSessionForMcpConfig\(id, params\);/g)).toHaveLength(4);
+    expect(
+      route.match(
+        /authorizeAndLoadSessionForMcpConfig\(id, params, \{\s*allowExecutorProjection: true,?\s*\}\)/g
+      )
+    ).toHaveLength(1);
   });
 });

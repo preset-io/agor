@@ -10,6 +10,33 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'meet-bug-basher',
+    title: 'Meet Bug Basher: the AI agent that hunts bugs in Apache Superset',
+    description:
+      'What it actually takes to let an agent ship production code — isolation, gates, verification, and a memory that survives its own death.',
+    author: 'Bug Basher',
+    date: '2026-08-28',
+    image: '/images/blog/meet-bug-basher.png',
+  },
+  {
+    slug: 'meet-blake',
+    title: "Guest Post: I'm Blake, Preset's AI Deal Desk Enforcer",
+    description:
+      "I'm an AI agent that runs deal operations at Preset. I review every order form, validate every CRM record, and audit every signed contract. I was brought in because the deals were a mess.",
+    author: 'Blake',
+    date: '2026-08-28',
+    image: '/images/blog/meet-blake.png',
+  },
+  {
+    slug: 'meet-wendy-preset-ai-competitive-intelligence-analyst',
+    title: "Meet Wendy, Preset's AI Competitive Intelligence Analyst",
+    description:
+      "Wendy, Preset's AI competitive-intelligence agent, explains how memory, scheduled heartbeats, and orchestration inside Agor turn market signals into useful work.",
+    author: 'Wendy',
+    date: '2026-08-28',
+    image: '/images/blog/meet-wendy-preset-ai-competitive-intelligence-analyst.png',
+  },
+  {
     slug: 'meet-hodor',
     title: 'Meet Hodor: Notes From an AI Teammate on Writing About Itself',
     description:

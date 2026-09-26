@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { decryptApiKey, encryptApiKey, isEncrypted } from './encryption';
+import { decryptApiKey, decryptApiKeyAsync, encryptApiKey, isEncrypted } from './encryption';
 
 const KEY_A = 'encryption-test-master-key-a';
 const KEY_B = 'encryption-test-master-key-b';
 
-describe('legacy deployment-secret envelope', () => {
+describe.each([
+  ['sync', async (value: string, key?: string) => decryptApiKey(value, key)],
+  ['async', decryptApiKeyAsync],
+] as const)('legacy deployment-secret envelope (%s)', (_mode, decrypt) => {
   const originalMasterSecret = process.env.AGOR_MASTER_SECRET;
 
   afterEach(() => {
@@ -12,7 +15,7 @@ describe('legacy deployment-secret envelope', () => {
     else process.env.AGOR_MASTER_SECRET = originalMasterSecret;
   });
 
-  it('round-trips without embedding plaintext and randomizes each envelope', () => {
+  it('round-trips without embedding plaintext and randomizes each envelope', async () => {
     const value = 'audit-canary-value';
     const first = encryptApiKey(value, KEY_A);
     const second = encryptApiKey(value, KEY_A);
@@ -21,36 +24,36 @@ describe('legacy deployment-secret envelope', () => {
     expect(second).not.toContain(value);
     expect(first).not.toBe(second);
     expect(isEncrypted(first)).toBe(true);
-    expect(decryptApiKey(first, KEY_A)).toBe(value);
-    expect(decryptApiKey(second, KEY_A)).toBe(value);
+    await expect(decrypt(first, KEY_A)).resolves.toBe(value);
+    await expect(decrypt(second, KEY_A)).resolves.toBe(value);
   });
 
-  it('round-trips an empty plaintext for credential classes that permit one', () => {
+  it('round-trips an empty plaintext for credential classes that permit one', async () => {
     const envelope = encryptApiKey('', KEY_A);
 
     expect(isEncrypted(envelope)).toBe(true);
-    expect(decryptApiKey(envelope, KEY_A)).toBe('');
+    await expect(decrypt(envelope, KEY_A)).resolves.toBe('');
   });
 
-  it('fails closed when the deployment master secret is unavailable', () => {
+  it('fails closed when the deployment master secret is unavailable', async () => {
     delete process.env.AGOR_MASTER_SECRET;
 
     expect(() => encryptApiKey('canary')).toThrow('Secret encryption requires AGOR_MASTER_SECRET');
-    expect(() => decryptApiKey('not-an-envelope')).toThrow(
+    await expect(decrypt('not-an-envelope')).rejects.toThrow(
       'Secret decryption requires AGOR_MASTER_SECRET'
     );
   });
 
-  it('rejects an explicitly empty deployment secret', () => {
+  it('rejects an explicitly empty deployment secret', async () => {
     expect(() => encryptApiKey('canary', '')).toThrow(
       'Secret encryption requires AGOR_MASTER_SECRET'
     );
-    expect(() => decryptApiKey(encryptApiKey('canary', KEY_A), '')).toThrow(
+    await expect(decrypt(encryptApiKey('canary', KEY_A), '')).rejects.toThrow(
       'Secret decryption requires AGOR_MASTER_SECRET'
     );
   });
 
-  it('normalizes wrong-key, tamper, and malformed-envelope failures', () => {
+  it('normalizes wrong-key, tamper, and malformed-envelope failures', async () => {
     const envelope = encryptApiKey('canary', KEY_A);
     const [salt, iv, tag, ciphertext] = envelope.split(':');
     const malformed = [
@@ -62,14 +65,14 @@ describe('legacy deployment-secret envelope', () => {
       `${salt}:${iv}:${tag}:${ciphertext}:extra`,
     ];
 
-    expect(() => decryptApiKey(envelope, KEY_B)).toThrow('Secret decryption failed');
+    await expect(decrypt(envelope, KEY_B)).rejects.toThrow('Secret decryption failed');
     for (const candidate of malformed) {
-      expect(() => decryptApiKey(candidate, KEY_A)).toThrow('Secret decryption failed');
+      await expect(decrypt(candidate, KEY_A)).rejects.toThrow('Secret decryption failed');
       expect(isEncrypted(candidate)).toBe(false);
     }
 
     const last = ciphertext.at(-1) === '0' ? '1' : '0';
     const tampered = `${salt}:${iv}:${tag}:${ciphertext.slice(0, -1)}${last}`;
-    expect(() => decryptApiKey(tampered, KEY_A)).toThrow('Secret decryption failed');
+    await expect(decrypt(tampered, KEY_A)).rejects.toThrow('Secret decryption failed');
   });
 });

@@ -76,6 +76,16 @@ describe('checked-in HA Compose configuration', () => {
       auth_claim: 'tenant_id',
       filesystem_isolation_enabled: true,
     });
+    // Production-shaped like Cloud Cells: the ingress forwards the exact
+    // browser host:port, which launch binding and personal API-key tenant
+    // routing both trust.
+    expect(effective.external_launch).toMatchObject({
+      forward_request_host: true,
+      trusted_host_header: 'host',
+    });
+    const nginx = await fs.readFile(path.join(REPO_ROOT, 'docker/ha/nginx.conf'), 'utf8');
+    expect(nginx).not.toContain('proxy_set_header Host $host;');
+    expect(nginx).toContain('proxy_set_header Host $http_host;');
     expect(effective.execution).toMatchObject({
       branch_rbac: true,
       unix_user_mode: 'sandbox',

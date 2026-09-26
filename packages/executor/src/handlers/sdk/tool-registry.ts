@@ -10,6 +10,7 @@ import type {
   ExecutorPulseKind,
   MessageSource,
   PermissionMode,
+  PromptOrigin,
   SessionID,
   TaskID,
 } from '@agor/core/types';
@@ -32,6 +33,7 @@ export type ToolRunner = (params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
+  promptOrigin?: PromptOrigin;
   agenticToolContext?: Record<string, unknown>;
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
@@ -135,6 +137,7 @@ export class ToolRegistry {
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;
+      promptOrigin?: PromptOrigin;
       agenticToolContext?: Record<string, unknown>;
       resolvedConfig?: ResolvedConfigSlice;
       onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;

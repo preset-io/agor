@@ -45,26 +45,21 @@ describe('surface route registry', () => {
   );
 
   it.each([
+    '/catalog',
+    '/catalog/servers',
+    '/catalog/sessions',
+    '/catalog/credentials',
     '/marketplace',
     '/marketplace/catalog',
     '/marketplace/servers',
     '/marketplace/sessions',
     '/marketplace/credentials',
-  ])('classifies %s as Marketplace', (path) => {
-    expect(getRouteSurface(path).id).toBe('marketplace');
-    expect(isWorkspaceRoutePath(path)).toBe(false);
-    // Browsing the catalog must not spin up the board/session store.
-    expect(routeStartsWorkspaceRuntime(path)).toBe(false);
-    expect(routeUsesDeviceRouter(path)).toBe(false);
-    expect(routeUsesSharedUserSettings(path)).toBe(true);
+    '/catalog/extra',
+  ])('uses normal Workspace fallback for removed path %s', (path) => {
+    expect(getRouteSurface(path)).toEqual(getRouteSurface('/unknown-path'));
+    expect(routeStartsWorkspaceRuntime(path)).toBe(true);
+    expect(routeUsesDeviceRouter(path)).toBe(true);
   });
-
-  it.each(['/marketplaces', '/marketplace/extra'])(
-    'does not treat similarly prefixed path %s as Marketplace',
-    (path) => {
-      expect(getRouteSurface(path).id).toBe('workspace');
-    }
-  );
 
   it.each(['/a/artifact/fullscreen'])('classifies %s as Artifact fullscreen', (path) => {
     expect(getRouteSurface(path).id).toBe('artifact-fullscreen');

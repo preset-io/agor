@@ -416,34 +416,75 @@ export class TeamsMessageDeliveryRepository {
     claimGeneration: number;
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
-    return runDatabaseTransaction(this.db, async (tx) => {
-      await lockRowForUpdate(
-        tx,
-        this.db,
-        teamsMessageDeliveries,
-        eq(teamsMessageDeliveries.delivery_id, input.deliveryId)
-      );
-      const row = await select(tx)
-        .from(teamsMessageDeliveries)
-        .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
-        .one();
-      const now = row
-        ? await getDatabaseNow(
-            tx,
-            teamsMessageDeliveries,
-            eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
-            input.now
-          )
-        : null;
-      if (!row || !now || !this.isCurrent(row, input, now))
-        throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
-      const updated = await update(tx, teamsMessageDeliveries)
-        .set({ effect_started_at: row.effect_started_at ?? now, updated_at: now })
-        .where(this.claimWhere(input, now))
-        .returning()
-        .one();
-      return rowToDelivery(updated);
-    });
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        // Configuration mutations lock the channel first. Read only its immutable
+        // identity before taking that lock; re-read the delivery under both locks.
+        const candidate = await select(tx)
+          .from(teamsMessageDeliveries)
+          .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
+          .one();
+        if (!candidate) throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
+        await lockRowForUpdate(
+          tx,
+          this.db,
+          gatewayChannels,
+          eq(gatewayChannels.id, candidate.gateway_channel_id)
+        );
+        const channel = await select(tx)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, candidate.gateway_channel_id))
+          .one();
+        await lockRowForUpdate(
+          tx,
+          this.db,
+          teamsMessageDeliveries,
+          eq(teamsMessageDeliveries.delivery_id, input.deliveryId)
+        );
+        const row = await select(tx)
+          .from(teamsMessageDeliveries)
+          .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
+          .one();
+        // Use wall-clock database time after lock acquisition, not PostgreSQL's
+        // transaction-start timestamp (a lock wait may have outlived the lease).
+        const clock =
+          row && !isSQLiteDatabase(tx)
+            ? await select(tx, { now: sql<Date>`clock_timestamp()` })
+                .from(teamsMessageDeliveries)
+                .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
+                .one()
+            : null;
+        const now = clock
+          ? new Date(clock.now)
+          : row
+            ? await getDatabaseNow(
+                tx,
+                teamsMessageDeliveries,
+                eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
+                input.now
+              )
+            : null;
+        if (!row || !now || !this.isCurrent(row, input, now))
+          throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
+        if (
+          !channel?.enabled ||
+          channel.channel_type !== 'teams' ||
+          (channel.config as Record<string, unknown>).outbound_enabled === false ||
+          channel.provider_installation_id !== row.provider_installation_id ||
+          channel.provider_config_generation !== row.provider_config_generation
+        ) {
+          throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
+        }
+        const updated = await update(tx, teamsMessageDeliveries)
+          .set({ effect_started_at: row.effect_started_at ?? now, updated_at: now })
+          .where(this.claimWhere(input, now))
+          .returning()
+          .one();
+        return rowToDelivery(updated);
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   async complete(input: {

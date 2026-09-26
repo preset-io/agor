@@ -19,10 +19,12 @@ import {
   assertTenantWritable,
   type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorLaunchAuthority,
-  type ExecutorLaunchAuthorityOptions,
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
+  getPostgresSqlState,
   isPostgresDatabaseHandle,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -37,15 +39,18 @@ import {
   type TerminationSettlementResult,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   BranchID,
+  CancelQueuedTasksInput,
   ContentBlock,
   ExecutorTerminationCompleteInput,
   MessageID,
   Paginated,
   QueryParams,
+  ReorderQueuedTasksInput,
   RuntimeTelemetryInput,
   SdkFailure,
   SdkHealthFailureInput,
@@ -54,6 +59,7 @@ import type {
   Task,
   TaskID,
   TaskPendingDispatchStatus,
+  TaskQueueMutationResult,
   UUID,
 } from '@agor/core/types';
 import {
@@ -86,14 +92,12 @@ import {
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
-import type { SessionsService } from './sessions';
+import type { SessionParams, SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
   isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
 }
-
-export type TaskRuntimeAuthorityOptions = ExecutorLaunchAuthorityOptions;
 
 /**
  * Task service params
@@ -112,7 +116,49 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
-const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
+function elapsedMs(from: string | undefined, to: string | undefined): number | 'none' {
+  if (!from || !to) return 'none';
+  const ms = Date.parse(to) - Date.parse(from);
+  return Number.isFinite(ms) ? ms : 'none';
+}
+
+/**
+ * Detection facts for a winning termination claim. Ages are measured against
+ * the durable request time so daemon clock skew cannot distort them.
+ * `error_message` is deliberately omitted: a user Stop reason can reach it.
+ */
+function terminationRequestDiagnostics(task: Task): string {
+  const request = task.termination_request;
+  const pulse = task.latest_executor_pulse;
+  return (
+    `session_id=${shortId(task.session_id)} ` +
+    `executor_connected=${task.executor_connected_at ? 'true' : 'false'} ` +
+    `heartbeat_age_ms=${elapsedMs(task.last_executor_heartbeat_at, request?.requested_at)} ` +
+    `last_pulse=${pulse?.kind ?? 'none'} ` +
+    `last_pulse_age_ms=${elapsedMs(pulse?.observed_at, request?.requested_at)} ` +
+    `sdk_failure=${task.sdk_failure?.reason ?? 'none'}`
+  );
+}
+
+function terminationSettlementDiagnostics(task: Task): string {
+  const request = task.termination_request;
+  return (
+    `session_id=${shortId(task.session_id)} ` +
+    `cause=${request?.cause ?? 'unknown'} ` +
+    `containment=${task.sdk_failure?.termination ?? 'unknown'} ` +
+    `executor_quiesced=${request?.executor_quiesced_at ? 'true' : 'false'} ` +
+    `request_to_settle_ms=${elapsedMs(request?.requested_at, task.completed_at)}`
+  );
+}
+
+const TASK_SORT_FIELDS = new Set([
+  'task_id',
+  'session_id',
+  'status',
+  'created_at',
+  'created_by',
+  'queue_position',
+]);
 
 /**
  * Public Task transport surface. `update` is deliberately absent so whole-row
@@ -124,6 +170,8 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'create',
   'patch',
   'remove',
+  'cancelQueued',
+  'reorderQueued',
   'connectExecutor',
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
@@ -176,10 +224,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-    private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
-      branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-    }
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
   ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
@@ -197,6 +242,78 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.db = db;
     const heartbeatConfig = resolveExecutorHeartbeatConfig(app.get?.('config')?.execution);
     this.heartbeatCallbackRunner = new ExecutorHeartbeatCallbackRunner(heartbeatConfig);
+  }
+
+  async cancelQueued(
+    data: CancelQueuedTasksInput,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    return this.manageQueue(data, false, params);
+  }
+
+  async reorderQueued(
+    data: ReorderQueuedTasksInput,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    return this.manageQueue(data, true, params);
+  }
+
+  private async manageQueue(
+    data: CancelQueuedTasksInput | ReorderQueuedTasksInput,
+    reorder: boolean,
+    params?: TaskParams
+  ): Promise<TaskQueueMutationResult> {
+    const validIds = (ids: unknown): ids is TaskID[] =>
+      Array.isArray(ids) &&
+      ids.every((id) => typeof id === 'string' && isValidUUID(id)) &&
+      new Set(ids).size === ids.length;
+    if (
+      !data ||
+      !isValidUUID(data.session_id) ||
+      !validIds(data.task_ids) ||
+      (!reorder && data.task_ids.length === 0) ||
+      (reorder && (!('expected_task_ids' in data) || !validIds(data.expected_task_ids)))
+    ) {
+      throw new BadRequest(
+        'Queue commands require a session UUID and unique full task UUIDs; reorder also requires expected_task_ids'
+      );
+    }
+    const result = await this.taskRepo.mutateQueued(
+      data.session_id,
+      reorder
+        ? { order: data.task_ids, expected: (data as ReorderQueuedTasksInput).expected_task_ids }
+        : { cancel: data.task_ids }
+    );
+    if (result.outcome === 'conflict') {
+      throw new Conflict(
+        'Queue changed or IDs are not queued in this session. Reread queued tasks and retry with the current order.',
+        { code: 'TASK_QUEUE_CONFLICT', session_id: data.session_id }
+      );
+    }
+    for (const task of reorder ? result.queue : result.removed) {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: reorder ? 'patched' : 'removed',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    }
+    if (result.wake) {
+      // Postcommit, tenant-bound wakeup only. Never resume a failure-held queue
+      // or run completion side effects for prompts that were merely removed.
+      deferWithTenantContext(params, () =>
+        (this.app.service('sessions') as unknown as SessionsService).triggerQueueProcessing(
+          data.session_id,
+          { ...params, provider: undefined } as SessionParams
+        )
+      );
+    }
+    return {
+      session_id: data.session_id,
+      queue: result.queue.map(({ task_id, queue_position }) => ({ task_id, queue_position })),
+      cancelled_task_ids: result.removed.map((task) => task.task_id),
+    };
   }
 
   /** Atomic daemon-side launch-intent fence plus its Session projection. */
@@ -230,15 +347,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
     const query = (params?.query ?? {}) as Query;
-    const requestedLimit = query.$limit ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT;
-    const skip = query.$skip ?? 0;
-    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 0) {
+    if (query.$limit !== undefined && (!Number.isSafeInteger(query.$limit) || query.$limit < 0)) {
       throw new BadRequest('$limit must be a finite non-negative integer');
     }
+    const { limit, skip } = this.pageWindow(query);
     if (!Number.isSafeInteger(skip) || skip < 0) {
       throw new BadRequest('$skip must be a finite non-negative integer');
     }
-    const limit = Math.min(requestedLimit, this.paginate?.max ?? PAGINATION.MAX_LIMIT);
     const sort = query.$sort;
     if (sort) {
       for (const [field, direction] of Object.entries(sort)) {
@@ -288,6 +403,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       sessionId.$in.every((value: unknown) => typeof value === 'string')
     ) {
       pageOptions.sessionIds = sessionId.$in as SessionID[];
+    }
+    if (query.status && typeof query.status === 'object' && '$ne' in query.status) {
+      if (query.status.$ne !== TaskStatus.QUEUED)
+        throw new BadRequest('Only queued status exclusion is supported');
+      pageOptions.excludeQueued = true;
     }
     if (typeof query.status === 'string') pageOptions.status = query.status as Task['status'];
     if (typeof query.created_at === 'number' && Number.isFinite(query.created_at)) {
@@ -396,7 +516,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       status: task.status,
       model: task.model ?? task.normalized_sdk_response?.primaryModel ?? null,
       queue_position: task.queue_position ?? null,
-      tool_use_count: task.tool_use_count ?? 0,
+      recorded_tool_count: task.recorded_tool_count ?? null,
       is_callback: task.metadata?.is_agor_callback === true,
       source: task.metadata?.source ?? null,
     };
@@ -462,7 +582,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `[task.termination] event=request_committed task_id=${shortId(result.task.task_id)} ` +
             `cause=${result.task.termination_request?.cause ?? 'unknown'} ` +
-            `mode=${result.task.executor_mode ?? 'local'}`
+            `mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationRequestDiagnostics(result.task)
         );
         emitServiceEvent(this.app, {
           path: 'tasks',
@@ -534,12 +655,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (result.outcome === 'unverified') {
         console.warn(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
-            `outcome=unverified mode=${result.task.executor_mode ?? 'local'}`
+            `outcome=unverified mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationSettlementDiagnostics(result.task)
         );
       } else {
         console.log(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
-            `outcome=${result.task.status} mode=${result.task.executor_mode ?? 'local'}`
+            `outcome=${result.task.status} mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationSettlementDiagnostics(result.task)
         );
       }
       emitServiceEvent(this.app, {
@@ -614,20 +737,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   private async runAfterTenantDatabaseCommit(
     label: string,
-    work: () => Promise<void>
+    work: () => Promise<void>,
+    scope: 'database' | 'identity' = 'database'
   ): Promise<void> {
+    const tenantId = getCurrentTenantId();
     const run = async () => {
       try {
-        await work();
+        if (scope === 'identity' && tenantId) await runWithTenantContext(tenantId, work);
+        else await work();
       } catch (error) {
         console.warn(
-          `⚠️  [TasksService] ${label} failed:`,
-          error instanceof Error ? error.message : String(error)
+          `[tasks.after_commit] operation=${label} sqlstate=${getPostgresSqlState(error) ?? 'unknown'} outcome=failed`
         );
       }
     };
 
-    if (enqueueTenantDatabasePostCommitCallback(run)) {
+    // Identity-only fanout must open separate short DB units, not inherit a
+    // fresh transaction spanning parent-message injection and Git I/O.
+    const queued =
+      scope === 'identity'
+        ? enqueueAfterTenantDatabaseCommit(run)
+        : enqueueTenantDatabasePostCommitCallback(run);
+    if (queued) {
       return;
     }
 
@@ -687,20 +818,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const session = await this.app.service('sessions').get(task.session_id, params);
 
       if (session.branch_id) {
-        this.app
-          .service('branches')
-          .get(session.branch_id, params)
-          .then((branch) => {
-            const repoId = branch?.repo_id;
-            if (!repoId) return;
-            return ensureRepoOriginAlignedById(this.app, repoId, params);
-          })
-          .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
+        // Preserve fire-and-forget behavior, but never let Git orchestration
+        // inherit a live (or already committed) completion transaction.
+        deferWithTenantContext(
+          params,
+          async () => {
+            const branch = await this.app.service('branches').get(session.branch_id!, params);
+            if (branch?.repo_id)
+              await ensureRepoOriginAlignedById(this.app, branch.repo_id, params);
+          },
+          (error) => {
             console.warn(
-              `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${shortId(task.session_id)}: ${message}`
+              `[tasks.origin_alignment] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`
             );
-          });
+          }
+        );
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];
@@ -748,22 +880,47 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
 
       if (session.fork_origin === 'btw') {
+        // Keep archive atomic with completion: deferring it could re-archive
+        // a Session that a newer prompt has already restored.
         if (!suppressBtwCleanup) {
           try {
-            await this.app.service('sessions').patch(session.session_id, {
-              archived: true,
-              archived_reason: 'btw_completed',
+            const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+            if (!tenantId) throw new Error('Missing tenant context for BTW archive cleanup');
+            await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+              await assertTenantWritable(tenantDb, tenantId);
+              const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+              const archiveParams: SessionParams = {
+                ...params,
+                query: undefined,
+                provider: undefined,
+              };
+              await sessionsService.archiveBtwSession(session.session_id, archiveParams);
             });
             console.log(
               `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
             );
           } catch (error) {
-            console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+            console.warn(
+              `[tasks.btw_archive] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`
+            );
           }
         }
 
         if (!isStop && !isTermination) {
-          await this.injectBtwResultMessage(task, session, params);
+          // Parent transcript fanout must not inherit the child Task/Session
+          // locks: message admission takes Branch first. The original task,
+          // terminal projection and archive commit before this fresh unit.
+          await this.runAfterTenantDatabaseCommit(
+            'btw_result',
+            async () => {
+              const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+              if (!tenantId) throw new Error('Missing tenant context for BTW result injection');
+              await runWithTenantDatabaseScope(this.db, tenantId, () =>
+                this.injectBtwResultMessage(task, session, params)
+              );
+            },
+            'identity'
+          );
         }
       }
 
@@ -987,7 +1144,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `💬 [TasksService] Injected btw result message into parent session ${shortId(parentSessionId)} from btw fork ${shortId(btwSession.session_id)}`
       );
     } catch (error) {
-      console.warn(`⚠️  [TasksService] Failed to inject btw result message:`, error);
+      console.warn(`[tasks.btw_result] failed sqlstate=${getPostgresSqlState(error) ?? 'unknown'}`);
       // Non-critical — don't break task completion
     }
   }
@@ -1293,7 +1450,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           task.message_range?.start_index !== undefined
             ? task.message_range.end_index - task.message_range.start_index + 1
             : 0,
-        toolUseCount: task.tool_use_count || 0,
+        recordedToolCount: task.recorded_tool_count,
         lastAssistantMessage,
       };
 
@@ -1499,7 +1656,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /** Internal launch boundary; not exposed through the Feathers transport. */
   bindExecutorLaunchAuthority(taskId: string): Promise<ExecutorLaunchAuthority> {
-    return this.taskRepo.bindExecutorLaunchAuthority(taskId, this.runtimeAuthorityOptions);
+    return this.taskRepo.bindExecutorLaunchAuthority(taskId);
   }
 
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
@@ -1550,7 +1707,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           principal_user_id: authority.userId,
           session_id: authority.sessionId,
           branch_id: authority.branchId,
-          ...this.runtimeAuthorityOptions,
           ...(standaloneTokenCurrent === undefined
             ? {}
             : { standalone_token_current: standaloneTokenCurrent }),
@@ -1776,8 +1932,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
+  return new TasksService(db, app, executorCredentialRevoker);
 }

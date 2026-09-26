@@ -8,11 +8,14 @@ export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 export const HA_UNSUPPORTED_FEATURES = {
   providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
-  mcpOAuth: 'MCP OAuth flows',
   codexAuth:
     'Codex credential-file import/logout without a consistent executor user home and execution.executor_storage.user_home_locking: cross-replica-flock',
   codexDeviceAuth:
     'Codex device authentication without durable attempt ownership, exact per-user credential routing, and execution.executor_storage.user_home_locking: cross-replica-flock',
+  claudeAuth:
+    'Claude credential mutation without exact local per-user routing, cross-replica writer serialization, and generation fencing',
+  claudeOAuth:
+    'Claude subscription OAuth without durable attempt ownership, exact per-user routing, cross-replica credential mutation authority, and concrete runtime credential containment',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -39,6 +42,8 @@ export function isHaFeatureUnavailable(
   if (!isConstrainedHa(deployment)) return false;
   if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
   if (feature === 'codexDeviceAuth') return !deployment.capabilities.codexDeviceAuth;
+  if (feature === 'claudeAuth') return !deployment.capabilities.claudeAuth;
+  if (feature === 'claudeOAuth') return !deployment.capabilities.claudeOAuth;
   return true;
 }
 

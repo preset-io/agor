@@ -12,6 +12,7 @@ export type {
   MessageID,
   MessageSource,
   PermissionMode,
+  PromptOrigin,
   SessionID,
   TaskID,
   UserID,

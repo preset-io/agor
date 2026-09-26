@@ -28,6 +28,17 @@ vi.mock('@aws-sdk/client-s3', () => awsMocks);
 vi.mock('@agor/core/db', () => ({
   runWithTenantDatabaseScope: async (_db: unknown, _tenant: string, work: () => unknown) => work(),
   UploadRepository: class {
+    async reserve(nextOwner: UploadOwner, metadata: any) {
+      repositoryState.rows.push({ ...nextOwner, ...metadata, status: 'pending' });
+    }
+    async complete(_owner: UploadOwner, metadata: any) {
+      Object.assign(
+        repositoryState.rows.find((row) => row.ref === metadata.ref),
+        metadata,
+        { status: 'active' }
+      );
+    }
+
     async create(nextOwner: UploadOwner, metadata: any) {
       const row = { ...nextOwner, ...metadata, status: 'active' };
       repositoryState.rows.push(row);
@@ -152,10 +163,11 @@ describe('S3UploadStagingStore', () => {
       owner,
       name: '../report.txt',
       mimeType: 'text/plain',
-      provenance: 'browser',
+      provenance: 'gateway-discord',
       body: Readable.from('0123456789'),
     });
     expect(metadata.name).toBe('report.txt');
+    expect(metadata.provenance).toBe('gateway-discord');
     expect([...client.objects.keys()][0]).toMatch(
       /^uploads\/agor\/tenants\/tenant-a\/uploads\/objects\/[0-9a-f]{2}\/upl_/
     );

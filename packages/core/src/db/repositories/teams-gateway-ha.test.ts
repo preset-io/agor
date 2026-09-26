@@ -1,11 +1,11 @@
 import type { BranchID, Message, MessageID, SessionID, UUID } from '@agor/core/types';
-import { MessageRole, SessionStatus } from '@agor/core/types';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { select, update } from '../database-wrapper';
-import { gatewayInboundEvents } from '../schema';
+import { runDatabaseTransaction, select, update } from '../database-wrapper';
+import { gatewayInboundEvents, tasks } from '../schema';
 import { ownedDbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
@@ -16,6 +16,7 @@ import {
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 import {
   decryptTeamsConversationAddress,
   TEAMS_CONVERSATION_ADDRESS_TTL_MS,
@@ -546,6 +547,163 @@ describe('Teams gateway HA repositories', () => {
       expect(new Date(retriedDelivery!.next_attempt_at).getTime()).toBe(
         outboundNow.getTime() + 2_345
       );
+    }
+  );
+
+  // The pause represents history, identity and prompt preparation that happens
+  // after a worker's initial check but before the durable admission transaction.
+  for (const mutation of ['disable', 'policy', 'reclaim'] as const) {
+    ownedDbTest(`fences Task admission after asynchronous ${mutation}`, async ({ db }) => {
+      const { channel, session } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation)
+      );
+      const claim = await inbound.claimQueued(admitted.event.id, 'worker-a', 30_000);
+      if (!claim) throw new Error('missing claim');
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const work = (async () => {
+        await paused;
+        return runDatabaseTransaction(
+          db,
+          async (tx) => {
+            await new GatewayInboundEventRepository(tx).assertTeamsTaskAdmission(claim);
+            return new TaskRepository(tx).createPending({
+              status: TaskStatus.QUEUED,
+              session_id: session.session_id,
+              full_prompt: 'must not be admitted',
+              created_by: session.created_by!,
+            });
+          },
+          { sqliteImmediate: true }
+        );
+      })();
+      if (mutation === 'reclaim') {
+        await update(db, gatewayInboundEvents)
+          .set({ processing_expires_at: new Date(0) })
+          .where(eq(gatewayInboundEvents.id, claim.id))
+          .run();
+        expect(await inbound.claimQueued(claim.id, 'worker-b', 30_000)).toBeTruthy();
+      } else {
+        await new GatewayChannelRepository(db).update(
+          channel.id,
+          mutation === 'disable'
+            ? { enabled: false }
+            : { config: { ...teamsConfig, allowed_user_aad_object_ids: ['different-user'] } }
+        );
+      }
+      const rejected = expect(work).rejects.toThrow('admission authority');
+      resume();
+      await rejected;
+      expect(
+        await select(db).from(tasks).where(eq(tasks.session_id, session.session_id)).all()
+      ).toEqual([]);
+    });
+
+    ownedDbTest(`fences outbound effect after asynchronous ${mutation}`, async ({ db }) => {
+      const { channel, session } = await seedTeamsMapping(db);
+      const deliveries = new TeamsMessageDeliveryRepository(db);
+      const messages = new MessagesRepository(db, (tx, message) =>
+        deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+      );
+      const message = await messages.create(assistantMessage(session.session_id, 0));
+      const delivery = await deliveries.findByMessageId(message.message_id);
+      if (!delivery) throw new Error('missing delivery');
+      const claim = await deliveries.claim(delivery.delivery_id, 'worker-a', 30_000);
+      if (!claim) throw new Error('missing claim');
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      let sent = false;
+      const work = (async () => {
+        await paused;
+        await deliveries.markEffectStarted({
+          deliveryId: delivery.delivery_id,
+          claimToken: claim.claim_token,
+          claimGeneration: claim.claim_generation,
+        });
+        sent = true;
+      })();
+      if (mutation === 'reclaim') {
+        expect(
+          await deliveries.claim(
+            delivery.delivery_id,
+            'worker-b',
+            30_000,
+            new Date(new Date(claim.lease_expires_at).getTime() + 1)
+          )
+        ).toBeTruthy();
+      } else {
+        await new GatewayChannelRepository(db).update(
+          channel.id,
+          mutation === 'disable'
+            ? { enabled: false }
+            : { config: { ...teamsConfig, outbound_enabled: false } }
+        );
+      }
+      const rejected = expect(work).rejects.toThrow();
+      resume();
+      await rejected;
+      expect(sent).toBe(false);
+      expect((await deliveries.findById(delivery.delivery_id))?.effect_started_at).toBeNull();
+    });
+  }
+
+  ownedDbTest(
+    'expires only the claimed row, leaving bounded discovery to collect the rest',
+    async ({ db }) => {
+      const { channel } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const first = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation, 'expiry-a')
+      );
+      const second = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation, 'expiry-b')
+      );
+      await update(db, gatewayInboundEvents)
+        .set({ payload_expires_at: new Date(0) })
+        .where(eq(gatewayInboundEvents.gateway_channel_id, channel.id))
+        .run();
+      expect(await inbound.claimQueued(first.event.id, 'expiry-worker', 30_000)).toBeNull();
+      const untouched = await inbound.findByProviderEvent(channel.id, 'expiry-b');
+      expect(untouched?.status).toBe('pending');
+      expect(untouched?.payload_encrypted).toBeTruthy();
+      expect(await inbound.findDueTeamsRefs(db, { limit: 1 })).toEqual([
+        { tenant_id: 'default', gateway_channel_id: channel.id, event_id: second.event.id },
+      ]);
+    }
+  );
+  ownedDbTest(
+    'admits a Task while the current event and channel fences are held',
+    async ({ db }) => {
+      const { channel, session } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation)
+      );
+      const claim = await inbound.claimQueued(admitted.event.id, 'current-worker', 30_000);
+      if (!claim) throw new Error('missing claim');
+      const task = await runDatabaseTransaction(
+        db,
+        async (tx) => {
+          await new GatewayInboundEventRepository(tx).assertTeamsTaskAdmission(claim);
+          return new TaskRepository(tx).createPending({
+            status: TaskStatus.QUEUED,
+            session_id: session.session_id,
+            full_prompt: 'current',
+            created_by: session.created_by!,
+          });
+        },
+        { sqliteImmediate: true }
+      );
+      expect(task.session_id).toBe(session.session_id);
+      expect(
+        await select(db).from(tasks).where(eq(tasks.session_id, session.session_id)).all()
+      ).toHaveLength(1);
     }
   );
 });

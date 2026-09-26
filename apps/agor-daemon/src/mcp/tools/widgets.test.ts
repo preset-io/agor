@@ -24,7 +24,13 @@ vi.mock('../../utils/append-system-message.js', () => ({
 
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { widgetAutoResumeTaskId } from '../../utils/durable-task-id.js';
+import { registerAllWidgets } from '../../widgets/index.js';
 import { registerWidgetTools } from './widgets.js';
+
+// A widget's mint-time gate lives on its registry entry, and `mintWidgetMessage`
+// refuses a type this daemon has not registered. Same call `index.ts` makes at
+// boot.
+registerAllWidgets();
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -535,6 +541,7 @@ describe('agor_widgets_request_env_vars', () => {
     expect(promptData.metadata.widget_id).toBe(widgetId);
     expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId(widgetId as MessageID));
     expect(promptData.idempotencyTaskId).not.toBe(widgetId);
+    expect((promptCall!.args[1] as { provider?: string }).provider).toBeUndefined();
   });
 
   it('reads the prompt actor env vars rather than the shared Session owner', async () => {

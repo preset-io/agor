@@ -600,6 +600,34 @@ describe('createBranch', () => {
     expect(featureFileExists).toBe(true);
   });
 
+  it('pins worktree creation to the resolved source SHA when the named ref moves', async () => {
+    await createTestRepoWithBranches(repoDir);
+    const git = simpleGit(repoDir);
+    const pinnedSha = (await git.revparse(['feature-branch'])).trim();
+    await git.checkout('feature-branch');
+    await fs.writeFile(path.join(repoDir, 'after-resolution.txt'), 'moved', 'utf-8');
+    await git.add('after-resolution.txt');
+    await git.commit('move source after resolution');
+    await git.checkout('main');
+
+    await createBranch(
+      repoDir,
+      branchDir,
+      'pinned-feature',
+      true,
+      false,
+      'feature-branch',
+      undefined,
+      'branch',
+      undefined,
+      undefined,
+      pinnedSha
+    );
+
+    expect(await getCurrentSha(branchDir)).toBe(pinnedSha);
+    await expect(fs.access(path.join(branchDir, 'after-resolution.txt'))).rejects.toThrow();
+  });
+
   it('creates a worktree from a template ref missing on the destination remote', async () => {
     const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
     await simpleGit().clone(destinationRemote, repoDir);
@@ -637,7 +665,11 @@ describe('createBranch', () => {
   it('does not leave a temporary source ref when the target path already exists', async () => {
     const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
     await simpleGit().clone(destinationRemote, repoDir);
-    await fs.mkdir(branchDir);
+    // Must be NON-empty to trip the guard: an empty directory is deliberately
+    // allowed through so a failed provisioning attempt — which leaves exactly
+    // such an empty directory behind — stays repairable by retry provisioning.
+    await fs.mkdir(branchDir, { recursive: true });
+    await fs.writeFile(path.join(branchDir, 'preexisting.txt'), 'x', 'utf-8');
 
     await expect(
       createBranch(
@@ -1622,6 +1654,40 @@ describe('createBranchAsClone', () => {
     const cloned = simpleGit(targetPath);
     const remoteBranches = await cloned.branch(['-r']);
     expect(remoteBranches.all).not.toContain('origin/my-new-feature');
+  });
+
+  it('checks out a raw commit SHA detached in clone mode', async () => {
+    await seedRemoteWithBranches();
+    const source = path.join(tempDir, 'detached-source');
+    await simpleGit().clone(remoteDir, source);
+    const sha = (await simpleGit(source).revparse(['HEAD'])).trim();
+    const targetPath = path.join(tempDir, 'wt-detached');
+
+    const result = await createBranchAsClone({
+      remoteUrl: remoteDir,
+      targetPath,
+      ref: sha,
+      detached: true,
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: sha });
+    const cloned = simpleGit(targetPath);
+    expect((await cloned.revparse(['HEAD'])).trim()).toBe(sha);
+    expect((await cloned.revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('HEAD');
+  });
+
+  it('fails clone materialization if the resolved ref moved before checkout', async () => {
+    await seedRemoteWithBranches();
+    const targetPath = path.join(tempDir, 'wt-ref-moved');
+
+    await expect(
+      createBranchAsClone({
+        remoteUrl: remoteDir,
+        targetPath,
+        ref: 'main',
+        expectedSha: '0'.repeat(40),
+      })
+    ).rejects.toThrow(/moved during clone/);
   });
 
   it('clones a template ref from its source while keeping the private destination as origin', async () => {

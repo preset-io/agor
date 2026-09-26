@@ -7,8 +7,8 @@ import {
   authorizeBoardCommentRouteAccess,
   boardCommentReactionInput,
   boardCommentReplyInput,
-  createTenantScopedAuthenticatedRouteRegistrar,
 } from './register-routes.js';
+import { createTenantScopedAuthenticatedRouteRegistrar } from './utils/tenant-authenticated-route.js';
 
 const USER = '018f0000-0000-7000-8000-000000000001';
 const OTHER = '018f0000-0000-7000-8000-000000000002';

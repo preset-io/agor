@@ -1,0 +1,151 @@
+import type { Server } from 'node:http';
+import { resolveMultiTenancyConfig } from '@agor/core/config';
+import {
+  BoardRepository,
+  BranchRepository,
+  SessionRepository,
+  type TenantScopeAwareDatabase,
+  UsersRepository,
+} from '@agor/core/db';
+import {
+  type Application,
+  AuthenticationService,
+  authenticate,
+  errorHandler,
+  feathers,
+  feathersExpress,
+  rest,
+  socketio,
+} from '@agor/core/feathers';
+import type { HookContext, UserID } from '@agor/core/types';
+import express from 'express';
+import jwt from 'jsonwebtoken';
+import { DrizzleService } from '../src/adapters/drizzle.js';
+import { RuntimeJWTStrategy } from '../src/auth/runtime-jwt-strategy.js';
+import { setupMCPRoutes } from '../src/mcp/server.js';
+import { type RegisterHooksContext, registerHooks } from '../src/register-hooks.js';
+import { BoardObjectsService } from '../src/services/board-objects.js';
+import { createBoardsService } from '../src/services/boards.js';
+import { BranchesService } from '../src/services/branches.js';
+import { setupCapabilityPolicyServices } from '../src/services/capability-policies.js';
+import { setupBoardEffectiveAccessService } from '../src/services/groups.js';
+import { TASKS_SERVICE_TRANSPORT_METHODS, TasksService } from '../src/services/tasks.js';
+import { createUsersService } from '../src/services/users.js';
+import { configureChannels, createSocketIOConfig } from '../src/setup/socketio.js';
+
+const JWT_SECRET = 'board-metadata-disposable-test-secret';
+
+/** Real REST/auth/hooks/repositories; only unrelated daemon services are inert. */
+export async function boardMetadataTestApp(
+  db: TenantScopeAwareDatabase,
+  config: RegisterHooksContext['config'],
+  withSocketIO = false,
+  withMcp = false,
+  withTasks = false,
+  configure?: (app: Application) => Promise<void>
+) {
+  const app = feathersExpress(feathers());
+  app.use(express.json());
+  app.configure(rest());
+  if (!withSocketIO) (app as unknown as { publish: () => void }).publish = () => undefined;
+  app.set('config', config);
+  app.set('authentication', {
+    secret: JWT_SECRET,
+    entity: 'user',
+    entityId: 'user_id',
+    service: 'users',
+    authStrategies: ['jwt'],
+    jwtOptions: {
+      header: { typ: 'access' },
+      audience: 'https://agor.dev',
+      issuer: 'agor',
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    },
+  });
+  for (const path of ['messages', 'repos', 'sessions', 'leaderboard', 'schedules', 'tasks']) {
+    app.use(path, {
+      async find() {
+        return [];
+      },
+    });
+  }
+  const sessionsRepository = new SessionRepository(db);
+  if (withTasks) {
+    app.unuse('sessions');
+    app.unuse('tasks');
+    app.use(
+      'sessions',
+      new DrizzleService(sessionsRepository, { id: 'session_id', resourceType: 'Session' })
+    );
+    app.use('tasks', new TasksService(db, app), { methods: [...TASKS_SERVICE_TRANSPORT_METHODS] });
+  }
+  app.use('users', createUsersService(db, app, config));
+  const authentication = new AuthenticationService(app);
+  authentication.register(
+    'jwt',
+    new RuntimeJWTStrategy({ multiTenancy: resolveMultiTenancyConfig(config) })
+  );
+  app.use('authentication', authentication);
+  if (withSocketIO) {
+    const sockets = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      credentialsAllowed: false,
+      multiTenancy: resolveMultiTenancyConfig(config),
+    });
+    app.configure(socketio(sockets.serverOptions, sockets.callback));
+    configureChannels(app);
+  }
+  // Register realtime services after the transport installs its event mixins.
+  app.use('branches', new BranchesService(db, app));
+  const boardsService = createBoardsService(db);
+  app.use('boards', boardsService);
+  app.use('board-objects', new BoardObjectsService(db, app));
+  setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin: false });
+  setupCapabilityPolicyServices(app, db, { allowSuperadmin: false });
+  await configure?.(app);
+  registerHooks({
+    db,
+    app,
+    config,
+    jwtSecret: JWT_SECRET,
+    requireAuth: authenticate({ strategies: ['jwt'] }) as (
+      context: HookContext
+    ) => Promise<HookContext>,
+    superadminOpts: { allowSuperadmin: false },
+    deployment: { mode: 'standalone' },
+    sessionsService: app.service('sessions') as never,
+    messagesService: app.service('messages') as never,
+    // Match registerServices' custom-method transport declaration adapter.
+    boardsService: boardsService as unknown as RegisterHooksContext['boardsService'],
+    branchRepository: new BranchRepository(db),
+    usersRepository: new UsersRepository(db),
+    sessionsRepository: withTasks
+      ? sessionsRepository
+      : ({} as RegisterHooksContext['sessionsRepository']),
+  });
+  if (withMcp) setupMCPRoutes(app, db, true, config);
+  app.use(errorHandler());
+  const server = (await app.listen(0)) as Server;
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected test TCP server');
+  return {
+    app,
+    url: `http://127.0.0.1:${address.port}`,
+    headers(userId: UserID, tenantId?: string) {
+      const token = jwt.sign(
+        { sub: userId, type: 'access', ...(tenantId ? { tenant_id: tenantId } : {}) },
+        JWT_SECRET,
+        {
+          issuer: 'agor',
+          audience: 'https://agor.dev',
+          expiresIn: '15m',
+        }
+      );
+      return { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    },
+    async close() {
+      await app.teardown();
+    },
+  };
+}

@@ -22,8 +22,8 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
-  BranchEnvironmentUpdate,
   BranchID,
+  CancelQueuedTasksInput,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
   AuthenticatedUser as CoreAuthenticatedUser,
@@ -33,6 +33,7 @@ import type {
   DeepReadonly,
   Params as FeathersParams,
   Message,
+  ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
   SdkHealthFailureInput,
@@ -40,13 +41,17 @@ import type {
   SessionUpdate,
   Task,
   TaskPendingDispatchStatus,
+  TaskQueueMutationResult,
 } from '@agor/core/types';
-import type { DaemonMetrics } from './metrics/index.js';
+import type { DaemonMetrics, DaemonOperationalMetrics } from './metrics/index.js';
 import type { EnvironmentHealthCheckOptions } from './services/branches.js';
 import type {
   ExecuteTaskData,
+  SessionArchiveBatchResult,
   SessionArchiveOptions,
   SessionArchiveResult,
+  SessionBulkArchiveOptions,
+  SessionBulkArchiveResult,
 } from './services/sessions.js';
 
 // Re-export core types for convenience
@@ -65,6 +70,8 @@ export type Application = ExpressApplication & {
   set(name: 'distributedWorkIdentity', value: DistributedWorkIdentity): ExpressApplication;
   get(name: 'metrics'): DaemonMetrics | undefined;
   set(name: 'metrics', value: DaemonMetrics): ExpressApplication;
+  get(name: 'daemonOperationalMetrics'): DaemonOperationalMetrics | undefined;
+  set(name: 'daemonOperationalMetrics', value: DaemonOperationalMetrics): ExpressApplication;
 };
 
 /**
@@ -110,6 +117,21 @@ export interface SessionsServiceImpl
     options?: SessionArchiveOptions,
     params?: FeathersParams
   ): Promise<SessionArchiveResult>;
+  archiveBtwSession(id: string, params?: FeathersParams): Promise<SessionArchiveResult>;
+  archiveBranchSessions(
+    branchId: BranchID,
+    params?: FeathersParams
+  ): Promise<SessionArchiveBatchResult>;
+  unarchiveBranchSessions(
+    branchId: BranchID,
+    params?: FeathersParams
+  ): Promise<SessionArchiveBatchResult>;
+  archiveRootsInBranch(
+    branchId: BranchID,
+    rootIds: import('@agor/core/types').SessionID[],
+    options: SessionBulkArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionBulkArchiveResult>;
   enrichRemoteRelationships(
     sessionList: import('@agor/core/types').Session[]
   ): Promise<import('@agor/core/types').Session[]>;
@@ -174,6 +196,14 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
+  cancelQueued(
+    data: CancelQueuedTasksInput,
+    params?: FeathersParams
+  ): Promise<TaskQueueMutationResult>;
+  reorderQueued(
+    data: ReorderQueuedTasksInput,
+    params?: FeathersParams
+  ): Promise<TaskQueueMutationResult>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
   complete(
     id: string,
@@ -234,6 +264,13 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
     },
     params?: FeathersParams
   ): Promise<Branch>;
+  retryBranchProvisioning(branchId: string, params?: FeathersParams): Promise<Branch>;
+  // Takes AuthenticatedParams, not bare FeathersParams: the startup watchdog
+  // calls it with an explicit static-tenant context and no user, and that
+  // tenant has to survive into the repository scope.
+  reconcileStuckCreatingBranches(
+    params?: CoreAuthenticatedParams
+  ): Promise<{ scanned: number; failed: number }>;
   removeBranch(id: string, name: string, params?: FeathersParams): Promise<Repo>;
   importFromAgorYml(
     id: string,
@@ -284,9 +321,12 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
   fromBlob(
     blob: import('@agor/core/types').BoardExportBlob,
     params?: FeathersParams
-  ): Promise<Board>;
+  ): Promise<import('@agor/core/types').BoardImportResult>;
   toYaml(boardId: string, params?: FeathersParams): Promise<string>;
-  fromYaml(yamlContent: string, params?: FeathersParams): Promise<Board>;
+  fromYaml(
+    yamlContent: string,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BoardImportResult>;
   clone(boardId: string, newName: string, params?: FeathersParams): Promise<Board>;
   setPrimaryTeammate(
     data: { id?: string; boardId?: string; branchId: string },
@@ -314,19 +354,15 @@ export interface MessagesServiceImpl
  * Branches service with custom methods (server-side implementation)
  */
 export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
-  updateEnvironment(
-    id:
-      | BranchID
-      | {
-          branch_id?: BranchID;
-          branchId?: BranchID;
-          environment_update?: BranchEnvironmentUpdate;
-          environmentUpdate?: BranchEnvironmentUpdate;
-        },
-    environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
+  retireTeammate(
+    id: BranchID,
     params?: FeathersParams
-  ): Promise<Branch>;
-  startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  ): Promise<import('@agor/core/types').BranchCleanAccepted>;
+  clean(
+    input: { branchId: import('@agor/core/types').BranchID },
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').BranchCleanAccepted>;
+  startEnvironment(id: BranchID, params?: FeathersParams, confirmationOf?: string): Promise<Branch>;
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

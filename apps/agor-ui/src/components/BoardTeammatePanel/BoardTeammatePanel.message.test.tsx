@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch } from '@agor-live/client';
+import type { AgorClient, Board, Branch, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +24,7 @@ const board = {
   created_at: '2026-08-14T00:00:00.000Z',
   last_updated: '2026-08-14T00:00:00.000Z',
   created_by: 'user-1',
+  primary_owner_user_id: 'user-1',
   url: '',
   archived: false,
 } satisfies Board;
@@ -42,6 +43,7 @@ describe('BoardTeammatePanel messages', () => {
     messageApi.showError.mockReset();
     agorStore.setState({
       ...EMPTY_MAPS,
+      userById: new Map([['user-1', { user_id: 'user-1', role: 'member' } as User]]),
       branchById: new Map([[teammate.branch_id, teammate]]),
     });
   });
@@ -59,6 +61,7 @@ describe('BoardTeammatePanel messages', () => {
       <AntApp>
         <BoardTeammatePanel
           board={board}
+          currentUserId="user-1"
           activeTab="teammate"
           onTabChange={vi.fn()}
           primaryTeammateInaccessible={false}
@@ -78,5 +81,46 @@ describe('BoardTeammatePanel messages', () => {
       )
     );
     expect(messageApi.showSuccess).not.toHaveBeenCalled();
+  });
+  it('assigns an inherited teammate from another board with one atomic request', async () => {
+    agorStore.setState({
+      branchById: new Map([
+        [
+          teammate.branch_id,
+          {
+            ...teammate,
+            board_id: 'source-board' as Board['board_id'],
+            permission_binding: 'inherit',
+          },
+        ],
+      ]),
+    });
+    const setPrimaryTeammate = vi.fn().mockResolvedValue(board);
+    const patch = vi.fn();
+    const client = {
+      service: (path: string) => (path === 'boards' ? { setPrimaryTeammate } : { patch }),
+    } as unknown as AgorClient;
+    render(
+      <AntApp>
+        <BoardTeammatePanel
+          board={board}
+          currentUserId="user-1"
+          activeTab="teammate"
+          onTabChange={vi.fn()}
+          primaryTeammateInaccessible={false}
+          onSessionClick={vi.fn()}
+          client={client}
+        />
+      </AntApp>
+    );
+    const assign = screen.getByRole('button', { name: 'Assign' });
+    await waitFor(() => expect(assign).toBeEnabled());
+    fireEvent.click(assign);
+    await waitFor(() => expect(messageApi.showSuccess).toHaveBeenCalledWith('Teammate assigned'));
+    expect(setPrimaryTeammate).toHaveBeenCalledWith({
+      boardId: board.board_id,
+      branchId: teammate.branch_id,
+    });
+    expect(patch).not.toHaveBeenCalled();
   });
 });

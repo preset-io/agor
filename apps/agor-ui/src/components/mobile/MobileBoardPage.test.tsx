@@ -142,8 +142,9 @@ describe('MobileBoardPage', () => {
                     ],
                   ])
                 }
-                onMenuClick={vi.fn()}
                 onOpenBranch={onOpenBranch}
+                onNewSession={vi.fn()}
+                onGiveFirstTask={vi.fn()}
               />
             }
           />
@@ -151,7 +152,15 @@ describe('MobileBoardPage', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getAllByText('Review')).toHaveLength(3);
+    // Board identity lives in the header; only its description remains in the content.
+    expect(screen.getAllByText('Delivery board')).toHaveLength(1);
+    expect(screen.getByText('Everything shipping this week').closest('.ant-card')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Open comments for Delivery board' })
+    ).not.toBeInTheDocument();
+
+    // Zone label appears as the collapsible zone header and on the card's zone tag.
+    expect(screen.getAllByText('Review')).toHaveLength(2);
     expect(screen.getByText('Ship by Friday')).toBeInTheDocument();
     expect(screen.getByText('## Checklist')).toBeInTheDocument();
     expect(screen.getByText('Release dashboard')).toBeInTheDocument();
@@ -161,5 +170,37 @@ describe('MobileBoardPage', () => {
     expect(screen.getByText('Polish mobile UI')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
     expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'schedule');
+  });
+
+  it('offers a first-task CTA on an empty board', () => {
+    const onGiveFirstTask = vi.fn();
+    const emptyBoard = { board_id: 'b2', name: 'Fresh board', objects: {} } as unknown as Board;
+    render(
+      <MemoryRouter initialEntries={['/m/board/b2']}>
+        <Routes>
+          <Route
+            path="/m/board/:boardId"
+            element={
+              <MobileBoardPage
+                boardById={new Map([['b2', emptyBoard]])}
+                branchById={new Map()}
+                repoById={new Map()}
+                sessionsByBranch={new Map()}
+                boardObjectsByBoardId={new Map()}
+                cardById={new Map()}
+                artifactById={new Map()}
+                onOpenBranch={vi.fn()}
+                onNewSession={vi.fn()}
+                onGiveFirstTask={onGiveFirstTask}
+                firstTaskAssistantName="Fable"
+              />
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Give Fable their first task/ }));
+    expect(onGiveFirstTask).toHaveBeenCalled();
   });
 });

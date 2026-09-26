@@ -869,14 +869,17 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     const memory =
       args.includeMemory === false || !docsService?.find
         ? []
-        : await docsService.find(
-            mcpParams(ctx, {
-              namespace_id: namespace.namespace_id,
-              kind: 'memory',
-              include_content: true,
-              include_my_drafts: true,
-              limit: args.limit ?? 10,
-            })
+        : knowledgeSearchRows(
+            await docsService.find(
+              mcpParams(ctx, {
+                namespace_id: namespace.namespace_id,
+                kind: 'memory',
+                include_content: true,
+                include_my_drafts: true,
+                $limit: args.limit ?? 10,
+                $sort: { updated_at: -1 },
+              })
+            )
           );
     return textResult({
       branch_id: branch.branch_id,
@@ -1036,6 +1039,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
 
     let existingContent = `# ${date}\n`;
     let expectedVersion: string | number | undefined;
+    let documentExists = false;
     try {
       const existing = (await callCustomMethod(
         docsService,
@@ -1048,6 +1052,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         mcpParams(ctx)
       )) as HydratedKnowledgeDocumentResult | undefined;
       if (existing) {
+        documentExists = true;
         existingContent = typeof existing.content === 'string' ? existing.content : existingContent;
         expectedVersion = existing.current_version?.version_id;
       }
@@ -1092,11 +1097,20 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         {
           namespace_slug: namespace.slug,
           path: docPath,
-          title: date,
-          kind: 'memory',
-          visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
-          edit_policy: 'public',
-          status: 'published',
+          // Appending is a content operation, so it must not restate document
+          // governance. Creation defaults apply only on first write: replaying
+          // them on every append silently republished a memory document its
+          // owner had set to private/owner, and undid retitles and drafting.
+          // Omitted fields are preserved by the repository's merge on update.
+          ...(documentExists
+            ? {}
+            : {
+                title: date,
+                kind: 'memory',
+                visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
+                edit_policy: 'public',
+                status: 'published',
+              }),
           content_text: nextContent,
           expected_version: expectedVersion,
           metadata: {

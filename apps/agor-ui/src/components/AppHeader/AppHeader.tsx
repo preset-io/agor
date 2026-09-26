@@ -7,6 +7,7 @@ import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
@@ -148,7 +149,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
-  const marketplaceHref = useHref('/marketplace');
+  const catalog = useMCPCatalogModal();
   const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
@@ -336,29 +337,17 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           />
         </Tooltip>
-        {/* A marketplace is a surface people are meant to come back to, so it
-            gets promoted chrome next to the gear rather than a line inside the
-            gear's menu. Ungated by role: the catalog read is authenticated-only
-            (`mcp-catalog` takes `requireAuth` and nothing more), so everyone who
-            can see this header can browse it. Connecting is narrower, and
-            CatalogDetailDrawer asks the MCP member policy before offering it —
-            without that this entry would send a viewer to a Connect button that
-            403s, which is why the two changed together. */}
-        <Tooltip title="Marketplace">
-          <Button
-            type="text"
-            icon={<ShopOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href={marketplaceHref}
-            aria-label="Marketplace"
-            onClick={(event) => {
-              if (isPlainLeftClick(event)) {
-                event.preventDefault();
-                navigate('/marketplace');
-              }
-            }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          />
-        </Tooltip>
+        {catalog && (
+          <Tooltip title="Open MCP Catalog">
+            <Button
+              type="text"
+              icon={<ShopOutlined style={{ fontSize: token.fontSizeLG }} />}
+              aria-label="Open MCP Catalog"
+              onClick={(event) => catalog.openCatalog(event.currentTarget)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            />
+          </Tooltip>
+        )}
         <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}

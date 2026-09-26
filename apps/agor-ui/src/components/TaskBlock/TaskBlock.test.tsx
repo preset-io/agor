@@ -18,6 +18,7 @@ import {
   groupMessagesIntoBlocks,
   isAuthorizationRevokedFailure,
   isVerifiedRuntimeInterruption,
+  runtimeInterruptionDescription,
   shouldRenderLiveTaskProgress,
   TaskBlock,
 } from './TaskBlock';
@@ -169,6 +170,19 @@ describe('verified runtime interruption projection', () => {
     termination_request: { cause: 'heartbeat_lost' },
   } as unknown as Task;
 
+  it.each([
+    ['heartbeat_lost', 'stopped unexpectedly or stopped responding'],
+    ['startup_timeout', 'did not start in time'],
+    ['sdk_health_failure', 'stopped making progress'],
+  ])('explains a %s interruption by its cause', (cause, expected) => {
+    const description = runtimeInterruptionDescription({
+      ...task,
+      termination_request: { ...task.termination_request!, cause },
+    } as Task);
+    expect(description).toContain(expected);
+    expect(description).toContain('verified containment');
+  });
+
   it('offers outcome-based recovery only for the latest verified interruption', () => {
     expect(isVerifiedRuntimeInterruption(task, true)).toBe(true);
     expect(isVerifiedRuntimeInterruption(task, false)).toBe(false);
@@ -246,15 +260,11 @@ describe('authorization-revoked failure projection', () => {
               end_index: 0,
               start_timestamp: '2026-08-30T19:26:18.933Z',
             },
-            tool_use_count: 0,
           } as Task
         }
-        isExpanded
-        onExpandChange={vi.fn()}
         taskMessages={[]}
         taskMessagesLoaded
         onLoadTaskMessages={vi.fn()}
-        onUnloadTaskMessages={vi.fn()}
       />
     );
 

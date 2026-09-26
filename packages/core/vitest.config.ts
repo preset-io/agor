@@ -39,11 +39,15 @@ export default defineConfig({
   // Workspace dependencies expose their TypeScript implementation through
   // the `source` condition. Tests must not depend on prebuilt sibling dist
   // directories being present in a fresh worktree.
-  resolve: { conditions: ['source'] },
+  resolve: {
+    conditions: ['source'],
+    // Resolve before Vitest externalization so config and DB source share ALS.
+    alias: [{ find: /^@agor\/core\/db$/, replacement: path.join(srcDir, 'db/index.ts') }],
+  },
   test: {
     globals: true,
     environment: 'node',
     testTimeout: 10000,
-    setupFiles: ['./test/isolate-host-env.ts'],
+    setupFiles: ['../../test/isolate-host-env.ts'],
   },
 });

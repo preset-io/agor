@@ -1,7 +1,7 @@
 import { encryptApiKey } from '@agor/core/db';
 import type { GatewayChannel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { isVerifiedHttpGatewayCreate } from './gateway-authority';
+import { isVerifiedHttpGatewayCreate, verifiedHttpGatewayAuthority } from './gateway-authority';
 import { TeamsGatewayWorker } from './teams-gateway-worker';
 
 vi.stubEnv('AGOR_MASTER_SECRET', 'teams-worker-test-secret');
@@ -165,6 +165,53 @@ function makeWorker(options: {
 }
 
 describe('TeamsGatewayWorker inbound admission', () => {
+  it('carries the original generation and processing token across delayed history work', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pause = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const setup = makeWorker({
+      activity: activity(),
+      catchUp: async () => {
+        entered();
+        await pause;
+        return { activities: [], complete: false };
+      },
+    });
+    const work = setup.worker.checkOnce();
+    await started;
+    expect(setup.create).not.toHaveBeenCalled();
+    release();
+    await work;
+    expect(verifiedHttpGatewayAuthority(setup.create.mock.calls[0][0])).toMatchObject({
+      id: 'event-1',
+      gateway_channel_id: 'channel-1',
+      processing_token: 'claim-1',
+      provider_config_generation: 3,
+      verified_app_id: 'teams-app',
+      verified_tenant_id: 'tenant-1',
+    });
+  });
+
+  it('backs off empty discovery instead of scanning shared events every second', async () => {
+    vi.useFakeTimers();
+    const setup = makeWorker({ activity: activity() });
+    const scan = vi.spyOn(setup.worker, 'checkOnce').mockResolvedValue(0);
+    try {
+      setup.worker.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(scan.mock.calls.length).toBeLessThanOrEqual(6);
+      expect(scan.mock.calls.length).toBeGreaterThan(0);
+      await setup.worker.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never creates a Task for an unmentioned standard-channel message', async () => {
     const catchUp = vi.fn(async () => ({ activities: [], complete: true }));
     const setup = makeWorker({

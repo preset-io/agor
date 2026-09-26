@@ -5,6 +5,8 @@
  */
 
 import {
+  ArtifactRepository,
+  BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
@@ -196,6 +198,105 @@ describe('BoardsService - Custom Methods', () => {
     expect(imported.custom_css).toBe('.yaml-board { gap: 8px; }');
   });
 
+  dbTest("fromYaml drops references to another user's private artifact", async ({ db }) => {
+    await ensureTestUser(db);
+    const users = new UsersRepository(db);
+    const otherUser = generateId() as UUID;
+    await users.create({
+      user_id: otherUser,
+      email: `other-${otherUser}@example.com`,
+      name: 'Other',
+      role: 'member',
+    });
+    const service = new BoardsService(db);
+    const sourceBoard = (await service.create({
+      name: 'Artifact Home',
+      created_by: otherUser,
+    })) as Board;
+    // Another user's private artifact in the same tenant: an import must not be
+    // able to attach a reference to it by naming its ID.
+    const artifact = await new ArtifactRepository(db).create({
+      artifact_id: generateId(),
+      board_id: sourceBoard.board_id,
+      name: 'private',
+      created_by: otherUser,
+      public: false,
+    });
+
+    const imported = await service.fromYaml(
+      [
+        'name: Imported With Artifact',
+        'objects:',
+        '  note-1:',
+        '    type: markdown',
+        '    x: 0',
+        "    'y': 0",
+        '    width: 400',
+        '    content: hi',
+        `  artifact-${artifact.artifact_id}:`,
+        '    type: artifact',
+        '    x: 0',
+        "    'y': 0",
+        '    width: 600',
+        '    height: 400',
+        `    artifact_id: ${artifact.artifact_id}`,
+        '',
+      ].join('\n'),
+      TEST_PARAMS
+    );
+
+    expect(Object.keys(imported.objects ?? {})).toEqual(['note-1']);
+    expect(imported.import_skipped).toEqual([
+      expect.objectContaining({
+        object_id: `artifact-${artifact.artifact_id}`,
+        reason: 'unresolved_reference',
+      }),
+    ]);
+    const stored = await new BoardRepository(db).findById(imported.board_id);
+    expect(Object.keys(stored?.objects ?? {})).toEqual(['note-1']);
+  });
+
+  dbTest("fromBlob keeps a reference to another user's public artifact", async ({ db }) => {
+    await ensureTestUser(db);
+    const otherUser = generateId() as UUID;
+    await new UsersRepository(db).create({
+      user_id: otherUser,
+      email: `other-${otherUser}@example.com`,
+      name: 'Other',
+      role: 'member',
+    });
+    const service = new BoardsService(db);
+    const home = (await service.create({ name: 'Home', created_by: otherUser })) as Board;
+    const artifact = await new ArtifactRepository(db).create({
+      artifact_id: generateId(),
+      board_id: home.board_id,
+      name: 'shared',
+      created_by: otherUser,
+      public: true,
+    });
+    const key = `artifact-${artifact.artifact_id}`;
+
+    const imported = await service.fromBlob(
+      {
+        name: 'Uses public artifact',
+        objects: {
+          [key]: {
+            type: 'artifact',
+            x: 0,
+            y: 0,
+            width: 600,
+            height: 400,
+            artifact_id: artifact.artifact_id,
+          },
+        },
+      },
+      TEST_PARAMS
+    );
+
+    expect(Object.keys(imported.objects ?? {})).toEqual([key]);
+    expect(imported.import_skipped).toBeUndefined();
+  });
+
   dbTest('clone should create a copy with new name', async ({ db }) => {
     await ensureTestUser(db);
     const service = new BoardsService(db);
@@ -240,13 +341,18 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest(
-    'removeBoardObject clears zone-pinned entities with absolute positions',
+    'deleteZone keeps pinned entities and comments at their absolute board positions',
     async ({ db }) => {
       const emitBoardObjectPatched = vi.fn();
-      const service = new BoardsService(db, emitBoardObjectPatched);
+      const emitBoardCommentPatched = vi.fn();
+      const service = new BoardsService(db, {
+        emitBoardObjectPatched,
+        emitBoardCommentPatched,
+      });
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
       const boardObjectRepo = new BoardObjectRepository(db);
+      const commentsRepo = new BoardCommentsRepository(db);
 
       const repo = await repoRepo.create(createRepoData());
       const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
@@ -272,12 +378,31 @@ describe('BoardsService - Custom Methods', () => {
         position: { x: 10, y: 20 },
         zone_id: 'zone-review',
       });
+      const comment = await commentsRepo.create({
+        board_id: board.board_id,
+        created_by: TEST_USER,
+        content: 'Keep this comment',
+        position: {
+          relative: {
+            parent_id: 'review',
+            parent_type: 'zone',
+            offset_x: 7,
+            offset_y: 8,
+          },
+        },
+      });
 
-      await service.removeBoardObject(board.board_id, 'zone-review');
+      const result = await service.deleteZone(board.board_id, 'zone-review', false);
 
       const updatedBoardObject = await boardObjectRepo.findByObjectId(boardObject.object_id);
+      const updatedComment = await commentsRepo.findById(comment.comment_id);
+      const preservedBranch = await branchRepo.findById(branch.branch_id);
+      expect(result.board.objects?.['zone-review']).toBeUndefined();
+      expect(result.affectedSessions).toEqual([]);
+      expect(preservedBranch?.branch_id).toBe(branch.branch_id);
       expect(updatedBoardObject?.zone_id).toBeUndefined();
       expect(updatedBoardObject?.position).toEqual({ x: 110, y: 220 });
+      expect(updatedComment?.position).toEqual({ absolute: { x: 107, y: 208 } });
       expect(emitBoardObjectPatched).toHaveBeenCalledWith(
         expect.objectContaining({
           object_id: boardObject.object_id,
@@ -285,8 +410,79 @@ describe('BoardsService - Custom Methods', () => {
           zone_id: null,
         })
       );
+      expect(emitBoardCommentPatched).toHaveBeenCalledWith(
+        expect.objectContaining({
+          comment_id: comment.comment_id,
+          position: { absolute: { x: 107, y: 208 } },
+        })
+      );
     }
   );
+
+  dbTest('deleteZone rolls back every unpin when one child update fails', async ({ db }) => {
+    const service = new BoardsService(db);
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardRepo = new BoardRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const commentsRepo = new BoardCommentsRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const board = (await service.create({
+      name: 'Atomic Zone Cleanup Board',
+      slug: `atomic-zone-cleanup-${generateId()}`,
+      created_by: TEST_USER,
+      objects: {
+        'zone-review': {
+          type: 'zone',
+          x: 100,
+          y: 200,
+          width: 400,
+          height: 300,
+          label: 'Review',
+        },
+      },
+    })) as Board;
+    const boardObject = await boardObjectRepo.create({
+      board_id: board.board_id,
+      branch_id: branch.branch_id,
+      position: { x: 10, y: 20 },
+      zone_id: 'zone-review',
+    });
+    const comment = await commentsRepo.create({
+      board_id: board.board_id,
+      created_by: TEST_USER,
+      content: 'Still pinned after rollback',
+      position: {
+        relative: {
+          parent_id: 'review',
+          parent_type: 'zone',
+          offset_x: 7,
+          offset_y: 8,
+        },
+      },
+    });
+    const updateSpy = vi
+      .spyOn(BoardCommentsRepository.prototype, 'update')
+      .mockRejectedValueOnce(new Error('simulated comment update failure'));
+
+    try {
+      await expect(service.deleteZone(board.board_id, 'zone-review', false)).rejects.toThrow(
+        'simulated comment update failure'
+      );
+    } finally {
+      updateSpy.mockRestore();
+    }
+
+    const preservedBoard = await boardRepo.findById(board.board_id);
+    const preservedBoardObject = await boardObjectRepo.findByObjectId(boardObject.object_id);
+    const preservedComment = await commentsRepo.findById(comment.comment_id);
+    expect(preservedBoard?.objects?.['zone-review']).toBeDefined();
+    expect(preservedBoardObject?.zone_id).toBe('zone-review');
+    expect(preservedBoardObject?.position).toEqual({ x: 10, y: 20 });
+    expect(preservedComment?.position).toEqual(comment.position);
+  });
 
   dbTest(
     'ensureTeammateWelcomeNote creates rendered static markdown server-side',
@@ -467,7 +663,7 @@ describe('BoardsService - Custom Methods', () => {
 
   dbTest('manually emits archive transitions from the custom method', async ({ db }) => {
     const emitBoardEvent = vi.fn();
-    const service = new BoardsService(db, undefined, emitBoardEvent);
+    const service = new BoardsService(db, { emitBoardEvent });
     const board = (await service.create({
       name: 'Archive realtime',
       slug: 'archive-realtime',
@@ -514,7 +710,7 @@ describe('BoardsService.find SQL pushdown', () => {
   }
 
   dbTest(
-    'pages the whole tenant scope in SQL when no filter is present (rbac off)',
+    'pages the whole authorized tenant scope in SQL when no filter is present',
     async ({ db }) => {
       const { service } = await seed(db);
       const repoFindPage = vi.spyOn(

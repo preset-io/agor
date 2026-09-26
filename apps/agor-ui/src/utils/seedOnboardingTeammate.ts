@@ -1,6 +1,8 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
+import { getTeammateConfig } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
+import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -9,6 +11,8 @@ import {
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
+  connectedMcpServerIds?: string[];
+  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   /** Framework repo the teammate branches from — undefined while it's still cloning. */
   frameworkRepo: Repo | undefined;
   /** Board the wizard already created; the teammate is seeded onto it (no second board). */
@@ -138,14 +142,24 @@ async function findExistingSession(
       }
     }
   }
-  const fromMap = [...input.sessionById.values()].find((session) => session.branch_id === branchId);
+  // Earlier onboarding revisions could leave idle Catalog tryouts here. They
+  // are not the bootstrap, nor are normal Catalog tryouts on this teammate.
+  // A retained exact session ID above wins even if its title has since changed.
+  const isBootstrap = (session: Session) =>
+    session.branch_id === branchId &&
+    session.title ===
+      buildTeammateFirstSessionTitle({
+        displayName: input.teammateName?.trim() ?? '',
+        emoji: input.teammateEmoji,
+      });
+  const fromMap = [...input.sessionById.values()].find(isBootstrap);
   if (fromMap || !input.client) return fromMap;
 
   const result = await input.client.service('sessions').find({
-    query: { branch_id: branchId, archived: false, $limit: 1 },
+    query: { branch_id: branchId, archived: false, $limit: 100 },
   });
   const sessions = Array.isArray(result) ? result : result.data;
-  return sessions.find((session) => session.branch_id === branchId);
+  return sessions.find(isBootstrap);
 }
 
 export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput): Promise<{
@@ -240,10 +254,11 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       return { branchId: branch.branch_id, sessionId: existingSession.session_id };
     }
 
-    // No agent means the LLM step was skipped: there is no configured model to
-    // run on. Silently defaulting to claude-code here would open a session whose
-    // very first turn fails on missing credentials, so stop at the workspace and
-    // tell the user what to do instead.
+    // Callers resolve a fallback agent so onboarding lands in the first-task
+    // composer even when the LLM step was skipped (the composer then surfaces
+    // the inline connect-model panel). This branch only remains for the rare
+    // case where no agentic tool is available at all — then there is nothing to
+    // open a session with, so stop at the workspace with guidance.
     if (!input.agent) {
       warn(
         `${teammateName}'s workspace is ready. Connect an AI model in Settings - AI & Agents to start your first session.`
@@ -258,6 +273,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent,
+        ...(input.connectedMcpServerIds?.length
+          ? { mcpServerIds: input.connectedMcpServerIds }
+          : {}),
         title: buildTeammateFirstSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,
@@ -269,7 +287,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           userEmail: input.user?.email,
           goals: input.goals,
           templateId: input.templateId,
+          localHome: getTeammateConfig(branch)?.localHome,
           suggestedIntegrations: input.suggestedIntegrations,
+          slackGatewayIntent: input.slackGatewayIntent,
         }),
       },
       onCreateSession: input.onCreateSession,

@@ -26,12 +26,15 @@ import { readCollapsedBranchNode } from '../../utils/collapsedBranchNodes';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
+  REACT_FLOW_NO_WHEEL_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { BranchFilesystemRecovery } from '../BranchFilesystemRecovery';
+import { BranchWorkspaceStatus } from '../BranchWorkspaceStatus';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MarkdownPreview } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
@@ -39,7 +42,6 @@ import { BranchSessionSections } from './BranchSessionSections';
 import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
-const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
 
 interface BranchCardProps {
@@ -112,6 +114,44 @@ const BranchCardComponent = ({
   const connectionDisabled = useConnectionDisabled();
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const sessionSectionsRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || inPopover || panelMode) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const scrollArea = event.target.closest(`.${REACT_FLOW_NO_WHEEL_CLASS}`);
+      const renderer = card.closest('.react-flow__renderer');
+      if (!scrollArea || !card.contains(scrollArea) || !renderer) return;
+
+      // AntD puts nowheel on the tree wrapper, not its virtual scroll holder.
+      // Read current layout dimensions on every gesture (load/expand/resize can
+      // change them). Like markdown, an overflowing tree keeps ordinary wheel
+      // even at its edges; ctrl/meta still belongs to canvas zoom.
+      const treeHolder = scrollArea.querySelector<HTMLElement>('.ant-tree-list-holder');
+      const viewport = treeHolder ?? scrollArea;
+      const isPaginatedList = sessionSectionsRef.current?.contains(scrollArea) && !treeHolder;
+      // The spacer measures row content. Descendant decorations can extend
+      // scrollHeight a few pixels even when a short tree has no virtual scrolling.
+      const contentHeight = treeHolder?.firstElementChild?.clientHeight ?? viewport.scrollHeight;
+      const overflows =
+        contentHeight > viewport.clientHeight || viewport.scrollWidth > viewport.clientWidth;
+      if (!event.ctrlKey && !event.metaKey && !isPaginatedList && overflows) return;
+
+      // Removing nowheel alone is insufficient: the virtual list still consumes
+      // wheel. Capture first, then let React Flow own pan/zoom and anchoring.
+      event.preventDefault();
+      event.stopPropagation();
+      renderer.dispatchEvent(new WheelEvent(event.type, event));
+    };
+
+    // React's delegated wheel listeners are passive; cancellation must be native.
+    card.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    return () => card.removeEventListener('wheel', onWheel, { capture: true });
+  }, [inPopover, panelMode]);
 
   // Canvas cards hydrate their session sections in chunks after the board
   // shell commits (#1768); panel/popover surfaces render a single card, so
@@ -134,8 +174,6 @@ const BranchCardComponent = ({
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
 
-  // Notes expansion state
-  const [notesExpanded, setNotesExpanded] = useState(false);
   const [storedPeekedSessionIds, setStoredPeekedSessionIds] = useLocalStorage<string[]>(
     `${PEEK_SESSIONS_STORAGE_KEY_PREFIX}${branch.branch_id}`,
     []
@@ -212,7 +250,8 @@ const BranchCardComponent = ({
 
   // Check if branch is still being created on filesystem
   const isCreating = branch.filesystem_status === 'creating';
-  const isFailed = branch.filesystem_status === 'failed';
+  const isFailed =
+    branch.filesystem_status === 'failed' || branch.deletion_status === 'deletion_failed';
 
   // Check if this branch is a persisted agent
   const teammateConfig = useMemo(() => getTeammateConfig(branch), [branch]);
@@ -279,19 +318,6 @@ const BranchCardComponent = ({
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
 
-  // Determine if notes should show "See more" button
-  const notesNeedTruncation = branch.notes && branch.notes.length > NOTES_MAX_LENGTH;
-  const displayedNotes = useMemo(() => {
-    if (!branch.notes) return '';
-    if (!notesNeedTruncation || notesExpanded) return branch.notes;
-    // Truncate at word boundary for cleaner display
-    const truncated = branch.notes.slice(0, NOTES_MAX_LENGTH);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return lastSpace > NOTES_MAX_LENGTH * 0.8
-      ? `${truncated.slice(0, lastSpace)}...`
-      : `${truncated}...`;
-  }, [branch.notes, notesNeedTruncation, notesExpanded]);
-
   // Compose card chrome from independent visual channels so multiple
   // states can stack cleanly:
   //   • `boxShadow` — attention halo for needs_attention / awaiting prompt
@@ -330,6 +356,7 @@ const BranchCardComponent = ({
 
   return (
     <Card
+      ref={cardRef}
       style={{
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
@@ -384,7 +411,7 @@ const BranchCardComponent = ({
                 flexShrink: 0,
               }}
             >
-              {isCreating || hasRunningSession ? (
+              {isCreating || branch.deletion_status === 'deleting' || hasRunningSession ? (
                 <Spin size="large" />
               ) : isAgent && teammateConfig?.emoji ? (
                 <span style={{ fontSize: 32 }}>{teammateConfig.emoji}</span>
@@ -500,7 +527,11 @@ const BranchCardComponent = ({
             )}
             {!inPopover && !panelMode && onArchiveOrDelete && (
               <ArchiveActionButton
-                tooltip="Archive or delete branch"
+                tooltip={
+                  branch.deletion_status
+                    ? 'View deletion status or retry'
+                    : 'Archive or delete branch'
+                }
                 disabled={connectionDisabled}
                 onClick={() => {
                   setArchiveDeleteModalMounted(true);
@@ -512,6 +543,16 @@ const BranchCardComponent = ({
         </Space>
       </div>
 
+      <BranchWorkspaceStatus branch={branch} />
+      {branch.deletion_status && (
+        <div
+          role="status"
+          style={{ color: isFailed ? token.colorError : token.colorTextSecondary, marginBottom: 8 }}
+        >
+          {branch.deletion_status === 'deletion_failed' ? 'Deletion failed' : 'Deleting…'}
+          {branch.deletion_error && <div>{branch.deletion_error}</div>}
+        </div>
+      )}
       {/* Branch metadata - all pills on one row with wrapping */}
       <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
         <Space size={4} wrap>
@@ -541,47 +582,24 @@ const BranchCardComponent = ({
         </Space>
       </div>
 
+      <BranchFilesystemRecovery branch={branch} client={client} />
+
       {/* Notes */}
       {branch.notes && (
         <div className={REACT_FLOW_NO_DRAG_CLASS} style={{ marginBottom: 8 }}>
-          <div
-            className="markdown-compact"
-            style={{
-              maxHeight: notesExpanded ? 'none' : '120px',
-              overflow: 'hidden',
-              transition: 'max-height 0.3s ease',
-            }}
-          >
-            <MarkdownRenderer
-              content={displayedNotes}
-              style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: '1.5' }}
-              compact={false}
-              showControls={false}
-            />
-          </div>
-          {notesNeedTruncation && (
-            <Button
-              type="link"
-              size="small"
-              onClick={(e) => {
-                e.stopPropagation();
-                setNotesExpanded(!notesExpanded);
-              }}
-              style={{
-                padding: 0,
-                height: 'auto',
-                fontSize: 12,
-                color: token.colorLink,
-              }}
-            >
-              {notesExpanded ? 'See less' : 'See more'}
-            </Button>
-          )}
+          <MarkdownPreview
+            key={branch.branch_id}
+            content={branch.notes}
+            collapsedHeight={120}
+            moreLabel="See more"
+            lessLabel="See less"
+          />
         </div>
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}
       <div
+        ref={sessionSectionsRef}
         className={REACT_FLOW_NO_DRAG_CLASS}
         style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
       >
@@ -628,6 +646,8 @@ const BranchCardComponent = ({
       {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
       {archiveDeleteModalMounted && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUserId ? userById.get(currentUserId) : null}
           open={archiveDeleteModalOpen}
           branch={branch}
           sessionCount={sessions.length}

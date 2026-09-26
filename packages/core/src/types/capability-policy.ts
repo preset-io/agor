@@ -1,7 +1,28 @@
-import type { BoardID, GroupID, UserID, UUID } from './id';
+import type { BoardID, BranchID, GroupID, UserID, UUID } from './id';
 
 /** Canonical board/branch capability-policy contract. */
 export const CAPABILITY_POLICY_SCHEMA_VERSION = 1 as const;
+
+/** Ownership is changed only through these explicit management-only commands. */
+export const OWNERSHIP_TRANSFER_SERVICES = {
+  board: 'boards/:id/ownership',
+  branch: 'branches/:id/ownership',
+} as const;
+
+export interface OwnershipTransferRequest {
+  expected_owner_user_id: UserID;
+  target_user_id: UserID;
+}
+
+export interface OwnershipTransferResult {
+  scope: 'management_only';
+  resource_type: 'board' | 'branch';
+  resource_id: BoardID | BranchID;
+  previous_owner_user_id: UserID;
+  primary_owner_user_id: UserID;
+  /** Independent grants remain intact; transfer is not user revocation. */
+  previous_owner_access: EffectiveCapabilityPolicyAccess;
+}
 
 /** Durable workspace-preference identifiers used by shared-session policy. */
 export const CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences' as const;
@@ -252,6 +273,17 @@ export function capabilityPolicyPresetCapabilities(
     capabilities.push('terminal.open');
   }
   return normalizeCapabilityPolicyCapabilities(kind, capabilities);
+}
+
+/** Inverse of canonical role expansion, including the supplied filesystem dimension. */
+export function capabilityPolicyPresetsGrantingCapability(
+  kind: CapabilityPolicyKind,
+  capability: CapabilityPolicyCapability,
+  fsAccess: CapabilityPolicyFsAccess = 'none'
+): CapabilityPolicyPresetId[] {
+  return (Object.keys(PRESET_CAPABILITIES[kind]) as CapabilityPolicyPresetId[]).filter((preset) =>
+    capabilityPolicyPresetCapabilities(kind, preset, fsAccess)?.includes(capability)
+  );
 }
 
 export function capabilityPolicyPrincipalKey(principal: CapabilityPolicyPrincipalRef): string {

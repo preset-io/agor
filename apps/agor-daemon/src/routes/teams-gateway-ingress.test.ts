@@ -1,5 +1,10 @@
+import type { Request } from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchTeamsSigningJwk, validateTeamsVerifiedIdentity } from './teams-gateway-ingress';
+import {
+  fetchTeamsSigningJwk,
+  TeamsIngressRateLimitStore,
+  validateTeamsVerifiedIdentity,
+} from './teams-gateway-ingress';
 
 const config = {
   app_id: 'app-123',
@@ -23,11 +28,28 @@ const teamsSigningJwk = { kid: 'key-1', endorsements: ['msteams'] };
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('validateTeamsVerifiedIdentity', () => {
   it('accepts the SDK-verified Bot Framework identity binding', () => {
     expect(validateTeamsVerifiedIdentity(claims, config, activity, teamsSigningJwk)).toBeNull();
+  });
+
+  it.each([
+    'http://example.test/',
+    ' https://example.test/',
+    'https://user:pass@example.test/',
+    'not-a-url',
+  ])('rejects a signed but unsafe service URL %s', (serviceUrl) => {
+    expect(
+      validateTeamsVerifiedIdentity(
+        { ...claims, serviceurl: serviceUrl },
+        config,
+        { ...activity, serviceUrl },
+        teamsSigningJwk
+      )
+    ).toBe('invalid_service_url');
   });
 
   it.each([
@@ -75,6 +97,24 @@ describe('validateTeamsVerifiedIdentity', () => {
     expect(
       validateTeamsVerifiedIdentity(nextClaims, config, nextActivity, signingJwk ?? teamsSigningJwk)
     ).toBe(expected);
+  });
+});
+
+describe('Teams pre-auth accounting bounds', () => {
+  it('expires budgets and evicts accounting instead of rejecting unrelated channels at capacity', async () => {
+    vi.useFakeTimers();
+    const store = new TeamsIngressRateLimitStore(2);
+    expect((await store.increment('channel-a')).totalHits).toBe(1);
+    expect((await store.increment('channel-a')).totalHits).toBe(2);
+    expect((await store.increment('channel-b')).totalHits).toBe(1);
+    expect((await store.increment('channel-c')).totalHits).toBe(1);
+    expect((await store.increment('channel-a')).totalHits).toBe(1);
+    await store.decrement('channel-a');
+    expect((await store.increment('channel-a')).totalHits).toBe(1);
+    vi.advanceTimersByTime(60_001);
+    expect((await store.increment('channel-a')).totalHits).toBe(1);
+    await store.resetKey('channel-a');
+    expect((await store.increment('channel-a')).totalHits).toBe(1);
   });
 });
 

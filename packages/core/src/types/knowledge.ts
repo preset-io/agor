@@ -75,6 +75,15 @@ export type KnowledgeVisibility = (typeof KNOWLEDGE_VISIBILITIES)[number];
 export const KNOWLEDGE_DOCUMENT_STATUSES = ['draft', 'published'] as const;
 export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
 
+/** Fields a Knowledge document list may be ordered by (`$sort`). */
+export const KNOWLEDGE_DOCUMENT_SORT_FIELDS = [
+  'updated_at',
+  'created_at',
+  'path',
+  'title',
+] as const;
+export type KnowledgeDocumentSortField = (typeof KNOWLEDGE_DOCUMENT_SORT_FIELDS)[number];
+
 export const KNOWLEDGE_EDIT_POLICIES = ['owner', 'public', 'admins'] as const;
 export type KnowledgeEditPolicy = (typeof KNOWLEDGE_EDIT_POLICIES)[number];
 
@@ -651,6 +660,15 @@ export interface KnowledgeDocument {
    */
   indexing_status?: KnowledgeDocumentIndexingStatus | null;
 }
+
+/** Permission-checked document with its selected version and Markdown content. */
+export type HydratedKnowledgeDocument = KnowledgeDocument & {
+  document: KnowledgeDocument;
+  current_version: KnowledgeDocumentVersion | null;
+  content: string | null;
+  first_line_is_title: boolean;
+  links?: unknown[];
+};
 
 export interface KnowledgeDocumentVersion {
   version_id: KnowledgeDocumentVersionID;

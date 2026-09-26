@@ -14,8 +14,12 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
-import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
+import {
+  renderAgorSessionIdentity,
+  renderAgorSystemPrompt,
+} from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
@@ -186,7 +190,7 @@ export class GeminiPromptService {
       const configuredModel = session.model_config?.model;
 
       // Prepare initial prompt (just text for now - can enhance with file paths later)
-      let parts: Part[] = [{ text: prompt }];
+      let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
 
       // Generate unique prompt ID for this turn
       const promptId = `${sessionId}-${Date.now()}`;
@@ -723,7 +727,7 @@ export class GeminiPromptService {
           undefined, // cwd
           undefined, // url (websocket)
           `${daemonUrl}/mcp`, // httpUrl
-          { Authorization: `Bearer ${mcpToken}` } // headers
+          { Authorization: `Bearer ${mcpToken}`, [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.gemini } // headers
         );
       } else {
         console.warn(

@@ -49,6 +49,7 @@ import {
   resolveEffectiveConfig,
   resolveGitConfigParameters,
   resolveIdentityAuthority,
+  resolveMcpOAuthCallbackOrigin,
   resolveMultiTenancyConfig,
   resolveSecurity,
   resolveValidExternalLaunchProvider,
@@ -71,7 +72,12 @@ import expressStaticGzip from 'express-static-gzip';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
-import { createDaemonMetrics, NOOP_METRICS, resolveMetricsWorkIdentity } from './metrics/index.js';
+import {
+  createDaemonMetrics,
+  createDaemonOperationalMetrics,
+  NOOP_METRICS,
+  resolveMetricsWorkIdentity,
+} from './metrics/index.js';
 import { type OwnStartupMetrics, runWithStartupMetricsOwner } from './metrics/startup-ownership.js';
 import { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from './realtime/routing.js';
@@ -100,6 +106,7 @@ import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-sourc
 import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
+import { assertTenantServiceClassification } from './utils/tenant-service-classification.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
 
@@ -217,17 +224,6 @@ async function startDaemonWithOwnedMetrics(
     };
   }
 
-  // HA is an explicit, validated topology boundary. REDIS_URL alone never
-  // changes standalone behavior. Resolve this after immutable environment
-  // projection so every startup consumer observes one effective snapshot.
-  const deployment = resolveDeploymentConfig(config, process.env, databaseUrl);
-  console.log(`🌐 Deployment mode: ${deployment.mode}`);
-
-  const multiTenancy = resolveMultiTenancyConfig(config);
-  console.log(
-    `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
-  );
-
   // Set GIT_CONFIG_PARAMETERS before any child-process spawn so every git
   // invocation under Agor's control inherits it. See @agor/core/config
   // (security-resolver) for the defaults + resolver semantics.
@@ -253,6 +249,26 @@ async function startDaemonWithOwnedMetrics(
   // Detach the snapshot before freezing so callers that supplied
   // DaemonStartOptions.config retain ownership of their object graph.
   const effectiveConfig = deepFreezeClone(config);
+  // Resolve the callback exactly once from the same frozen startup snapshot
+  // used by services. This prevents parameterless config reloads from reading
+  // a different ~/.agor/config.yaml than --config/AGOR_CONFIG_PATH/injection.
+  const mcpOAuthCallbackOrigin = resolveMcpOAuthCallbackOrigin(effectiveConfig, process.env);
+  const deployment = resolveDeploymentConfig(
+    effectiveConfig,
+    process.env,
+    databaseUrl,
+    mcpOAuthCallbackOrigin
+  );
+  const mcpOAuthCallbackUrl =
+    deployment.mode === 'ha'
+      ? (deployment.mcpOAuthCallbackUrl ?? undefined)
+      : (mcpOAuthCallbackOrigin.standaloneCallbackUrl ?? undefined);
+  console.log(`🌐 Deployment mode: ${deployment.mode}`);
+
+  const multiTenancy = resolveMultiTenancyConfig(effectiveConfig);
+  console.log(
+    `🏢 Multi-tenancy: mode=${multiTenancy.mode} tenant=${multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : 'auth-resolved'}`
+  );
   configureResolvedConfigSlice(effectiveConfig);
   configureOpenSourceTelemetryLogger(effectiveConfig);
   if (effectiveConfig.telemetry?.enabled === undefined) {
@@ -401,6 +417,7 @@ async function startDaemonWithOwnedMetrics(
       });
   ownMetrics(metrics);
   app.set('metrics', metrics);
+  app.set('daemonOperationalMetrics', createDaemonOperationalMetrics(metrics));
   reconcileTrackedExecutorGauge(app);
   if (unsafeHaMetricsIdentity) {
     console.warn(
@@ -597,7 +614,7 @@ async function startDaemonWithOwnedMetrics(
         // Teams callbacks have a much tighter provider-facing bound than the
         // general API. Reject while parsing so an oversized body is never
         // materialized into req.body before the ingress route can inspect it.
-        if (req.url?.startsWith('/gateway/teams/') && buffer.byteLength > 1_024 * 1_024) {
+        if (/^\/gateway\/teams\//i.test(req.url ?? '') && buffer.byteLength > 1_024 * 1_024) {
           const error = new Error('Teams activity exceeds the 1 MiB limit') as Error & {
             status?: number;
             type?: string;
@@ -769,7 +786,6 @@ async function startDaemonWithOwnedMetrics(
 
   const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
-    requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap:
       !resolveIdentityAuthority(effectiveConfig).capabilities.users.create,
     // The URL may come from DATABASE_URL, but operators still need to size the
@@ -784,9 +800,8 @@ async function startDaemonWithOwnedMetrics(
   configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 
   // --------------------------------------------------------------------------
-  // RBAC flags
+  // Authorization settings
   // --------------------------------------------------------------------------
-  const branchRbacEnabled = effectiveConfig.execution?.branch_rbac === true;
   const allowSuperadmin = effectiveConfig.execution?.allow_superadmin === true;
   const superadminOpts = { allowSuperadmin };
 
@@ -807,7 +822,7 @@ async function startDaemonWithOwnedMetrics(
       db_backend: process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite',
       os_family: platform(),
       node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
-      branch_rbac: branchRbacEnabled,
+      branch_rbac: true,
       unix_user_mode: effectiveConfig.execution?.unix_user_mode ?? 'simple',
     };
 
@@ -856,10 +871,10 @@ async function startDaemonWithOwnedMetrics(
     bundledUiAvailable,
     DAEMON_PORT,
     UI_PORT,
-    branchRbacEnabled,
     allowSuperadmin,
     requireAuth,
     deployment,
+    mcpOAuthCallbackUrl,
   });
 
   // --------------------------------------------------------------------------
@@ -891,7 +906,6 @@ async function startDaemonWithOwnedMetrics(
     config: effectiveConfig,
     externalLaunchProvider,
     jwtSecret,
-    branchRbacEnabled,
     requireAuth,
     enforcePasswordChange,
     superadminOpts,
@@ -922,6 +936,18 @@ async function startDaemonWithOwnedMetrics(
   // not request data.
   // --------------------------------------------------------------------------
   assertRealtimePublishPolicyCoverage(app);
+
+  // --------------------------------------------------------------------------
+  // Phase 3.6: Every registered service must also have declared WHERE its
+  // tenant database scope is armed — `scoped`, `identity-only`, or a narrowly
+  // reviewed `system`. One defect class (an unclassified route reaching a free
+  // function from identity-only context, the guard error laundered into a
+  // generic refusal) has shipped five times; declaring the policy at
+  // registration is what stops a new service from reintroducing it. Services
+  // that predate the mechanism are baselined, and that baseline may only
+  // shrink. Deterministic for the same reason as the assertion above.
+  // --------------------------------------------------------------------------
+  assertTenantServiceClassification(app);
 
   // --------------------------------------------------------------------------
   // Phase 4: Startup (orphan cleanup, health, scheduler, listen, shutdown)

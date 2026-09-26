@@ -1,13 +1,34 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
-import type { CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
-import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
+import type {
+  BoardPolicyCapability,
+  BranchID,
+  BranchPolicyCapability,
+  CapabilityPolicyFsAccess,
+  SessionID,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import {
+  aliasedTable,
+  and,
+  eq,
+  exists,
+  inArray,
+  or,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from 'drizzle-orm';
+import {
+  BOARD_POLICY_CAPABILITIES,
+  BRANCH_POLICY_CAPABILITIES,
   CAPABILITY_POLICY_SESSION_SHARING_KEY,
   CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+  capabilityPolicyPresetsGrantingCapability,
 } from '../../types/capability-policy';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
+import { isPostgresDatabase, select } from '../database-wrapper';
 import {
   appVariables,
   boardAccessEntries,
@@ -26,23 +47,21 @@ import {
 
 type UserIdExpression = UUID | SQLWrapper;
 
-const BOARD_ROLES_BY_CAPABILITY = {
-  'board.view': ['viewer', 'editor', 'manager'],
-  'board.edit': ['editor', 'manager'],
-  'board.attach_branch': ['editor', 'manager'],
-  'board.policy.manage': ['manager'],
-} as const;
-
-const BRANCH_ROLES_BY_CAPABILITY = {
-  'branch.view': ['viewer', 'collaborator', 'manager'],
-  'sessions.create': ['collaborator', 'manager'],
-  'sessions.prompt_own': ['collaborator', 'manager'],
-  'sessions.manage_others': ['manager'],
-  'branch.manage': ['manager'],
-  'environment.control': ['manager'],
-  'terminal.open': ['collaborator', 'manager'],
-  'branch.policy.manage': ['manager'],
-} as const;
+// Static product definitions only, never principal/resource authorization state.
+// Expand with filesystem access so terminal's role half is included; SQL below
+// still checks actual filesystem grants (including additive group dimensions).
+const BOARD_ROLES_BY_CAPABILITY = Object.fromEntries(
+  BOARD_POLICY_CAPABILITIES.map((capability) => [
+    capability,
+    capabilityPolicyPresetsGrantingCapability('board_access', capability),
+  ])
+);
+const BRANCH_ROLES_BY_CAPABILITY = Object.fromEntries(
+  BRANCH_POLICY_CAPABILITIES.map((capability) => [
+    capability,
+    capabilityPolicyPresetsGrantingCapability('branch_access', capability, 'read'),
+  ])
+);
 
 function roleGrantsCapability(
   column: SQLWrapper,
@@ -127,7 +146,6 @@ export async function resolveSessionRuntimeBranchAccess(
   input: {
     sessionId: SessionID | string;
     principalUserId: UserID | string;
-    branchRbacEnabled: boolean;
   }
 ): Promise<SessionRuntimeBranchAccess | null> {
   const principal = input.principalUserId;
@@ -220,7 +238,7 @@ export async function resolveSessionRuntimeBranchAccess(
 
   let canPromptOwn = false;
   let fsAccess: CapabilityPolicyFsAccess = 'none';
-  if (principalUserId && (!input.branchRbacEnabled || isPrimaryOwner)) {
+  if (principalUserId && isPrimaryOwner) {
     canPromptOwn = true;
     fsAccess = 'write';
   } else if (principalUserId && row.sharing_mode === 'shared') {
@@ -258,10 +276,7 @@ export async function resolveSessionRuntimeBranchAccess(
     branch_id: String(row.branch_id),
     principal_available: principalUserId !== undefined,
     can_prompt_session: Boolean(
-      principalUserId &&
-        // RBAC-disabled admission intentionally permits any existing member to
-        // prompt the Session; its legacy filesystem projection remains write.
-        (!input.branchRbacEnabled || (canPromptOwn && (ownsSession || sharedSessionAllowed)))
+      principalUserId && canPromptOwn && (ownsSession || sharedSessionAllowed)
     ),
     fs_access: principalUserId ? fsAccess : 'none',
     observed_at: observedAt,
@@ -295,13 +310,56 @@ function directBranchEntryExists(db: Database, userId: UserIdExpression, capabil
   );
 }
 
+function matchingBranchGroupConfigs(db: Database, userId: UUID, entryCondition?: SQL): SQL {
+  return sql`
+  SELECT ${branchPermissionEntries.config_id}
+  FROM ${branchPermissionEntries}
+  INNER JOIN ${groupMemberships}
+    ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+  INNER JOIN ${groups} ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+  WHERE ${and(
+    eq(groupMemberships.user_id, userId),
+    eq(groups.archived, false),
+    ...(entryCondition ? [entryCondition] : [])
+  )}
+  ${isPostgresDatabase(db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
+  `;
+}
+
+function inConfigurationSet(db: Database, configId: SQLWrapper, set: SQL): SQL {
+  return isPostgresDatabase(db)
+    ? sql`${configId} = ANY(ARRAY(${set}))`
+    : sql`${configId} IN (${set})`;
+}
+
 function activeBranchGroupEntryExists(
   db: Database,
   userId: UserIdExpression,
   capability?: string
 ): SQL {
-  const matchingGroupEntryExists = (entryCondition?: SQL): SQL =>
-    exists(
+  // For a fixed principal, group membership is independent of the branch.
+  // Form the matching config set once instead of walking the principal's group
+  // entries again for every branch. Keep the correlated form for SQL-valued
+  // principals (for example outer-user enumeration).
+  const matchingGroupEntryExists = (entryCondition?: SQL): SQL => {
+    if (typeof userId === 'string') {
+      const matchingConfigs = matchingBranchGroupConfigs(db, userId, entryCondition);
+      // PostgreSQL otherwise pulls IN into a semi-join and probes every group
+      // config for every branch. ARRAY makes this an uncorrelated InitPlan;
+      // it is statement-local and still evaluated under the caller's RLS.
+      return exists(
+        selectRaw(db)
+          .from(branchPermissionConfigs)
+          .where(
+            and(
+              effectiveConfigCondition(),
+              eq(branchPermissionConfigs.sharing_mode, 'shared'),
+              inConfigurationSet(db, branchPermissionConfigs.config_id, matchingConfigs)
+            )
+          )
+      );
+    }
+    return exists(
       selectRaw(db)
         .from(branchPermissionConfigs)
         .innerJoin(
@@ -327,6 +385,7 @@ function activeBranchGroupEntryExists(
           )
         )
     );
+  };
   if (!capability) return matchingGroupEntryExists();
   if (capability === 'terminal.open') {
     return (
@@ -372,22 +431,128 @@ function selectRaw(db: Database): any {
   return (db as any).select({ _: sql`1` });
 }
 
-function branchCapabilityCondition(
+/**
+ * Row predicate for an authenticated, existing same-tenant principal. Requires
+ * branches in the outer query and the caller's tenant DB scope; no admin bypass.
+ * This is not a principal-existence check or foreign-session prompt authority.
+ */
+export function branchCapabilityCondition(
   db: Database,
   userId: UserIdExpression,
-  capability: string
+  capability: BranchPolicyCapability
 ): SQL {
-  const directMatch = directBranchEntryExists(db, userId);
-  const groupMatch = activeBranchGroupEntryExists(db, userId);
+  if (!BRANCH_POLICY_CAPABILITIES.includes(capability)) return sql`false`;
   return (
     or(
       eq(branches.primary_owner_user_id, userId),
-      directBranchEntryExists(db, userId, capability),
-      and(sql`NOT ${directMatch}`, activeBranchGroupEntryExists(db, userId, capability)),
-      and(
-        sql`NOT ${directMatch}`,
-        sql`NOT ${groupMatch}`,
-        branchOthersHasCapability(db, capability)
+      branchConfigurationGrantsCapability(db, userId, capability)
+    ) ?? sql`false`
+  );
+}
+
+/** One precedence rule for both selective probes and bulk configuration sets. */
+function branchConfigurationGrantsCapability(
+  db: Database,
+  userId: UserIdExpression,
+  capability: BranchPolicyCapability
+): SQL {
+  const directMatch = directBranchEntryExists(db, userId);
+  const groupMatch = activeBranchGroupEntryExists(db, userId);
+  return principalGrantPrecedence(
+    directMatch,
+    directBranchEntryExists(db, userId, capability),
+    groupMatch,
+    activeBranchGroupEntryExists(db, userId, capability),
+    branchOthersHasCapability(db, capability)
+  );
+}
+
+function principalGrantPrecedence(
+  directMatch: SQL,
+  directGrant: SQL,
+  groupMatch: SQL,
+  groupGrant: SQL,
+  othersGrant: SQL
+): SQL {
+  return (
+    or(
+      directGrant,
+      and(sql`NOT ${directMatch}`, groupGrant),
+      and(sql`NOT ${directMatch}`, sql`NOT ${groupMatch}`, othersGrant)
+    ) ?? sql`false`
+  );
+}
+
+/** Broad inventories only; selective probes must not scan every configuration. */
+function visibleBranchInventoryCondition(db: Database, userId: UUID): SQL {
+  const aliasName = 'eligible_branch_configs';
+  const configs = aliasedTable(branchPermissionConfigs, aliasName);
+  const direct = (capability?: BranchPolicyCapability): SQL =>
+    inConfigurationSet(
+      db,
+      configs.config_id,
+      sql`
+    SELECT ${branchPermissionEntries.config_id} FROM ${branchPermissionEntries}
+    WHERE ${and(
+      eq(branchPermissionEntries.user_id, userId),
+      ...(capability
+        ? [
+            branchRoleGrantsCapability(
+              branchPermissionEntries.role,
+              branchPermissionEntries.fs_access,
+              capability
+            ),
+          ]
+        : [])
+    )}
+  `
+    );
+  const groupMatch = inConfigurationSet(
+    db,
+    configs.config_id,
+    matchingBranchGroupConfigs(db, userId)
+  );
+  const groupGrant = inConfigurationSet(
+    db,
+    configs.config_id,
+    matchingBranchGroupConfigs(
+      db,
+      userId,
+      branchRoleGrantsCapability(
+        branchPermissionEntries.role,
+        branchPermissionEntries.fs_access,
+        'branch.view'
+      )
+    )
+  );
+  const directMatch = direct();
+  const grants = and(
+    eq(configs.sharing_mode, 'shared'),
+    principalGrantPrecedence(
+      directMatch,
+      direct('branch.view'),
+      groupMatch,
+      groupGrant,
+      branchRoleGrantsCapability(configs.others_role, configs.others_fs_access, 'branch.view')
+    )
+  );
+  // Resolve inherited grants at configuration cardinality, once per statement.
+  // This is not a cache: RLS and policy changes apply on every new statement.
+  const eligible = sql`SELECT ${configs.config_id}
+    FROM ${branchPermissionConfigs} AS ${sql.identifier(aliasName)} WHERE ${grants}
+    ${isPostgresDatabase(db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}`;
+  return (
+    or(
+      eq(branches.primary_owner_user_id, userId),
+      exists(
+        selectRaw(db)
+          .from(branchPermissionConfigs)
+          .where(
+            and(
+              effectiveConfigCondition(),
+              inConfigurationSet(db, branchPermissionConfigs.config_id, eligible)
+            )
+          )
       )
     ) ?? sql`false`
   );
@@ -395,6 +560,43 @@ function branchCapabilityCondition(
 
 export function visibleBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
   return branchCapabilityCondition(db, userId, 'branch.view');
+}
+
+/**
+ * Inventory membership for many rows referring to branches, for one already
+ * authenticated same-tenant principal. Scope filters only intersect visibility.
+ *
+ * Keep policy evaluation at branch cardinality: OFFSET 0 prevents PostgreSQL
+ * flattening this set into the outer query and repeating policy per child row.
+ * SQLite requires an unbounded LIMIT with OFFSET. This is statement-local, not
+ * an authorization cache, and must use the caller's existing tenant DB scope.
+ *
+ * For a selective exact-ID probe or outer-user enumeration use
+ * visibleBranchReferenceAccessExists instead; for effective capabilities and
+ * principal existence checks use CapabilityPolicyRepository.resolveBranchAccess.
+ */
+export function inVisibleBranchSet(
+  db: Database,
+  userId: UUID,
+  branchId: SQLWrapper,
+  scope: { branchId?: BranchID; branchIds?: BranchID[]; boardId?: string } = {}
+): SQL {
+  if (scope.branchIds?.length === 0) return sql`false`;
+  const selective =
+    scope.branchId !== undefined || scope.branchIds !== undefined || scope.boardId !== undefined;
+  const conditions = [
+    selective
+      ? visibleBranchAccessCondition(db, userId)
+      : visibleBranchInventoryCondition(db, userId),
+  ];
+  if (scope.branchId !== undefined) conditions.push(eq(branches.branch_id, scope.branchId));
+  if (scope.branchIds !== undefined) conditions.push(inArray(branches.branch_id, scope.branchIds));
+  if (scope.boardId !== undefined) conditions.push(eq(branches.board_id, scope.boardId));
+  return sql`${branchId} IN (
+    SELECT ${branches.branch_id} FROM ${branches}
+    WHERE ${and(...conditions)}
+    ${isPostgresDatabase(db) ? sql`OFFSET 0` : sql`LIMIT -1 OFFSET 0`}
+  )`;
 }
 
 export function sessionBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
@@ -466,14 +668,20 @@ function activeBoardGroupEntryExists(
   );
 }
 
-export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
+/** Same authenticated-principal contract as branchCapabilityCondition; outer table is boards. */
+export function boardCapabilityCondition(
+  db: Database,
+  userId: UserIdExpression,
+  capability: BoardPolicyCapability
+): SQL {
+  if (!BOARD_POLICY_CAPABILITIES.includes(capability)) return sql`false`;
   const directMatch = directBoardEntryExists(db, userId);
   const groupMatch = activeBoardGroupEntryExists(db, userId);
   return (
     or(
       eq(boards.primary_owner_user_id, userId),
-      directBoardEntryExists(db, userId, 'board.view'),
-      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, 'board.view')),
+      directBoardEntryExists(db, userId, capability),
+      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, capability)),
       and(
         sql`NOT ${directMatch}`,
         sql`NOT ${groupMatch}`,
@@ -484,13 +692,17 @@ export function visibleBoardAccessCondition(db: Database, userId: UserIdExpressi
               and(
                 eq(boardAccessPolicies.board_id, boards.board_id),
                 eq(boardAccessPolicies.sharing_mode, 'shared'),
-                roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
+                roleGrantsCapability(boardAccessPolicies.others_role, 'board', capability)
               )
             )
         )
       )
     ) ?? sql`false`
   );
+}
+
+export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
+  return boardCapabilityCondition(db, userId, 'board.view');
 }
 
 export function visibleBoardReferenceAccessExists(
@@ -517,6 +729,13 @@ export function visibleBranchReferenceAccessExists(
   );
 }
 
+/**
+ * Shared visibility for session references, including message/task inventories.
+ * The INNER JOIN lets PostgreSQL filter branches before joining their Sessions;
+ * exact session IDs can instead become a bounded parent probe. Do not replace
+ * this with a fenced full inventory indiscriminately: the child-inventory plan
+ * regressions cover both broad and selective shapes across session/child ratios.
+ */
 export function visibleSessionReferenceAccessExists(
   db: Database,
   userId: UserIdExpression,

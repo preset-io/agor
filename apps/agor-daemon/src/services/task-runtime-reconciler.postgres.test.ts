@@ -156,7 +156,6 @@ async function seed(db: Database) {
         start_timestamp: '2000-01-01T00:00:00.000Z',
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'stale' },
-      tool_use_count: 0,
     });
     const tokenFingerprint = createHash('sha256').update(active.task_id).digest('hex');
     const authority = {
@@ -164,11 +163,8 @@ async function seed(db: Database) {
       principal_user_id: user.user_id,
       session_id: session.session_id,
       branch_id: branch.branch_id,
-      branchRbacEnabled: true,
     };
-    await tasks.bindExecutorLaunchAuthority(active.task_id, {
-      branchRbacEnabled: true,
-    });
+    await tasks.bindExecutorLaunchAuthority(active.task_id);
     await tasks.connectExecutor(active.task_id, new Date('2000-01-01T00:00:01.000Z'));
     const tokenNow = new Date();
     await new ExecutorSessionTokenAuthorityRepository(scoped).issue({
@@ -197,7 +193,6 @@ async function seed(db: Database) {
         start_timestamp: new Date().toISOString(),
       },
       git_state: { ref_at_start: '', sha_at_start: '' },
-      tool_use_count: 0,
     });
     return { tenantId, session, active, queued, authority };
   });

@@ -9,8 +9,16 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { and, asc, eq, isNotNull, lt } from 'drizzle-orm';
+import { lockSessionBranchForAdmission } from '../branch-admission';
 import type { Database, SystemDatabase } from '../client';
-import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isPostgresDatabase,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { type UploadRow, uploads } from '../schema';
 import { RepositoryError } from './base';
 
@@ -37,7 +45,11 @@ function logical(row: UploadRow, tenantId: TenantID): Upload {
 export class UploadRepository {
   constructor(private readonly db: Database) {}
 
-  async create(owner: UploadOwner, metadata: UploadMetadata): Promise<Upload> {
+  async create(
+    owner: UploadOwner,
+    metadata: UploadMetadata,
+    status: Upload['status'] = 'active'
+  ): Promise<Upload> {
     await insert(this.db, uploads)
       .values({
         upload_ref: metadata.ref,
@@ -52,7 +64,7 @@ export class UploadRepository {
         content_type: metadata.mimeType,
         size_bytes: metadata.size,
         checksum: null,
-        status: 'active',
+        status,
         provenance: metadata.provenance,
         created_at: new Date(metadata.createdAt),
         expires_at: metadata.expiresAt ? new Date(metadata.expiresAt) : null,
@@ -61,6 +73,47 @@ export class UploadRepository {
     const created = await this.findOwned(owner.tenantId, metadata.ref);
     if (!created) throw new Error('Failed to persist upload metadata');
     return created;
+  }
+
+  /** Durable launch intent precedes byte I/O; pending rows never expire on a timer. */
+  async reserve(owner: UploadOwner, metadata: UploadMetadata): Promise<void> {
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const branch = await lockSessionBranchForAdmission(tx, owner.sessionId);
+        if (branch.branch_id !== owner.branchId)
+          throw new RepositoryError('Upload branch membership changed');
+        await new UploadRepository(tx).create(owner, { ...metadata, expiresAt: null }, 'pending');
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
+  }
+
+  async complete(owner: UploadOwner, metadata: UploadMetadata): Promise<void> {
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockSessionBranchForAdmission(tx, owner.sessionId);
+        const current = await new UploadRepository(tx).findOwned(owner.tenantId, metadata.ref);
+        if (
+          current?.status !== 'pending' ||
+          current.branchId !== owner.branchId ||
+          current.sessionId !== owner.sessionId
+        )
+          throw new RepositoryError('Upload staging reservation changed');
+        await update(tx, uploads)
+          .set({
+            status: 'active',
+            size_bytes: metadata.size,
+            original_name: metadata.name,
+            display_name: metadata.name,
+            expires_at: metadata.expiresAt ? new Date(metadata.expiresAt) : null,
+          })
+          .where(eq(uploads.upload_ref, metadata.ref))
+          .run();
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
   }
 
   async findOwned(tenantId: TenantID, ref: UploadRef): Promise<Upload | null> {

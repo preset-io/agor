@@ -18,15 +18,24 @@ import {
   type Database,
   eq,
   RepoRepository,
+  runWithTenantContext,
   SessionRepository,
   shortId,
   UsersRepository,
   update,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/types';
+import type {
+  Artifact,
+  ArtifactStatus,
+  BoardID,
+  BranchID,
+  SessionID,
+  UUID,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { requestExecutor } from '../utils/spawn-executor';
 import { ArtifactsService, escapeEnvValue } from './artifacts';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -37,6 +46,11 @@ vi.mock('@agor/core/config', async (importOriginal) => {
   };
 });
 
+vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/spawn-executor.js')>();
+  return { ...actual, requestExecutor: vi.fn() };
+});
+
 it('quotes dotenv values without permitting CR/LF record injection', () => {
   const escaped = escapeEnvValue('first\rINJECTED=value\nlast\\"');
 
@@ -45,17 +59,49 @@ it('quotes dotenv values without permitting CR/LF record injection', () => {
   expect(escaped).not.toContain('\n');
 });
 
+describe('artifact status diagnosis', () => {
+  it.each([
+    [`Unexpected token '<', "<!doctype "... is not valid JSON`, 'html_instead_of_json'],
+    ['Unexpected token < in JSON at position 0', 'html_instead_of_json'],
+    [
+      'package.json: Expected property name in JSON at position 2',
+      'malformed_package_json_or_syntax',
+    ],
+    ["/App.tsx: Unexpected token '<'", 'malformed_package_json_or_syntax'],
+    ["Cannot use 'import.meta' outside a module", 'environment_variable_access'],
+    ["Cannot find module './missing'", 'missing_local_import_or_dependency'],
+  ])('classifies %s without inventing a failed endpoint', (message, diagnosis) => {
+    const status: ArtifactStatus = {
+      artifact_id: generateId(),
+      build_status: 'error',
+      sandpack_error: { message },
+      console_logs: [],
+    };
+    expect(ArtifactsService.prototype.buildStatusDiagnostic(status)).toMatchObject({
+      diagnosis,
+      primary_error: message,
+    });
+  });
+});
+
 /**
  * Build a fake Feathers app whose services all no-op on emit. The service
  * under test only calls `app.service(name).emit(event, payload)` for
  * WebSocket broadcasts, which we don't care about in unit tests.
  */
-function makeFakeApp(): Application {
+function makeFakeApp(config: Record<string, unknown> = {}): Application {
   const service = () => ({ emit: () => {} });
   return {
     service,
     get: (key: string) =>
-      key === 'authentication' ? { secret: 'artifact-test-secret' } : undefined,
+      key === 'authentication'
+        ? { secret: 'artifact-test-secret' }
+        : key === 'config'
+          ? config
+          : undefined,
+    sessionTokenService: {
+      generateCommandToken: vi.fn(async () => 'artifact-test-command-token'),
+    },
   } as unknown as Application;
 }
 
@@ -71,7 +117,11 @@ async function seedBoard(db: Database) {
   });
 }
 
-async function seedRepoAndBranch(db: Database, branchPath: string) {
+async function seedRepoAndBranch(
+  db: Database,
+  branchPath: string,
+  options: { storageMode?: 'worktree' | 'clone' } = {}
+) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `artifact-test-${generateId()}`,
@@ -88,6 +138,7 @@ async function seedRepoAndBranch(db: Database, branchPath: string) {
     ref: 'refs/heads/artifact-branch',
     branch_unique_id: 1,
     path: branchPath,
+    storage_mode: options.storageMode,
     created_by: 'user-owner' as UUID,
     others_can: 'session',
   });
@@ -158,6 +209,199 @@ async function seedArtifact(
 
   return created;
 }
+
+describe('ArtifactsService executor sandbox ownership', () => {
+  const perUserSandboxConfig = {
+    paths: { data_home: '/srv/agor-data' },
+    multi_tenancy: {
+      mode: 'required_from_auth',
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '/srv/agor-tenants',
+    },
+    execution: {
+      unix_user_mode: 'sandbox',
+      sandbox: { enabled: true, home_mode: 'per_user' },
+    },
+  };
+  const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
+
+  dbTest(
+    'passes the authenticated actor home and tenant mounts to publish, validate, and land',
+    async ({ db }) => {
+      const actorId = generateId();
+      await seedUser(db, actorId);
+      await new UsersRepository(db).update(actorId, {
+        filesystem_home: '/srv/external-homes/artifact-collaborator',
+      });
+      await seedUser(db, 'user-owner');
+      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/artifact-branch';
+      const branch = await seedRepoAndBranch(db, branchPath);
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      const serviceBranchRepo = (service as unknown as { branchRepo: BranchRepository }).branchRepo;
+      vi.spyOn(serviceBranchRepo, 'resolveUserAccess').mockResolvedValue({
+        can: 'all',
+        fs_access: 'write',
+        is_owner: false,
+        source: 'direct',
+      });
+      vi.mocked(requestExecutor).mockReset();
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: false,
+        error: { code: 'TEST_STOP', message: 'captured executor request' },
+      });
+      const params = {
+        user: { user_id: actorId, role: 'admin' },
+        tenant,
+      } as never;
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          params
+        )
+      ).rejects.toThrow('captured executor request');
+      await expect(
+        service.checkBuildFromFolder({ branch_id: branch.branch_id, subpath: 'artifact' }, params)
+      ).rejects.toThrow('captured executor request');
+      await expect(
+        service.land(generateId(), branch.branch_id, { subpath: 'artifact-copy' }, params)
+      ).rejects.toThrow('captured executor request');
+
+      expect(requestExecutor).toHaveBeenCalledTimes(3);
+      for (const [payload, options] of vi.mocked(requestExecutor).mock.calls) {
+        expect(payload).toEqual(
+          expect.objectContaining({
+            params: expect.objectContaining({
+              sandboxHomeStore: '/srv/external-homes/artifact-collaborator',
+              sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+              sandboxBaseRepoPath: path.dirname(branchPath),
+            }),
+          })
+        );
+        expect(options).toEqual(
+          expect.objectContaining({
+            templateVariables: expect.objectContaining({ user_id: actorId }),
+          })
+        );
+        expect(JSON.stringify(payload)).not.toContain('user-owner');
+      }
+    }
+  );
+
+  dbTest(
+    'derives a canonical home from trusted tenant context without a shared fallback',
+    async ({ db }) => {
+      await seedUser(db, 'user-owner');
+      const branch = await seedRepoAndBranch(
+        db,
+        '/srv/agor-tenants/tenant-a/worktrees/canonical-artifact-branch'
+      );
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      vi.mocked(requestExecutor).mockReset();
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: false,
+        error: { code: 'TEST_STOP', message: 'captured executor request' },
+      });
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          {
+            user: { user_id: 'user-owner', role: 'member' },
+            tenant,
+          } as never
+        )
+      ).rejects.toThrow('captured executor request');
+
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sandboxHomeStore: '/srv/agor-tenants/tenant-a/homes/user-owner',
+            sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+          }),
+        }),
+        expect.any(Object)
+      );
+    }
+  );
+
+  dbTest(
+    'fails closed before executor spawn when tenant ownership is unavailable',
+    async ({ db }) => {
+      await seedUser(db, 'user-owner');
+      const branch = await seedRepoAndBranch(
+        db,
+        '/srv/agor-tenants/tenant-a/worktrees/missing-tenant-artifact-branch'
+      );
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      vi.mocked(requestExecutor).mockReset();
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          { user: { user_id: 'user-owner', role: 'member' } } as never
+        )
+      ).rejects.toThrow(/tenant/i);
+
+      expect(requestExecutor).not.toHaveBeenCalled();
+    }
+  );
+
+  dbTest('rejects conflicting authenticated and ambient tenant identities', async ({ db }) => {
+    await seedUser(db, 'user-owner');
+    const branch = await seedRepoAndBranch(
+      db,
+      '/srv/agor-tenants/tenant-a/worktrees/conflicting-tenant-artifact-branch'
+    );
+    const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+    vi.mocked(requestExecutor).mockReset();
+
+    await expect(
+      runWithTenantContext('tenant-b', () =>
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          {
+            user: { user_id: 'user-owner', role: 'member' },
+            tenant,
+          } as never
+        )
+      )
+    ).rejects.toThrow(/tenant identity mismatch/i);
+
+    expect(requestExecutor).not.toHaveBeenCalled();
+  });
+
+  dbTest('omits the base-repository mount for clone-mode branches', async ({ db }) => {
+    await seedUser(db, 'user-owner');
+    const branch = await seedRepoAndBranch(
+      db,
+      '/srv/agor-tenants/tenant-a/worktrees/clone-artifact-branch',
+      { storageMode: 'clone' }
+    );
+    const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+    vi.mocked(requestExecutor).mockReset();
+    vi.mocked(requestExecutor).mockResolvedValue({
+      success: false,
+      error: { code: 'TEST_STOP', message: 'captured executor request' },
+    });
+
+    await expect(
+      service.publishArtifact({ branch_id: branch.branch_id, subpath: 'artifact', name: 'test' }, {
+        user: { user_id: 'user-owner', role: 'member' },
+        tenant,
+      } as never)
+    ).rejects.toThrow('captured executor request');
+
+    const payload = vi.mocked(requestExecutor).mock.calls[0]?.[0];
+    expect(payload?.params).toEqual(
+      expect.objectContaining({
+        sandboxHomeStore: '/srv/agor-tenants/tenant-a/homes/user-owner',
+        sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+      })
+    );
+    expect(payload?.params).not.toHaveProperty('sandboxBaseRepoPath');
+  });
+});
 
 describe('ArtifactRepository URL fields', () => {
   dbTest('returns both board url and fullscreen_url from repository reads', async ({ db }) => {
@@ -940,6 +1184,173 @@ describe('ArtifactsService.grantTrust', () => {
 });
 
 describe('ArtifactsService.getStatus + console isolation', () => {
+  dbTest(
+    'explicit completion succeeds while the provider stays running, only for its viewer',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const board = await seedBoard(db);
+      const artifact = await seedArtifact(db, board.board_id);
+      const payload = await service.getPayload(artifact.artifact_id, 'viewer-A' as never);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        payload.runtime_report_hash,
+        'success'
+      );
+
+      const result = await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        settleMs: 0,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        observed: true,
+        timed_out: false,
+        sandpack_status: 'running',
+        compilation_status: 'success',
+      });
+      const other = await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-B' as never, {
+        timeoutMs: 500,
+        settleMs: 0,
+      });
+      expect(other).toMatchObject({ ok: false, observed: false, timed_out: true });
+      expect(other.compilation_status).toBeUndefined();
+    }
+  );
+
+  for (const status of ['idle', 'initial', 'running']) {
+    dbTest(
+      `legacy provider ${status} is observation, not successful compilation`,
+      async ({ db }) => {
+        const service = new ArtifactsService(db, makeFakeApp());
+        const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+        await service.setSandpackError(artifact.artifact_id, 'viewer-A', null, status);
+        const result = await service.waitForRuntimeStatus(
+          artifact.artifact_id,
+          'viewer-A' as never,
+          { timeoutMs: 500, settleMs: 0 }
+        );
+        expect(result).toMatchObject({ ok: false, observed: true, timed_out: true });
+        expect(result.note).toContain('does not prove the app is broken');
+      }
+    );
+  }
+
+  dbTest(
+    'compilation failure without an error object is still an observed failure',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        undefined,
+        'error'
+      );
+      expect(
+        await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never)
+      ).toMatchObject({ ok: false, observed: true, timed_out: false, build_status: 'error' });
+    }
+  );
+
+  dbTest('a legacy report clears old completion rather than inheriting success', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+    await service.setSandpackError(
+      artifact.artifact_id,
+      'viewer-A',
+      null,
+      'running',
+      undefined,
+      'success'
+    );
+    await service.setSandpackError(artifact.artifact_id, 'viewer-A', null, 'running');
+    expect(
+      (await service.getStatus(artifact.artifact_id, 'viewer-A' as never)).compilation_status
+    ).toBeUndefined();
+  });
+
+  dbTest(
+    'the settle window catches early runtime errors after successful compilation',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await service.setSandpackError(
+        artifact.artifact_id,
+        'viewer-A',
+        null,
+        'running',
+        undefined,
+        'success'
+      );
+      const waiting = service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 2000,
+        settleMs: 1000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await service.appendConsoleLogs(artifact.artifact_id, 'viewer-A', [
+        { timestamp: 1, level: 'error', message: 'boot failed' },
+      ]);
+      expect(await waiting).toMatchObject({ ok: false, observed: true, build_status: 'error' });
+    }
+  );
+
+  dbTest('HA still rejects process-local runtime waits', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp(), { runtimeIntrospectionEnabled: false });
+    await expect(
+      service.waitForRuntimeStatus('unobserved', 'viewer-A' as never)
+    ).rejects.toMatchObject({ data: { code: 'HA_FEATURE_UNSUPPORTED' } });
+  });
+
+  dbTest('completion must finish the settle window before the wait deadline', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+    await service.setSandpackError(
+      artifact.artifact_id,
+      'viewer-A',
+      null,
+      'running',
+      undefined,
+      'success'
+    );
+    expect(
+      await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 500,
+        settleMs: 25,
+      })
+    ).toMatchObject({ ok: true, observed: true, timed_out: false });
+    expect(
+      await service.waitForRuntimeStatus(artifact.artifact_id, 'viewer-A' as never, {
+        timeoutMs: 500,
+        settleMs: 1000,
+      })
+    ).toMatchObject({ ok: false, observed: true, timed_out: true });
+  });
+
+  dbTest(
+    'rejects invalid completion reports without recording browser activity',
+    async ({ db }) => {
+      const service = new ArtifactsService(db, makeFakeApp());
+      const artifact = await seedArtifact(db, (await seedBoard(db)).board_id);
+      await expect(
+        service.setSandpackError(
+          artifact.artifact_id,
+          'viewer-A',
+          null,
+          'running',
+          undefined,
+          'ready' as never
+        )
+      ).rejects.toMatchObject({ code: 400 });
+      const status = await service.getStatus(artifact.artifact_id, 'viewer-A' as never);
+      expect(status.compilation_status).toBeUndefined();
+      expect(status.runtime_observed_at).toBeUndefined();
+    }
+  );
+
   dbTest('console logs and sandpack errors are scoped per viewer', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const board = await seedBoard(db);
@@ -1034,7 +1445,14 @@ describe('ArtifactsService.getStatus + console isolation', () => {
           timeoutMs: 500,
           settleMs: 0,
         });
-        await service.setSandpackError(created.artifact_id, 'viewer-A', null, 'idle', 'old');
+        await service.setSandpackError(
+          created.artifact_id,
+          'viewer-A',
+          null,
+          'running',
+          'old',
+          'success'
+        );
         await vi.advanceTimersByTimeAsync(600);
 
         const result = await waitPromise;
@@ -1042,6 +1460,7 @@ describe('ArtifactsService.getStatus + console isolation', () => {
         expect(result.observed).toBe(false);
         expect(result.timed_out).toBe(true);
         expect(result.sandpack_status).toBeUndefined();
+        expect(result.compilation_status).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }
@@ -1084,8 +1503,9 @@ describe('ArtifactsService.getStatus + console isolation', () => {
           created.artifact_id,
           'viewer-A',
           null,
-          'idle',
-          beforePayload.runtime_report_hash
+          'running',
+          beforePayload.runtime_report_hash,
+          'success'
         );
         await vi.advanceTimersByTimeAsync(600);
 
@@ -1725,7 +2145,7 @@ describe('ArtifactsService.find SQL pushdown', () => {
     return { service, boardA, boardB, branch1, branch2, onBranch1, onBranch2, orphan };
   }
 
-  dbTest('pushes board_id into the repository read (rbac off)', async ({ db }) => {
+  dbTest('pushes board_id into the repository read', async ({ db }) => {
     const { service, boardA } = await seedPushdownFixture(db);
     const repoFindAll = vi.spyOn(
       (service as unknown as { artifactRepo: ArtifactRepository }).artifactRepo,

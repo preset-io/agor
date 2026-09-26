@@ -7,9 +7,9 @@ export type SdkActivityAdapter = 'claude-code' | 'codex' | 'gemini' | 'copilot';
 export type SdkActivityCallback = (kind: ExecutorPulseKind, detail?: string) => void;
 
 export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> = {
-  'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.197',
-  codex: '@openai/codex-sdk@0.144.0',
-  gemini: '@google/gemini-cli-core@0.40.1',
+  'claude-code': '@anthropic-ai/claude-agent-sdk@0.3.280',
+  codex: '@openai/codex-sdk@0.156.1',
+  gemini: '@google/gemini-cli-core@0.59.0',
   copilot: '@github/copilot-sdk@0.2.2',
 };
 

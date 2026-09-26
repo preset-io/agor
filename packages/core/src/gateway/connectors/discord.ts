@@ -21,6 +21,8 @@ import {
 } from 'discord-api-types/v10';
 import type {
   ChannelType,
+  DiscordAgentChannelHistoryRequest,
+  DiscordChannelHistoryResult,
   DiscordGatewayConfig,
   DiscordThreadCoordinates,
   GatewayConnectionTestResult,
@@ -37,6 +39,7 @@ import type {
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
   GatewaySendReceipt,
+  InboundFile,
   InboundMessage,
 } from '../connector';
 import type { DiscordDeliveryNonce } from '../discord-identifiers';
@@ -51,13 +54,21 @@ import {
 } from '../discord-identifiers';
 import { GatewayListenerError } from '../listener-error';
 import { gatewayFailureCode } from '../provider-error';
-import { fetchDiscordProviderHistory } from './discord-history';
+import {
+  createDiscordReadBudget,
+  type DiscordReadBudget,
+  fetchDiscordChannelHistory,
+  fetchDiscordProviderHistory,
+  getDiscordRecordWithinBudget,
+} from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 const DISCORD_TEXT_CHANNEL_TYPE = 0;
 const DISCORD_PUBLIC_THREAD_TYPES = new Set([10, 11]);
 const DISCORD_TEXT_MESSAGE_TYPES = new Set([0, 19]);
 const DISCORD_NONCE_RECOVERY_WINDOW_MS = 5 * 60_000;
+const DISCORD_ADMINISTRATOR_PERMISSION = PermissionFlagsBits.Administrator;
+const DISCORD_ALL_PERMISSIONS = (1n << 64n) - 1n;
 const DISCORD_VIEW_CHANNEL_PERMISSION = PermissionFlagsBits.ViewChannel;
 const DISCORD_SEND_MESSAGES_PERMISSION = PermissionFlagsBits.SendMessages;
 const DISCORD_READ_MESSAGE_HISTORY_PERMISSION = PermissionFlagsBits.ReadMessageHistory;
@@ -91,6 +102,12 @@ interface DiscordGatewayTransport {
 
 interface DiscordTransport {
   rest: DiscordRestTransport;
+  /**
+   * REST client for agent history reads. It rejects instead of sleeping on a
+   * rate limit so the row's rate-limit budget applies; the listener, catch-up,
+   * and delivery keep the library's own rate-limit handling on `rest`.
+   */
+  historyRest: DiscordRestTransport;
   createGateway(options: {
     checkpoint: Record<string, unknown> | null | undefined;
     onSessionInfo: (sessionInfo: unknown) => Promise<void>;
@@ -103,13 +120,33 @@ interface VerifiedDiscordThread {
 }
 
 function defaultDiscordTransport(token: string): DiscordTransport {
-  const rest = new REST({ version: '10' }).setToken(token);
+  // Clients are built on first use: connectors are often created only to
+  // validate config or serve one read, and each REST client starts recurring
+  // cache sweeper timers that are never cleared.
+  let rest: REST | undefined;
+  const sharedRest = () => {
+    rest ??= new REST({ version: '10' }).setToken(token);
+    return rest;
+  };
+  let historyRest: DiscordRestTransport | undefined;
   return {
-    rest,
+    get rest() {
+      return sharedRest();
+    },
+    // Agent history reads are one-shot, so this client runs no sweeper timers.
+    get historyRest() {
+      historyRest ??= new REST({
+        version: '10',
+        rejectOnRateLimit: () => true,
+        hashSweepInterval: 0,
+        handlerSweepInterval: 0,
+      }).setToken(token);
+      return historyRest;
+    },
     createGateway: ({ onSessionInfo }) =>
       new WebSocketManager({
         token,
-        rest,
+        rest: sharedRest(),
         intents:
           GatewayIntentBits.Guilds |
           GatewayIntentBits.GuildMessages |
@@ -156,6 +193,95 @@ function withDeliveryErrorMetadata(error: unknown, message: string): Error {
 
 function snowflake(value: unknown): string | undefined {
   return isDiscordSnowflake(value) ? value : undefined;
+}
+
+const DISCORD_ATTACHMENT_CDN_HOST = 'cdn.discordapp.com';
+const DISCORD_ATTACHMENT_PATH = /^\/attachments\/\d{17,20}\/\d{17,20}\/.+$/;
+const DISCORD_SIGNED_ATTACHMENT_QUERY = new Set(['ex', 'is', 'hm']);
+const DISCORD_IMAGE_MIMES = new Set(['image/png', 'image/jpeg']);
+
+/**
+ * Discord attachment URLs are signed CDN URLs, not arbitrary user-provided
+ * download targets. Keep the accepted shape narrow so the daemon can fetch
+ * without forwarding a channel credential or accepting external URL input.
+ */
+export function isAllowedDiscordAttachmentUrl(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname.toLowerCase() !== DISCORD_ATTACHMENT_CDN_HOST ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.hash ||
+    !DISCORD_ATTACHMENT_PATH.test(url.pathname)
+  ) {
+    return false;
+  }
+  const queryKeys = [...url.searchParams.keys()];
+  return (
+    queryKeys.length === DISCORD_SIGNED_ATTACHMENT_QUERY.size &&
+    queryKeys.every((key) => DISCORD_SIGNED_ATTACHMENT_QUERY.has(key)) &&
+    [...DISCORD_SIGNED_ATTACHMENT_QUERY].every((key) => {
+      const value = url.searchParams.get(key);
+      return typeof value === 'string' && value.length > 0;
+    })
+  );
+}
+
+function discordAttachmentMime(contentType: unknown, filename: string): string | undefined {
+  if (contentType !== undefined && contentType !== null && typeof contentType !== 'string') {
+    return undefined;
+  }
+  const normalized =
+    typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
+  if (normalized) return DISCORD_IMAGE_MIMES.has(normalized) ? normalized : undefined;
+  const lowerName = filename.toLowerCase();
+  if (lowerName.endsWith('.png')) return 'image/png';
+  if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg';
+  return undefined;
+}
+
+/** Normalize the strictly supported live Discord attachment subset. */
+export function extractDiscordInboundFiles(rawAttachments: unknown): InboundFile[] | undefined {
+  if (!Array.isArray(rawAttachments)) return undefined;
+  const files: InboundFile[] = [];
+  for (const rawAttachment of rawAttachments) {
+    const attachment = asRecord(rawAttachment);
+    const id = snowflake(attachment?.id);
+    const filename = attachment?.filename;
+    const size = attachment?.size;
+    const url = attachment?.url;
+    if (
+      !id ||
+      typeof filename !== 'string' ||
+      filename.length === 0 ||
+      filename.length > 255 ||
+      !Number.isSafeInteger(size) ||
+      (size as number) < 0 ||
+      typeof url !== 'string' ||
+      !isAllowedDiscordAttachmentUrl(url)
+    ) {
+      return undefined;
+    }
+    const mimetype = discordAttachmentMime(attachment?.content_type, filename);
+    if (!mimetype) return undefined;
+    files.push({ id, name: filename, mimetype, size: size as number, url_private_download: url });
+  }
+  return files;
+}
+
+function hasUnsupportedDiscordRichPayload(message: Record<string, unknown>): boolean {
+  for (const field of ['embeds', 'components', 'sticker_items'] as const) {
+    const value = message[field];
+    if (value !== undefined && (!Array.isArray(value) || value.length > 0)) return true;
+  }
+  return message.poll !== undefined;
 }
 
 function escapeRegExp(value: string): string {
@@ -484,7 +610,9 @@ function effectiveChannelPermissions(
   botUserId: string
 ): bigint {
   const direct = permissionBits(member?.permissions);
-  if (direct !== 0n) return direct;
+  if (direct !== 0n) {
+    return (direct & DISCORD_ADMINISTRATOR_PERMISSION) !== 0n ? DISCORD_ALL_PERMISSIONS : direct;
+  }
   const roles = Array.isArray(guild?.roles) ? guild.roles.map(asRecord).filter(Boolean) : [];
   const memberRoles = Array.isArray(member?.roles)
     ? member.roles.filter((role): role is string => typeof role === 'string')
@@ -496,7 +624,8 @@ function effectiveChannelPermissions(
       permissions |= permissionBits(role.permissions);
     }
   }
-  if ((permissions & (1n << 3n)) !== 0n) return permissions;
+  // Administrator grants every permission and bypasses channel overwrites.
+  if ((permissions & DISCORD_ADMINISTRATOR_PERMISSION) !== 0n) return DISCORD_ALL_PERMISSIONS;
   const overwrites = Array.isArray(channel?.permission_overwrites)
     ? channel.permission_overwrites.map(asRecord).filter(Boolean)
     : [];
@@ -883,6 +1012,112 @@ export class DiscordConnector implements GatewayConnector {
     return fetchDiscordProviderHistory(this.transport.rest, this.config, req);
   }
 
+  /**
+   * Agent channel-history read (`agent_tools.channel_history`). The target
+   * must be an allowlisted public parent channel or a public thread under one,
+   * and the bot must hold View Channel and Read Message History there: Discord
+   * answers a missing Read Message History with an empty list, not an error,
+   * so an empty result is only trusted after this check. Resolution, access
+   * checks, and pages share one deadline and rate-limit budget.
+   */
+  async fetchChannelHistory(
+    req: DiscordAgentChannelHistoryRequest
+  ): Promise<DiscordChannelHistoryResult> {
+    this.validate();
+    const budget = createDiscordReadBudget(this.config);
+    const channelId =
+      req.channelId ??
+      (req.sessionThreadKey
+        ? await this.resolveHistoryParentChannel(req.sessionThreadKey, budget)
+        : undefined);
+    if (!channelId) throw new Error('A Discord channel or session thread is required.');
+    await this.requireChannelHistoryAccess(channelId, budget);
+    return fetchDiscordChannelHistory(
+      this.transport.historyRest,
+      this.config,
+      {
+        channelId,
+        ...(req.before ? { before: req.before } : {}),
+        ...(req.after ? { after: req.after } : {}),
+        ...(req.limit !== undefined ? { limit: req.limit } : {}),
+        ...(req.includeBotMessages !== undefined
+          ? { includeBotMessages: req.includeBotMessages }
+          : {}),
+      },
+      budget
+    );
+  }
+
+  /** The allowlisted parent channel behind a Discord gateway thread key. */
+  private async resolveHistoryParentChannel(
+    threadKey: string,
+    budget: DiscordReadBudget
+  ): Promise<string> {
+    const parsed = parseDiscordThreadKey(threadKey);
+    let parentChannelId: string | undefined;
+    if (parsed?.kind === 'legacy_thread') parentChannelId = parsed.parentChannelId;
+    else if (parsed?.kind === 'message') parentChannelId = parsed.channelId;
+    else if (parsed?.kind === 'provider_thread') {
+      const thread = await getDiscordRecordWithinBudget(
+        this.transport.historyRest,
+        Routes.channel(parsed.channelId),
+        budget
+      );
+      parentChannelId = snowflake(thread?.parent_id);
+    }
+    if (!parentChannelId || !configuredChannelIds(this.config).includes(parentChannelId)) {
+      throw new Error(
+        'Could not resolve an allowed Discord parent channel for this session; pass discordChannelId.'
+      );
+    }
+    return parentChannelId;
+  }
+
+  private async requireChannelHistoryAccess(
+    channelId: string,
+    budget: DiscordReadBudget
+  ): Promise<void> {
+    const get = (route: string) =>
+      getDiscordRecordWithinBudget(this.transport.historyRest, route, budget);
+    const guildId = configuredString(this.config, 'guild_id');
+    const allowedChannelIds = configuredChannelIds(this.config);
+    const denied = () =>
+      new Error(
+        `Discord channel ${channelId} is not an allowed channel, or a public thread under one, for this gateway channel.`
+      );
+    if (!isDiscordSnowflake(channelId)) throw denied();
+    const target = await get(Routes.channel(channelId));
+    if (!target || target.id !== channelId || target.guild_id !== guildId) throw denied();
+    let parent: Record<string, unknown> | null = target;
+    if (!allowedChannelIds.includes(channelId)) {
+      const parentChannelId = snowflake(target.parent_id);
+      if (
+        !DISCORD_PUBLIC_THREAD_TYPES.has(target.type as number) ||
+        !parentChannelId ||
+        !allowedChannelIds.includes(parentChannelId)
+      ) {
+        throw denied();
+      }
+      parent = await get(Routes.channel(parentChannelId));
+      if (parent?.id !== parentChannelId || parent.guild_id !== guildId) throw denied();
+    }
+    if (!isPublicTextChannel(parent, guildId)) throw denied();
+
+    // Threads inherit their parent's permission overwrites.
+    const botUserId = configuredString(this.config, 'application_id');
+    const [guild, member] = await Promise.all([
+      get(Routes.guild(guildId)),
+      get(Routes.guildMember(guildId, botUserId)),
+    ]);
+    const permissions = effectiveChannelPermissions(guild, member, parent, guildId, botUserId);
+    const required = DISCORD_VIEW_CHANNEL_PERMISSION | DISCORD_READ_MESSAGE_HISTORY_PERMISSION;
+    if ((permissions & required) !== required) {
+      throw new Error(
+        `The Discord bot lacks View Channel or Read Message History on channel ${channelId}; grant both in Discord to read its history.`
+      );
+    }
+  }
+
   async sendDirectMessage(req: {
     target: string;
     text: string;
@@ -915,6 +1150,7 @@ export class DiscordConnector implements GatewayConnector {
     threadId?: string;
     metadata?: Record<string, unknown>;
     text?: string;
+    files?: InboundFile[];
     prepareDelivery?: InboundMessage['prepareDelivery'];
   }> {
     const author = asRecord(message.author);
@@ -959,14 +1195,16 @@ export class DiscordConnector implements GatewayConnector {
     const rawContent = typeof message.content === 'string' ? message.content : '';
     const mentioned = hasStructuredDiscordBotMention(message, botUserId);
     if (!mentioned) return { accepted: false };
-    if (
-      (Array.isArray(message.attachments) && message.attachments.length > 0) ||
-      (Array.isArray(message.embeds) && message.embeds.length > 0) ||
-      (Array.isArray(message.components) && message.components.length > 0) ||
-      (Array.isArray(message.sticker_items) && message.sticker_items.length > 0) ||
-      message.poll !== undefined
-    ) {
+    const rawAttachments = message.attachments;
+    if (rawAttachments !== undefined && !Array.isArray(rawAttachments)) {
       return { accepted: false };
+    }
+    if (hasUnsupportedDiscordRichPayload(message)) return { accepted: false };
+    let files: InboundFile[] | undefined;
+    if (Array.isArray(rawAttachments) && rawAttachments.length > 0) {
+      if (this.config.files !== true) return { accepted: false };
+      files = extractDiscordInboundFiles(rawAttachments);
+      if (!files) return { accepted: false };
     }
     const text = stripStructuredDiscordBotMention(rawContent, botUserId);
     if (!text) return { accepted: false };
@@ -1001,6 +1239,7 @@ export class DiscordConnector implements GatewayConnector {
       accepted: true,
       threadId,
       text,
+      ...(files ? { files } : {}),
       metadata: buildDiscordInboundMetadata({
         guildId,
         channelId,
@@ -1041,6 +1280,7 @@ export class DiscordConnector implements GatewayConnector {
       text: result.text,
       userId: String(asRecord(message.author)?.id ?? ''),
       timestamp: toIsoTimestamp(message.timestamp),
+      ...(result.files && result.files.length > 0 ? { files: result.files } : {}),
       metadata: result.metadata,
       prepareDelivery: result.prepareDelivery,
     };

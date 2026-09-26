@@ -238,7 +238,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
     });
 
-    it('conflicts instead of combining a board move with stale inheritance state', async () => {
+    it('moves inherited branches but rejects policy writes based on the old board', async () => {
       const tenantId = `policy-board-move-binding-${generateId()}` as TenantID;
       const value = await seed(tenantId);
       const destination = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
@@ -270,7 +270,18 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             board_id: destination.board_id,
           })
         )
-      ).rejects.toThrow(/explicit permission override/);
+      ).resolves.toMatchObject({ board_id: destination.board_id, permission_binding: 'inherit' });
+      // Moving is now an authorized policy transition, not a forced override.
+      // An editor still cannot apply a package loaded from the previous board.
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new CapabilityPolicyRepository(scoped).replaceBranchPolicy(
+            value.branchId,
+            inheritSource,
+            value.ownerId
+          )
+        )
+      ).rejects.toThrow(/Branch board changed/);
 
       const inverseTenantId = `policy-board-move-binding-inverse-${generateId()}` as TenantID;
       const inverse = await seed(inverseTenantId);

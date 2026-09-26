@@ -151,6 +151,18 @@ describe('auth_type', () => {
     });
   });
 
+  it('accepts only an explicit true OAuth-challenge bearer exception', () => {
+    const entry = parseCuratedCatalog(
+      `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: true\n`
+    )[0];
+    expect(entry.credentials?.oauth_challenge_compatible).toBe(true);
+    expect(() =>
+      parseCuratedCatalog(
+        `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: false\n`
+      )
+    ).toThrow(CuratedCatalogError);
+  });
+
   it('refuses a verdict only a live check could produce', () => {
     // `unreachable` describes one moment, so a checked-in file cannot claim it.
     expect(() => withAuth('auth_type: unreachable')).toThrow(CuratedCatalogError);
@@ -389,6 +401,36 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
+  it('offers Fellow with discovered OAuth and discloses its permission-gated read/write tools', async () => {
+    const fellow = (await loadCuratedCatalog()).find((entry) => entry.name === 'app.fellow/mcp');
+    expect(fellow).toMatchObject({
+      title: 'Fellow',
+      category: 'productivity',
+      capabilities: ['notes', 'tasks', 'channels'],
+      remote_url: 'https://fellow.app/mcp',
+      website_url: 'https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+    });
+    expect(fellow?.hidden).toBeUndefined();
+    expect(fellow?.oauth).toBeUndefined();
+    expect(fellow?.credentials).toBeUndefined();
+    for (const authority of [
+      'admin to enable MCP',
+      'per-user Fellow permissions',
+      'transcripts',
+      'action items',
+      'calendar events',
+      'channels',
+      'create, replace, edit, and rename agendas',
+      'permanently delete',
+      'agenda templates',
+      "meeting series' default template",
+    ]) {
+      expect(fellow?.permission_disclosure).toContain(authority);
+    }
+  });
+
   it('keeps material destructive, sensitive, and operational authority in disclosures', async () => {
     const entries = await loadCuratedCatalog();
     const disclosure = (name: string): string => {
@@ -531,25 +573,77 @@ describe('the shipped catalog', () => {
     );
   });
 
-  it('opts the providers that pass the strict production boundary into strict mode', async () => {
+  it('keeps the GitHub PAT and Twilio Public Beta limitations visible on their cards', async () => {
+    const entries = await loadCuratedCatalog();
+    const github = entries.find((entry) => entry.name === 'io.github.github/github-mcp-server');
+    expect(github).toMatchObject({
+      website_url:
+        'https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server',
+      credentials: { label: 'Fine-grained personal access token' },
+    });
+    expect(github?.permission_disclosure).toMatch(/Enterprise Managed User/i);
+    expect(github?.permission_disclosure).toMatch(/Organisation policy/i);
+    expect(github?.permission_disclosure).toMatch(/paid GitHub or Copilot feature requirements/i);
+
+    const twilio = entries.find((entry) => entry.name === 'com.twilio/docs-mcp');
+    expect(twilio).toMatchObject({ website_url: 'https://www.twilio.com/docs/ai/mcp' });
+    expect(twilio?.permission_disclosure).toMatch(/Public Beta/i);
+    expect(twilio?.permission_disclosure).toMatch(/Support Terms/i);
+    expect(twilio?.permission_disclosure).toMatch(/Service Level Agreement/i);
+  });
+
+  it('keeps the explicit strict-mode policy inventory', async () => {
     // Marketplace installs with no statement use the daemon's bounded
-    // interoperability profile. These three publish the exact PRM/issuer,
+    // interoperability profile. Monday, Cloudflare and ClickUp publish the exact PRM/issuer,
     // S256 and RFC 9207 contracts, so keep the stronger policy explicit and
-    // make any later expansion a reviewed curation change.
+    // make any later expansion a reviewed curation change. Preset is pinned
+    // defensively pending production validation, not claimed to have passed it.
     const entries = await loadCuratedCatalog();
     expect(
       entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
     ).toEqual([
       ['com.monday/monday.com', { compatibility_mode: 'strict' }],
       ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
+      ['io.preset/mcp-gateway', { compatibility_mode: 'strict' }],
       ['com.clickup/mcp', { compatibility_mode: 'strict' }],
     ]);
+  });
+
+  it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {
+    const entries = await loadCuratedCatalog();
+    // catalog_entry_name is persisted on installs: this is a release identity,
+    // not display copy. A rename requires an explicit migration decision.
+    const preset = entries.find((entry) => entry.name === 'io.preset/mcp-gateway');
+    expect(preset).toMatchObject({
+      remote_url: 'https://mcp.app.preset.io/mcp',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+      oauth: { compatibility_mode: 'strict' },
+    });
+    // The initial task is intentionally read-only, not an authorization limit.
+    expect(preset!.starter_prompt).toContain('Do not change any data.');
+    expect(preset!.permission_disclosure).toContain('run SQL');
+    expect(preset!.permission_disclosure).toContain(
+      'create, edit, soft-delete, or restore Knowledge documents'
+    );
+  });
+
+  it('uses Datadog’s documented US1 v1 endpoint with unchanged OAuth and transport', async () => {
+    const entries = await loadCuratedCatalog();
+    const datadog = entries.find((entry) => entry.name === 'com.datadoghq/mcp');
+
+    expect(datadog).toMatchObject({
+      remote_url: 'https://mcp.datadoghq.com/v1/mcp',
+      transport: 'streamable-http',
+      auth_type: 'oauth',
+    });
+    expect(datadog?.credentials).toBeUndefined();
+    expect(datadog?.oauth).toBeUndefined();
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
     const entries = await loadCuratedCatalog();
     const unsupported = [
-      'io.github.github/github-mcp-server',
       'io.prisma/mcp',
       'com.mongodb/mcp',
       'com.box/mcp',
@@ -558,9 +652,30 @@ describe('the shipped catalog', () => {
       'com.pagerduty/mcp',
       'com.kagi/mcp',
       'com.render/mcp',
+      // Explicit 2026-09-01 exclusions: customer OAuth clients, tenant/admin
+      // gates, callback allowlisting, preview constraints, or unusable live
+      // metadata keep these off the one-click shelf.
+      'com.google.gmail/mcp',
+      'com.google.drive/mcp',
+      'com.google.calendar/mcp',
+      'com.google.chat/mcp',
+      'com.google.docs/mcp',
+      'com.google.sheets/mcp',
+      'com.google.slides/mcp',
+      'com.google.tasks/mcp',
+      'com.microsoft.powerbi/mcp',
+      'com.typeform/mcp',
+      'com.contentful/mcp',
+      'com.mongodb.atlas/mcp',
     ];
 
     expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
+    expect(
+      entries.find((entry) => entry.name === 'io.github.github/github-mcp-server')
+    ).toMatchObject({
+      auth_type: 'credentials',
+      credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
+    });
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {
@@ -659,5 +774,41 @@ describe('the shipped catalog — everything on the shelf can be taken off it', 
     // executing third-party code on the executor host, beside every session.
     const entries = await loadCuratedCatalog();
     expect(entries.filter((entry) => entry.transport === 'stdio')).toEqual([]);
+  });
+});
+
+describe('catalog visibility validation', () => {
+  it('preserves optional boolean visibility without excluding definitions', () => {
+    expect(parseCuratedCatalog(VALID_ENTRY)[0].hidden).toBeUndefined();
+    for (const hidden of [true, false]) {
+      expect(parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${hidden}\n`)[0].hidden).toBe(hidden);
+    }
+  });
+
+  it.each(['"true"', '"false"', '1', 'null'])('rejects non-boolean hidden: %s', (value) => {
+    expect(() => parseCuratedCatalog(`${VALID_ENTRY}    hidden: ${value}\n`)).toThrow(/hidden/);
+  });
+
+  it('still validates hidden definitions, including transport and duplicate identities', () => {
+    const hidden = `${VALID_ENTRY}    hidden: true\n`;
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('category: dev-tools', 'category: invalid'))
+    ).toThrow(/category/);
+    expect(() => parseCuratedCatalog(`${hidden}    transport: stdio\n`)).toThrow(/stdio/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace(/\s+permission_disclosure:.*\n/, '\n'))
+    ).toThrow(/permission_disclosure/);
+    expect(() =>
+      parseCuratedCatalog(hidden.replace('https://mcp.example.com/mcp', 'file:///tmp/mcp'))
+    ).toThrow(/remote_url/);
+    expect(() =>
+      parseCuratedCatalog(`${hidden}    oauth:\n      client_secret: forbidden\n`)
+    ).toThrow(/client_secret/);
+    expect(() => parseCuratedCatalog(`${hidden}    auth_type: credentials\n`)).toThrow(
+      /credentials/
+    );
+    expect(() => parseCuratedCatalog(hidden + hidden.replace('entries:', 'unpublished:'))).toThrow(
+      /duplicate entry name/
+    );
   });
 });

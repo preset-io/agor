@@ -11,7 +11,7 @@
  *   never from request data — callers act only on their own credentials.
  * - Token material flows browser → daemon → target user's filesystem only. It is
  *   never logged, echoed back, or placed in any agent/LLM context; failures log
- *   an error class, never token bytes.
+ *   only reviewed error categories and durations, never token bytes.
  * - Writes run through the configured execution substrate and use restrictive
  *   file permissions in the selected execution home.
  */
@@ -23,6 +23,7 @@ import {
   hasTenantSafeExecutorCredentialHome,
 } from '@agor/core/config';
 import {
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -32,11 +33,13 @@ import type {
   AgenticAuthMethods,
   AuthenticatedParams,
   DeepReadonly,
-  User,
   UserID,
 } from '@agor/core/types';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
-import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import {
+  CodexAuthCredentialWriteError,
+  writeCodexAuthCredential,
+} from '../utils/executor-codex-auth.js';
 import {
   ExecutionCredentialHomeResolutionError,
   resolveExecutionCredentialHome,
@@ -54,8 +57,23 @@ export interface CodexCredentialMutationCoordinator {
     tenantId: string,
     userId: UserID,
     reason: 'credentials_imported' | 'credentials_removed',
-    work: (authorityGeneration: number) => Promise<T>
+    work: (authorityGeneration?: number) => Promise<T>,
+    preflight?: () => Promise<void>
   ): Promise<T>;
+}
+
+/** Compare the complete filesystem/executor identity captured by an auth flow. */
+export function sameCodexCredentialRoute(
+  left: Pick<
+    Extract<CodexCredentialRouteResolution, { ok: true }>,
+    'delegatedHomeKey' | 'codexHome'
+  >,
+  right: Pick<
+    Extract<CodexCredentialRouteResolution, { ok: true }>,
+    'delegatedHomeKey' | 'codexHome'
+  >
+): boolean {
+  return left.delegatedHomeKey === right.delegatedHomeKey && left.codexHome === right.codexHome;
 }
 
 /** In-process users-service flag: publish this mutation only after its outer DB commit. */
@@ -63,7 +81,6 @@ export const CODEX_AUTH_DEFER_USER_REALTIME = Symbol('codex-auth-defer-user-real
 
 /** Minimal users-service surface — mirrors the widget handlers' structural typing. */
 interface UsersServiceLike {
-  get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
     data: { agentic_auth_methods: AgenticAuthMethods },
@@ -86,6 +103,8 @@ export type CodexCredentialRouteResolution =
        * user's `~/.codex`).
        */
       codexHome?: string;
+      /** Explicit Claude config directory for the same per-user home store. */
+      claudeConfigDir?: string;
     }
   | {
       ok: false;
@@ -180,11 +199,13 @@ export async function resolveCodexCredentialRoute(
       };
     }
     const codexHome = resolved.homeStore ? join(resolved.homeStore, '.codex') : undefined;
+    const claudeConfigDir = resolved.homeStore ? join(resolved.homeStore, '.claude') : undefined;
     return {
       ok: true,
       delegatedHomeKey: resolved.delegatedHomeKey,
       userId,
       ...(codexHome ? { codexHome } : {}),
+      ...(claudeConfigDir ? { claudeConfigDir } : {}),
     };
   } catch (err) {
     return {
@@ -231,25 +252,29 @@ export async function persistVerifiedCodexAuth(options: {
       authorityGeneration
     );
   } catch (err) {
-    // The error may carry launcher stderr; log a class-level summary only
-    // so token material (or its absence) never reaches daemon logs.
-    console.error(
-      `[CodexAuth] Failed to write auth.json: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
-    );
+    // Raw errors can carry launcher stderr or credentials. The executor route
+    // supplies only reviewed codes and monotonic durations for this diagnostic.
+    const diagnostic =
+      err instanceof CodexAuthCredentialWriteError
+        ? `code=${err.code} duration_ms=${err.durationMs}`
+        : 'code=UNEXPECTED';
+    console.error(`[CodexAuth] Failed to write auth.json: ${diagnostic}`);
     throw new BadRequest(
       'Could not write the Codex credentials file on the server. Check daemon logs or use an API key instead.'
     );
   }
 
+  const scope = getCurrentTenantDatabaseScope();
   const usersService = app.service('users') as UsersServiceLike;
-  const current = await usersService.get(userId, { user: authUser, authenticated: true });
   await usersService.patch(
     userId,
-    { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
+    { agentic_auth_methods: { codex: 'subscription' } },
     {
       user: authUser,
       authenticated: true,
-      ...(authorityGeneration === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+      ...(authorityGeneration !== undefined || (scope?.kind === 'tenant' && scope.transactionActive)
+        ? { [CODEX_AUTH_DEFER_USER_REALTIME]: true }
+        : {}),
     }
   );
 

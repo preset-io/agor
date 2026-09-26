@@ -96,7 +96,6 @@ function runtimeAuthority(seed: TenantSeed, taskId: string) {
     principal_user_id: seed.userId,
     session_id: seed.sessionId,
     branch_id: seed.branchId,
-    branchRbacEnabled: true,
   };
 }
 
@@ -108,9 +107,7 @@ async function authorizeRuntime(
 ) {
   const tasks = new TaskRepository(scoped);
   const authority = runtimeAuthority(seed, task.task_id);
-  await tasks.bindExecutorLaunchAuthority(task.task_id, {
-    branchRbacEnabled: true,
-  });
+  await tasks.bindExecutorLaunchAuthority(task.task_id);
   await tasks.connectExecutor(task.task_id, connectedAt);
   const now = new Date();
   await new ExecutorSessionTokenAuthorityRepository(scoped).issue({
@@ -142,7 +139,6 @@ function taskInput(seed: TenantSeed, status: TaskStatus, overrides: Record<strin
       start_timestamp: new Date().toISOString(),
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'ha-probe' },
-    tool_use_count: 0,
     ...overrides,
   };
 }
@@ -197,6 +193,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
         daemonB.reportRuntimeTelemetry(active.task_id, authority)
       ).resolves.toMatchObject({ outcome: 'continued' });
       refreshedAt = (await daemonB.findById(active.task_id))?.last_executor_heartbeat_at;
+      await daemonB.assertRuntimeCredentialAuthority(active.task_id, authority);
+      expect((await daemonB.findById(active.task_id))?.last_executor_heartbeat_at).toBe(
+        refreshedAt
+      );
       expect(await daemonB.findById(active.task_id)).toMatchObject({ status: TaskStatus.RUNNING });
       expect(await daemonB.findById(queued.task_id)).toMatchObject({
         status: TaskStatus.QUEUED,
@@ -211,8 +211,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     );
     await runWithTenantDatabaseScope(peerDb, seed.tenantId, async (scoped) => {
       // Daemon A committed revocation while Redis/realtime fanout was missed.
-      // Daemon B's next normal heartbeat still denies from PostgreSQL.
+      // Daemon B's next credential request and heartbeat both deny from PostgreSQL.
       const daemonB = new TaskRepository(scoped);
+      await expect(
+        daemonB.assertRuntimeCredentialAuthority(active.task_id, authority)
+      ).rejects.toThrow();
       await expect(
         daemonB.reportRuntimeTelemetry(active.task_id, authority)
       ).resolves.toMatchObject({ outcome: 'authorization_revoked', reason: 'token_revoked' });
@@ -535,6 +538,68 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     });
   });
 
+  it('keeps a pre-connection remote stop out of stranded discovery until the startup deadline', async () => {
+    const owner = await seedTenant(db, 'awaiting-remote');
+    const dispatchedAt = '2026-08-06T12:00:00.000Z';
+    const graceMs = 5 * 60_000;
+    const ids = await runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      const remote = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'templated',
+          started_at: dispatchedAt,
+        })
+      );
+      const local = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'local',
+          started_at: dispatchedAt,
+        })
+      );
+      const quiesced = await tasks.create(
+        taskInput(owner, TaskStatus.DISPATCHING, {
+          executor_mode: 'templated',
+          started_at: dispatchedAt,
+        })
+      );
+      for (const task of [remote, local, quiesced]) {
+        await tasks.claimTermination({
+          taskId: task.task_id,
+          cause: 'user_stop',
+          errorMessage: 'Stopped by user',
+          now: new Date('2026-08-06T12:00:30.000Z'),
+        });
+      }
+      const quiescedRequest = (await tasks.findById(quiesced.task_id))!.termination_request!;
+      await tasks.recordExecutorQuiescence(
+        { task_id: quiesced.task_id, requested_at: quiescedRequest.requested_at },
+        new Date('2026-08-06T12:00:31.000Z')
+      );
+      return { remote: remote.task_id, local: local.task_id, quiesced: quiesced.task_id };
+    });
+
+    const stranded = (now: Date) =>
+      runWithSystemDatabaseScope(
+        db,
+        'awaiting remote discovery',
+        async (systemDb) =>
+          (
+            await new TaskRepository(systemDb).findStrandedTerminationRefs({
+              now,
+              limit: 1_000,
+              unconnectedGraceMs: graceMs,
+            })
+          ).map((ref) => ref.task_id),
+        { capability: 'task_runtime_discovery' }
+      );
+
+    const inside = await stranded(new Date('2026-08-06T12:04:59.000Z'));
+    expect(inside).not.toContain(ids.remote);
+    expect(inside).toContain(ids.local);
+    expect(inside).toContain(ids.quiesced);
+    expect(await stranded(new Date('2026-08-06T12:05:00.000Z'))).toContain(ids.remote);
+  });
+
   it('discovers routing refs globally but rejects cross-tenant reload and mutation', async () => {
     const a = await seedTenant(db, 'tenant-a');
     const b = await seedTenant(db, 'tenant-b');
@@ -573,6 +638,77 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           cause: 'heartbeat_lost',
           errorMessage: 'cross-tenant attempt',
         })
+      ).rejects.toThrow();
+    });
+  });
+
+  it('keeps Slack recovery single-use CAS tenant-scoped under forced RLS', async () => {
+    const a = await seedTenant(db, 'slack-recovery-a');
+    const b = await seedTenant(db, 'slack-recovery-b');
+    const task = await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+      new TaskRepository(scoped).create(taskInput(a, TaskStatus.RUNNING))
+    );
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      await new TaskRepository(scoped).mutateMCPSlackRecoveryNotice(task.task_id, () => ({
+        notice_id: 'notice-rls',
+        token_jti: 'jti-rls',
+        issued_at: '2026-08-26T12:00:00.000Z',
+        expires_at: '2026-08-26T12:10:00.000Z',
+        principal_user_id: a.userId,
+        credential_user_id: a.userId,
+        slack_user_id: 'U1',
+        slack_team_id: 'T1',
+        gateway_channel_id: 'gateway-1',
+        gateway_config_generation: 1,
+        slack_channel_id: 'C1',
+        slack_thread_id: 'C1-1.1',
+        session_id: a.sessionId,
+        task_id: task.task_id,
+        mcp_server_id: generateId() as never,
+        mcp_server_config_version: 1,
+        recovery_generation: 1,
+        recovery_request_id: 'request-rls',
+        provider_dispatch: 'not_started',
+        delivery_id: 'delivery-rls',
+        next_repair_at: '2026-08-26T12:00:00.000Z',
+      }));
+    });
+    const consume = (database: Database) =>
+      runWithTenantDatabaseScope(database, a.tenantId, (scoped) =>
+        new TaskRepository(scoped).mutateMCPSlackRecoveryNotice(task.task_id, (current) =>
+          current?.token_jti === 'jti-rls' && !current.token_consumed_at
+            ? { ...current, token_consumed_at: '2026-08-26T12:01:00.000Z' }
+            : null
+        )
+      );
+    const results = await Promise.all([consume(db), consume(peerDb)]);
+    expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      expect(
+        (
+          await tasks.findMcpSlackRecoveryNoticePage({
+            now: new Date('2026-08-26T12:02:00.000Z'),
+            horizon: new Date('2026-08-25T12:02:00.000Z'),
+            limit: 10,
+          })
+        ).tasks.map((candidate) => candidate.task_id)
+      ).toContain(task.task_id);
+    });
+    await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      expect(await tasks.findById(task.task_id)).toBeNull();
+      expect(
+        (
+          await tasks.findMcpSlackRecoveryNoticePage({
+            now: new Date('2026-08-26T12:02:00.000Z'),
+            horizon: new Date('2026-08-25T12:02:00.000Z'),
+            limit: 10,
+          })
+        ).tasks
+      ).toEqual([]);
+      await expect(
+        tasks.mutateMCPSlackRecoveryNotice(task.task_id, (current) => current ?? null)
       ).rejects.toThrow();
     });
   });

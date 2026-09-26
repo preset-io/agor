@@ -11,7 +11,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { and, eq, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, eq, lte, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -113,25 +113,6 @@ function safeTeamsDeliveryMetadata(
     if (typeof value === 'string' || typeof value === 'boolean') safe[key] = value;
   }
   return safe;
-}
-
-async function terminalizeExpiredTeamsPayloads(db: Database, now: Date | SQL): Promise<void> {
-  await update(db, gatewayInboundEvents)
-    .set({
-      status: 'dead_letter',
-      processing_expires_at: now,
-      next_attempt_at: now,
-      last_error_code: 'payload_expired',
-      payload_encrypted: null,
-      payload_expires_at: null,
-    })
-    .where(
-      and(
-        inArray(gatewayInboundEvents.status, ['pending', 'processing']),
-        lte(gatewayInboundEvents.payload_expires_at, now)
-      )
-    )
-    .run();
 }
 
 function rowToEvent(row: GatewayInboundEventRow): GatewayInboundEvent {
@@ -435,20 +416,32 @@ export class GatewayInboundEventRepository {
       event_id: gatewayInboundEvents.id,
       next_attempt_at: gatewayInboundEvents.next_attempt_at,
     };
-    const enabledRows = await select(db, projection)
-      .from(gatewayInboundEvents)
-      .innerJoin(gatewayChannels, eq(gatewayChannels.id, gatewayInboundEvents.gateway_channel_id))
-      .where(
-        and(
-          due,
-          teamsInboundLaneIsOldest(db),
-          eq(gatewayChannels.channel_type, 'teams'),
-          eq(gatewayChannels.enabled, true)
-        )
-      )
-      .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
-      .limit(limit)
-      .all();
+    // Avoid touching the shared inbound-event table on installations with no
+    // enabled Teams channel. Expiration uses its separate bounded index below.
+    const enabledChannel = await select(db, { id: gatewayChannels.id })
+      .from(gatewayChannels)
+      .where(and(eq(gatewayChannels.channel_type, 'teams'), eq(gatewayChannels.enabled, true)))
+      .limit(1)
+      .one();
+    const enabledRows = enabledChannel
+      ? await select(db, projection)
+          .from(gatewayInboundEvents)
+          .innerJoin(
+            gatewayChannels,
+            eq(gatewayChannels.id, gatewayInboundEvents.gateway_channel_id)
+          )
+          .where(
+            and(
+              due,
+              teamsInboundLaneIsOldest(db),
+              eq(gatewayChannels.channel_type, 'teams'),
+              eq(gatewayChannels.enabled, true)
+            )
+          )
+          .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
+          .limit(limit)
+          .all()
+      : [];
 
     // Expired encrypted payloads are the durable Teams envelope. Discover
     // them independently of gateway_channels because its system policy is
@@ -458,13 +451,13 @@ export class GatewayInboundEventRepository {
       .from(gatewayInboundEvents)
       .where(
         and(
-          due,
+          sql`${gatewayInboundEvents.status} IN ('pending', 'processing')`,
+          sql`${gatewayInboundEvents.payload_expires_at} IS NOT NULL`,
           lte(gatewayInboundEvents.payload_expires_at, now),
-          sql`${gatewayInboundEvents.payload_encrypted} IS NOT NULL`,
-          teamsInboundLaneIsOldest(db)
+          sql`${gatewayInboundEvents.payload_encrypted} IS NOT NULL`
         )
       )
-      .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
+      .orderBy(gatewayInboundEvents.payload_expires_at, gatewayInboundEvents.id)
       .limit(limit)
       .all();
 
@@ -525,9 +518,6 @@ export class GatewayInboundEventRepository {
           now
         );
         if (!dbNow) throw new RepositoryError('Unable to obtain database time for Teams claim');
-        // Direct claim callers must not be able to leave an expired
-        // predecessor in the lane forever just because discovery was skipped.
-        await terminalizeExpiredTeamsPayloads(txDb, dbNow);
         if (
           row.payload_expires_at &&
           new Date(row.payload_expires_at).getTime() <= dbNow.getTime() &&
@@ -570,6 +560,85 @@ export class GatewayInboundEventRepository {
       },
       { sqliteImmediate: true }
     );
+  }
+
+  /** Called inside the Task admission transaction. Locks remain held through
+   * Task insertion/commit, serializing configuration revocation and lease reclaim.
+   * Lock order is channel then event, matching channel configuration mutation.
+   */
+  async assertTeamsTaskAdmission(
+    authority: Pick<
+      GatewayInboundEvent,
+      | 'id'
+      | 'gateway_channel_id'
+      | 'processing_token'
+      | 'provider_config_generation'
+      | 'verified_app_id'
+      | 'verified_tenant_id'
+      | 'thread_id'
+    >
+  ): Promise<void> {
+    await lockRowForUpdate(
+      this.db,
+      this.db,
+      gatewayChannels,
+      eq(gatewayChannels.id, authority.gateway_channel_id)
+    );
+    await lockRowForUpdate(
+      this.db,
+      this.db,
+      gatewayInboundEvents,
+      eq(gatewayInboundEvents.id, authority.id)
+    );
+    const channel = await select(this.db)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, authority.gateway_channel_id))
+      .one();
+    const event = await select(this.db)
+      .from(gatewayInboundEvents)
+      .where(eq(gatewayInboundEvents.id, authority.id))
+      .one();
+    // PostgreSQL CURRENT_TIMESTAMP is transaction-start time, which may precede
+    // a lock wait. The admission fence needs the actual time after both locks.
+    const clock =
+      event && !isSQLiteDatabase(this.db)
+        ? await select(this.db, { now: sql<Date>`clock_timestamp()` })
+            .from(gatewayInboundEvents)
+            .where(eq(gatewayInboundEvents.id, authority.id))
+            .one()
+        : null;
+    const now = clock
+      ? new Date(clock.now)
+      : event
+        ? await getDatabaseNow(
+            this.db,
+            gatewayInboundEvents,
+            eq(gatewayInboundEvents.id, authority.id)
+          )
+        : null;
+    if (
+      !channel ||
+      !event ||
+      !now ||
+      !channel.enabled ||
+      !authority.verified_app_id ||
+      !authority.verified_tenant_id ||
+      channel.channel_type !== 'teams' ||
+      event.gateway_channel_id !== channel.id ||
+      event.thread_id !== authority.thread_id ||
+      event.status !== 'processing' ||
+      event.processing_token !== authority.processing_token ||
+      new Date(event.processing_expires_at) <= now ||
+      !event.payload_expires_at ||
+      new Date(event.payload_expires_at) <= now ||
+      event.provider_config_generation !== authority.provider_config_generation ||
+      channel.provider_config_generation !== authority.provider_config_generation ||
+      channel.provider_installation_id !== authority.verified_app_id ||
+      event.verified_app_id !== authority.verified_app_id ||
+      event.verified_tenant_id !== authority.verified_tenant_id
+    ) {
+      throw new RepositoryError('Teams Task admission authority is no longer current');
+    }
   }
 
   decryptQueuedPayload(event: GatewayInboundEvent): Record<string, unknown> {

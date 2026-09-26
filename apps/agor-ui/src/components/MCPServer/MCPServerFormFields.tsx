@@ -1,3 +1,4 @@
+import type { MCPDiscoveryResult } from '@agor/core/types';
 import type { AgorClient, MCPScope, MCPTransport } from '@agor-live/client';
 import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
 import { ApiOutlined, DownOutlined } from '@ant-design/icons';
@@ -11,6 +12,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -25,7 +27,11 @@ import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
-import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
+import {
+  extractOAuthConfigForTesting,
+  validateEnvJSON,
+  validateHeadersJSON,
+} from './mcp-oauth-utils';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 const { TextArea } = Input;
@@ -70,16 +76,7 @@ export interface MCPServerFormFieldsProps {
   serverId?: string;
   onTestConnection?: () => Promise<void>;
   testing?: boolean;
-  testResult?: {
-    success: boolean;
-    toolCount: number;
-    resourceCount: number;
-    promptCount: number;
-    error?: string;
-    tools?: Array<{ name: string; description?: string }>;
-    resources?: Array<{ name: string; uri: string; mimeType?: string }>;
-    prompts?: Array<{ name: string; description?: string }>;
-  } | null;
+  testResult?: MCPDiscoveryResult | null;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
   /** Whether persistent mutations/OAuth preparation remain authorized. */
@@ -439,7 +436,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
+          <Form.Item
+            label="Enabled"
+            name="enabled"
+            valuePropName="checked"
+            initialValue={true}
+            extra={
+              mode === 'edit' && authType === 'oauth'
+                ? 'Disabling removes the saved OAuth connection from Agor. Re-enabling requires a new sign-in.'
+                : undefined
+            }
+          >
             <Switch />
           </Form.Item>
         </Col>
@@ -620,16 +627,21 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
       {/* Connection action buttons — surfaced before secondary fields so they
           aren't buried under env vars or the OAuth advanced section. */}
-      {(authType !== 'none' || isRemoteTransport) && (
+      {isRemoteTransport && (
         <Form.Item label="Actions" style={{ marginBottom: 16 }}>
           <Space wrap>
-            {authType !== 'none' && (
-              <Button type="default" loading={testingAuth} onClick={handleTestAuth}>
+            {authType !== 'none' && !serverId && (
+              <Button
+                type="default"
+                loading={testingAuth}
+                disabled={!oauthStartAllowed || testing}
+                onClick={handleTestAuth}
+              >
                 Test Authentication
               </Button>
             )}
             {authType === 'oauth' &&
-              oauthBrowserFlowAvailable &&
+              (oauthBrowserFlowAvailable || !!serverId) &&
               (!oauthStartAllowed || missingRequiredFields.length > 0 ? (
                 // Disabled rather than hidden: the user has already earned this
                 // button with a successful auth test, so it has to say what is
@@ -653,15 +665,23 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 </Button>
               ))}
             {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
-              <Button
-                type="default"
-                danger
-                loading={disconnectingOAuth}
+              <Popconfirm
+                title="Disconnect this OAuth connection?"
+                description="This removes the saved connection from Agor. Provider-side access may remain until you revoke it with the provider."
+                okText="Disconnect"
+                okButtonProps={{ danger: true }}
                 disabled={!mutationAllowed}
-                onClick={handleDisconnectOAuth}
+                onConfirm={handleDisconnectOAuth}
               >
-                Disconnect OAuth
-              </Button>
+                <Button
+                  type="default"
+                  danger
+                  loading={disconnectingOAuth}
+                  disabled={!mutationAllowed}
+                >
+                  Disconnect OAuth
+                </Button>
+              </Popconfirm>
             )}
             {isRemoteTransport && (
               <Button
@@ -669,8 +689,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 icon={<ApiOutlined />}
                 onClick={onTestConnection}
                 loading={testing}
+                disabled={
+                  !oauthStartAllowed ||
+                  !onTestConnection ||
+                  ((!!serverId || authType === 'oauth') && missingRequiredFields.length > 0)
+                }
               >
-                {testing ? 'Testing...' : 'Test Connection'}
+                {testing
+                  ? 'Testing...'
+                  : serverId || authType === 'oauth'
+                    ? 'Save & Test Connection'
+                    : 'Test Connection'}
               </Button>
             )}
           </Space>
@@ -682,10 +711,18 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <div style={{ marginBottom: 16 }}>
           <Alert
             type="success"
-            title={`Connected: ${testResult.toolCount} tools, ${testResult.resourceCount} resources, ${testResult.promptCount} prompts`}
+            title={`Connected: ${testResult.capabilities.tools} tools, ${testResult.capabilities.resources} resources, ${testResult.capabilities.prompts} prompts`}
             showIcon
             style={{ marginBottom: 8 }}
           />
+          {!!testResult.metadata?.descriptions_truncated && (
+            <Alert
+              type="info"
+              showIcon
+              title={`${testResult.metadata.descriptions_truncated} provider description(s) shortened to Agor's safe metadata budget`}
+              style={{ marginBottom: 8 }}
+            />
+          )}
           {testResult.tools && testResult.tools.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <Typography.Text
@@ -823,7 +860,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
                           {managedOAuthCompatibilityMode
-                            ? `The current Marketplace catalog manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
+                            ? `The current Catalog entry manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
                             : 'Strict MCP OAuth discovery is enabled by default.'}{' '}
                           Protected-resource binding, PKCE S256, and issuer checks remain enabled.
                         </li>
@@ -873,14 +910,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     initialValue="strict"
                     tooltip={
                       managedOAuthCompatibilityMode
-                        ? 'This effective policy is managed by the current curated Marketplace entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
+                        ? 'This effective policy is managed by the current curated Catalog entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
                         : 'Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections.'
                     }
                   >
                     <Select disabled={!!managedOAuthCompatibilityMode}>
                       {managedOAuthCompatibilityMode === 'marketplace' && (
                         <Select.Option value="marketplace">
-                          Marketplace compatibility (catalog managed)
+                          Catalog compatibility (managed)
                         </Select.Option>
                       )}
                       <Select.Option value="strict">
@@ -970,6 +1007,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     },
     {
       key: 'advanced-config',
+      forceRender: true,
       label: (
         <Space size={8}>
           <Typography.Text strong>Advanced Configuration</Typography.Text>
@@ -1009,6 +1047,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Environment Variables"
             name="env"
+            rules={[
+              {
+                validator: async (_, value) => {
+                  const error = validateEnvJSON(value);
+                  if (error) throw new Error(error);
+                },
+              },
+            ]}
             tooltip="JSON object of environment variables. Values support templates like {{ user.env.VAR_NAME }}"
           >
             <TextArea

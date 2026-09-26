@@ -1,3 +1,5 @@
+import { resolveExecutorBranch } from './branch-filesystem.js';
+import { validateExistingRestore } from './branch-restore-validation.js';
 /**
  * Git Command Handlers for Executor
  *
@@ -13,14 +15,20 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
-import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
+import {
+  getTeammateConfig,
+  isCanonicalTeammateFrameworkRepo,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+} from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import type { UserGitEnvironment } from '@agor/git/pure';
+import { cloneDiagnostic } from '../git/clone-diagnostic.js';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
   categorizeGitError,
@@ -35,10 +43,12 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
+  gitEnvironmentForRemote,
   isRemoteRefVisibleForClone,
   isValidGitRepo,
   redactGitUrlCredentials,
-  removeGitWorktree,
+  removeBranchWorkspace,
+  resolveGitRef,
   restoreBranchFilesystem,
   scanGitConfigRemoteCredentials,
   scrubGitConfigRemoteCredentials,
@@ -281,7 +291,7 @@ export async function handleBranchFilesList(
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
     client = await createExecutorClient(daemonUrl, payload.sessionToken);
 
-    const branch = await client.service('branches').get(branchId);
+    const branch = await resolveExecutorBranch(client, branchId);
     if (!branch?.path) {
       return { success: true, data: { results: [] } };
     }
@@ -575,6 +585,7 @@ export async function handleGitClone(
     (payload.params.slug ? join(getReposDir(), payload.params.slug) : undefined);
 
   let client: AgorClient | null = null;
+  let env: UserGitEnvironment = {};
 
   try {
     // Connect to daemon
@@ -592,7 +603,7 @@ export async function handleGitClone(
     console.log(`[git.clone] Git ${git.version} is executable (${git.binary})`);
 
     // Fetch per-user git credentials via Feathers RPC
-    const env = await fetchUserGitEnvironment(client);
+    env = await fetchUserGitEnvironment(client);
     if (Object.keys(env).length > 0) {
       console.log('[git.clone] Resolved credentials:', Object.keys(env));
     }
@@ -734,7 +745,8 @@ export async function handleGitClone(
       },
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = cloneDiagnostic(rawMessage, env);
     console.error('[git.clone] Failed:', errorMessage);
 
     // Persist failure on the pre-created repo row so MCP / REST callers can
@@ -744,8 +756,7 @@ export async function handleGitClone(
     // is the durable record for clients that connect later.
     if (payload.params.repoId && client) {
       try {
-        const category = categorizeGitError(errorMessage);
-        const firstLine = errorMessage.split('\n')[0]?.slice(0, 500) || errorMessage.slice(0, 500);
+        const category = categorizeGitError(rawMessage);
         await client.service('repos').patch(payload.params.repoId, {
           clone_status: 'failed',
           clone_error: {
@@ -754,7 +765,7 @@ export async function handleGitClone(
             // underlying call already failed.
             exit_code: 1,
             category,
-            message: firstLine,
+            message: errorMessage,
           },
         });
         console.log(
@@ -799,13 +810,53 @@ export async function handleGitClone(
  *
  * Creates a git branch at the specified path.
  * The DB record is created by the daemon BEFORE this runs (with filesystem_status: 'creating').
- * This handler patches the branch to 'ready' when complete (or leaves as 'creating' on failure).
+ * On success this handler patches the branch to 'ready'; on a caught error it
+ * patches 'failed' with a sanitized message — but ONLY when it still holds a
+ * daemon connection (`client`). If this process is killed or crashes before its
+ * catch runs, or it never connected, it cannot patch anything. The daemon's
+ * onExit safety net (`ReposService.dispatchBranchProvisioning`) reconciles those
+ * cases by marking the branch 'failed' for an explicit retry.
  */
+
+/**
+ * Idempotency preflight: is a working directory for exactly this ref already
+ * materialized at `branchPath`? Executor-local filesystem probe (the daemon
+ * deliberately does not do this — it can't reliably distinguish a complete
+ * checkout from a stale/partial/wrong-ref one, and may not even share the
+ * filesystem). Lets a retry after "executor materialized then crashed before
+ * acking" adopt the existing checkout instead of re-running `git worktree add`
+ * (which would fail on the already-attached ref). Only claims a match when the
+ * checkout's HEAD is the expected branch, so a stale or wrong-ref directory is
+ * NOT silently promoted — it falls through to normal materialization/guarding.
+ */
+async function isBranchAlreadyMaterialized(
+  branchPath: string,
+  expectedRef: string,
+  expectedBranchId: string
+): Promise<boolean> {
+  if (!existsSync(join(branchPath, '.git'))) return false;
+  try {
+    const { git } = createGit(branchPath);
+    const headCommit = (await git.revparse(['HEAD^{commit}'])).trim();
+    const expectedCommit = (await git.revparse([`${expectedRef}^{commit}`])).trim();
+    if (headCommit !== expectedCommit) return false;
+    const markerPath = (await git.revparse(['--git-path', 'agor-branch-id'])).trim();
+    return (await readFile(resolve(branchPath, markerPath), 'utf8')).trim() === expectedBranchId;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleGitBranchAdd(
   payload: GitBranchAddPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
   const branchId = payload.params.branchId;
+  // Echoed on every terminal patch below so the daemon can drop this
+  // acknowledgement if a retry superseded the attempt while we were running.
+  const attemptFence = payload.params.provisioningAttemptId
+    ? { provisioning_attempt_id: payload.params.provisioningAttemptId }
+    : {};
   let resolvedRepoPath: string | undefined;
   let resolvedBranchPath: string | undefined;
   let resolvedBranchName: string | undefined;
@@ -826,6 +877,10 @@ export async function handleGitBranchAdd(
   }
 
   let client: AgorClient | null = null;
+  let materializationWritesSettled = false;
+  let sourceResolutionAdmitted = false;
+  let localHome = false;
+  let filesystemRecovery = false;
 
   try {
     // Connect to daemon
@@ -836,9 +891,25 @@ export async function handleGitBranchAdd(
     // Resolve filesystem-bearing repository metadata through the initiating
     // user's delegated Feathers authority in this same executor.
     const repo = await client.service('repos').get(payload.params.repoId);
-    const branchRecord = await client.service('branches').get(branchId);
+    const branchRecord = await resolveExecutorBranch(client, branchId);
+    if (
+      branchRecord.filesystem_status !== 'creating' ||
+      branchRecord.provisioning_attempt_id !== payload.params.provisioningAttemptId
+    )
+      throw new Error('Branch materialization is not admitted');
     if (branchRecord.repo_id !== payload.params.repoId) {
       throw new Error(`Branch ${branchId} does not belong to repository ${payload.params.repoId}`);
+    }
+
+    // Recovery policy comes from the tenant-scoped, authorized row, not the
+    // caller's restoreMode hint. The admission check above binds this intent to
+    // the current provisioning attempt; ordinary remote restore stays unchanged.
+    filesystemRecovery = branchRecord.provisioning_operation === 'restore';
+    if (
+      filesystemRecovery &&
+      (!payload.params.restoreMode || !payload.params.provisioningAttemptId)
+    ) {
+      throw new Error('Filesystem recovery requires its admitted restore attempt');
     }
 
     // Fetch per-user git credentials via Feathers RPC
@@ -868,7 +939,23 @@ export async function handleGitBranchAdd(
         'Refusing untrusted base_remote_url: only the canonical Agor teammate template repository is allowed.'
       );
     }
-    const referencePath = payload.params.useReference ? repo.local_path : undefined;
+    localHome = getTeammateConfig(branchRecord)?.localHome === true;
+    const existingRestore = filesystemRecovery
+      ? await validateExistingRestore(branchRecord, repo)
+      : false;
+    if (
+      localHome &&
+      !existingRestore &&
+      (restoreMode ||
+        storageMode !== 'clone' ||
+        cloneDepth != null ||
+        !isCanonicalTeammateFrameworkRepo(repo))
+    ) {
+      throw new Error(
+        'Local teammate home cannot be reconstructed from the public template. Restore its files from your own backup.'
+      );
+    }
+    const referencePath = !localHome && payload.params.useReference ? repo.local_path : undefined;
 
     if (!repoPath && storageMode === 'worktree') {
       throw new Error(`Repository ${repoId} has no local_path for worktree materialization`);
@@ -879,8 +966,80 @@ export async function handleGitBranchAdd(
       `[git.branch.add] Repo: ${repoPath}, Branch: ${branch}, CreateBranch: ${shouldCreateBranch}, RestoreMode: ${restoreMode}, RefType: ${refType || 'branch'}, StorageMode: ${storageMode}`
     );
 
-    // Create the git branch on filesystem
-    if (storageMode === 'clone') {
+    // Create the git branch on filesystem.
+    //
+    // Idempotency: a prior attempt may have materialized the worktree/clone
+    // and then died before acking (its branch was subsequently marked 'failed'
+    // by the daemon safety net). If a checkout for exactly this ref is already
+    // present, adopt it instead of re-running materialization — `git worktree
+    // add` / `git clone` would otherwise fail on the already-attached ref.
+    const alreadyMaterialized =
+      existingRestore ||
+      (payload.params.allowExistingCheckout
+        ? await isBranchAlreadyMaterialized(branchPath, branch, branchId)
+        : false);
+
+    // Resolve the user-controlled starting point once, before storage-mode
+    // dispatch. Worktree and clone materializers consume this concrete result
+    // and must not independently guess or qualify the ref.
+    const requestedStartingRef = shouldCreateBranch ? sourceBranch : branch;
+    // A local home is sourced from the canonical template, never cached refs
+    // or remotes belonging to an existing repository workspace.
+    const sourceRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : baseRemoteUrl;
+    const resolutionPath =
+      storageMode === 'clone' && (!repoPath || !existsSync(repoPath)) ? undefined : repoPath;
+    const resolveStartingRef = () => {
+      // Persisted source identity is a locator, not credential authority. Resolve
+      // it without the mutable cache, and bound credentials independently just as
+      // we do for the eventual clone transport. Older rows retain the legacy path.
+      if (restoreMode && branchRecord.base_source) {
+        const source = branchRecord.base_source;
+        return resolveGitRef(undefined, source.name, {
+          refType: refType || 'branch',
+          remote: { url: source.remote_url },
+          remoteOnly: true,
+          env: gitEnvironmentForRemote(source.remote_url, [remoteUrl, sourceRemoteUrl], env),
+        });
+      }
+      return resolveGitRef(resolutionPath, requestedStartingRef, {
+        refType: refType || 'branch',
+        ...(sourceRemoteUrl
+          ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
+          : remoteUrl
+            ? { remote: { url: remoteUrl, name: 'origin' } }
+            : {}),
+        env,
+      });
+    };
+    let resolvedStartingRef =
+      restoreMode || alreadyMaterialized ? undefined : await resolveStartingRef();
+
+    if (resolvedStartingRef) {
+      await client.service('branches').patch(branchId, {
+        ...attemptFence,
+        base_ref: resolvedStartingRef.ref,
+        base_sha: resolvedStartingRef.sha,
+        ...(resolvedStartingRef.remoteUrl
+          ? {
+              base_source: {
+                name: resolvedStartingRef.name,
+                remote_url: stripGitUrlCredentials(resolvedStartingRef.remoteUrl),
+              },
+            }
+          : {}),
+      });
+      console.log(
+        `[git.branch.add] Resolved '${requestedStartingRef}' to ${resolvedStartingRef.ref} @ ${resolvedStartingRef.sha}`
+      );
+    }
+
+    // A rejected provenance capability must not create even a fallback directory.
+    sourceResolutionAdmitted = true;
+    if (alreadyMaterialized) {
+      console.log(
+        `[git.branch.add] Existing checkout for '${branch}' already present at ${branchPath} — adopting it (idempotent retry)`
+      );
+    } else if (storageMode === 'clone') {
       // Self-standing clone path. The remote URL is daemon-resolved from the
       // repo record; refuse to silently fall through to worktree mode if it
       // didn't come along — that would defeat the leak-defense reason for
@@ -896,8 +1055,8 @@ export async function handleGitBranchAdd(
       // helper fork off the cloned tip. When checking out an existing
       // branch, just clone the ref directly. The helper owns both flows so
       // the executor handler doesn't have to orchestrate post-clone git ops.
-      let cloneRef = branch;
-      let cloneRemoteUrl = remoteUrl;
+      let cloneRef = resolvedStartingRef?.name ?? branch;
+      let cloneRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : remoteUrl;
       let newBranchName: string | undefined;
 
       if (shouldCreateBranch) {
@@ -911,10 +1070,30 @@ export async function handleGitBranchAdd(
           : false;
 
         if (!restoreFromDestination) {
-          cloneRef = sourceBranch || branch;
-          cloneRemoteUrl = baseRemoteUrl || remoteUrl;
+          resolvedStartingRef ??= await resolveStartingRef();
+          cloneRef = resolvedStartingRef?.name ?? sourceBranch ?? branch;
+          cloneRemoteUrl = localHome
+            ? TEAMMATE_FRAMEWORK_REPO_URL
+            : (resolvedStartingRef?.remoteUrl ??
+              (resolvedStartingRef?.kind === 'local_branch' ||
+              resolvedStartingRef?.kind === 'commit' ||
+              (resolvedStartingRef?.kind === 'tag' && !resolvedStartingRef.remoteUrl)
+                ? repoPath
+                : baseRemoteUrl || remoteUrl));
           newBranchName = branch !== cloneRef ? branch : undefined;
         }
+      } else if (resolvedStartingRef) {
+        cloneRemoteUrl = localHome
+          ? TEAMMATE_FRAMEWORK_REPO_URL
+          : (resolvedStartingRef.remoteUrl ??
+            (resolvedStartingRef.kind === 'local_branch' ||
+            resolvedStartingRef.kind === 'commit' ||
+            resolvedStartingRef.kind === 'tag'
+              ? repoPath
+              : remoteUrl));
+      }
+      if (!cloneRemoteUrl) {
+        throw new Error(`Cannot materialize resolved ref '${requestedStartingRef}': no source URL`);
       }
       console.log(
         `[git.branch.add] Using createBranchAsClone (sourceRemote=${redactGitUrlCredentials(cloneRemoteUrl)}, ` +
@@ -924,16 +1103,19 @@ export async function handleGitBranchAdd(
       );
       await createBranchAsClone({
         remoteUrl: cloneRemoteUrl,
-        ...(cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
+        localHome,
+        ...(!localHome && cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
         targetPath: branchPath,
         ref: cloneRef,
         ...(newBranchName ? { newBranchName } : {}),
+        ...(resolvedStartingRef?.kind === 'commit' ? { detached: true } : {}),
+        ...(resolvedStartingRef ? { expectedSha: resolvedStartingRef.sha } : {}),
         depth: cloneDepth,
         // Pass the daemon's hint through unconditionally. The helper does
         // the existsSync check on the executor's filesystem and falls back
         // gracefully if the path isn't actually mounted here.
         ...(referencePath ? { referencePath } : {}),
-        env,
+        env: gitEnvironmentForRemote(cloneRemoteUrl, [remoteUrl, sourceRemoteUrl], env),
       });
     } else if (restoreMode && sourceBranch) {
       // Restore mode: smart branch detection — checks if branch exists on remote,
@@ -950,7 +1132,8 @@ export async function handleGitBranchAdd(
         env,
         baseRemoteUrl,
         refType || 'branch',
-        remoteUrl
+        remoteUrl,
+        filesystemRecovery
       );
       if (!result.success) {
         throw new Error(`restoreBranchFilesystem failed: ${result.error}`);
@@ -960,27 +1143,47 @@ export async function handleGitBranchAdd(
       await createBranch(
         repoPath,
         branchPath,
-        branch,
+        shouldCreateBranch
+          ? branch
+          : resolvedStartingRef?.kind === 'remote_branch' ||
+              resolvedStartingRef?.kind === 'local_branch'
+            ? resolvedStartingRef.name
+            : (resolvedStartingRef?.ref ?? branch),
         shouldCreateBranch,
         true, // pullLatest
-        sourceBranch,
+        resolvedStartingRef?.remoteUrl
+          ? resolvedStartingRef.name
+          : shouldCreateBranch
+            ? resolvedStartingRef?.ref
+            : undefined,
         env,
         refType,
-        baseRemoteUrl,
-        remoteUrl
+        resolvedStartingRef?.remoteUrl ?? baseRemoteUrl,
+        remoteUrl,
+        resolvedStartingRef?.sha,
+        gitEnvironmentForRemote(
+          resolvedStartingRef?.remoteUrl ?? baseRemoteUrl ?? '',
+          [remoteUrl, sourceRemoteUrl],
+          env
+        ) ?? {},
+        resolvedStartingRef
       );
     }
 
     console.log(`[git.branch.add] Branch created at ${branchPath}`);
 
+    // Durable workspace ownership prevents a retry/restore from adopting an
+    // archived or unrelated checkout which merely happens to use the same ref.
+    if (!existingRestore) {
+      const { git: materializedGit } = createGit(branchPath);
+      const markerPath = (await materializedGit.revparse(['--git-path', 'agor-branch-id'])).trim();
+      await writeFile(resolve(branchPath, markerPath), `${branchId}\n`, { mode: 0o600 });
+    }
+
     // Persist only filesystem outcome directly. Executable environment
     // rendering belongs to the daemon's existing authorization/validation
     // boundary and is derived there from trusted repo configuration.
     if (branchId) {
-      console.log(`[git.branch.add] Marking branch ${shortId(branchId)} as ready`);
-      await client.service('branches').patch(branchId, { filesystem_status: 'ready' });
-      console.log(`[git.branch.add] Branch marked as ready`);
-
       if (repo.environment) {
         try {
           const renderer = client.service(`branches/${branchId}/render-environment`) as unknown as {
@@ -998,6 +1201,13 @@ export async function handleGitBranchAdd(
         }
       }
     }
+
+    // No filesystem work (including fallback recovery) may follow publication
+    // of readiness: deletion may acquire the Branch fence immediately afterward.
+    materializationWritesSettled = true;
+    await client
+      .service('branches')
+      .patch(branchId, { filesystem_status: 'ready', ...attemptFence });
 
     return {
       success: true,
@@ -1018,7 +1228,14 @@ export async function handleGitBranchAdd(
     // when git worktree add fails. No host permission repair is attempted.
     const fallbackPath = resolvedBranchPath;
     let fallbackCreated = false;
-    if (fallbackPath) {
+    if (
+      fallbackPath &&
+      sourceResolutionAdmitted &&
+      !materializationWritesSettled &&
+      !localHome &&
+      !filesystemRecovery &&
+      !payload.params.restoreMode
+    ) {
       // Step 1: Ensure directory exists
       if (!existsSync(fallbackPath)) {
         try {
@@ -1034,22 +1251,30 @@ export async function handleGitBranchAdd(
       }
     }
 
-    // Provide user-friendly error messages for common failures
+    // Provide user-friendly error messages for common failures. Match on the
+    // specific "ref already attached to another worktree" signal — NOT merely
+    // the word "branch", which also appears in the non-empty-directory message
+    // and would otherwise be misreported as a ref collision.
     let userMessage = errorMessage;
-    if (errorMessage.includes('already exists')) {
-      if (errorMessage.includes('branch')) {
-        userMessage = `A branch named '${resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
-      } else {
-        userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists. An archived or partially-cleaned branch may still occupy this path.`;
-      }
+    if (
+      payload.params.restoreMode &&
+      /is in use by another|already registered|already checked out/.test(errorMessage)
+    ) {
+      userMessage =
+        'Recovery cannot attach this checkout: Git registration is stale or the ref is occupied. Keep files and refs intact. An operator must verify the target storage and backups in the executor storage context before target-scoped repair; do not run global worktree repair or prune.';
+    } else if (errorMessage.includes('is in use by another')) {
+      userMessage = `A branch named '${resolvedBranchName || 'unknown'}' already exists and is in use by another branch. Please choose a different name.`;
+    } else if (errorMessage.includes('already exists') && errorMessage.includes('not empty')) {
+      userMessage = `Directory '${resolvedBranchPath || resolvedBranchName || 'unknown'}' already exists and is not empty. An archived or partially-cleaned branch may still occupy this path.`;
     }
 
     // Try to mark branch as failed with error details (if we have a branchId and client)
-    if (branchId && client) {
+    if (branchId && client && !materializationWritesSettled && resolvedBranchPath) {
       try {
         await client.service('branches').patch(branchId, {
           filesystem_status: 'failed',
           error_message: userMessage,
+          ...attemptFence,
         });
         console.log(`[git.branch.add] Marked branch as failed`);
       } catch (patchError) {
@@ -1089,8 +1314,8 @@ export async function handleGitBranchAdd(
 /**
  * Handle git.branch.remove command
  *
- * Removes a branch from the filesystem and deletes the database record.
- * This is a complete transaction - filesystem + DB in one atomic operation.
+ * Removes filesystem state only. Database finalization belongs to the deletion
+ * workflow; no filesystem operation is atomic with a database transaction.
  */
 export async function handleGitBranchRemove(
   payload: GitBranchRemovePayload,
@@ -1121,116 +1346,20 @@ export async function handleGitBranchRemove(
       `[git.branch.remove] Removing branch at ${branchPath} (storageMode=${storageMode})...`
     );
 
-    // Find the repo path from the branch's .git file
-    const { readFile, stat } = await import('node:fs/promises');
-    const { existsSync } = await import('node:fs');
-    const { join, dirname, basename } = await import('node:path');
-
-    const gitPath = join(branchPath, '.git');
-    let filesystemRemoved = false;
-
-    // Clone-mode short-circuit: there's no parent base repo to deregister
-    // from, no `gitdir:` pointer file, and `git worktree remove --force`
-    // would fail (or worse, mis-target). Just blow away the directory.
-    if (storageMode === 'clone') {
-      if (existsSync(branchPath)) {
-        console.log(
-          `[git.branch.remove] Clone mode — removing self-standing directory ${branchPath}`
-        );
-        await deleteBranchDirectory(branchPath, branchesRoot);
-        filesystemRemoved = true;
-      } else {
-        console.log(
-          '[git.branch.remove] Clone mode — directory already absent, skipping filesystem removal'
-        );
+    await removeBranchWorkspace({
+      branchPath,
+      branchesRoot,
+      repoPath: payload.params.repoPath,
+      storageMode,
+    });
+    // Preserve the legacy caller's explicit ref policy outside workspace removal.
+    // Permanent deletion retains shared Git refs and does not request this step.
+    if (storageMode === 'worktree' && payload.params.deleteBranch && payload.params.branch) {
+      try {
+        await deleteBranch(payload.params.repoPath, payload.params.branch);
+      } catch {
+        console.warn('[git.branch.remove] event=ref_removal_failed');
       }
-    } else if (existsSync(gitPath)) {
-      // Worktree mode: .git is a file (`gitdir: …`) pointing back at the
-      // base repo's `.git/worktrees/<name>`. Read it to find the base repo
-      // and deregister cleanly.
-      //
-      // Defensive: if .git is somehow a directory here despite storage_mode
-      // being 'worktree' (mislabeled DB row from a manual conversion), fall
-      // back to the clone-mode removal path rather than misreading a dir as
-      // a `gitdir:` file. See design doc §2 operational caveats.
-      const gitStat = await stat(gitPath);
-      if (gitStat.isDirectory()) {
-        console.warn(
-          `[git.branch.remove] DB says storage_mode='worktree' but ${gitPath} is a directory — treating as clone-mode removal`
-        );
-        await deleteBranchDirectory(branchPath, branchesRoot);
-        filesystemRemoved = true;
-      } else {
-        // Read .git file to find the main repo
-        // Format: gitdir: /path/to/repo/.git/worktrees/<name>
-        const gitContent = await readFile(gitPath, 'utf-8');
-        const match = gitContent.match(/gitdir:\s*(.+)/);
-
-        if (!match) {
-          throw new Error(`Invalid .git file in branch: ${gitPath}`);
-        }
-
-        // Extract repo path from gitdir path
-        // gitdir points to: <repo>/.git/worktrees/<name>
-        // We need: <repo>
-        const gitdirPath = match[1].trim();
-        const gitBranchesDir = dirname(gitdirPath); // <repo>/.git/worktrees
-        const dotGitDir = dirname(gitBranchesDir); // <repo>/.git
-        const repoPath = dirname(dotGitDir); // <repo>
-
-        const branchName = basename(branchPath);
-
-        console.log(`[git.branch.remove] Repo path: ${repoPath}, Branch name: ${branchName}`);
-
-        // Deregister the git worktree (removes the `.git/worktrees/<name>/`
-        // entry from the base repo). Wraps `git worktree remove --force`.
-        await removeGitWorktree(repoPath, branchName);
-        console.log(`[git.branch.remove] Git worktree deregistered`);
-
-        // git worktree remove --force may leave residual files on disk.
-        // Fully delete the directory to reclaim all disk space.
-        if (existsSync(branchPath)) {
-          console.log(`[git.branch.remove] Directory still exists, removing residual files...`);
-          await deleteBranchDirectory(branchPath, branchesRoot);
-          console.log(`[git.branch.remove] Directory fully removed`);
-        }
-
-        filesystemRemoved = true;
-        console.log(`[git.branch.remove] Branch removed from filesystem`);
-
-        // Delete the associated branch if requested
-        if (payload.params.deleteBranch && payload.params.branch) {
-          const branchToDelete = payload.params.branch;
-          try {
-            console.log(`[git.branch.remove] Deleting branch '${branchToDelete}'...`);
-            const deleted = await deleteBranch(repoPath, branchToDelete);
-            if (deleted) {
-              console.log(`[git.branch.remove] Branch '${branchToDelete}' deleted`);
-            } else {
-              console.log(
-                `[git.branch.remove] Branch '${branchToDelete}' not found (already deleted)`
-              );
-            }
-          } catch (branchError) {
-            // Log but don't fail the overall operation
-            console.warn(
-              `[git.branch.remove] Failed to delete branch '${branchToDelete}':`,
-              branchError instanceof Error ? branchError.message : String(branchError)
-            );
-          }
-        }
-      }
-    } else if (existsSync(branchPath)) {
-      // No .git file but directory exists — orphaned directory from a previous partial removal.
-      // Clean it up completely.
-      console.log(
-        '[git.branch.remove] No .git file but directory exists (orphaned), removing directory...'
-      );
-      await deleteBranchDirectory(branchPath, branchesRoot);
-      filesystemRemoved = true;
-      console.log('[git.branch.remove] Orphaned directory removed');
-    } else {
-      console.log('[git.branch.remove] Branch does not exist on filesystem, skipping git removal');
     }
 
     return {
@@ -1238,12 +1367,12 @@ export async function handleGitBranchRemove(
       data: {
         branchId,
         branchPath,
-        filesystemRemoved,
+        filesystemRemoved: true,
       },
     };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[git.branch.remove] Failed:', errorMessage);
+  } catch {
+    const errorMessage = 'Workspace removal could not be verified';
+    console.error('[git.branch.remove] event=workspace_removal_failed');
 
     return {
       success: false,

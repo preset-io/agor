@@ -5,7 +5,7 @@ import {
   DeleteOutlined,
   InfoCircleOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useLayoutEffect, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
@@ -194,10 +194,14 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     {}
   );
   const operationGuard = useAuthorityOperationGuard(operationScope);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<AgenticToolConfigField, string>>>(
+    {}
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey is the caller-private draft lifecycle key
   useLayoutEffect(() => {
     setInputValues({});
+    setFieldErrors({});
   }, [identityKey]);
 
   const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
@@ -213,16 +217,36 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     const value = raw ? (config?.type === 'text' ? raw.trim() : sanitizeSecretValue(raw)) : '';
     if (!value || !operation.isCurrent()) return;
 
-    await onSave(field, value);
-    if (!operation.isCurrent()) return;
-    setInputValues((prev) => ({ ...prev, [field]: '' }));
+    setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
+    try {
+      await onSave(field, value);
+      if (!operation.isCurrent()) return;
+      setInputValues((previous) =>
+        previous[field] === raw ? { ...previous, [field]: '' } : previous
+      );
+    } catch {
+      if (!operation.isCurrent()) return;
+      // Never echo provider/server errors here: they can contain credential values.
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field]: 'Could not save this field. Please try again.',
+      }));
+    }
   };
 
   const handleClear = async (field: AgenticToolConfigField) => {
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
-    await onClear(field);
-    if (!operation.isCurrent()) return;
+    setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
+    try {
+      await onClear(field);
+    } catch {
+      if (!operation.isCurrent()) return;
+      setFieldErrors((previous) => ({
+        ...previous,
+        [field]: 'Could not clear this field. Please try again.',
+      }));
+    }
   };
 
   const renderField = (config: AgenticToolFieldConfig) => {
@@ -278,7 +302,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                 icon={<DeleteOutlined />}
                 onClick={() => void handleClear(field)}
                 loading={saving[field]}
-                disabled={disabled}
+                disabled={disabled || saving[field]}
               >
                 Clear
               </Button>
@@ -291,19 +315,20 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
                 onChange={(e) => setInputValues((prev) => ({ ...prev, [field]: e.target.value }))}
                 onPressEnter={() => handleSave(field)}
                 style={{ flex: 1 }}
-                disabled={disabled}
+                disabled={disabled || saving[field]}
               />
               <Button
                 type="primary"
                 onClick={() => handleSave(field)}
                 loading={saving[field]}
-                disabled={disabled || !inputValues[field]?.trim()}
+                disabled={disabled || saving[field] || !inputValues[field]?.trim()}
               >
                 Save
               </Button>
             </Space.Compact>
           )}
 
+          {fieldErrors[field] && <Alert type="error" showIcon title={fieldErrors[field]} />}
           {docUrl && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Get your key at:{' '}

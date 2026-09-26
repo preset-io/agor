@@ -1,13 +1,4 @@
-import { buildAllowlistedEnv } from '@agor/core/config';
-
-/**
- * Reserved ambient namespace for operator-configured Cloud launcher helpers.
- *
- * These values are intentionally available only to trusted external launcher
- * processes. They are not part of the user/session environment and must never
- * be copied into an executor payload.
- */
-const TRUSTED_LAUNCHER_ENV_PREFIX = 'AGOR_CLOUD_';
+import { buildAllowlistedEnv, TRUSTED_LAUNCHER_ENV_PREFIX } from '@agor/core/config';
 
 /**
  * Build the environment for a trusted operator-configured launcher/helper.

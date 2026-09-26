@@ -88,7 +88,10 @@ export default class BranchUnarchive extends BaseCommand {
         boardId: flags['board-id'],
       });
 
-      this.log(chalk.green(`✓ Unarchived branch "${branch.name}"`));
+      this.log(chalk.green(`✓ Unarchive accepted for "${branch.name}"`));
+      this.log(
+        'Filesystem restoration is asynchronous. Wait for filesystem_status ready before starting work; inspect the branch for failures.'
+      );
       this.log('');
 
       // Cleanup

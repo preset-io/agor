@@ -29,7 +29,6 @@ interface RuntimeSeed {
 
 interface RuntimeSeedOptions {
   actorRole?: 'member' | 'superadmin';
-  branchRbacEnabled?: boolean;
   sessionOwner?: 'actor' | 'branch_owner';
   sessionSdkHomeScope?: SessionSdkHomeScope;
   allowForeignSessionSharing?: boolean;
@@ -119,11 +118,9 @@ async function seedRuntime(
       start_timestamp: '2026-08-28T00:00:00.000Z',
     },
     git_state: { ref_at_start: 'main', sha_at_start: 'authority' },
-    tool_use_count: 0,
   });
-  const branchRbacEnabled = options.branchRbacEnabled ?? true;
-  const launch = await tasks.bindExecutorLaunchAuthority(task.task_id, { branchRbacEnabled });
-  expect(launch.fs_access).toBe(branchRbacEnabled ? floor : 'write');
+  const launch = await tasks.bindExecutorLaunchAuthority(task.task_id);
+  expect(launch.fs_access).toBe(floor);
   await tasks.connectExecutor(task.task_id, new Date('2026-08-28T00:00:01.000Z'));
   return {
     ownerId: owner.user_id,
@@ -138,7 +135,6 @@ async function seedRuntime(
       principal_user_id: actor.user_id,
       session_id: session.session_id,
       branch_id: branch.branch_id,
-      branchRbacEnabled,
       standalone_token_current: true,
     },
   };
@@ -165,6 +161,37 @@ async function expectDeniedWithoutHeartbeatRefresh(
 }
 
 describe('Task runtime heartbeat authority (SQLite)', () => {
+  dbTest(
+    'credential authorization is read-only and refuses revoked, stopping and wrong-actor tasks',
+    async ({ db }) => {
+      const seed = await seedRuntime(db);
+      const before = await seed.tasks.findById(seed.task.task_id);
+      await seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, seed.authority);
+      const after = await seed.tasks.findById(seed.task.task_id);
+      expect(after?.last_executor_heartbeat_at).toEqual(before?.last_executor_heartbeat_at);
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, {
+          ...seed.authority,
+          principal_user_id: seed.ownerId,
+        })
+      ).rejects.toThrow();
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, {
+          ...seed.authority,
+          standalone_token_current: false,
+        })
+      ).rejects.toThrow();
+      await seed.tasks.claimTermination({
+        taskId: seed.task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Synthetic expired heartbeat',
+      });
+      await expect(
+        seed.tasks.assertRuntimeCredentialAuthority(seed.task.task_id, seed.authority)
+      ).rejects.toThrow();
+    }
+  );
+
   dbTest(
     'continues with the exact current principal, capability, and launch floor',
     async ({ db }) => {
@@ -243,33 +270,6 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
     ).rejects.toThrow('Authorization to launch this task is unavailable');
   });
 
-  dbTest(
-    'preserves RBAC-disabled foreign-session launch and heartbeat admission',
-    async ({ db }) => {
-      const seed = await seedRuntime(db, 'read', {
-        branchRbacEnabled: false,
-        sessionOwner: 'branch_owner',
-      });
-      await expect(
-        new BranchRepository(db).resolveSessionPromptAuthority(
-          seed.branchId,
-          seed.actorId,
-          seed.sessionOwnerId,
-          seed.sessionSdkHomeScope
-        )
-      ).resolves.toMatchObject({ allowed: false });
-      await expect(
-        seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
-      ).resolves.toMatchObject({ outcome: 'continued' });
-
-      const stored = await select(db, { data: tasksTable.data })
-        .from(tasksTable)
-        .where(eq(tasksTable.task_id, seed.task.task_id))
-        .one();
-      expect(stored?.data.executor_launch_fs_access_floor).toBe('write');
-    }
-  );
-
   dbTest('denies a removed/deactivated principal without refreshing liveness', async ({ db }) => {
     const seed = await seedRuntime(db);
     await new UsersRepository(db).delete(seed.actorId);
@@ -323,11 +323,9 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
 
     // A connected runtime cannot be rebound at all. Its original read floor
     // remains the only projection consumed by the heartbeat comparison.
-    await expect(
-      seed.tasks.bindExecutorLaunchAuthority(seed.task.task_id, {
-        branchRbacEnabled: true,
-      })
-    ).rejects.toThrow('not awaiting executor launch authority');
+    await expect(seed.tasks.bindExecutorLaunchAuthority(seed.task.task_id)).rejects.toThrow(
+      'not awaiting executor launch authority'
+    );
   });
 
   dbTest(

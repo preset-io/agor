@@ -1,4 +1,10 @@
-import type { AgenticToolName, AuthCheckStatus, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AuthCheckStatus,
+  TenantAgenticToolName,
+  TenantAgenticToolSettings,
+  User,
+} from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   BannerDecision,
@@ -55,7 +61,7 @@ describe('decideBanner — fail-safe amber banners', () => {
     ).toBe(BannerDecision.KeyInvalid);
   });
 
-  it('a snoozed credential warning stays hidden without becoming an integrations prompt', () => {
+  it('a dismissed credential reminder stays hidden without becoming an integrations prompt', () => {
     expect(
       decideBanner({
         ...baseInput,
@@ -113,9 +119,9 @@ describe('decideBanner — integrations banner', () => {
     ).toBe(BannerDecision.None);
   });
 
-  it('shows the teal banner for a DB-key user even while the probe is still loading', () => {
+  it('does not advertise integrations on presence alone while the probe is unknown', () => {
     expect(decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unknown })).toBe(
-      BannerDecision.Integrations
+      BannerDecision.None
     );
   });
 
@@ -158,7 +164,7 @@ describe('resolveGovernedProbeAgent — matches session creation', () => {
       resolveGovernedProbeAgent(
         asUser({
           primary_agentic_tool: 'gemini',
-          agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
+          agentic_tools: { codex: { OPENAI_API_KEY: true } },
         }),
         new Map([['gemini', setting('gemini', true)]])
       )
@@ -166,14 +172,14 @@ describe('resolveGovernedProbeAgent — matches session creation', () => {
   });
 
   it('does not let another tool credential/default override the creation default', () => {
-    const settings = new Map([
+    const settings = new Map<TenantAgenticToolName, TenantAgenticToolSettings>([
       ['claude-code', setting('claude-code', true)],
       ['codex', setting('codex', true)],
     ]);
     expect(
       resolveGovernedProbeAgent(
         asUser({
-          agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
+          agentic_tools: { codex: { OPENAI_API_KEY: true } },
           default_agentic_config: { codex: {} },
         }),
         settings
@@ -182,7 +188,7 @@ describe('resolveGovernedProbeAgent — matches session creation', () => {
   });
 
   it('uses the canonical creation order when the preferred tools are disabled', () => {
-    const settings = new Map([
+    const settings = new Map<TenantAgenticToolName, TenantAgenticToolSettings>([
       ['claude-code', setting('claude-code', false)],
       ['codex', setting('codex', false)],
       ['gemini', setting('gemini', false)],
@@ -222,6 +228,15 @@ describe('resolveProbeState — selected tool only', () => {
     });
     expect(await resolveProbeState(checkStatus, 'claude-code')).toBe(ProbeState.Authenticated);
     expect(calls).toEqual(['claude-code']);
+  });
+
+  it('clears the No-AI banner for a native subscription login with no stored key', async () => {
+    // The in-app Claude OAuth sign-in removes any pasted API key, while the
+    // selected Claude probe still reports the native login as authenticated.
+    const { checkStatus } = collect({ 'claude-code': 'authenticated' });
+    const probeState = await resolveProbeState(checkStatus, 'claude-code');
+    expect(probeState).toBe(ProbeState.Authenticated);
+    expect(decideBanner({ ...baseInput, hasLlm: false, probeState })).not.toBe(BannerDecision.NoAi);
   });
 
   it('returns Unauthenticated only on a positive rejection for the selected tool', async () => {

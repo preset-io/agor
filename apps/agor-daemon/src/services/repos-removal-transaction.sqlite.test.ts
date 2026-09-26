@@ -3,6 +3,7 @@ import {
   createTenantScopedDatabaseProxy,
   generateId,
   RepoRepository,
+  runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, UUID } from '@agor/core/types';
@@ -12,7 +13,7 @@ import { BranchesService } from './branches';
 import { ReposService } from './repos';
 
 dbTest(
-  'rolls back real SQLite branch deletions and emits no tombstones when repository deletion fails',
+  'rejects repository deletion before touching remaining branches and emits no tombstones',
   async ({ db }) => {
     const repoRepository = new RepoRepository(db);
     const branchRepository = new BranchRepository(db);
@@ -57,11 +58,18 @@ dbTest(
       new Error('forced final repository deletion failure')
     );
 
+    // Production reaches `remove` through the Feathers tenant around-hook, which
+    // wraps the whole call in an ambient tenant DB scope. Reproduce that here so
+    // the armed scope guard sees the same declared tenancy intent the HTTP path
+    // provides; `remove`'s prologue reads run in this scope, then it opens its
+    // own native transaction for the atomic delete.
     await expect(
-      reposService.remove(repo.repo_id, {
-        tenant: { tenant_id: 'tenant-a', source: 'explicit' },
-      } as never)
-    ).rejects.toThrow('forced final repository deletion failure');
+      runWithTenantDatabaseScope(serviceDb, 'tenant-a', () =>
+        reposService.remove(repo.repo_id, {
+          tenant: { tenant_id: 'tenant-a', source: 'explicit' },
+        } as never)
+      )
+    ).rejects.toThrow('branches first');
 
     expect(await repoRepository.findById(repo.repo_id)).not.toBeNull();
     for (const branchId of branchIds) {

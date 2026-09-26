@@ -19,6 +19,10 @@ import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
 import SessionCanvas from './SessionCanvas';
 
+vi.mock('../../hooks/useCanManageBoard', () => ({
+  useCanManageBoard: () => true,
+}));
+
 // ── Render counters ──────────────────────────────────────────────────────────
 // Leaf node components are mocked to count renders per entity. This isolates the
 // memo boundaries the store migration is meant to protect: a `session:patched`

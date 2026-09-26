@@ -5,6 +5,7 @@ import type {
   BranchArchiveOrDeleteOptions,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import {
@@ -16,7 +17,7 @@ import {
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
@@ -29,9 +30,11 @@ import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
+  currentUser?: User | null;
   client: AgorClient | null;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
@@ -65,6 +68,7 @@ interface BranchesTableProps {
 }
 
 export const BranchesTable: React.FC<BranchesTableProps> = ({
+  currentUser,
   client,
   branchById,
   repoById,
@@ -152,6 +156,26 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       cancelled = true;
     };
   }, [archiveFilter, archivedLoaded, client]);
+
+  useEffect(() => {
+    if (!client) return;
+    const service = client.service('branches');
+    const patched = (branch: Branch) =>
+      setArchivedBranches((previous) => {
+        if (!previous.some((item) => item.branch_id === branch.branch_id)) return previous;
+        return previous.map((item) => (item.branch_id === branch.branch_id ? branch : item));
+      });
+    const removed = (branch: Branch) =>
+      setArchivedBranches((previous) =>
+        previous.filter((item) => item.branch_id !== branch.branch_id)
+      );
+    service.on('patched', patched);
+    service.on('removed', removed);
+    return () => {
+      service.off('patched', patched);
+      service.off('removed', removed);
+    };
+  }, [client]);
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -257,8 +281,16 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       return;
     }
 
-    // Hard-delete should disappear from both active + archived local sets
-    setArchivedBranches((prev) => prev.filter((branch) => branch.branch_id !== branchId));
+    // Acceptance is not removal. Refresh this row while waiting for the
+    // authoritative patched/removed events (archived rows have a local cache).
+    const pending = await client
+      ?.service('branches')
+      .get(branchId)
+      .catch(() => undefined);
+    if (pending)
+      setArchivedBranches((prev) =>
+        prev.map((branch) => (branch.branch_id === branchId ? pending : branch))
+      );
   };
 
   const handleCreate = async () => {
@@ -326,6 +358,16 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               >
                 <HighlightMatch text={name} query={searchTerm} />
               </Typography.Text>
+              {record.deletion_status && (
+                <Typography.Text
+                  type={record.deletion_status === 'deletion_failed' ? 'danger' : 'secondary'}
+                  title={record.deletion_error}
+                >
+                  {record.deletion_status === 'deletion_failed'
+                    ? 'Deletion failed — open deletion to retry'
+                    : 'Deleting…'}
+                </Typography.Text>
+              )}
               {!nameMatchesRef && (
                 <Typography.Text
                   code
@@ -348,6 +390,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       align: 'center' as const,
       render: (_: unknown, record: Branch) => {
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
+        if (record.deletion_status)
+          return <Typography.Text type="secondary">Unavailable</Typography.Text>;
         return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
       },
     },
@@ -419,24 +463,11 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                     record.branch_id,
                     record.board_id ? { boardId: record.board_id } : undefined
                   )
-                )
-                  .then(() => {
-                    setArchivedBranches((prev) =>
-                      prev.map((branch) =>
-                        branch.branch_id === record.branch_id
-                          ? {
-                              ...branch,
-                              archived: false,
-                              archived_at: undefined,
-                              archived_by: undefined,
-                            }
-                          : branch
-                      )
-                    );
-                  })
-                  .catch(() => {
-                    // Error surfaced by parent handler (toast); keep local state unchanged
-                  });
+                ).catch(() => {
+                  // Error surfaced by parent handler (toast); keep local state unchanged
+                });
+                // Only authoritative branch events update this cache. An ack
+                // means accepted, not ready; a lost ack may arrive after unmount.
                 return;
               }
               setSelectedBranch(record);
@@ -598,7 +629,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       )}
 
       {hasAnyBranches && (
-        <Table
+        <ResponsiveTable
           dataSource={filteredBranches}
           columns={columns}
           rowKey="branch_id"
@@ -641,6 +672,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal
+          client={client}
+          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}

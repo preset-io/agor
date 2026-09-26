@@ -10,10 +10,13 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { z } from 'zod';
 import type {
+  MCPOAuthClientRegistrationID,
   MCPOAuthDCRDiagnostic,
   MCPOAuthDCRMode,
+  MCPOAuthFailureReason,
   MCPOAuthRuntimeCompatibilityMode,
 } from '../../types/mcp.js';
+import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
@@ -80,6 +83,34 @@ interface OAuthRawTokenResponse {
 }
 
 /**
+ * Google only issues a durable refresh token when the authorization request
+ * explicitly asks for offline access. `prompt=consent` is required when an
+ * existing grant must be replaced because Google commonly omits a refresh
+ * token from subsequent authorization responses.
+ *
+ * These are Google extensions rather than generic OAuth parameters, so keep
+ * them scoped to Google's exact authorization host. Other providers can give
+ * `prompt` different semantics or reject unknown parameters entirely.
+ */
+export function isGoogleAuthorizationEndpoint(authUrl: URL): boolean {
+  return authUrl.protocol === 'https:' && authUrl.hostname.toLowerCase() === 'accounts.google.com';
+}
+
+function applyProviderAuthorizationParameters(authUrl: URL): void {
+  if (!isGoogleAuthorizationEndpoint(authUrl)) return;
+
+  authUrl.searchParams.set('access_type', 'offline');
+  const prompts = new Set(
+    (authUrl.searchParams.get('prompt') ?? '')
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+  prompts.add('consent');
+  authUrl.searchParams.set('prompt', [...prompts].join(' '));
+}
+
+/**
  * Classified authorization-code exchange failure.
  *
  * `ambiguous=true` means the request may have reached the provider and the
@@ -90,7 +121,16 @@ export class OAuthCodeExchangeError extends Error {
   constructor(
     message: string,
     readonly ambiguous: boolean,
-    readonly failureCode: 'provider_rejected' | 'transport_ambiguous' | 'response_ambiguous'
+    readonly failureCode:
+      | 'provider_rejected'
+      | 'client_registration_invalidated'
+      | 'transport_ambiguous'
+      | 'response_ambiguous',
+    /**
+     * Closed classification set only from a structured pinned token-endpoint
+     * response; arbitrary provider payloads and front-channel errors are never retained.
+     */
+    readonly invalidClientRegistration = false
   ) {
     super(message);
     this.name = 'OAuthCodeExchangeError';
@@ -143,8 +183,14 @@ export class OAuthConfigurationError extends Error {
       | 'endpoint_override_mismatch'
       | 'issuer_mismatch'
       | 'pkce_required'
-      | 'client_registration_required',
-    message = `OAuth configuration failed (${failureCode})`
+      | 'client_registration_required'
+      | 'redirect_uri_mismatch',
+    message = `OAuth configuration failed (${failureCode})`,
+    /** Specific local predicate, without changing the broad external-error category. */
+    readonly failureReason?: Extract<
+      MCPOAuthFailureReason,
+      'dcr_disabled' | 'protected_resource_mismatch' | 'redirect_uri_mismatch'
+    >
   ) {
     super(message);
     this.name = 'OAuthConfigurationError';
@@ -459,7 +505,7 @@ export async function resolveMCPOAuthDiscovery(
 /**
  * Fetch Protected Resource Metadata (RFC 9728)
  */
-async function fetchResourceMetadata(
+export async function fetchResourceMetadata(
   metadataUrl: string,
   options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<OAuthMetadata> {
@@ -510,13 +556,15 @@ const MAX_DCR_RESPONSE_BYTES = 16 * 1024;
 const dynamicClientRegistrationSchema = z.object({
   client_id: z.string().trim().min(1),
   client_secret: z.string().optional(),
+  client_id_issued_at: z.number().int().nonnegative().optional(),
+  client_secret_expires_at: z.number().int().nonnegative().optional(),
   redirect_uris: z.array(z.string()).optional(),
   token_endpoint_auth_method: z.string().optional(),
   grant_types: z.array(z.string()).optional(),
   response_types: z.array(z.string()).optional(),
 });
 
-type DynamicClientRegistrationResponse = z.infer<typeof dynamicClientRegistrationSchema>;
+export type DynamicClientRegistrationResponse = z.infer<typeof dynamicClientRegistrationSchema>;
 
 function registrationDiagnostic(
   httpStatus: number,
@@ -565,6 +613,57 @@ function registrationFailure(
   );
 }
 
+function validateDynamicClientRegistration(
+  responseBody: unknown,
+  redirectUri: string,
+  diagnostic: MCPOAuthDCRDiagnostic
+): DynamicClientRegistrationResponse {
+  const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
+  if (!parsed.success) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an invalid response'
+    );
+  }
+  const result: DynamicClientRegistrationResponse = parsed.data;
+  if (!result.redirect_uris?.includes(redirectUri)) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not bind the required redirect URI'
+    );
+  }
+  // A returned secret is authoritative even when the provider echoes `none`.
+  // The token exchange routes any present secret through HTTP Basic.
+  const authMethod = result.client_secret
+    ? 'client_secret_basic'
+    : (result.token_endpoint_auth_method ?? 'none');
+  if (!['none', 'client_secret_basic'].includes(authMethod)) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an unsupported token auth method'
+    );
+  }
+  if (authMethod === 'client_secret_basic' && !result.client_secret) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration omitted the required client secret'
+    );
+  }
+  if (result.grant_types && !result.grant_types.includes('authorization_code')) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the authorization-code grant'
+    );
+  }
+  if (result.response_types && !result.response_types.includes('code')) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the code response type'
+    );
+  }
+  return result;
+}
+
 function missingRegistrationEndpointFailure(): OAuthDCRFailure {
   const diagnostic: MCPOAuthDCRDiagnostic = { stage: 'dcr_endpoint_discovery' };
   return new OAuthDCRFailure(
@@ -594,7 +693,36 @@ export function __seedDynamicClientCacheForTests(
 }
 
 /**
- * Perform Dynamic Client Registration (RFC 7591)
+ * RFC 7591 `client_name` for every Dynamic Client Registration Agor performs.
+ *
+ * Do not change this casually. It is an input to `bindingFingerprint` in
+ * `apps/agor-daemon/src/services/mcp-oauth-client-registration-authority.ts`,
+ * so a new value silently changes the fingerprint of every stored DCR
+ * registration in every deployment: on its next OAuth start each one stops
+ * matching, is superseded, and the server registers again with its provider —
+ * under a request that provider has never seen, with no evidence it will be
+ * honoured. Changing it is a fleet-wide re-registration and has to be decided
+ * as one. `mcp-oauth-client-registration-authority.postgres.test.ts` pins that
+ * a registration sealed from this request is still reused.
+ *
+ * A per-deployment name was tried once, for a Datadog `Mismatching redirect
+ * URI`, and reverted: the failure reproduced under both names while the same
+ * integration kept working on deployments that sent this one. See §7.1.16 of
+ * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ */
+export const MCP_OAUTH_DCR_CLIENT_NAME = 'Agor MCP Client';
+
+/** Classify the already-validated callback, never the provider's endpoint. */
+function dcrApplicationType(redirectUri: string): 'native' | 'web' {
+  const callback = new URL(redirectUri);
+  return callback.protocol === 'http:' &&
+    ['127.0.0.1', '[::1]', 'localhost'].includes(callback.hostname)
+    ? 'native'
+    : 'web';
+}
+
+/**
+ * Dynamic Client Registration (RFC 7591)
  *
  * Registers a new OAuth client with the authorization server.
  * Results are cached per authorization server to avoid repeated registrations.
@@ -602,7 +730,7 @@ export function __seedDynamicClientCacheForTests(
 async function registerDynamicClient(
   registrationEndpoint: string,
   redirectUri: string,
-  clientName: string = 'Agor MCP Client',
+  clientName: string = MCP_OAUTH_DCR_CLIENT_NAME,
   scope?: string,
   reuseLocalCache = true,
   allowLocalhostHttp = false,
@@ -623,6 +751,7 @@ async function registerDynamicClient(
   // biome-ignore lint/suspicious/noExplicitAny: DCR request shape varies per RFC 7591
   const registrationRequest: any = {
     client_name: clientName,
+    application_type: dcrApplicationType(redirectUri),
     redirect_uris: [redirectUri],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
@@ -663,55 +792,7 @@ async function registerDynamicClient(
   const diagnostic = registrationDiagnostic(response.status, registrationEndpointSource);
   const responseBody = await response.json().catch(() => null);
   assertCurrent?.();
-  const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
-  if (!parsed.success) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration returned an invalid response'
-    );
-  }
-  const result: DynamicClientRegistrationResponse = parsed.data;
-
-  if (!result.redirect_uris?.includes(redirectUri)) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not bind the required redirect URI'
-    );
-  }
-  // We request a public client (`token_endpoint_auth_method: 'none'`), but some providers
-  // (e.g. Atlassian) ignore that and register a *confidential* client — returning HTTP 201
-  // with a `client_secret` while either omitting the auth method or echoing 'none'. A returned
-  // secret is the authoritative signal that the client is confidential, so treat it as
-  // client_secret_basic regardless of the advertised method. The token exchange already routes
-  // any present secret through HTTP Basic auth (RFC 6749 §2.3.1), so these credentials are
-  // usable as-is.
-  const authMethod = result.client_secret
-    ? 'client_secret_basic'
-    : (result.token_endpoint_auth_method ?? 'none');
-  if (!['none', 'client_secret_basic'].includes(authMethod)) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration returned an unsupported token auth method'
-    );
-  }
-  if (authMethod === 'client_secret_basic' && !result.client_secret) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration omitted the required client secret'
-    );
-  }
-  if (result.grant_types && !result.grant_types.includes('authorization_code')) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not enable the authorization-code grant'
-    );
-  }
-  if (result.response_types && !result.response_types.includes('code')) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not enable the code response type'
-    );
-  }
+  const result = validateDynamicClientRegistration(responseBody, redirectUri, diagnostic);
 
   if (reuseLocalCache) {
     assertCurrent?.();
@@ -820,6 +901,7 @@ export async function fetchAuthorizationServerMetadata(
   }
 
   const errors: string[] = [];
+  let issuerMismatch = false;
   for (const { url, label } of urlsToTry) {
     options.assertCurrent?.();
     let response: Response;
@@ -855,6 +937,7 @@ export async function fetchAuthorizationServerMetadata(
         : compatibilityMode === 'marketplace' &&
           !oauthIssuerIdentifiersMatch(metadata.issuer, authServerUrl)
     ) {
+      issuerMismatch = true;
       errors.push(`${label}: request failed`);
       continue;
     }
@@ -864,7 +947,7 @@ export async function fetchAuthorizationServerMetadata(
 
   options.assertCurrent?.();
   throw new OAuthConfigurationError(
-    'metadata_unavailable',
+    issuerMismatch ? 'issuer_mismatch' : 'metadata_unavailable',
     'Failed to fetch authorization server metadata.\n' +
       `Tried:\n${errors.map((e) => `  - ${e}`).join('\n')}\n\n` +
       'The authorization server may not support RFC 8414 or OIDC metadata discovery.\n' +
@@ -1015,7 +1098,8 @@ async function exchangeCodeForToken(
   clientId: string,
   clientSecret?: string,
   resourceUri?: string,
-  allowLocalhostHttp = false
+  allowLocalhostHttp = false,
+  clientRegistrationInvalidatable = false
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -1072,11 +1156,16 @@ async function exchangeCodeForToken(
     // request. A bare 4xx (including timeout/rate-limit/proxy responses) may
     // still arrive after the authorization code was consumed.
     let explicitOAuthError = false;
+    let invalidClientRegistration = false;
     if (response.status === 400 || response.status === 401) {
       try {
         const errorResponse = (await response.json()) as { error?: unknown };
         explicitOAuthError =
           typeof errorResponse.error === 'string' && /^[A-Za-z0-9._~-]+$/.test(errorResponse.error);
+        invalidClientRegistration =
+          clientRegistrationInvalidatable &&
+          (errorResponse.error === 'invalid_client' ||
+            errorResponse.error === 'unauthorized_client');
       } catch {
         // An unusable error response cannot prove the provider's code state.
       }
@@ -1087,7 +1176,12 @@ async function exchangeCodeForToken(
         ? 'The provider exchange outcome is unknown. Start a new OAuth flow.'
         : 'The provider rejected the authorization code. Start a new OAuth flow.',
       ambiguous,
-      ambiguous ? 'transport_ambiguous' : 'provider_rejected'
+      ambiguous
+        ? 'transport_ambiguous'
+        : invalidClientRegistration
+          ? 'client_registration_invalidated'
+          : 'provider_rejected',
+      invalidClientRegistration
     );
   }
 
@@ -1105,10 +1199,14 @@ async function exchangeCodeForToken(
 
   // Some providers (e.g. Slack) return HTTP 200 with {"ok": false, "error": "..."} on failure
   if (json.ok === false && json.error) {
+    const invalidClientRegistration =
+      clientRegistrationInvalidatable &&
+      (json.error === 'invalid_client' || json.error === 'unauthorized_client');
     throw new OAuthCodeExchangeError(
       'The provider rejected the authorization code. Start a new OAuth flow.',
       false,
-      'provider_rejected'
+      invalidClientRegistration ? 'client_registration_invalidated' : 'provider_rejected',
+      invalidClientRegistration
     );
   }
 
@@ -1258,7 +1356,7 @@ export async function performMCPOAuthFlow(
         const registration = await registerDynamicClient(
           authServerMetadata.registration_endpoint,
           callback.url,
-          'Agor MCP Client',
+          MCP_OAUTH_DCR_CLIENT_NAME,
           scopeString,
           true,
           true
@@ -1283,6 +1381,7 @@ export async function performMCPOAuthFlow(
     authUrl.searchParams.set('code_challenge', pkce.challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
     authUrl.searchParams.set('state', state);
+    applyProviderAuthorizationParameters(authUrl);
 
     // Add scopes if available (same scopes used during DCR registration)
     if (scopeString) {
@@ -1446,6 +1545,19 @@ export interface OAuthFlowContext {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /** Exact durable DCR epoch used by this attempt; absent for configured/local clients. */
+  clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * Non-secret evidence about where this flow's client came from, for the one
+   * operational line the daemon emits when the authorization URL is built.
+   * `registeredRedirectUri` is absent for a configured client, and the whole
+   * group is absent from a context reconstituted at callback time, which is
+   * rebuilt from sealed grant material rather than from a live resolution.
+   */
+  clientSource?: 'configured' | 'dcr';
+  clientName?: string;
+  registeredRedirectUri?: string;
+  registrationEndpoint?: string;
   state: string;
   authorizationUrl: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1453,6 +1565,297 @@ export interface OAuthFlowContext {
   authorizationResponseIssuerParameterSupported: boolean;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
+}
+
+/** Exact non-secret inputs that bind a daemon-owned durable DCR credential. */
+export interface MCPOAuthDynamicClientRegistrationRequest {
+  registrationEndpoint: string;
+  registrationEndpointSource: 'metadata' | 'legacy_fallback';
+  metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  clientName: string;
+  applicationType: 'native' | 'web';
+  scope?: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+}
+
+export interface MCPOAuthResolvedDynamicClientRegistration {
+  registration: DynamicClientRegistrationResponse;
+  /** PostgreSQL authority UUID; omitted by standalone process-local DCR. */
+  registrationId?: MCPOAuthClientRegistrationID;
+}
+
+/**
+ * Injection boundary used by multi-daemon callers to lease/persist DCR while
+ * the core transport retains provider request/response validation.
+ */
+export type MCPOAuthDynamicClientRegistrationResolver = (
+  request: MCPOAuthDynamicClientRegistrationRequest,
+  register: () => Promise<DynamicClientRegistrationResponse>
+) => Promise<MCPOAuthResolvedDynamicClientRegistration>;
+
+export interface MCPOAuthResolvedClient {
+  clientId: string;
+  clientSecret?: string;
+  method: 'configured' | 'dynamic_registration';
+  clientRegistrationId?: MCPOAuthClientRegistrationID;
+  /**
+   * The redirect URI this client was registered under, as Agor sent it.
+   *
+   * Absent for a configured client, whose provider-side binding Agor never
+   * saw. Present for every DCR path so the authorize URL can be checked
+   * against it rather than assumed equal to it.
+   */
+  registeredRedirectUri?: string;
+  /** RFC 7591 `client_name` sent for this registration. Never a secret. */
+  clientName?: string;
+  /** Registration endpoint used, for origin-only operational evidence. */
+  registrationEndpoint?: string;
+}
+
+/**
+ * Origin of a URL, or a fixed marker. Never a path, query or fragment.
+ *
+ * The whole point of the authorize-built line is that it can be read in a log
+ * aggregator by someone debugging a redirect mismatch, which means it must
+ * carry no `state`, no `code_challenge`, no `client_id` and no provider text.
+ * Origins answer "which deployment, which provider" and nothing else.
+ */
+function oauthLogOrigin(value: string | undefined): string {
+  if (!value) return 'absent';
+  try {
+    return new URL(value).origin;
+  } catch {
+    return 'unparseable';
+  }
+}
+
+/** Bounded, control-character-free rendering for one log field. */
+function oauthLogField(value: string | undefined): string {
+  if (!value) return 'absent';
+  const flattened = Array.from(value, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? ' ' : character;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flattened ? flattened.slice(0, 120) : 'absent';
+}
+
+/**
+ * One line, at the moment the authorization URL is built.
+ *
+ * A provider that rejects the authorization request front-channel
+ * (`invalid_request — Mismatching redirect URI`) tells Agor nothing: the
+ * browser is redirected to the provider's own error page and no callback
+ * arrives. So the only evidence that can ever exist about what Agor SENT has
+ * to be written before the URL leaves — and until this line existed, a
+ * production retry taught us nothing at all, because there was nothing on
+ * either side of the failure to compare.
+ *
+ * Deliberately origins and Agor-owned non-secret fields only. Never the
+ * authorization URL, never its query string, never `client_id`, never
+ * anything a provider said. `client_name` is Agor's own constant
+ * (`MCP_OAUTH_DCR_CLIENT_NAME`), and
+ * `registered_redirect_matches` is the comparison a reader actually wants,
+ * reported rather than the two URLs it was drawn from.
+ */
+function logOAuthAuthorizeBuilt(
+  client: Pick<
+    MCPOAuthResolvedClient,
+    'method' | 'clientName' | 'registeredRedirectUri' | 'registrationEndpoint'
+  >,
+  authorizeRedirectUri: string,
+  authorizationEndpoint: string
+): void {
+  const clientSource = client.method === 'configured' ? 'configured' : 'dcr';
+  // Three-valued on purpose: a configured client has no observed registration
+  // to compare against, which is not the same answer as "they differ".
+  const registeredRedirectMatches =
+    client.registeredRedirectUri === undefined
+      ? 'absent'
+      : String(client.registeredRedirectUri === authorizeRedirectUri);
+  console.log(
+    `[MCP OAuth] event=oauth_authorize_built ` +
+      `redirect_origin=${oauthLogOrigin(authorizeRedirectUri)} ` +
+      `authorize_origin=${oauthLogOrigin(authorizationEndpoint)} ` +
+      `client_source=${clientSource} ` +
+      `client_name=${oauthLogField(client.clientName)} ` +
+      `registration_origin=${oauthLogOrigin(client.registrationEndpoint)} ` +
+      `registered_redirect_matches=${registeredRedirectMatches}`
+  );
+}
+
+/**
+ * Refuse to authorize with a redirect URI the client is not registered under.
+ *
+ * **This assertion cannot fire, and it is not the fence.** `resolveOAuthClient`
+ * returns `registeredRedirectUri: options.actualRedirectUri` — the same value
+ * this compares it against — so the comparison is a tautology over one
+ * binding. It is kept as a structural guard against a future resolution path
+ * that sources the two separately, not because it currently checks anything.
+ *
+ * **The invariant actually lives in
+ * `apps/agor-daemon/src/services/mcp-oauth-client-registration-authority.ts`.**
+ * Its `bindingFingerprint` covers `redirectUri` (and `clientName`), so a
+ * durable registration is only reusable for the exact redirect URI it was
+ * registered under; a changed callback produces a different fingerprint and
+ * therefore a fresh registration rather than a reused mismatched one. On the
+ * way back out, `open()` reconstitutes `redirect_uris: [parsed.redirectUri]`
+ * and feeds `validateDynamicClientRegistration`, which throws unless the
+ * provider echoed that exact URI. Do not read the tautology below as the
+ * thing keeping those two in step.
+ *
+ * The provider's version of this disagreement is rejected front-channel
+ * (`invalid_request — Mismatching redirect URI`) and never reaches Agor, so a
+ * URL known here to be wrong has no second chance to be classified; see the
+ * `authorization_never_returned` proxy, and `oauth_authorize_built` above for
+ * the evidence that does survive.
+ *
+ * A configured client carries no observed binding and is deliberately not
+ * checked: its provider-side redirect URI is not something Agor has ever seen.
+ */
+export function assertAuthorizeRedirectUriMatchesClient(
+  client: Pick<MCPOAuthResolvedClient, 'registeredRedirectUri'>,
+  authorizeRedirectUri: string
+): void {
+  if (
+    client.registeredRedirectUri === undefined ||
+    client.registeredRedirectUri === authorizeRedirectUri
+  ) {
+    return;
+  }
+  throw new OAuthConfigurationError(
+    'redirect_uri_mismatch',
+    'The OAuth client is registered under a different Agor callback URL than the one this ' +
+      'authorization request would use. Reconnect this MCP server so a client is registered ' +
+      'for the current callback URL.',
+    'redirect_uri_mismatch'
+  );
+}
+
+/**
+ * One client-resolution boundary for the otherwise shared OAuth lifecycle.
+ * DCR is a compatibility method here, not a parallel flow; configured clients
+ * and any future standardized resolver feed the same PKCE, attempt, callback,
+ * exchange, grant, and refresh path after this function returns.
+ */
+async function resolveOAuthClient(options: {
+  clientId?: string;
+  clientSecret?: string;
+  dcrMode: MCPOAuthDCRMode;
+  authServerMetadata: AuthorizationServerMetadata | null;
+  fallbackRegistrationEndpoint?: string;
+  hasFullOverrides: boolean;
+  actualRedirectUri: string;
+  scope?: string;
+  cacheKey: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  allowLocalhostHttp: boolean;
+  reuseDynamicClientRegistration?: boolean;
+  resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+  assertCurrent?: () => void;
+}): Promise<MCPOAuthResolvedClient> {
+  if (options.clientId) {
+    return {
+      clientId: options.clientId,
+      ...(options.clientSecret ? { clientSecret: options.clientSecret } : {}),
+      method: 'configured',
+    };
+  }
+  if (options.dcrMode === 'disabled') {
+    throw new OAuthConfigurationError(
+      'client_registration_required',
+      'OAuth client_id is required because Dynamic Client Registration is disabled for this server.',
+      'dcr_disabled'
+    );
+  }
+
+  const registrationEndpoint =
+    options.authServerMetadata?.registration_endpoint ||
+    (options.dcrMode === 'fallback' ? options.fallbackRegistrationEndpoint : undefined);
+  if (!registrationEndpoint) {
+    if (options.hasFullOverrides) {
+      throw new OAuthConfigurationError(
+        'client_registration_required',
+        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
+          'Please provide a client_id in the MCP server configuration.'
+      );
+    }
+    throw missingRegistrationEndpointFailure();
+  }
+
+  options.assertCurrent?.();
+  console.log('[MCP OAuth] Using Dynamic Client Registration');
+  const registrationEndpointSource = options.authServerMetadata?.registration_endpoint
+    ? 'metadata'
+    : 'legacy_fallback';
+  try {
+    const register = () =>
+      registerDynamicClient(
+        registrationEndpoint,
+        options.actualRedirectUri,
+        MCP_OAUTH_DCR_CLIENT_NAME,
+        options.scope,
+        options.reuseDynamicClientRegistration !== false,
+        options.allowLocalhostHttp,
+        registrationEndpointSource,
+        options.assertCurrent
+      );
+    const resolved = options.resolveDynamicClientRegistration
+      ? await options.resolveDynamicClientRegistration(
+          {
+            registrationEndpoint,
+            registrationEndpointSource,
+            metadataUrl: options.cacheKey,
+            resourceUri: options.resourceUri,
+            issuer: options.authServerMetadata?.issuer ?? options.issuer,
+            authorizationEndpoint: options.authorizationEndpoint,
+            tokenEndpoint: options.tokenEndpoint,
+            redirectUri: options.actualRedirectUri,
+            clientName: MCP_OAUTH_DCR_CLIENT_NAME,
+            applicationType: dcrApplicationType(options.actualRedirectUri),
+            scope: options.scope,
+            compatibilityMode: options.compatibilityMode,
+            dcrMode: options.dcrMode,
+          },
+          register
+        )
+      : { registration: await register() };
+    const registration = options.resolveDynamicClientRegistration
+      ? validateDynamicClientRegistration(resolved.registration, options.actualRedirectUri, {
+          stage: 'dcr_registration',
+          registration_endpoint_source: registrationEndpointSource,
+        })
+      : resolved.registration;
+    options.assertCurrent?.();
+    return {
+      clientId: registration.client_id,
+      ...(registration.client_secret ? { clientSecret: registration.client_secret } : {}),
+      method: 'dynamic_registration',
+      ...(resolved.registrationId ? { clientRegistrationId: resolved.registrationId } : {}),
+      registeredRedirectUri: options.actualRedirectUri,
+      clientName: MCP_OAUTH_DCR_CLIENT_NAME,
+      registrationEndpoint,
+    };
+  } catch (error) {
+    options.assertCurrent?.();
+    if (error instanceof OAuthDCRFailure) throw error;
+    throw registrationFailure({
+      stage: 'dcr_registration',
+      registration_endpoint_source: registrationEndpointSource,
+    });
+  }
 }
 
 /**
@@ -1503,115 +1906,91 @@ function marketplaceResourceMetadataMatches(
   }
 }
 
-/**
- * Start the OAuth 2.1 Authorization Code flow with PKCE
- *
- * This is the first phase of a two-phase OAuth flow for remote daemon scenarios.
- * Returns the authorization URL to open in browser and context needed to complete
- * the flow later.
- *
- * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
- * @param clientId - OAuth client ID (optional, will use DCR if not provided)
- * @param redirectUri - Custom redirect URI (optional, defaults to a placeholder)
- * @param options - Additional options
- * @param options.authorizationUrlOverride - Override the auto-discovered authorization endpoint URL
- * @param options.tokenUrlOverride - Override the auto-discovered token endpoint URL
- * @returns Authorization URL and flow context
- */
-/**
- * Build the OAuth authorization URL + cache context once we already have AS
- * metadata. Shared by both the RFC 9728 path (after fetching resource +
- * AS metadata) and the AS-direct path (Reo.Dev-style discovery, where the
- * caller hands us prefetched AS metadata).
- *
- * Inputs:
- *   - `authServerMetadata`: required when no full URL overrides are supplied
- *   - `cacheKey`: becomes `context.metadataUrl` — the exact key
- *     `completeMCPOAuthFlow` writes its legacy CLI cache entry under, and the
- *     metadata URI the daemon persists as the grant's binding
- */
-async function startMCPOAuthFlowWithAS(opts: {
+function assertOAuthProtectedResourceMetadata(
+  metadataUrl: string,
+  statedResource: OAuthMetadata['resource'],
+  resourceUri: string,
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode
+): void {
+  if (
+    compatibilityMode === 'strict'
+      ? statedResource !== resourceUri
+      : compatibilityMode === 'marketplace' &&
+        !marketplaceResourceMetadataMatches(metadataUrl, statedResource, resourceUri)
+  ) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Protected resource metadata does not match the MCP resource URI',
+      'protected_resource_mismatch'
+    );
+  }
+}
+
+function assertOAuthDirectDiscoveryIssuer(
+  authServerMetadata: AuthorizationServerMetadata,
+  resourceUri: string,
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode
+): void {
+  if (compatibilityMode === 'strict') {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
+    );
+  }
+  if (
+    compatibilityMode === 'marketplace' &&
+    !oauthIssuerOriginMatchesResource(authServerMetadata.issuer, resourceUri)
+  ) {
+    throw new OAuthConfigurationError(
+      'issuer_mismatch',
+      'Authorization-server-direct discovery issuer does not match the MCP resource origin'
+    );
+  }
+}
+
+interface OAuthAuthorizationContractOptions {
   authServerMetadata: AuthorizationServerMetadata | null;
-  cacheKey: string;
-  clientId?: string;
-  redirectUri?: string;
+  issuer: string;
+  resourceUri: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  allowLocalhostHttp: boolean;
   authorizationUrlOverride?: string;
   tokenUrlOverride?: string;
-  clientSecret?: string;
-  scope?: string;
-  /** Optional fallback registration endpoint (e.g. `${authServerUrl}/register`) */
-  fallbackRegistrationEndpoint?: string;
-  /** Scopes advertised by the resource server (RFC 9728 path only) */
-  resourceScopesSupported?: string[];
-  /** Daemons disable the process-global DCR cache; legacy local CLI flows may reuse it. */
-  reuseDynamicClientRegistration?: boolean;
-  resourceUri: string;
-  issuer: string;
-  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
-  dcrMode: MCPOAuthDCRMode;
-  allowLocalhostHttp: boolean;
-  /** Daemon-owned authority/deadline assertion around provider side effects. */
-  assertCurrent?: () => void;
-}): Promise<OAuthFlowContext> {
+}
+
+/**
+ * Resolve and validate the authorization/token/issuer contract before any DCR
+ * or browser authorization side effect. The production flow and catalog audit
+ * deliberately share this exact predicate.
+ */
+function resolveOAuthAuthorizationContract(options: OAuthAuthorizationContractOptions): {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+} {
   const {
     authServerMetadata,
-    cacheKey,
-    clientId,
-    redirectUri,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
     authorizationUrlOverride,
     tokenUrlOverride,
-    fallbackRegistrationEndpoint,
-    resourceScopesSupported,
-    resourceUri,
-    issuer,
-    compatibilityMode,
-    dcrMode,
-    allowLocalhostHttp,
-  } = opts;
-
-  const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
-  opts.assertCurrent?.();
-
-  // PKCE
-  const pkce = generatePKCE();
-
-  // Redirect URI default — preserved for legacy CLI callers
-  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
-  // Validate before registration: DCR sends this value to an external service
-  // and must not turn an unsafe configured callback into durable provider-side
-  // client metadata.
-  assertSafeOAuthUrl(actualRedirectUri, { allowLocalhostHttp });
-
-  // Scope: explicit option > resource-metadata advertised scopes > none
-  // (Skip auto-populating when client_id is pre-registered — see comment in
-  // the RFC 9728 path for the rationale.)
-  const scopeString = opts.scope
-    ? opts.scope
-    : !clientId && resourceScopesSupported && resourceScopesSupported.length > 0
-      ? resourceScopesSupported.join(' ')
-      : undefined;
-
-  // Validate the authorization contract before DCR creates durable state at
-  // the provider. A strict-profile rejection must not leave an unused client
-  // registration behind.
+  } = options;
   const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
   if (!tokenEndpoint) {
     throw new OAuthConfigurationError(
-      'metadata_unavailable',
-      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+      'metadata_incompatible',
+      'Authorization-server metadata does not provide a token endpoint'
     );
   }
   const authorizationEndpoint =
     authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
   if (!authorizationEndpoint) {
     throw new OAuthConfigurationError(
-      'metadata_unavailable',
-      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
+      'metadata_incompatible',
+      'Authorization-server metadata does not provide an authorization endpoint'
     );
   }
-  console.log('[MCP OAuth] OAuth endpoints resolved');
 
   assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
   assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
@@ -1667,72 +2046,235 @@ async function startMCPOAuthFlowWithAS(opts: {
     }
   }
 
-  // Client ID resolution (DCR if available)
-  let actualClientId = clientId;
-  let resolvedClientSecret = opts.clientSecret;
+  // The exact protected resource still travels on the eventual authorization
+  // and token requests; validating it here also rejects unsafe configured URLs
+  // before a catalog audit or production flow proceeds to registration.
+  assertSafeOAuthUrl(resourceUri, { allowLocalhostHttp });
+  return { authorizationEndpoint, tokenEndpoint };
+}
 
-  if (!actualClientId && dcrMode !== 'disabled') {
-    const registrationEndpoint =
-      authServerMetadata?.registration_endpoint ||
-      (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
-    if (registrationEndpoint) {
-      opts.assertCurrent?.();
-      console.log('[MCP OAuth] Using Dynamic Client Registration');
-      const registrationEndpointSource = authServerMetadata?.registration_endpoint
-        ? 'metadata'
-        : 'legacy_fallback';
-      try {
-        const registration = await registerDynamicClient(
-          registrationEndpoint,
-          actualRedirectUri,
-          'Agor MCP Client',
-          scopeString,
-          opts.reuseDynamicClientRegistration !== false,
-          allowLocalhostHttp,
-          registrationEndpointSource,
-          opts.assertCurrent
-        );
-        actualClientId = registration.client_id;
-        resolvedClientSecret = registration.client_secret;
-      } catch (error) {
-        // An authority/deadline assertion is not a provider DCR diagnostic.
-        // Reassert first so it escapes this compatibility wrapper unchanged.
-        opts.assertCurrent?.();
-        if (error instanceof OAuthDCRFailure) throw error;
-        throw registrationFailure({
-          stage: 'dcr_registration',
-          registration_endpoint_source: registrationEndpointSource,
-        });
-      }
-      // Keep authority/deadline failures out of the DCR diagnostic wrapper.
-      opts.assertCurrent?.();
-    } else if (hasFullOverrides) {
-      throw new OAuthConfigurationError(
-        'client_registration_required',
-        'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
-          'Please provide a client_id in the MCP server configuration.'
-      );
-    } else {
-      throw missingRegistrationEndpointFailure();
-    }
-  } else if (!actualClientId) {
-    throw new OAuthConfigurationError(
-      'client_registration_required',
-      'OAuth client_id is required because Dynamic Client Registration is disabled for this server.'
+export interface ValidatedMCPOAuthMetadata {
+  authServerMetadata: AuthorizationServerMetadata;
+  issuer: string;
+  registrationEndpoint?: string;
+}
+
+/**
+ * Fetch and validate the production OAuth metadata contract without performing
+ * Dynamic Client Registration or starting user authorization.
+ *
+ * This is the audit-safe boundary: discovery is supplied by the caller, every
+ * resource/issuer/endpoint/PKCE rule is the same helper used by
+ * `startMCPOAuthFlow`, and the function stops before the first provider-side
+ * mutation.
+ */
+export async function validateMCPOAuthMetadata(
+  discovery: MCPOAuthDiscoveryResult,
+  resourceUri: string,
+  options: {
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
+    allowLocalhostHttp?: boolean;
+    assertCurrent?: () => void;
+  } = {}
+): Promise<ValidatedMCPOAuthMetadata> {
+  const compatibilityMode = options.compatibilityMode ?? 'strict';
+  const allowLocalhostHttp = options.allowLocalhostHttp === true;
+  let authServerMetadata: AuthorizationServerMetadata;
+  let issuer: string;
+
+  if (discovery.kind === 'authorization-server') {
+    assertOAuthDirectDiscoveryIssuer(discovery.authServerMetadata, resourceUri, compatibilityMode);
+    authServerMetadata = discovery.authServerMetadata;
+    issuer = authServerMetadata.issuer;
+  } else {
+    options.assertCurrent?.();
+    const resourceMetadata = await fetchResourceMetadata(discovery.metadataUrl, {
+      allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+    options.assertCurrent?.();
+    assertOAuthProtectedResourceMetadata(
+      discovery.metadataUrl,
+      resourceMetadata.resource,
+      resourceUri,
+      compatibilityMode
     );
+    if (
+      !Array.isArray(resourceMetadata.authorization_servers) ||
+      typeof resourceMetadata.authorization_servers[0] !== 'string'
+    ) {
+      throw new OAuthConfigurationError(
+        'metadata_incompatible',
+        'Protected resource metadata does not name an authorization server'
+      );
+    }
+    issuer = resourceMetadata.authorization_servers[0];
+    authServerMetadata = await fetchAuthorizationServerMetadata(issuer, {
+      compatibilityMode,
+      allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+    options.assertCurrent?.();
   }
+
+  resolveOAuthAuthorizationContract({
+    authServerMetadata,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
+  });
+  return {
+    authServerMetadata,
+    issuer,
+    registrationEndpoint: authServerMetadata.registration_endpoint,
+  };
+}
+
+/**
+ * Start the OAuth 2.1 Authorization Code flow with PKCE
+ *
+ * This is the first phase of a two-phase OAuth flow for remote daemon scenarios.
+ * Returns the authorization URL to open in browser and context needed to complete
+ * the flow later.
+ *
+ * @param wwwAuthenticateHeader - The WWW-Authenticate header from 401 response
+ * @param clientId - OAuth client ID (optional, will use DCR if not provided)
+ * @param redirectUri - Custom redirect URI (optional, defaults to a placeholder)
+ * @param options - Additional options
+ * @param options.authorizationUrlOverride - Override the auto-discovered authorization endpoint URL
+ * @param options.tokenUrlOverride - Override the auto-discovered token endpoint URL
+ * @returns Authorization URL and flow context
+ */
+/**
+ * Build the OAuth authorization URL + cache context once we already have AS
+ * metadata. Shared by both the RFC 9728 path (after fetching resource +
+ * AS metadata) and the AS-direct path (Reo.Dev-style discovery, where the
+ * caller hands us prefetched AS metadata).
+ *
+ * Inputs:
+ *   - `authServerMetadata`: required when no full URL overrides are supplied
+ *   - `cacheKey`: becomes `context.metadataUrl` — the exact key
+ *     `completeMCPOAuthFlow` writes its legacy CLI cache entry under, and the
+ *     metadata URI the daemon persists as the grant's binding
+ */
+async function startMCPOAuthFlowWithAS(opts: {
+  authServerMetadata: AuthorizationServerMetadata | null;
+  cacheKey: string;
+  clientId?: string;
+  redirectUri?: string;
+  authorizationUrlOverride?: string;
+  tokenUrlOverride?: string;
+  clientSecret?: string;
+  scope?: string;
+  /** Optional fallback registration endpoint (e.g. `${authServerUrl}/register`) */
+  fallbackRegistrationEndpoint?: string;
+  /** Scopes advertised by the resource server (RFC 9728 path only) */
+  resourceScopesSupported?: string[];
+  /** Daemons disable the process-global DCR cache; legacy local CLI flows may reuse it. */
+  reuseDynamicClientRegistration?: boolean;
+  /** PostgreSQL daemons inject a fleet-wide encrypted registration authority. */
+  resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
+  resourceUri: string;
+  issuer: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+  allowLocalhostHttp: boolean;
+  /** Daemon-owned authority/deadline assertion around provider side effects. */
+  assertCurrent?: () => void;
+}): Promise<OAuthFlowContext> {
+  const {
+    authServerMetadata,
+    cacheKey,
+    clientId,
+    redirectUri,
+    authorizationUrlOverride,
+    tokenUrlOverride,
+    fallbackRegistrationEndpoint,
+    resourceScopesSupported,
+    resourceUri,
+    issuer,
+    compatibilityMode,
+    dcrMode,
+    allowLocalhostHttp,
+  } = opts;
+
+  const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
+  opts.assertCurrent?.();
+
+  // PKCE
+  const pkce = generatePKCE();
+
+  // Redirect URI default — preserved for legacy CLI callers
+  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+  // Validate before registration: DCR sends this value to an external service
+  // and must not turn an unsafe configured callback into durable provider-side
+  // client metadata.
+  assertSafeOAuthUrl(actualRedirectUri, { allowLocalhostHttp });
+
+  // Scope: explicit option > resource-metadata advertised scopes > none
+  // (Skip auto-populating when client_id is pre-registered — see comment in
+  // the RFC 9728 path for the rationale.)
+  const scopeString = opts.scope
+    ? opts.scope
+    : !clientId && resourceScopesSupported && resourceScopesSupported.length > 0
+      ? resourceScopesSupported.join(' ')
+      : undefined;
+
+  // Validate the authorization contract before DCR creates durable state at
+  // the provider. A strict-profile rejection must not leave an unused client
+  // registration behind.
+  const { authorizationEndpoint, tokenEndpoint } = resolveOAuthAuthorizationContract({
+    authServerMetadata,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
+    authorizationUrlOverride,
+    tokenUrlOverride,
+  });
+  console.log('[MCP OAuth] OAuth endpoints resolved');
+
+  const resolvedClient = await resolveOAuthClient({
+    clientId,
+    clientSecret: opts.clientSecret,
+    dcrMode,
+    authServerMetadata,
+    fallbackRegistrationEndpoint,
+    hasFullOverrides,
+    actualRedirectUri,
+    scope: scopeString,
+    cacheKey,
+    resourceUri,
+    issuer,
+    authorizationEndpoint,
+    tokenEndpoint,
+    compatibilityMode,
+    allowLocalhostHttp,
+    reuseDynamicClientRegistration: opts.reuseDynamicClientRegistration,
+    resolveDynamicClientRegistration: opts.resolveDynamicClientRegistration,
+    assertCurrent: opts.assertCurrent,
+  });
 
   // CSRF state
   const state = crypto.randomUUID();
 
+  // Before the URL exists, not after: a mismatch here is one Agor already
+  // knows about, and the provider's rejection of it is front-channel.
+  assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
+
+  // The only record of what Agor sent that survives a front-channel refusal.
+  logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
+
   const authUrl = new URL(authorizationEndpoint);
   authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', actualClientId!);
+  authUrl.searchParams.set('client_id', resolvedClient.clientId);
   authUrl.searchParams.set('redirect_uri', actualRedirectUri);
   authUrl.searchParams.set('code_challenge', pkce.challenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('state', state);
   authUrl.searchParams.set('resource', resourceUri);
+  applyProviderAuthorizationParameters(authUrl);
   if (scopeString) {
     authUrl.searchParams.set('scope', scopeString);
   }
@@ -1750,8 +2292,17 @@ async function startMCPOAuthFlowWithAS(opts: {
     tokenEndpoint,
     redirectUri: actualRedirectUri,
     pkceVerifier: pkce.verifier,
-    clientId: actualClientId!,
-    clientSecret: resolvedClientSecret,
+    clientId: resolvedClient.clientId,
+    clientSecret: resolvedClient.clientSecret,
+    clientRegistrationId: resolvedClient.clientRegistrationId,
+    clientSource: resolvedClient.method === 'configured' ? 'configured' : 'dcr',
+    ...(resolvedClient.clientName ? { clientName: resolvedClient.clientName } : {}),
+    ...(resolvedClient.registeredRedirectUri
+      ? { registeredRedirectUri: resolvedClient.registeredRedirectUri }
+      : {}),
+    ...(resolvedClient.registrationEndpoint
+      ? { registrationEndpoint: resolvedClient.registrationEndpoint }
+      : {}),
     state,
     authorizationUrl: authUrl.toString(),
     compatibilityMode,
@@ -1793,6 +2344,8 @@ export async function startMCPOAuthFlow(
     cacheKey?: string;
     /** Disable process-global DCR credential reuse in multi-user daemons. */
     reuseDynamicClientRegistration?: boolean;
+    /** Fleet-wide DCR lease/persistence boundary for multi-daemon callers. */
+    resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
@@ -1808,7 +2361,7 @@ export async function startMCPOAuthFlow(
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
   const compatibilityMode = options?.compatibilityMode ?? 'strict';
-  const dcrMode = options?.dcrMode ?? 'advertised';
+  const dcrMode = options?.dcrMode ?? MCP_OAUTH_DEFAULT_DCR_MODE;
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
   options?.assertCurrent?.();
@@ -1843,15 +2396,11 @@ export async function startMCPOAuthFlow(
     // identifier to bind. The marketplace fallback is therefore safe only
     // when the directly discovered issuer remains on the protected resource's
     // origin. Legacy mode retains its explicitly broader behavior.
-    if (
-      compatibilityMode === 'marketplace' &&
-      !oauthIssuerOriginMatchesResource(options.prefetchedAuthServerMetadata.issuer, resourceUri)
-    ) {
-      throw new OAuthConfigurationError(
-        'issuer_mismatch',
-        'Authorization-server-direct discovery issuer does not match the MCP resource origin'
-      );
-    }
+    assertOAuthDirectDiscoveryIssuer(
+      options.prefetchedAuthServerMetadata,
+      resourceUri,
+      compatibilityMode
+    );
     console.log('[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped)');
     return startMCPOAuthFlowWithAS({
       authServerMetadata: options.prefetchedAuthServerMetadata,
@@ -1863,6 +2412,7 @@ export async function startMCPOAuthFlow(
       clientSecret: options.clientSecret,
       scope: options.scope,
       reuseDynamicClientRegistration: options.reuseDynamicClientRegistration,
+      resolveDynamicClientRegistration: options.resolveDynamicClientRegistration,
       resourceUri,
       issuer: options.prefetchedAuthServerMetadata.issuer,
       compatibilityMode,
@@ -1892,17 +2442,12 @@ export async function startMCPOAuthFlow(
   });
   options?.assertCurrent?.();
 
-  if (
-    compatibilityMode === 'strict'
-      ? resourceMetadata.resource !== resourceUri
-      : compatibilityMode === 'marketplace' &&
-        !marketplaceResourceMetadataMatches(metadataUrl, resourceMetadata.resource, resourceUri)
-  ) {
-    throw new OAuthConfigurationError(
-      'metadata_incompatible',
-      'Protected resource metadata does not match the MCP resource URI'
-    );
-  }
+  assertOAuthProtectedResourceMetadata(
+    metadataUrl,
+    resourceMetadata.resource,
+    resourceUri,
+    compatibilityMode
+  );
 
   if (
     !resourceMetadata.authorization_servers ||
@@ -1972,6 +2517,7 @@ export async function startMCPOAuthFlow(
         : undefined,
     resourceScopesSupported: resourceMetadata.scopes_supported,
     reuseDynamicClientRegistration: options?.reuseDynamicClientRegistration,
+    resolveDynamicClientRegistration: options?.resolveDynamicClientRegistration,
     resourceUri,
     issuer: authServerUrl,
     compatibilityMode,
@@ -2024,7 +2570,8 @@ export async function completeMCPOAuthFlow(
     context.clientId,
     context.clientSecret,
     context.resourceUri,
-    context.allowLocalhostHttp
+    context.allowLocalhostHttp,
+    Boolean(context.clientRegistrationId)
   );
 
   console.log('[MCP OAuth] Access token received successfully');
@@ -2062,32 +2609,40 @@ export async function completeMCPOAuthFlow(
  * @returns Object with code and state, or throws if invalid
  */
 export function parseOAuthCallback(callbackUrl: string): {
-  code: string;
+  code: string | null;
   state: string;
   issuer?: string;
+  /** Closed front-channel outcome; the provider's arbitrary error value is discarded. */
+  authorizationRejected: boolean;
 } {
   try {
     const url = new URL(callbackUrl);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
 
-    if (!code) {
-      const error = url.searchParams.get('error');
-      if (error) {
-        throw new Error('OAuth provider rejected authorization');
-      }
-      throw new Error('No authorization code in callback URL');
-    }
-
     if (!state) {
       throw new Error('No state parameter in callback URL');
     }
 
-    return { code, state, issuer: url.searchParams.get('iss') ?? undefined };
-  } catch (e) {
-    if (e instanceof Error && e.message === 'OAuth provider rejected authorization') {
-      throw e;
+    if (url.searchParams.has('error')) {
+      return {
+        code: null,
+        state,
+        issuer: url.searchParams.get('iss') ?? undefined,
+        authorizationRejected: true,
+      };
     }
+    if (!code) {
+      throw new Error('No authorization code in callback URL');
+    }
+
+    return {
+      code,
+      state,
+      issuer: url.searchParams.get('iss') ?? undefined,
+      authorizationRejected: false,
+    };
+  } catch {
     // The URL can contain the one-shot authorization code and state. Never
     // copy either capability into an exception that a caller may later log.
     throw new Error('Invalid OAuth callback URL');

@@ -8,17 +8,19 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   Message,
   PermissionMode,
+  RepoCleanupPolicy,
   SandpackConfig,
   Session,
   Task,
   UserExternalIdentity,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, DEFAULT_REPO_CLEANUP_POLICY } from '@agor/core/types';
 import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
@@ -52,7 +54,8 @@ export const sessions = sqliteTable(
     // Primary identity
     session_id: text('session_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at'),
+    // 0113 backfills legacy NULLs; writers initialize recency from created_at.
+    updated_at: t.timestamp('updated_at').notNull(),
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
@@ -337,6 +340,9 @@ export const tasks = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
 
+    // Indexed due-work projection for bounded Slack MCP recovery repair.
+    mcp_slack_recovery_due_at: t.timestamp('mcp_slack_recovery_due_at'),
+
     data: t
       .json<unknown>('data')
       .$type<{
@@ -347,7 +353,7 @@ export const tasks = sqliteTable(
 
         /** Filled by the executor after the turn. */
         model?: string;
-        tool_use_count: number;
+        recorded_tool_count?: number | null;
 
         duration_ms?: number;
         agent_session_id?: string;
@@ -390,6 +396,9 @@ export const tasks = sqliteTable(
     sessionTaskIdIdx: index('tasks_session_task_id_idx').on(table.session_id, table.task_id),
     statusIdx: index('tasks_status_idx').on(table.status),
     createdIdx: index('tasks_created_idx').on(table.created_at),
+    mcpSlackRecoveryDueIdx: index('tasks_mcp_slack_recovery_due_idx')
+      .on(table.mcp_slack_recovery_due_at, table.task_id)
+      .where(sql`${table.mcp_slack_recovery_due_at} IS NOT NULL`),
     queueIdx: index('tasks_queue_idx').on(table.session_id, table.status, table.queue_position),
     runtimeDispatchIdx: index('tasks_runtime_dispatch_idx')
       .on(table.started_at, table.task_id)
@@ -517,6 +526,14 @@ export const messages = sqliteTable(
     // Parent tool use ID (for nested tool calls - e.g., Task tool spawning Read/Grep)
     parent_tool_use_id: text('parent_tool_use_id'),
 
+    // Indexed due-work projection for the bounded Slack MCP connect-card
+    // repair sweep. Mirrors `metadata.widget.slack_connect.next_repair_at` and
+    // is written by the same locked mutation, so it cannot drift from the JSON
+    // it projects. Null for every message that is not a Slack-delivered
+    // `oauth` widget — which is all but a handful — so the partial index stays
+    // tiny on a table this large.
+    mcp_slack_connect_due_at: t.timestamp('mcp_slack_connect_due_at'),
+
     // NOTE: queueing moved off `messages` and onto `tasks.status='queued'` as
     // of migration sqlite/0040 (postgres/0030). The legacy `status` and
     // `queue_position` columns are gone — see `tasks.queue_position` instead.
@@ -546,6 +563,9 @@ export const messages = sqliteTable(
       table.session_id,
       table.timestamp
     ),
+    mcpSlackConnectDueIdx: index('messages_mcp_slack_connect_due_idx')
+      .on(table.mcp_slack_connect_due_at, table.message_id)
+      .where(sql`${table.mcp_slack_connect_due_at} IS NOT NULL`),
   })
 );
 
@@ -561,8 +581,8 @@ export const boards = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
-    // User deletion guards are a separate lifecycle flow; this immutable
-    // logical owner pointer intentionally does not cascade or transfer.
+    // User deletion is a separate lifecycle flow. Only an explicit management
+    // transfer changes this owner pointer; attribution is never reassigned.
     primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
@@ -632,6 +652,11 @@ export const repos = sqliteTable(
 
     // Retired nullable compatibility stamp retained for rollback/audit only.
     unix_group: text('unix_group'), // retired nullable compatibility stamp; runtime ignores it
+
+    cleanup_policy: t
+      .json<RepoCleanupPolicy>('cleanup_policy')
+      .notNull()
+      .default(DEFAULT_REPO_CLEANUP_POLICY),
 
     data: t
       .json<unknown>('data')
@@ -711,6 +736,8 @@ export const branches = sqliteTable(
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at'),
 
+    cleanup_protected: t.bool('cleanup_protected').notNull().default(false),
+
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
     primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
@@ -757,6 +784,11 @@ export const branches = sqliteTable(
     archived: t.bool('archived').notNull().default(false),
     archived_at: t.timestamp('archived_at'),
     archived_by: text('archived_by', { length: 36 }),
+    // Permanent deletion retains this row and its authority through partial failure.
+    deletion_status: text('deletion_status', { enum: ['deleting', 'deletion_failed'] }),
+    deletion_error: text('deletion_error'),
+    deletion_updated_at: t.timestamp('deletion_updated_at'),
+
     filesystem_status: text('filesystem_status', {
       enum: ['creating', 'ready', 'failed', 'preserved', 'cleaned', 'deleted'],
     }),
@@ -812,10 +844,19 @@ export const branches = sqliteTable(
       .json<unknown>('data')
       .$type<{
         // File system
+        // Daemon-private shared maintenance authority. Never accept through generic patches.
+        maintenance?: import('../types/branch-deletion').BranchMaintenanceClaim;
+        maintenance_generation?: number;
+        workspace_snapshot?: import('../types/branch-cleanup').BranchWorkspaceSnapshot;
+        workspace_operation?: import('../types/branch-cleanup').BranchWorkspaceOperation;
+        cleanup_last_error?: import('../types/branch-cleanup').BranchWorkspaceError;
+        last_cleanup_succeeded_at?: string;
+        last_cleanup_operation_id?: import('../types/id').UUID;
         path: string; // Absolute path to branch directory
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_source?: import('../types/branch').Branch['base_source'];
         base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
@@ -827,26 +868,13 @@ export const branches = sqliteTable(
         pull_request_url?: string; // PR link
         notes?: string; // Freeform user notes
         error_message?: string; // Error details when filesystem_status is 'failed'
+        // Generation owning the in-flight provisioning attempt. Fences stale
+        // acknowledgements from a superseded attempt (see Branch type).
+        provisioning_attempt_id?: string;
+        provisioning_operation?: 'create' | 'retry' | 'restore';
 
         // Environment instance (runtime state only, no variables)
-        environment_instance?: {
-          status: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-          process?: {
-            pid?: number;
-            started_at?: string;
-            uptime?: string;
-          };
-          last_health_check?: {
-            timestamp: string;
-            status: 'healthy' | 'unhealthy' | 'unknown';
-            message?: string;
-          };
-          access_urls?: Array<{
-            name: string;
-            url: string;
-          }>;
-          logs?: string[];
-        };
+        environment_instance?: BranchEnvironmentInstance;
 
         last_used: string; // ISO timestamp
 
@@ -861,6 +889,9 @@ export const branches = sqliteTable(
       .notNull(),
   },
   (table) => ({
+    deletionDiscoveryIdx: index('branches_deletion_discovery_idx')
+      .on(table.branch_id)
+      .where(sql`${table.deletion_status} = 'deleting'`),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -1085,6 +1116,7 @@ export const users = sqliteTable(
           opencode?: Record<string, never>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
+        agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -1549,6 +1581,8 @@ export const userApiKeys = sqliteTable(
     name: text('name').notNull(),
     prefix: text('prefix').notNull(), // first 12 chars: 'agor_sk_XXXX' for identification
     key_hash: text('key_hash').notNull(), // bcrypt hash of full key
+    // 'manual' (created in settings) | 'cli_login' (minted by `agor login`)
+    source: text('source').notNull().default('manual'),
     created_at: t.timestamp('created_at').notNull(),
     last_used_at: t.timestamp('last_used_at'),
   },
@@ -1660,6 +1694,7 @@ export const mcpServers = sqliteTable(
             required?: boolean;
           }>;
         }>;
+        capabilities_discovered_at?: string;
 
         // Tool permissions configuration
         tool_permissions?: Record<string, 'ask' | 'allow' | 'deny'>;
@@ -1915,6 +1950,11 @@ export const userMcpOauthTokens = sqliteTable(
     mcp_server_id: text('mcp_server_id', { length: 36 })
       .notNull()
       .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    // Trusted flow/caller attribution, independent of the shared NULL subject
+    // and server ownership. Hard deletion retires the local grant via CASCADE.
+    granted_by_user_id: text('granted_by_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
     oauth_access_token: text('oauth_access_token').notNull(),
     oauth_token_expires_at: t.timestamp('oauth_token_expires_at'), // Unix timestamp in milliseconds
     oauth_refresh_token: text('oauth_refresh_token'),
@@ -1940,6 +1980,11 @@ export const userMcpOauthTokens = sqliteTable(
     updated_at: t.timestamp('updated_at'),
   },
   (table) => ({
+    consenterSubjectCheck: check(
+      'user_mcp_oauth_tokens_consenter_subject_check',
+      sql`${table.user_id} IS NULL OR ${table.user_id} = ${table.granted_by_user_id}`
+    ),
+    grantedByIdx: index('user_mcp_oauth_tokens_granted_by_idx').on(table.granted_by_user_id),
     // Composite lookup indexes. Uniqueness enforced via partial unique indexes
     // created in the migration (one for per-user rows, one for the shared row).
     pk: index('user_mcp_oauth_tokens_pk').on(table.user_id, table.mcp_server_id),
@@ -1997,6 +2042,89 @@ export const mcpOauthPendingFlows = sqliteTable(
       table.grant_generation
     ),
     maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Schema mirror for PostgreSQL Claude subscription OAuth attempt authority.
+ *
+ * Standalone SQLite deliberately keeps its existing process-local sign-in state;
+ * this table is unused at runtime and exists for cross-dialect compatibility.
+ */
+/** Deployment-bound personal provider grants; SQLite is an inert schema mirror. */
+export const userProviderOauthGrants = sqliteTable(
+  'user_provider_oauth_grants',
+  {
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['claude-code'] }).notNull(),
+    grant_generation: integer('grant_generation').notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: text('binding_fingerprint').notNull(),
+    established_attempt_id: text('established_attempt_id').notNull(),
+    sealed_access_token: text('sealed_access_token'),
+    sealed_refresh_token: text('sealed_refresh_token'),
+    expires_at: t.timestamp('expires_at'),
+    scopes: text('scopes').notNull().default(''),
+    subscription_type: text('subscription_type'),
+    refresh_generation: integer('refresh_generation').notNull().default(0),
+    refresh_success_generation: integer('refresh_success_generation').notNull().default(0),
+    refresh_claim_id: text('refresh_claim_id'),
+    refresh_claimed_at: t.timestamp('refresh_claimed_at'),
+    state: text('state', {
+      enum: ['idle', 'refreshing', 'ambiguous', 'reauth_required', 'disconnected'],
+    })
+      .notNull()
+      .default('idle'),
+    failure_code: text('failure_code'),
+    retry_not_before: t.timestamp('retry_not_before'),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.user_id, table.provider] }),
+  })
+);
+
+export const claudeOauthAttempts = sqliteTable(
+  'claude_oauth_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    submission_count: integer('submission_count').notNull().default(0),
+    state_hash: text('state_hash', { length: 64 }).notNull(),
+    user_id: text('user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    attempt_generation: integer('attempt_generation').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
+    })
+      .notNull()
+      .default('pending'),
+    sealed_material: text('sealed_material'),
+    exchange_claim_id: text('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    subscription_type: text('subscription_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    userIdx: index('claude_oauth_attempts_user_idx').on(table.user_id, table.created_at),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.user_id)
+      .where(sql`${table.is_current} = 1`),
+    maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -2188,7 +2316,7 @@ export const uploads = sqliteTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -2301,7 +2429,7 @@ export const gatewayInboundEvents = sqliteTable(
     verified_app_id: text('verified_app_id'),
     verified_tenant_id: text('verified_tenant_id'),
     attempt_count: integer('attempt_count').notNull().default(0),
-    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull().default(sql`0`),
     last_error_code: text('last_error_code'),
     session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
       onDelete: 'set null',
@@ -2317,6 +2445,19 @@ export const gatewayInboundEvents = sqliteTable(
       table.gateway_channel_id,
       table.provider_event_id
     ),
+    teamsDueIdx: index('gateway_inbound_events_teams_due_idx')
+      .on(table.next_attempt_at, table.id)
+      .where(
+        sql`${table.status} IN ('pending', 'processing') AND ${table.payload_expires_at} IS NOT NULL`
+      ),
+    teamsExpiryIdx: index('gateway_inbound_events_teams_expiry_idx')
+      .on(table.payload_expires_at, table.id)
+      .where(
+        sql`${table.status} IN ('pending', 'processing') AND ${table.payload_expires_at} IS NOT NULL AND ${table.payload_encrypted} IS NOT NULL`
+      ),
+    teamsLaneIdx: index('gateway_inbound_events_teams_lane_idx')
+      .on(table.gateway_channel_id, table.thread_id, table.received_at, table.id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
     recoveryIdx: index('gateway_inbound_events_recovery_idx').on(
       table.status,
       table.processing_expires_at,
@@ -2472,6 +2613,12 @@ export const teamsMessageDeliveries = sqliteTable(
       table.message_id,
       table.thread_session_map_id
     ),
+    discoveryIdx: index('teams_message_deliveries_discovery_idx')
+      .on(table.next_attempt_at, table.delivery_id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
+    laneIdx: index('teams_message_deliveries_lane_idx')
+      .on(table.thread_session_map_id, table.created_at, table.delivery_id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
     dueIdx: index('teams_message_deliveries_due_idx').on(
       table.status,
       table.next_attempt_at,
@@ -3091,6 +3238,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
+export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
 export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
@@ -3182,3 +3331,30 @@ export const schedulesRelations = relations(schedules, ({ one, many }) => ({
   }),
   sessions: many(sessions),
 }));
+
+/** Durable create receipts survive target archive/deletion; never grant access by themselves. */
+export const kbImportReceipts = sqliteTable(
+  'kb_import_receipts',
+  {
+    receipt_id: text('receipt_id').primaryKey(),
+    owner_user_id: text('owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    bundle: text('bundle').notNull(),
+    slug: text('slug').notNull(),
+    entry_key: text('entry_key').notNull(),
+    target_id: text('target_id').notNull(),
+    digest: text('digest').notNull(),
+    request_bytes: integer('request_bytes').notNull().default(0),
+    reconciled_count: integer('reconciled_count').notNull().default(-1),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    identityIdx: uniqueIndex('kb_import_receipts_identity_unique').on(
+      table.owner_user_id,
+      table.bundle,
+      table.slug,
+      table.entry_key
+    ),
+  })
+);

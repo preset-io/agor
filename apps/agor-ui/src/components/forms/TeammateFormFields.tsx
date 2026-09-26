@@ -1,11 +1,14 @@
-import type { Repo } from '@agor-live/client';
+import { isCanonicalTeammateFrameworkRepo, type Repo } from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
+import type { TeammateGalleryCardId } from '@/utils/teammateTemplates';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
+import { TeammateGallery } from '../TeammateGallery';
 
 export interface TeammateFormFieldsProps {
   form: FormInstance;
+  onTemplateChange: (id: TeammateGalleryCardId | null) => void;
   repos: Repo[];
   frameworkRepo: Repo | undefined;
   isCloning?: boolean;
@@ -25,6 +28,7 @@ export interface TeammateFormFieldsProps {
  */
 export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   form,
+  onTemplateChange,
   repos,
   frameworkRepo,
   isCloning,
@@ -34,6 +38,8 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   extraBeforeAdvanced,
 }) => {
   const { token } = theme.useToken();
+  const repoId = Form.useWatch('repoId', form);
+  const selectedRepo = repos.find((repo) => repo.repo_id === repoId) ?? frameworkRepo;
   const repoPlaceholder = frameworkRepo
     ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
     : isCloning
@@ -59,6 +65,18 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
           </Form.Item>
         </Space.Compact>
       </Form.Item>
+
+      <Form.Item name="templateId" label="Starter persona">
+        <TeammateGallery onChange={onTemplateChange} value={null} />
+      </Form.Item>
+      <Form.Item name="sourceRemoteUrl" hidden>
+        <Input />
+      </Form.Item>
+      {selectedRepo && isCanonicalTeammateFrameworkRepo(selectedRepo) && (
+        <Typography.Paragraph type="secondary">
+          Home files stay on this installation, without private backup. Memory lives in Knowledge.
+        </Typography.Paragraph>
+      )}
 
       <Form.Item
         name="description"
@@ -107,6 +125,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         items={[
           {
             key: 'advanced',
+            forceRender: true,
             label: (
               <Space size={6}>
                 <Typography.Text type="secondary">Advanced Teammate Settings</Typography.Text>
@@ -172,12 +191,13 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
                   <Input placeholder="private-my-teammate" />
                 </Form.Item>
 
-                {/* TODO(teammate-gallery): offer the TeammateGallery here as a
-                    friendlier way to pick a source branch (a selected template
-                    would set this field + the emoji). Kept as the bare input for
-                    now to avoid form-wiring risk — see PR description. */}
                 <Form.Item name="sourceBranch" label="Source Branch">
-                  <Input placeholder="main" />
+                  <Input
+                    placeholder={selectedRepo?.default_branch || 'Repository default'}
+                    onChange={() => {
+                      form.setFieldsValue({ templateId: null, sourceRemoteUrl: undefined });
+                    }}
+                  />
                 </Form.Item>
               </>
             ),

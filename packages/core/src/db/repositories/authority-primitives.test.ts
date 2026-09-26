@@ -21,6 +21,7 @@ describe('durable authority primitives', () => {
       tenantDatabaseScope.run(
         {
           db,
+          rootDb: db,
           kind: 'tenant',
           tenantId: 'tenant-a',
           transactionActive: true,
@@ -44,6 +45,7 @@ describe('durable authority primitives', () => {
       tenantDatabaseScope.run(
         {
           db,
+          rootDb: db,
           kind: 'tenant',
           tenantId: 'tenant-a',
           transactionActive: true,

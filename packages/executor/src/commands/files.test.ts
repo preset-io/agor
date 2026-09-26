@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { FileListItem } from '@agor/core/types';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createGit } from '../git/index.js';
 import { browseBranchFiles, readBranchFile } from './files.js';
 
 describe('branch file commands', () => {
@@ -47,5 +49,343 @@ describe('branch file commands', () => {
 
     await expect(readBranchFile(root, '../secret.txt')).rejects.toThrow(/path escapes branch/i);
     await expect(readBranchFile(root, 'escape.txt')).rejects.toThrow(/path escapes branch/i);
+  });
+});
+
+/**
+ * Integration coverage for the git-status enrichment in `browseBranchFiles`.
+ * Uses a real throwaway git repo so the porcelain parsing is exercised against
+ * actual git output rather than a fixture.
+ */
+describe('browseBranchFiles git status', () => {
+  let dir: string;
+
+  const statusByPath = (files: FileListItem[]) => new Map(files.map((f) => [f.path, f.gitStatus]));
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'agor-files-git-'));
+    const { git } = createGit(dir);
+    await git.init();
+    await git.addConfig('user.email', 'test@agor.test');
+    await git.addConfig('user.name', 'Agor Test');
+    await git.addConfig('commit.gpgsign', 'false');
+
+    await writeFile(join(dir, 'keep.txt'), 'unchanged\n');
+    await writeFile(join(dir, 'mod.txt'), 'original\n');
+    await writeFile(join(dir, 'del.txt'), 'to be deleted\n');
+    await writeFile(join(dir, 'old-name.txt'), 'rename me to a new path\n');
+    await writeFile(join(dir, 'recreated.txt'), 'original recreated content\n');
+    await writeFile(join(dir, 'staged-modified.txt'), 'original staged content\n');
+    await writeFile(join(dir, 'rename-then-delete.txt'), 'original renamed content\n');
+    await writeFile(join(dir, '.gitignore'), '*.log\n');
+    await git.add('.');
+    await git.commit('initial');
+
+    // Working-tree mutations covering each VSCode-style status.
+    await writeFile(join(dir, 'mod.txt'), 'original\nchanged\n');
+    await unlink(join(dir, 'del.txt'));
+    await git.mv('old-name.txt', 'new-name.txt');
+    await writeFile(join(dir, 'fresh.txt'), 'brand new untracked\n');
+    await writeFile(join(dir, 'debug.log'), 'ignored by *.log\n');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('tags each file with its working-tree status', async () => {
+    const files = await browseBranchFiles(dir);
+    const status = statusByPath(files);
+
+    expect(status.get('keep.txt')).toBeUndefined();
+    expect(status.get('mod.txt')).toBe('modified');
+    expect(status.get('new-name.txt')).toBe('renamed');
+    expect(status.get('fresh.txt')).toBe('untracked');
+    expect(status.get('debug.log')).toBe('ignored');
+
+    expect(files.find((file) => file.path === 'mod.txt')).toMatchObject({
+      gitWorkingTreeStatus: 'modified',
+    });
+    expect(files.find((file) => file.path === 'new-name.txt')).toMatchObject({
+      gitStagedStatus: 'renamed',
+    });
+    expect(files.find((file) => file.path === 'fresh.txt')).toMatchObject({
+      gitWorkingTreeStatus: 'untracked',
+    });
+  });
+
+  it('reports staged and working-tree changes independently', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, 'staged-modified.txt'), 'staged content\n');
+    await git.add('staged-modified.txt');
+    await writeFile(join(dir, 'staged-modified.txt'), 'staged and unstaged content\n');
+
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'staged-modified.txt')).toMatchObject({
+      gitStatus: 'modified',
+      gitStagedStatus: 'modified',
+      gitWorkingTreeStatus: 'modified',
+    });
+  });
+
+  it('reports a staged addition deleted from the working tree in both dimensions', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, 'added-then-deleted.txt'), 'staged new content\n');
+    await git.add('added-then-deleted.txt');
+    await unlink(join(dir, 'added-then-deleted.txt'));
+
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'added-then-deleted.txt')).toMatchObject({
+      gitStatus: 'deleted',
+      gitStagedStatus: 'added',
+      gitWorkingTreeStatus: 'deleted',
+      size: 0,
+    });
+
+    await expect(readBranchFile(dir, 'added-then-deleted.txt', 'staged')).resolves.toMatchObject({
+      gitStatus: 'added',
+      content: 'staged new content\n',
+      gitDiff: { baseContent: '' },
+    });
+    await expect(
+      readBranchFile(dir, 'added-then-deleted.txt', 'workingTree')
+    ).resolves.toMatchObject({
+      gitStatus: 'deleted',
+      content: '',
+      gitDiff: { baseContent: 'staged new content\n' },
+    });
+  });
+
+  it('appends deleted files as synthetic entries', async () => {
+    const files = await browseBranchFiles(dir);
+    const deleted = files.find((f) => f.path === 'del.txt');
+
+    expect(deleted).toBeDefined();
+    expect(deleted?.gitStatus).toBe('deleted');
+    expect(deleted?.isText).toBe(true);
+    // The renamed-away original path must not resurface as a deletion.
+    expect(files.some((f) => f.path === 'old-name.txt')).toBe(false);
+  });
+
+  it('returns HEAD and working-tree text for content-level diffs', async () => {
+    await expect(readBranchFile(dir, 'mod.txt')).resolves.toMatchObject({
+      gitStatus: 'modified',
+      content: 'original\nchanged\n',
+      gitDiff: { baseContent: 'original\n' },
+    });
+
+    await expect(readBranchFile(dir, 'fresh.txt')).resolves.toMatchObject({
+      gitStatus: 'untracked',
+      content: 'brand new untracked\n',
+      gitDiff: { baseContent: '' },
+    });
+  });
+
+  it('reads deleted and renamed files from their original HEAD paths', async () => {
+    await expect(readBranchFile(dir, 'del.txt')).resolves.toMatchObject({
+      gitStatus: 'deleted',
+      content: '',
+      encoding: 'utf-8',
+      gitDiff: { baseContent: 'to be deleted\n' },
+    });
+
+    await expect(readBranchFile(dir, 'new-name.txt')).resolves.toMatchObject({
+      gitStatus: 'renamed',
+      content: 'rename me to a new path\n',
+      gitDiff: {
+        basePath: 'old-name.txt',
+        baseContent: 'rename me to a new path\n',
+      },
+    });
+  });
+
+  it('uses the on-disk untracked record after a staged deletion is recreated', async () => {
+    const { git } = createGit(dir);
+    await unlink(join(dir, 'recreated.txt'));
+    await git.add('recreated.txt');
+    await writeFile(join(dir, 'recreated.txt'), 'new untracked content\n');
+
+    const files = await browseBranchFiles(dir);
+    const recreated = files.filter((file) => file.path === 'recreated.txt');
+
+    expect(recreated).toHaveLength(1);
+    expect(recreated[0]).toMatchObject({
+      gitStatus: 'untracked',
+      gitStagedStatus: 'deleted',
+      gitWorkingTreeStatus: 'untracked',
+    });
+    await expect(readBranchFile(dir, 'recreated.txt')).resolves.toMatchObject({
+      gitStatus: 'untracked',
+      content: 'new untracked content\n',
+      gitDiff: { baseContent: '' },
+    });
+  });
+
+  it('surfaces an MD path as a working-tree deletion', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, 'staged-modified.txt'), 'staged content\n');
+    await git.add('staged-modified.txt');
+    await unlink(join(dir, 'staged-modified.txt'));
+
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'staged-modified.txt')).toMatchObject({
+      gitStatus: 'deleted',
+      gitStagedStatus: 'modified',
+      gitWorkingTreeStatus: 'deleted',
+      size: 0,
+    });
+    await expect(readBranchFile(dir, 'staged-modified.txt')).resolves.toMatchObject({
+      gitStatus: 'deleted',
+      content: '',
+      gitDiff: { baseContent: 'original staged content\n' },
+    });
+  });
+
+  it('surfaces an RD destination as a deletion with its original HEAD path', async () => {
+    const { git } = createGit(dir);
+    await git.mv('rename-then-delete.txt', 'renamed-then-deleted.txt');
+    await unlink(join(dir, 'renamed-then-deleted.txt'));
+
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'renamed-then-deleted.txt')).toMatchObject({
+      gitStatus: 'deleted',
+      gitStagedStatus: 'renamed',
+      gitWorkingTreeStatus: 'deleted',
+      size: 0,
+    });
+    expect(files.some((file) => file.path === 'rename-then-delete.txt')).toBe(false);
+    await expect(readBranchFile(dir, 'renamed-then-deleted.txt')).resolves.toMatchObject({
+      gitStatus: 'deleted',
+      content: '',
+      gitDiff: {
+        basePath: 'rename-then-delete.txt',
+        baseContent: 'original renamed content\n',
+      },
+    });
+  });
+
+  it('compares staged bytes with HEAD and unstaged bytes with the index', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, 'mod.txt'), 'index version\n');
+    await git.add('mod.txt');
+    await writeFile(join(dir, 'mod.txt'), 'working version\n');
+    await expect(readBranchFile(dir, 'mod.txt', 'staged')).resolves.toMatchObject({
+      content: 'index version\n',
+      gitDiff: { baseContent: 'original\n' },
+    });
+    await expect(readBranchFile(dir, 'mod.txt', 'workingTree')).resolves.toMatchObject({
+      content: 'working version\n',
+      gitDiff: { baseContent: 'index version\n' },
+    });
+    await expect(readBranchFile(dir, 'mod.txt')).resolves.toMatchObject({
+      content: 'working version\n',
+      gitDiff: { baseContent: 'original\n' },
+    });
+  });
+
+  it('tags ignored directory descendants and preserves NUL-delimited rename paths', async () => {
+    const { git } = createGit(dir);
+    await writeFile(join(dir, '.gitignore'), '*.log\ncache/\n');
+    await mkdir(join(dir, 'cache'));
+    await writeFile(join(dir, 'cache', 'entry.txt'), 'ignored');
+    const renamed = 'renamed "quoted"\nfile.txt';
+    await git.mv('keep.txt', renamed);
+    const files = await browseBranchFiles(dir);
+    expect(files.find((file) => file.path === 'cache/entry.txt')).toMatchObject({
+      gitStatus: 'ignored',
+    });
+    await expect(readBranchFile(dir, renamed, 'staged')).resolves.toMatchObject({
+      content: 'unchanged\n',
+      gitDiff: { baseContent: 'unchanged\n', basePath: 'keep.txt' },
+    });
+  });
+
+  it.each(['combined', 'staged', 'workingTree'] as const)(
+    'rejects an ancestor symlink escape for %s',
+    async (source) => {
+      const outside = await mkdtemp(join(tmpdir(), 'agor-files-outside-'));
+      try {
+        await writeFile(join(outside, 'secret.txt'), 'private');
+        await symlink(outside, join(dir, 'outside'));
+        await expect(readBranchFile(dir, 'outside/secret.txt', source)).rejects.toThrow(
+          /escapes branch/i
+        );
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it('previews a staged deletion even after a directory replaces the file', async () => {
+    const { git } = createGit(dir);
+    await git.rm('keep.txt');
+    await mkdir(join(dir, 'keep.txt'));
+    await writeFile(join(dir, 'keep.txt', 'child.txt'), 'new child');
+    await expect(readBranchFile(dir, 'keep.txt', 'staged')).resolves.toMatchObject({
+      content: '',
+      gitStatus: 'deleted',
+      gitDiff: { baseContent: 'unchanged\n' },
+    });
+  });
+
+  it('does not treat a NUL-containing working-tree text extension as a text diff', async () => {
+    await writeFile(join(dir, 'fresh.txt'), 'not\0text');
+    await expect(readBranchFile(dir, 'fresh.txt', 'workingTree')).rejects.toThrow(/previewable/i);
+  });
+
+  it('retains missing modify/delete conflicts in Changes', async () => {
+    const { git } = createGit(dir);
+    await git.add('.');
+    await git.commit('baseline');
+    await git.checkoutLocalBranch('other');
+    await writeFile(join(dir, 'keep.txt'), 'other side\n');
+    await git.add('keep.txt');
+    await git.commit('modify');
+    await git.checkout(['-']);
+    await git.rm('keep.txt');
+    await git.commit('delete');
+    await expect(git.merge(['other'])).rejects.toThrow();
+    await unlink(join(dir, 'keep.txt'));
+
+    expect((await browseBranchFiles(dir)).find((file) => file.path === 'keep.txt')).toMatchObject({
+      gitStatus: 'conflicted',
+      gitWorkingTreeStatus: 'conflicted',
+    });
+    await expect(readBranchFile(dir, 'keep.txt', 'workingTree')).rejects.toThrow(/conflict/i);
+  });
+
+  it('rejects binary and oversized staged deletions instead of returning an empty text preview', async () => {
+    const { git } = createGit(dir);
+    for (const [path, content] of [
+      ['binary.txt', 'binary\0content'],
+      ['large.txt', 'x'.repeat(1024 * 1024 + 1)],
+    ]) {
+      await writeFile(join(dir, path), content);
+      await git.add(path);
+      await git.commit('fixture');
+      await git.rm(path);
+      await expect(readBranchFile(dir, path, 'staged')).rejects.toThrow(/previewable/i);
+    }
+  });
+
+  it('uses canonical branch-relative paths for Git comparisons', async () => {
+    await expect(readBranchFile(dir, './mod.txt')).resolves.toMatchObject({
+      path: 'mod.txt',
+      gitStatus: 'modified',
+      gitDiff: { baseContent: 'original\n' },
+    });
+    await expect(readBranchFile(dir, '/mod.txt')).rejects.toThrow(/relative/i);
+  });
+
+  it('leaves the file list intact for a non-git directory', async () => {
+    const plainDir = await mkdtemp(join(tmpdir(), 'agor-files-plain-'));
+    try {
+      await writeFile(join(plainDir, 'note.txt'), 'no repo here\n');
+      const files = await browseBranchFiles(plainDir);
+      expect(files.map((f) => f.path)).toContain('note.txt');
+      expect(files.every((f) => f.gitStatus === undefined)).toBe(true);
+    } finally {
+      await rm(plainDir, { recursive: true, force: true });
+    }
   });
 });

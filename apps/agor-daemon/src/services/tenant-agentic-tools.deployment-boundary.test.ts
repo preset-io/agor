@@ -1,4 +1,5 @@
 import { TenantAgenticToolSettingsRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { TENANT_AGENTIC_TOOL_NAMES } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TenantAgenticToolSettingsService } from './tenant-agentic-tools.js';
 
@@ -53,5 +54,39 @@ describe('tenant agentic tool deployment boundary', () => {
       connection: { ANTHROPIC_AUTH_TOKEN: { configured: true } },
     });
     expect(JSON.stringify(settings)).not.toContain(syntheticSecret);
+  });
+  it('uses one batch, retaining tool order, defaults, deployment policy and secret redaction', async () => {
+    const find = vi.spyOn(TenantAgenticToolSettingsRepository.prototype, 'find');
+    const all = vi
+      .spyOn(TenantAgenticToolSettingsRepository.prototype, 'findAll')
+      .mockResolvedValue(
+        new Map(
+          TENANT_AGENTIC_TOOL_NAMES.map((tool) => [
+            tool,
+            tool === 'codex'
+              ? { revision: 3, connection: { OPENAI_API_KEY: 'synthetic-secret' } }
+              : {},
+          ])
+        )
+      );
+    const service = new TenantAgenticToolSettingsService(
+      {} as TenantScopeAwareDatabase,
+      (tool) => tool !== 'codex'
+    );
+    const settings = await service.find();
+    expect(settings.map((setting) => setting.tool)).toEqual([...TENANT_AGENTIC_TOOL_NAMES]);
+    expect(settings.find((setting) => setting.tool === 'codex')).toMatchObject({
+      revision: 3,
+      enabled: false,
+      deployment_available: false,
+      connection: { OPENAI_API_KEY: { configured: true } },
+    });
+    expect(settings.find((setting) => setting.tool === 'claude-code')).toMatchObject({
+      revision: 0,
+      enabled: true,
+    });
+    expect(JSON.stringify(settings)).not.toContain('synthetic-secret');
+    expect(all).toHaveBeenCalledTimes(1);
+    expect(find).not.toHaveBeenCalled();
   });
 });

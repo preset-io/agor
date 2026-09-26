@@ -33,7 +33,6 @@ function permissionMessage(status = PermissionStatus.PENDING): Message {
 function harness(
   message = permissionMessage(),
   options: {
-    branchRbacEnabled?: boolean;
     branchPermission?: BranchPermissionLevel;
     sessionCreatedBy?: string;
   } = {}
@@ -79,7 +78,6 @@ function harness(
     }),
   };
   const authorization = {
-    branchRbacEnabled: options.branchRbacEnabled ?? false,
     branchRepository,
     allowSuperadmin: true,
   } as never;
@@ -212,7 +210,6 @@ describe('deliverPermissionDecision', () => {
 
   it('denies a view-only collaborator before delivering an execution decision', async () => {
     const { app, authorization, messages, params } = harness(permissionMessage(), {
-      branchRbacEnabled: true,
       branchPermission: 'view',
       sessionCreatedBy: 'user-b',
     });
@@ -232,7 +229,6 @@ describe('deliverPermissionDecision', () => {
 
   it('allows session-tier users to decide permissions only for their own Session', async () => {
     const { app, authorization, messages, params } = harness(permissionMessage(), {
-      branchRbacEnabled: true,
       branchPermission: 'session',
       sessionCreatedBy: 'user-a',
     });

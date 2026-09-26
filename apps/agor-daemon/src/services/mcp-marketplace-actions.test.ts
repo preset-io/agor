@@ -94,9 +94,32 @@ dbTest(
     await expect(repo.findById(server.mcp_server_id)).resolves.toMatchObject({
       tool_permissions: { 'issues.create': 'deny' },
     });
-    expect(invalidate).toHaveBeenCalledWith([ALICE], expect.anything());
+    expect(invalidate).toHaveBeenCalledWith([ALICE], expect.anything(), server.mcp_server_id);
   }
 );
+
+dbTest('committed Marketplace mutations ignore availability-hint failure', async ({ db }) => {
+  await seedUser(db, ALICE, 'member');
+  await setPolicy(db, 'allow_private_only');
+  const repo = new MCPServerRepository(db);
+  const server = await seed(repo);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const invalidate = vi.fn().mockRejectedValue(new Error('realtime unavailable'));
+
+  await expect(
+    new MCPMarketplaceToolPermissionService(db, invalidate).create(
+      { mcp_server_id: server.mcp_server_id, tool_name: 'issues.create', enabled: false },
+      params(ALICE, 'member')
+    )
+  ).resolves.toMatchObject({ permission: 'deny' });
+  await Promise.resolve();
+  await expect(repo.findById(server.mcp_server_id)).resolves.toMatchObject({
+    tool_permissions: { 'issues.create': 'deny' },
+  });
+  expect(warn).toHaveBeenCalledWith(
+    '[MCP Runtime] event=marketplace_hint_failed code=async_failure'
+  );
+});
 
 dbTest('Marketplace actions reject a non-owner member under allow_crud', async ({ db }) => {
   await seedUser(db, ALICE, 'member');
@@ -127,7 +150,7 @@ dbTest('Marketplace actions preserve the existing admin/non-owner semantics', as
       params(BOB, 'admin')
     )
   ).resolves.toMatchObject({ permission: 'deny' });
-  expect(invalidate).toHaveBeenCalledWith([BOB, ALICE], expect.anything());
+  expect(invalidate).toHaveBeenCalledWith([BOB, ALICE], expect.anything(), server.mcp_server_id);
 });
 
 dbTest('remove reports when an attachment wins without ordinary remove', async ({ db }) => {

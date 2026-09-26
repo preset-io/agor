@@ -31,6 +31,7 @@ import {
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
+import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -51,6 +52,7 @@ import {
   sessions,
   tasks,
 } from '../schema';
+import { tenantInventoryCondition } from '../tenant-inventory-condition';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -60,7 +62,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { inVisibleBranchSet } from './branch-access';
 import { deepMerge } from './merge-utils';
 import {
   extractMessageText,
@@ -118,6 +120,9 @@ function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
 
 /** Options for the SQL-backed session list page used by board/branch views. */
 export interface SessionPageOptions {
+  /** Omit the exact count for bounded consumers that do not need totals. */
+  includeTotal?: boolean;
+  status?: SessionStatus;
   boardId?: string;
   branchId?: BranchID;
   branchIds?: BranchID[];
@@ -200,7 +205,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         scheduler_init_retry_at: row.scheduler_init_retry_at?.toISOString(),
         ready_for_prompt: row.ready_for_prompt ?? false,
         archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
-        archived_reason: row.archived_reason ?? undefined,
+        // Active rows have no semantic archive cause. Ignore stale values
+        // left by historical callers that cleared `archived` with undefined;
+        // the next write of this Session will normalize the column to NULL.
+        archived_reason: row.archived ? (row.archived_reason ?? undefined) : undefined,
         current_context_usage: row.data.current_context_usage,
         context_window_limit: row.data.context_window_limit,
         last_context_update_at: row.data.last_context_update_at,
@@ -214,6 +222,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   private sessionToInsert(session: Partial<Session>): SessionInsert {
     const now = Date.now();
+    const createdAt = new Date(session.created_at ?? now);
     const sessionId = session.session_id ?? generateId();
 
     if (!session.branch_id) {
@@ -225,8 +234,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
     return {
       session_id: sessionId,
-      created_at: new Date(session.created_at ? session.created_at : now),
-      updated_at: session.last_updated ? new Date(session.last_updated) : new Date(now),
+      created_at: createdAt,
+      updated_at: session.last_updated ? new Date(session.last_updated) : createdAt,
       status: session.status ?? SessionStatus.IDLE,
       agentic_tool: session.agentic_tool ?? 'claude-code',
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
@@ -300,9 +309,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async create(data: Partial<Session>): Promise<Session> {
     try {
       const insertData = this.sessionToInsert(data);
-      await insert(this.db, sessions).values(insertData).run();
+      await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockBranchForAdmission(tx, insertData.branch_id);
+          await insert(tx, sessions).values(insertData).run();
+        },
+        { sqliteImmediate: true, sqliteBusyRetries: 9 }
+      );
 
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       // LEFT JOIN with branches and boards to get board_id and slug
       const result = await select(this.db)
@@ -337,7 +353,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findById(id: string): Promise<Session | null> {
     try {
       const fullId = await this.resolveId(id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       // LEFT JOIN with branches and boards to get board_id and slug in a single query
       const result = await select(this.db)
@@ -424,7 +440,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }): Promise<Session[]> {
     if (filter?.branchIds?.length === 0) return [];
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [];
       if (filter?.branchId) conditions.push(eq(sessions.branch_id, filter.branchId));
@@ -433,7 +449,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         conditions.push(eq(sessions.archived, filter.archived));
       }
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, filter)
+        );
       }
 
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
@@ -474,7 +492,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findByStatus(status: Session['status']): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const results = await select(this.db)
         .from(sessions)
@@ -513,11 +531,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findByBoard(boardId: string, filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [eq(branches.board_id, boardId)];
       if (filter?.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, filter.visibleToUserId, sessions.branch_id, { boardId })
+        );
       }
 
       // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
@@ -568,40 +588,59 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * @returns `{ data, total }` where `total` is the full match count (so Feathers
    *          pagination and the client `findAll` loop behave correctly).
    */
-  async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total: number }> {
+  async findPage(
+    opts: SessionPageOptions & { includeTotal: false }
+  ): Promise<{ data: Session[]; total?: never }>;
+  async findPage(
+    opts: SessionPageOptions & { includeTotal?: true }
+  ): Promise<{ data: Session[]; total: number }>;
+  async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total?: number }>;
+  async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total?: number }> {
     try {
-      if (opts.branchIds?.length === 0) return { data: [], total: 0 };
-      const baseUrl = await getBaseUrl();
+      if (opts.includeTotal === false && (!Number.isInteger(opts.limit) || opts.limit! < 0)) {
+        throw new Error('No-count session queries require a non-negative integer limit');
+      }
+      const tenantCondition = tenantInventoryCondition(this.db, sessions);
+      if (opts.branchIds?.length === 0)
+        return opts.includeTotal === false ? { data: [] } : { data: [], total: 0 };
+      const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [];
+      if (tenantCondition) conditions.push(tenantCondition);
+      if (opts.status !== undefined) conditions.push(eq(sessions.status, opts.status));
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
       if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
       if (opts.branchIds !== undefined)
         conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
-        conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+        conditions.push(
+          inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id, opts)
+        );
       }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-      // Total matching rows — drives Feathers pagination + the findAll loop.
-      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      const countQuery: any = select(this.db, { count: sql<number>`count(*)` })
-        .from(sessions)
-        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
-      const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
-      const total = Number(countRow?.count ?? 0);
+      // Exact totals remain the default for existing Feathers/findAll callers.
+      let total: number | undefined;
+      if (opts.includeTotal !== false) {
+        // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+        const countQuery: any = select(this.db, { count: sql<number>`count(*)` })
+          .from(sessions)
+          .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+        const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
+        total = Number(countRow?.count ?? 0);
+      }
+      if (opts.limit === 0) return { data: [], ...(total === undefined ? {} : { total }) };
 
       // Page of rows, recency-sorted in SQL on the real `updated_at` column.
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      let dataQuery: any = select(this.db)
+      let dataQuery: any = select(this.db, { sessions, branches: { board_id: branches.board_id } })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       if (whereClause) dataQuery = dataQuery.where(whereClause);
-      const logicalUpdatedAt = sql`COALESCE(${sessions.updated_at}, ${sessions.created_at})`;
       if (opts.sortUpdatedAt !== undefined) {
         dataQuery = dataQuery.orderBy(
-          opts.sortUpdatedAt === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt),
+          opts.sortUpdatedAt === -1 ? desc(sessions.updated_at) : asc(sessions.updated_at),
           asc(sessions.session_id)
         );
       } else if (opts.sortCreatedAt !== undefined) {
@@ -627,7 +666,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         }
       );
 
-      return { data, total };
+      return { data, ...(total === undefined ? {} : { total }) };
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions page: ${error instanceof Error ? error.message : String(error)}`,
@@ -644,7 +683,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async findChildren(sessionId: string): Promise<Session[]> {
     try {
       const fullId = await this.resolveId(sessionId);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const results = await select(this.db)
         .from(sessions)
@@ -681,9 +720,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * materialized genealogy columns rather than JSON extraction.
    */
   async findBranchLocalDescendants(sessionId: string, branchId: BranchID): Promise<Session[]> {
+    const descendantsByRoot = await this.findBranchLocalDescendantsForRoots([sessionId], branchId);
+    return descendantsByRoot.get(sessionId) ?? [];
+  }
+
+  /**
+   * Find the branch-local descendant closure for multiple roots with one read.
+   *
+   * The returned map is keyed by the caller-provided root ID. Archive callers
+   * use this to plan overlapping trees without repeating a full branch read.
+   */
+  async findBranchLocalDescendantsForRoots(
+    sessionIds: string[],
+    branchId: BranchID
+  ): Promise<Map<string, Session[]>> {
+    if (sessionIds.length === 0) return new Map();
+
     try {
-      const fullId = await this.resolveId(sessionId);
-      const baseUrl = await getBaseUrl();
+      const resolvedRoots = await Promise.all(
+        sessionIds.map(async (sessionId) => ({
+          requestedId: sessionId,
+          fullId: await this.resolveId(sessionId),
+        }))
+      );
+      const baseUrl = await getBaseUrl(this.db);
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -711,21 +771,28 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         }
       }
 
-      const descendants: Session[] = [];
-      const visited = new Set<string>([fullId]);
-      const queue = [...(childrenByParent.get(fullId) ?? [])];
-      while (queue.length > 0) {
-        const child = queue.shift();
-        if (!child || visited.has(child.session_id)) continue;
-        visited.add(child.session_id);
-        descendants.push(child);
-        queue.push(...(childrenByParent.get(child.session_id) ?? []));
+      const descendantsByRoot = new Map<string, Session[]>();
+      for (const { requestedId, fullId } of resolvedRoots) {
+        const descendants: Session[] = [];
+        const visited = new Set<string>([fullId]);
+        const queue = [...(childrenByParent.get(fullId) ?? [])];
+        for (let index = 0; index < queue.length; index++) {
+          const child = queue[index];
+          if (!child || visited.has(child.session_id)) continue;
+          visited.add(child.session_id);
+          descendants.push(child);
+          queue.push(...(childrenByParent.get(child.session_id) ?? []));
+        }
+        descendantsByRoot.set(
+          requestedId,
+          descendants.filter((session) => sessionById.has(session.session_id))
+        );
       }
 
-      return descendants.filter((session) => sessionById.has(session.session_id));
+      return descendantsByRoot;
     } catch (error) {
       throw new RepositoryError(
-        `Failed to find branch-local descendants: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to find branch-local descendants for roots: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -794,7 +861,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         throw new RepositoryError('Session sdk_home_scope is immutable after creation');
       }
       const fullId = await this.resolveId(id);
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
 
       const statusInfo = updates.status
         ? ` (status: ${updates.status}, ready_for_prompt: ${updates.ready_for_prompt})`
@@ -928,7 +995,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ...target,
         id: fullIds[index],
       }));
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const now = new Date();
       const result = await this.db.transaction(async (tx) => {
         const groups = new Map<string, SessionArchiveStateUpdate[]>();
@@ -1072,7 +1139,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     scheduledRunAt: number
   ): Promise<Session | null> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       const result = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -1294,7 +1361,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     opts: { orderByScheduledRunAt?: 'asc' | 'desc' } = {}
   ): Promise<Session[]> {
     try {
-      const baseUrl = await getBaseUrl();
+      const baseUrl = await getBaseUrl(this.db);
       let query = select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -1452,10 +1519,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * Also populates board_id and url via the branches JOIN.
    *
-   * NOTE: This method should only be called when RBAC is enabled. When RBAC is disabled,
-   * the scopeSessionQuery hook is not registered, so default Feathers query is used
-   * (which returns all sessions without filtering).
-   *
    * @param userId - User ID to check access for
    * @param boardId - Optional board filter, pushed down to SQL via the branch
    *                  join (session → branch → board). Lets callers scope to a
@@ -1463,11 +1526,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * @returns Array of accessible sessions with urls populated
    */
   async findAccessibleSessions(userId: UUID, boardId?: UUID): Promise<Session[]> {
-    const baseUrl = await getBaseUrl();
+    const baseUrl = await getBaseUrl(this.db);
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.
-    const accessCondition = visibleBranchAccessCondition(this.db, userId);
+    const accessCondition = inVisibleBranchSet(this.db, userId, sessions.branch_id, { boardId });
     const whereCondition = boardId
       ? and(accessCondition, eq(branches.board_id, boardId))
       : accessCondition;

@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
+import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import { Server as SdkServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import express from 'express';
@@ -136,7 +137,7 @@ describe('MCP tool registry', () => {
  */
 function captureMcpHandler(
   config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined }
-) {
+): (req: Request, res: Response) => Promise<unknown> | unknown {
   let handler: ((req: Request, res: Response) => Promise<unknown> | unknown) | null = null;
   const register = (_path: string, fn: typeof handler) => {
     handler = fn;
@@ -188,6 +189,124 @@ describe('POST /mcp token source', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects malformed credentials before any tenant lookup, logging only one bounded diagnostic', async () => {
+    initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+    const exists = vi.spyOn(SessionRepository.prototype, 'exists');
+    const handler = captureMcpHandler({
+      multi_tenancy: { mode: 'required_from_auth', trusted_header: 'x-agor-tenant-id' },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const method of ['POST', 'GET', 'DELETE']) {
+      for (const tenant of ['tenant-a', 'tenant-b']) {
+        const res = buildRes();
+        await handler(
+          {
+            method,
+            query: {},
+            headers: {
+              authorization: 'Bearer synthetic-non-jwt-secret',
+              'x-agor-tenant-id': tenant,
+              'x-agor-mcp-client': 'codex',
+            },
+            body: {
+              id: 1,
+              method: 'synthetic-private-method',
+              params: { private: 'private-body' },
+            },
+          } as unknown as Request,
+          res as unknown as Response
+        );
+        expect(res.statusCode).toBe(401);
+      }
+    }
+    expect(exists).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      [
+        '[mcp.auth] rejected reason=wrong_segment_count sample_method=POST sample_source=authorization sample_rpc=other client_hint=codex suppressed=0',
+      ],
+    ]);
+  });
+
+  it.each([
+    { headers: { authorization: 'Basic synthetic-secret' }, status: 400, reason: undefined },
+    {
+      headers: { 'x-api-key': 'synthetic-opaque-key' },
+      status: 401,
+      reason: 'wrong_segment_count',
+    },
+    {
+      headers: {
+        authorization: `Bearer ${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from('not-json').toString('base64url')}.dummy`,
+      },
+      status: 401,
+      reason: 'invalid_encoding',
+    },
+    {
+      // A signed browser/login JWT is not an MCP session token.
+      headers: { authorization: `Bearer ${jwt.sign({ sub: 'user' }, 'mcp-server-test-secret')}` },
+      status: 401,
+      reason: 'invalid_audience',
+    },
+  ])(
+    'preserves credential routing and rejection status ($status, $reason)',
+    async ({ headers, status, reason }) => {
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      const handler = captureMcpHandler();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = buildRes();
+      await handler(
+        {
+          method: 'POST',
+          query: {},
+          headers,
+          body: { id: 1, method: 'initialize' },
+        } as unknown as Request,
+        res as unknown as Response
+      );
+      expect(res.statusCode).toBe(status);
+      expect(error).not.toHaveBeenCalled();
+      if (reason) {
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.lastCall?.[0]).toContain(`reason=${reason}`);
+        expect(warn.mock.lastCall?.[0]).toContain('sample_rpc=initialize');
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('synthetic');
+    }
+  );
+
+  it('attributes admission failures without recording the credential or arbitrary method', async () => {
+    const { resolveTracerModule } = await import('../tracing/datadog.js');
+    const tracingModule = await import('../tracing/datadog.js');
+    const calls: unknown[] = [];
+    vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+      trace(name, options, work) {
+        calls.push({ name, options });
+        return work();
+      },
+    } satisfies NonNullable<ReturnType<typeof resolveTracerModule>>);
+    const handler = captureMcpHandler({ metrics: { apm: { trace_services: 'full' } } });
+    const res = buildRes();
+    await handler(
+      {
+        method: 'POST',
+        query: {},
+        headers: {},
+        body: { method: 'secret-method', params: { token: 'secret-token' } },
+      } as unknown as Request,
+      res as unknown as Response
+    );
+    expect(res.statusCode).toBe(401);
+    expect(calls).toEqual([
+      { name: 'mcp.request', options: { resource: 'other', tags: { 'mcp.method': 'other' } } },
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('secret');
+  });
+
   it('rejects requests with ?sessionToken= query param (400)', async () => {
     const handler = captureMcpHandler();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -211,23 +330,29 @@ describe('POST /mcp token source', () => {
     warn.mockRestore();
   });
 
-  it('rejects requests with no Authorization header (401)', async () => {
-    const handler = captureMcpHandler();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const req = {
-      method: 'POST',
-      query: {},
-      headers: {},
-      body: { id: 8 },
-      ip: '127.0.0.1',
-      socket: { remoteAddress: '127.0.0.1' },
-    } as unknown as Request;
-    const res = buildRes();
-    await handler(req, res as unknown as Response);
-    expect(res.statusCode).toBe(401);
-    const body = res.body as { error?: { message?: string } };
-    expect(body?.error?.message).toMatch(/authorization: bearer/i);
-  });
+  it.each(['POST', 'GET', 'DELETE'])(
+    'rejects credential-free %s without warning (401)',
+    async (method) => {
+      const handler = captureMcpHandler();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const exists = vi.spyOn(SessionRepository.prototype, 'exists');
+      const req = {
+        method,
+        query: {},
+        headers: {},
+        body: { id: 8 },
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+      } as unknown as Request;
+      const res = buildRes();
+      await handler(req, res as unknown as Response);
+      expect(res.statusCode).toBe(401);
+      expect(warn).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+      const body = res.body as { error?: { message?: string } };
+      expect(body?.error?.message).toMatch(/authorization: bearer/i);
+    }
+  );
 
   it('rejects an invalid personal API key from X-API-Key (401)', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
@@ -251,6 +376,7 @@ describe('POST /mcp token source', () => {
   });
 
   it('rejects an internal MCP token replayed under a conflicting trusted tenant', async () => {
+    const exists = vi.spyOn(SessionRepository.prototype, 'exists');
     initMcpTokens({
       db: testSqliteDb(),
       multiTenancy: resolveMultiTenancyConfig({}),
@@ -294,6 +420,7 @@ describe('POST /mcp token source', () => {
     expect(res.statusCode).toBe(403);
     const body = res.body as { error?: { message?: string } };
     expect(body.error?.message).toMatch(/tenant identity mismatch/i);
+    expect(exists).not.toHaveBeenCalled();
   });
 
   it('rejects even when query has both ?sessionToken= and an Authorization header (query wins → 400)', async () => {
@@ -349,6 +476,19 @@ describe('POST /mcp token source', () => {
     warn.mockRestore();
   });
 });
+
+/** Launch config under which personal keys may be routed by the trusted Host. */
+const HOST_ROUTING_LAUNCH_CONFIG = {
+  enabled: true,
+  exchange_url: 'https://issuer.example.test/exchange',
+  issuer: 'https://issuer.example.test',
+  audience: 'runtime:test',
+  instance_id: 'instance-1',
+  dev_shared_secret: 'launch-test-secret-0123456789abcdef',
+  service_credential: 'exchange-credential',
+  forward_request_host: true,
+  trusted_host_header: 'host',
+};
 
 describe('POST /mcp with personal API keys', () => {
   afterEach(() => {
@@ -424,6 +564,67 @@ describe('POST /mcp with personal API keys', () => {
       error?: { message: string };
     };
   }
+
+  it.each([
+    { search: false, facade: false },
+    { search: true, facade: false },
+    { search: true, facade: true },
+  ])(
+    'traces the registered tool with search=$search facade=$facade',
+    async ({ search, facade }) => {
+      await mockPersonalApiKeyUser();
+      const tracingModule = await import('../tracing/datadog.js');
+      const calls: { name: string; resource?: string }[] = [];
+      vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+        trace(name, options, work) {
+          calls.push({ name, resource: options.resource });
+          return work();
+        },
+      });
+      await withMcpServer(
+        {
+          users: {
+            get: vi.fn(async () => ({
+              user_id: 'user-1',
+              email: 'alice@example.com',
+              role: 'member',
+            })),
+          },
+        },
+        async (baseUrl) => {
+          const resp = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              'Content-Type': 'application/json',
+              'X-API-Key': 'agor_sk_valid',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'tools/call',
+              params: facade
+                ? {
+                    name: 'agor_execute_tool',
+                    arguments: { tool_name: 'agor_users_get_current', arguments: {} },
+                  }
+                : { name: 'agor_users_get_current', arguments: {} },
+            }),
+          });
+          expect(resp.status).toBe(200);
+          const parsed = parseMcpResponse(await resp.text());
+          expect(parsed.error).toBeUndefined();
+          expect(JSON.parse(parsed.result!.content![0].text)).toMatchObject({ user_id: 'user-1' });
+        },
+        { metrics: { apm: { trace_services: 'entrypoint' } } },
+        search
+      );
+      expect(calls).toEqual([
+        { name: 'mcp.request', resource: 'tools/call' },
+        { name: 'mcp.tool', resource: 'agor_users_get_current' },
+      ]);
+    }
+  );
 
   it('can call a non-session-scoped tool without X-Agor-Session-Id / ?sessionId', async () => {
     const { UserApiKeysRepository } = await import('@agor/core/db');
@@ -712,8 +913,14 @@ describe('POST /mcp with personal API keys', () => {
   ])(
     'rejects $label duplicate on-wire trusted tenant headers before API-key lookup',
     async ({ tenantHeaders, errorMessage }) => {
-      const { UserApiKeysRepository } = await import('@agor/core/db');
+      const { TenantPublicRoutingDiscoveryRepository, UserApiKeysRepository } = await import(
+        '@agor/core/db'
+      );
       const verifyKey = vi.spyOn(UserApiKeysRepository.prototype, 'verifyKey');
+      const hostDiscovery = vi.spyOn(
+        TenantPublicRoutingDiscoveryRepository.prototype,
+        'findTenantIdByRequestHost'
+      );
 
       await withMcpServer(
         {},
@@ -757,12 +964,16 @@ describe('POST /mcp with personal API keys', () => {
             error: { message: errorMessage },
           });
           expect(verifyKey).not.toHaveBeenCalled();
+          // A malformed/conflicting identity is terminal: never rescued by Host routing.
+          expect(hostDiscovery).not.toHaveBeenCalled();
         },
         {
           multi_tenancy: {
             mode: 'required_from_auth',
             trusted_header: 'x-agor-tenant-id',
           },
+          // Host routing is available here, so the test proves it is not used.
+          external_launch: HOST_ROUTING_LAUNCH_CONFIG,
         }
       );
     }
@@ -1013,6 +1224,14 @@ describe('POST /mcp with personal API keys', () => {
   });
 
   it('interoperates end-to-end with the v2 TypeScript client in modern auto-negotiation mode', async () => {
+    const tracingModule = await import('../tracing/datadog.js');
+    const trace = vi.fn<(name: string, options: Parameters<DatadogTracer['trace']>[1]) => void>();
+    vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+      trace(name, options, work) {
+        trace(name, options);
+        return work();
+      },
+    });
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({
       user_id: 'user-1',
@@ -1151,9 +1370,16 @@ describe('POST /mcp with personal API keys', () => {
           user_id: 'user-1',
         });
       },
-      { multi_tenancy: undefined },
+      { multi_tenancy: undefined, metrics: { apm: { trace_services: 'entrypoint' } } },
       /* toolSearchEnabled */ true
     );
+    const toolCalls = trace.mock.calls.filter(([name]) => name === 'mcp.tool');
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.[1]).toEqual({
+      resource: 'agor_users_get_current',
+      measured: true,
+      tags: { 'mcp.tool': 'agor_users_get_current', 'span.kind': 'server' },
+    });
   });
 
   it('rejects a modern request that omits the required per-request metadata envelope', async () => {
@@ -1425,6 +1651,14 @@ describe('POST /mcp with personal API keys', () => {
   });
 
   it('rejects cross-tenant Agor session context on a fresh stateless request', async () => {
+    const tracingModule = await import('../tracing/datadog.js');
+    const trace = vi.fn<(name: string, options: Parameters<DatadogTracer['trace']>[1]) => void>();
+    vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+      trace(name, options, work) {
+        trace(name, options);
+        return work();
+      },
+    });
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async (_userId: string, params: { tenant: { tenant_id: string } }) => ({
       user_id: 'user-1',
@@ -1461,12 +1695,14 @@ describe('POST /mcp with personal API keys', () => {
         );
       },
       {
+        metrics: { apm: { trace_services: 'entrypoint' } },
         multi_tenancy: {
           mode: 'required_from_auth',
           trusted_header: 'x-agor-tenant-id',
         },
       }
     );
+    expect(trace).toHaveBeenCalled();
   });
 
   it('re-authorizes a signed token Session binding on every stateless POST', async () => {
@@ -1538,6 +1774,14 @@ describe('POST /mcp with personal API keys', () => {
   });
 
   it('keeps authenticated user, tenant, and Agor session context isolated under concurrency', async () => {
+    const tracingModule = await import('../tracing/datadog.js');
+    const trace = vi.fn<(name: string, options: Parameters<DatadogTracer['trace']>[1]) => void>();
+    vi.spyOn(tracingModule, 'resolveTracerModule').mockReturnValue({
+      trace(name, options, work) {
+        trace(name, options);
+        return work();
+      },
+    });
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async (userId: string, params: { tenant: { tenant_id: string } }) => ({
       user_id: userId,
@@ -1598,11 +1842,13 @@ describe('POST /mcp with personal API keys', () => {
         expect(getSession).toHaveBeenCalledTimes(expected.length);
       },
       {
+        metrics: { apm: { trace_services: 'entrypoint' } },
         multi_tenancy: {
           mode: 'required_from_auth',
           trusted_header: 'x-agor-tenant-id',
         },
       }
     );
+    expect(trace).toHaveBeenCalled();
   });
 });

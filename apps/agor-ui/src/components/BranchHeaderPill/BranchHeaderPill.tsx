@@ -1,3 +1,4 @@
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { Branch, Repo } from '@agor-live/client';
 import {
   ApartmentOutlined,
@@ -15,6 +16,7 @@ import {
 import { Button, Tooltip, theme } from 'antd';
 import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
+import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
@@ -94,7 +96,8 @@ export function BranchHeaderPill({
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
-  const environmentUrl = branch.app_url;
+  const environmentUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
+  const commandActive = hasActiveEnvironmentCommand(env);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -118,8 +121,11 @@ export function BranchHeaderPill({
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
-  const canStop = status === 'running' || status === 'starting';
+  const canStop =
+    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
+  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
   const startDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -128,6 +134,7 @@ export function BranchHeaderPill({
     isStopping ||
     isRunning;
   const stopDisabled =
+    commandActive ||
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
     !hasConfig ||
@@ -202,7 +209,9 @@ export function BranchHeaderPill({
           ? `Unhealthy - ${environmentUrl}${healthMessage}`
           : `Unhealthy${healthMessage}`;
       case 'running':
-        return environmentUrl ? `Running - ${environmentUrl}` : 'Running (no health check)';
+        return environmentUrl
+          ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
+          : `Started (health unavailable${healthMessage})`;
       case 'starting':
         return 'Starting...';
       case 'stopping':
@@ -305,8 +314,8 @@ export function BranchHeaderPill({
         >
           {hasConfig ? (
             <>
-              {/* Env label — clickable to env URL when running, otherwise opens env tab */}
-              {isRunning && environmentUrl ? (
+              {/* Keep a static provider fallback clickable while Start discovers the runtime URL. */}
+              {canOpenEnvironment && environmentUrl ? (
                 <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
                   <a
                     href={environmentUrl}
@@ -387,7 +396,9 @@ export function BranchHeaderPill({
                         ? 'Cancel startup'
                         : isStopping
                           ? 'Stopping...'
-                          : 'Not running')
+                          : status === 'error' && env?.command_attempt
+                            ? 'Retry Stop (previous outcome unconfirmed)'
+                            : 'Not running')
                   }
                 >
                   <Button
@@ -438,7 +449,7 @@ export function BranchHeaderPill({
                         confirmNuke(() => onNukeEnvironment(branch.branch_id));
                       }
                     }}
-                    disabled={connectionDisabled || !resolvedCanControlEnvironment}
+                    disabled={commandActive || connectionDisabled || !resolvedCanControlEnvironment}
                     style={actionButtonStyle}
                   />
                 </Tooltip>

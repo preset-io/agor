@@ -12,6 +12,7 @@ import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
+import { renderAgorSessionIdentity } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import type {
   ContentBlock,
@@ -23,7 +24,7 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS, MessageRole } from '@agor/core/types';
 import type { McpServerConfig, Run, SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -210,6 +211,7 @@ async function buildCursorMcpServers(args: {
       url: `${daemonUrl}/mcp`,
       headers: {
         Authorization: `Bearer ${args.mcpToken}`,
+        [MCP_CLIENT_HINT_HEADER]: MCP_CLIENT_HINTS.cursor,
       },
     };
   }
@@ -540,7 +542,7 @@ export async function executeCursorTask(params: {
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
       const rawMessages: SDKMessage[] = [];
 
-      currentRun = await agent.send(prompt, {
+      currentRun = await agent.send(`${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`, {
         model,
         mcpServers,
         idempotencyKey: taskId,

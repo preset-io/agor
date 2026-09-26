@@ -75,11 +75,11 @@ export async function persistOAuthToken(
   const tokenUserId: UserID | null =
     oauthMode === 'per_user' && pendingFlow.userId ? (pendingFlow.userId as UserID) : null;
 
-  if (oauthMode === 'per_user' && !pendingFlow.userId) {
+  if (!pendingFlow.userId) {
     console.warn(
-      `[${logPrefix}] per_user pending flow has no user binding; refusing implicit shared fallback`
+      `[${logPrefix}] OAuth pending flow has no consenting user binding; refusing persistence`
     );
-    throw new Error('Per-user OAuth flow is missing its user binding');
+    throw new Error('OAuth flow is missing its consenting user binding');
   }
 
   // The moment the grant becomes durable, and so the moment the subject's
@@ -98,16 +98,21 @@ export async function persistOAuthToken(
     oauthMode,
   });
 
-  await userTokenRepo.saveToken(tokenUserId, pendingFlow.mcpServerId as MCPServerID, {
-    accessToken: tokenResponse.access_token,
-    expiresAt: expiry.expiresAt, // Date | null — null means "unknown"
-    refreshToken: tokenResponse.refresh_token,
-    clientId: pendingFlow.clientId,
-    clientSecret: pendingFlow.clientSecret,
-    tokenEndpoint: pendingFlow.tokenEndpoint,
-    resourceUri: pendingFlow.resourceUri,
-    grantBinding: pendingFlow.grantBinding,
-  });
+  await userTokenRepo.saveToken(
+    tokenUserId,
+    pendingFlow.mcpServerId as MCPServerID,
+    {
+      accessToken: tokenResponse.access_token,
+      expiresAt: expiry.expiresAt, // Date | null — null means "unknown"
+      refreshToken: tokenResponse.refresh_token,
+      clientId: pendingFlow.clientId,
+      clientSecret: pendingFlow.clientSecret,
+      tokenEndpoint: pendingFlow.tokenEndpoint,
+      resourceUri: pendingFlow.resourceUri,
+      grantBinding: pendingFlow.grantBinding,
+    },
+    pendingFlow.userId as UserID
+  );
 
   console.log(
     `[${logPrefix}] OAuth token persisted mode=${oauthMode} ` +

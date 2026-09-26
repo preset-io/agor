@@ -1,5 +1,13 @@
 import type { User } from '@agor-live/client';
 
+function timestamp(value: unknown): number {
+  return value instanceof Date
+    ? value.getTime()
+    : typeof value === 'string'
+      ? Date.parse(value)
+      : NaN;
+}
+
 /**
  * Enrich the freshly authenticated user with directory display data without
  * allowing an older directory snapshot to become authorization authority.
@@ -15,6 +23,12 @@ export function enrichAuthenticatedUser(
 ): User | null {
   if (!authenticated) return null;
   if (!directory || directory.user_id !== authenticated.user_id) return authenticated;
+
+  // A post-save authentication read must not be overwritten by an older
+  // directory echo (e.g. bringing back a just-cleared API-key presence flag).
+  // Missing/invalid timestamps retain the existing enrichment behavior.
+  // This selects display data only; directory rows never confer authority.
+  if (timestamp(directory.updated_at) < timestamp(authenticated.updated_at)) return authenticated;
 
   return {
     ...authenticated,

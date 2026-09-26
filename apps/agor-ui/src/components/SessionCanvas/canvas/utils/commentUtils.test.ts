@@ -1,6 +1,6 @@
-import type { BoardComment } from '@agor-live/client';
+import type { BoardComment, User } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { planBoardCommentReposition } from './commentUtils';
+import { canRepositionBoardComment, planBoardCommentReposition } from './commentUtils';
 
 const BASE_COMMENT = {
   comment_id: 'comment-1',
@@ -75,5 +75,19 @@ describe('planBoardCommentReposition', () => {
     expect(planBoardCommentReposition(BASE_COMMENT, { x: 70, y: 80 }, branch('branch-a'))).toEqual({
       data: { branch_id: null, position: { absolute: { x: 70, y: 80 } } },
     });
+  });
+});
+
+describe('canRepositionBoardComment', () => {
+  it('matches the server author-or-admin authorization boundary', () => {
+    expect(
+      canRepositionBoardComment(BASE_COMMENT, { user_id: 'user-1', role: 'member' } as User)
+    ).toBe(true);
+    expect(
+      canRepositionBoardComment(BASE_COMMENT, { user_id: 'user-2', role: 'member' } as User)
+    ).toBe(false);
+    expect(
+      canRepositionBoardComment(BASE_COMMENT, { user_id: 'admin-1', role: 'admin' } as User)
+    ).toBe(true);
   });
 });

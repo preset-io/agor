@@ -330,6 +330,83 @@ describe('a grant cannot become durable for a subject who lost standing', () => 
     expect(row, 'no grant may survive a refused write').toBeFalsy();
   });
 
+  it('attributes shared consent only to flow authority, never token/request fields or server owner', async () => {
+    const { user: owner, rawDb, serverId } = await buildDaemon('admin');
+    const consenter = await new UsersRepository(rawDb).create({
+      email: 'actual-consenter@example.test',
+      role: 'admin',
+    });
+    await persistOAuthToken(
+      rawDb,
+      {
+        ...token,
+        granted_by_user_id: owner.user_id,
+      } as typeof token,
+      {
+        ...flowFor(serverId, consenter.user_id, 'shared'),
+        granted_by_user_id: owner.user_id,
+      } as ReturnType<typeof flowFor>,
+      'Test'
+    );
+    const grants = new UserMCPOAuthTokenRepository(rawDb);
+    expect(await grants.getToken(null, serverId as never)).toMatchObject({
+      granted_by_user_id: consenter.user_id,
+    });
+    await new UsersRepository(rawDb).delete(owner.user_id);
+    expect(await grants.getToken(null, serverId as never)).toMatchObject({
+      granted_by_user_id: consenter.user_id,
+    });
+    await expect(
+      persistOAuthToken(
+        rawDb,
+        token,
+        {
+          mcpServerId: serverId,
+          oauthMode: 'shared',
+        },
+        'Test'
+      )
+    ).rejects.toThrow(/consenting user binding/);
+  });
+
+  it('fences deletion after the entitlement read but before callback token persistence', async () => {
+    const { user, rawDb, serverId } = await buildDaemon('admin');
+    let reached!: () => void;
+    let release!: () => void;
+    const atWrite = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalSave = UserMCPOAuthTokenRepository.prototype.saveToken;
+    const spy = vi
+      .spyOn(UserMCPOAuthTokenRepository.prototype, 'saveToken')
+      .mockImplementation(async function (this: UserMCPOAuthTokenRepository, ...args) {
+        reached();
+        await gate;
+        return originalSave.apply(this, args);
+      });
+    const completion = persistOAuthToken(
+      rawDb,
+      token,
+      flowFor(serverId, user.user_id, 'shared'),
+      'Test'
+    );
+    const rejected = expect(completion).rejects.toThrow();
+    try {
+      await atWrite;
+      await new UsersRepository(rawDb).delete(user.user_id);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+    await rejected;
+    expect(
+      await new UserMCPOAuthTokenRepository(rawDb).getToken(null, serverId as never)
+    ).toBeNull();
+  });
+
   it('holds a shared grant to admin at the write, as flow start already does', async () => {
     const { user, rawDb, serverId, demoteTo } = await buildDaemon('admin');
     await expect(

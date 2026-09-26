@@ -93,10 +93,12 @@ async function seedSession(
   db: Database,
   opts: { sessionId: string; branchId: string; tool: 'claude-code' | 'codex' | 'gemini' }
 ): Promise<void> {
+  const now = new Date();
   await insert(db, sessions)
     .values({
       session_id: opts.sessionId,
-      created_at: new Date(),
+      created_at: now,
+      updated_at: now,
       status: 'idle',
       agentic_tool: opts.tool,
       branch_id: opts.branchId,
@@ -125,7 +127,6 @@ async function seedTask(
     message_range: { start_index: 0, end_index: 0, start_timestamp: opts.createdAt.toISOString() },
     git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
     model: opts.model,
-    tool_use_count: 0,
     duration_ms: opts.durationMs,
     normalized_sdk_response: {
       tokenUsage: {
@@ -588,7 +589,6 @@ describe('LeaderboardService legacy rows', () => {
           },
           git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
           model: 'claude-sonnet-4-6',
-          tool_use_count: 0,
           duration_ms: 1500,
           // normalized_sdk_response intentionally absent
         },

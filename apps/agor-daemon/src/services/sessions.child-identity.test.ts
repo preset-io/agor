@@ -27,7 +27,6 @@ const resolveExecutionSecurityModeMock = vi.mocked(resolveExecutionSecurityMode)
 
 function mockMode(unixUserMode: 'simple' | 'delegated' | 'sandbox'): void {
   resolveExecutionSecurityModeMock.mockReturnValue({
-    appRbacEnabled: false,
     unixUserMode,
     requiresExecutionHomeKey: unixUserMode === 'delegated',
   });

@@ -1,4 +1,6 @@
 {
-  "*.{ts,tsx,js,jsx,mjs,cjs}": ["biome ci --no-errors-on-unmatched --files-ignore-unknown=true"],
+  "*.{ts,tsx,js,jsx,mjs,cjs,svg}": [
+    "biome ci --no-errors-on-unmatched --files-ignore-unknown=true"
+  ],
   "*.{json,md,yaml,yml}": ["prettier --write"]
 }

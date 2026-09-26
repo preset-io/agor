@@ -107,6 +107,19 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       return { owner, record };
     }
 
+    it('revalidates a captured route while holding durable reservation authority', async () => {
+      const owner = await seed('route-before-reservation');
+      await expect(
+        authorityA.reserve({
+          ...owner,
+          delegatedHomeKey: 'retired-home',
+          codexHome: '/retired/.codex',
+          validateRoute: async () => false,
+        })
+      ).rejects.toThrow(/route changed/i);
+      await expect(authorityA.getCurrentForUser(owner.tenantId, owner.userId)).resolves.toBeNull();
+    });
+
     it('runs the simulated provider flow from service A while service B observes and competes', async () => {
       const owner = await seed('service-flow');
       const idToken = `${Buffer.from('{}').toString('base64url')}.${Buffer.from(
@@ -215,18 +228,55 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('rejects stale-route import/logout before invalidating a newer durable attempt', async () => {
+      const { owner, record } = await pending('stale-mutation-preflight');
+      const work = vi.fn(async () => undefined);
+
+      await expect(
+        authorityB.runCredentialMutation(
+          owner.tenantId,
+          owner.userId,
+          'credentials_imported',
+          work,
+          async () => {
+            throw new Error('retired route');
+          }
+        )
+      ).rejects.toThrow(/retired route/);
+
+      expect(work).not.toHaveBeenCalled();
+      await expect(
+        authorityA.getCurrentForUser(owner.tenantId, owner.userId)
+      ).resolves.toMatchObject({ attemptId: record.attemptId, status: 'pending', isCurrent: true });
+    });
+
     it('admits one poll owner, permits bounded takeover, and rejects the stale owner', async () => {
       const { record } = await pending('takeover');
       const [claimA, claimB] = await Promise.all([
-        authorityA.claimPoll(record, 100),
-        authorityB.claimPoll(record, 100),
+        authorityA.claimPoll(record, 25_000),
+        authorityB.claimPoll(record, 25_000),
       ]);
       const winner = claimA ?? claimB;
       expect([claimA, claimB].filter(Boolean)).toHaveLength(1);
       expect(winner).not.toBeNull();
 
-      await new Promise((resolve) => setTimeout(resolve, 140));
-      const takeover = await (claimA ? authorityB : authorityA).claimPoll(record, 500);
+      // Advance the durable lease boundary directly instead of assuming two
+      // independent pools will both finish inside a 100 ms wall-clock window.
+      // Under CI load the first UPDATE can legitimately return after that tiny
+      // test lease has expired, allowing the peer's otherwise-correct takeover
+      // before Promise.all observes either result.
+      await runWithTenantDatabaseScope(dbA, record.tenantId, (scoped) =>
+        executeRaw(
+          scoped,
+          sql`UPDATE codex_device_auth_attempts
+              SET poll_lease_expires_at = clock_timestamp() - INTERVAL '1 millisecond'
+              WHERE tenant_id = ${record.tenantId}
+                AND attempt_id = ${record.attemptId}
+                AND poll_claim_id = ${winner!.pollClaimId}
+                AND poll_claim_generation = ${winner!.pollClaimGeneration}`
+        ).then(() => undefined)
+      );
+      const takeover = await (claimA ? authorityB : authorityA).claimPoll(record, 25_000);
       expect(takeover).toMatchObject({
         attemptId: record.attemptId,
         pollClaimGeneration: winner!.pollClaimGeneration + 1,

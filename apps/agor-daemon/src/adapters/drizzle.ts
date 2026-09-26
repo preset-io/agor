@@ -101,7 +101,7 @@ export class DrizzleService<
   emit?: (event: string, ...args: any[]) => boolean;
 
   /** Extract resolved tenant context from Feathers params. */
-  private getTenant(params?: P): TenantContext | undefined {
+  protected getTenant(params?: P): TenantContext | undefined {
     return (params as (P & { tenant?: TenantContext }) | undefined)?.tenant;
   }
 
@@ -110,7 +110,7 @@ export class DrizzleService<
    * fixtures that do not expose tenant_id are treated as visible so existing
    * single-tenant unit tests keep working; migrated DB rows always carry it.
    */
-  private rowBelongsToTenant(row: T, tenant: TenantContext | undefined): boolean {
+  protected rowBelongsToTenant(row: T, tenant: TenantContext | undefined): boolean {
     if (!tenant) return true;
     const record = row as Record<string, unknown>;
     if (!('tenant_id' in record)) return true;
@@ -240,27 +240,29 @@ export class DrizzleService<
   /**
    * Apply pagination to data
    */
-  protected paginateData(data: T[], query: Query, total: number): Paginated<T> | T[] {
-    const limit = query.$limit ?? this.paginate?.default ?? data.length;
-    const skip = query.$skip ?? 0;
+  /**
+   * The page a query asks for, bounded by this service's `paginate` options:
+   * `$limit` defaults to `paginate.default` and never exceeds `paginate.max`.
+   * Services that page in SQL use this so every endpoint clamps identically.
+   */
+  protected pageWindow(query: Query): { limit: number; skip: number } {
+    const max = this.paginate?.max ?? 1000;
+    const requested = query.$limit ?? this.paginate?.default ?? max;
+    return { limit: Math.min(requested, max), skip: query.$skip ?? 0 };
+  }
 
+  protected paginateData(data: T[], query: Query, total: number): Paginated<T> | T[] {
     // If pagination is disabled, return all data
     if (!this.paginate) {
       return data;
     }
 
-    // Apply limit (capped by max)
-    const maxLimit = this.paginate.max ?? 1000;
-    const actualLimit = Math.min(limit, maxLimit);
-
-    // Slice data
-    const paginated = data.slice(skip, skip + actualLimit);
-
+    const { limit, skip } = this.pageWindow(query);
     return {
       total,
-      limit: actualLimit,
+      limit,
       skip,
-      data: paginated,
+      data: data.slice(skip, skip + limit),
     };
   }
 

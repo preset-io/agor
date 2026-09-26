@@ -23,6 +23,9 @@ export const DAEMON = {
  * Environment Management Constants
  */
 export const ENVIRONMENT = {
+  /** Maximum operator guidance length, also enforced before Markdown rendering. */
+  DISCLAIMER_MAX_LENGTH: 4000,
+
   /**
    * Health check interval in milliseconds
    * How often to poll environment health when status is 'running'
@@ -115,10 +118,25 @@ export const PAGINATION = {
    */
   MAX_LIMIT: 10_000,
 
+  /** Offset ceiling for services using the common Feathers query schema. */
+  MAX_SKIP: 10_000,
+
   /**
    * Default limit for CLI list commands - reasonable for terminal display
    */
   CLI_DEFAULT_LIMIT: 50,
+} as const;
+
+/**
+ * Knowledge document list pages. Access, sort and paging are evaluated in SQL,
+ * and only the returned page is attributed or hydrated, so a list never pulls
+ * the whole corpus. Callers that genuinely need every readable document (the
+ * Knowledge sidebar tree, CLI listings) walk pages with the client's
+ * `findAll()`; the query schema therefore leaves `$skip` unbounded.
+ */
+export const KNOWLEDGE_DOCUMENT_PAGINATION = {
+  DEFAULT_LIMIT: 100,
+  MAX_LIMIT: 500,
 } as const;
 
 /**
@@ -127,6 +145,8 @@ export const PAGINATION = {
  * need a complete Task transcript use the client's paginated `findAll()` loop.
  */
 export const MESSAGE_PAGINATION = {
+  /** Maximum task IDs in one session-scoped transcript query. */
+  MAX_TASK_IDS: 100,
   DEFAULT_LIMIT: 100,
   MAX_LIMIT: 1_000,
 } as const;

@@ -185,7 +185,9 @@ This is its own worktree, probably 2–3 PRs. **This design doc is the spec.**
 **Cost.**
 
 - ~80 LOC bash or Node script.
-- A daemon job-scheduler hook (we already have one — `scripts/archive-old-gateway-sessions.ts` runs on a cron-style schedule via the daemon, exact integration TBD).
+- A supported daemon scheduler integration. The removed one-time gateway cleanup
+  script was never a registered recurring job; session retention now uses the
+  documented `agor_sessions_bulk_archive` workflow instead.
 - Alert channel: piggyback on existing Slack/Discord notification surfaces if present, else just a daemon log + UI notification.
 
 **Verdict.** **Ship in the same follow-up PR as Option 4.** Detection complements prevention — even with Option 4, we want to know when an agent _tried_ to persist a token.
@@ -389,4 +391,6 @@ if (findings.length > 0) {
 }
 ```
 
-Integrate as a daemon-scheduled job alongside `scripts/archive-old-gateway-sessions.ts`. Default cadence: hourly. Output channels: daemon log + UI notification (re-use the existing `app-events` bus).
+Integrate as a supported daemon-scheduled job rather than a direct repository
+script. Default cadence: hourly. Output channels: daemon log + UI notification
+(re-use the existing `app-events` bus).

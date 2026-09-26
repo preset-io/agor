@@ -11,6 +11,7 @@
 
 import type { Session } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ForkSpawnModal } from './ForkSpawnModal';
 
@@ -37,7 +38,7 @@ vi.mock('../AutocompleteTextarea', () => ({
 }));
 
 const mockSession: Partial<Session> = {
-  session_id: 'session-parent',
+  session_id: 'session-parent' as Session['session_id'],
   title: 'Parent Session',
   agentic_tool: 'claude-code',
 };
@@ -124,5 +125,54 @@ describe('ForkSpawnModal prompt preservation', { timeout: 10_000 }, () => {
     await screen.findByText('Configuration');
     expect(screen.getByTestId('model-chip')).toBeInTheDocument();
     expect(screen.getByTestId('permission-chip')).toBeInTheDocument();
+  });
+});
+
+// Keep the same modal instance mounted, just as SessionPanelContent does.
+describe('ForkSpawnModal repeated submission', () => {
+  it('can spawn again after the parent closes the modal in onConfirm', async () => {
+    const create = vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Reopen
+          </button>
+          <ForkSpawnModal
+            open={open}
+            action="spawn"
+            session={mockSession as Session}
+            onConfirm={async () => {
+              await create();
+              setOpen(false);
+            }}
+            onCancel={() => setOpen(false)}
+            client={null}
+            userById={new Map()}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      fireEvent.change(screen.getByTestId('prompt-textarea'), {
+        target: { value: `Child ${attempt}` },
+      });
+      const submit = screen.getByRole('button', { name: 'Spawn Session' });
+      await waitFor(() => expect(submit).not.toHaveClass('ant-btn-loading'));
+      fireEvent.click(submit);
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(attempt));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+      await screen.findByRole('dialog');
+    }
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Spawn Session' })).not.toHaveClass(
+        'ant-btn-loading'
+      )
+    );
   });
 });

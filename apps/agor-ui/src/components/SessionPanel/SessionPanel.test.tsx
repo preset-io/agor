@@ -4,7 +4,13 @@ import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { buildSessionMaps } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { MOBILE_SHELL_MAX_WIDTH } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
+
+// Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
 
 vi.mock('../AutocompleteTextarea', () => ({
   AutocompleteTextarea: () => <textarea aria-label="Prompt" />,
@@ -78,6 +84,11 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: reactive.useSharedReactiveSession,
 }));
 
+const viewport = vi.hoisted(() => ({ isMobile: false }));
+vi.mock('../../hooks/useIsMobileViewport', () => ({
+  useIsMobileViewport: () => viewport.isMobile,
+}));
+
 const connected = {
   connected: true,
   connecting: false,
@@ -122,12 +133,14 @@ function renderPanel({
   client = null,
   activeSession = session,
   open = true,
+  onClose = vi.fn(),
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
   onChooseAgenticTool?: ReturnType<typeof vi.fn>;
   client?: AgorClient | null;
   activeSession?: Session;
   open?: boolean;
+  onClose?: ReturnType<typeof vi.fn>;
 } = {}) {
   render(
     <ConnectionProvider value={connected}>
@@ -138,13 +151,13 @@ function renderPanel({
             session={activeSession}
             branch={branch}
             open={open}
-            onClose={vi.fn()}
+            onClose={onClose}
           />
         </AntApp>
       </AppActionsProvider>
     </ConnectionProvider>
   );
-  return { onOpenTerminal };
+  return { onOpenTerminal, onClose };
 }
 
 const findShortcuts = [
@@ -263,12 +276,20 @@ describe('SessionPanel search control', () => {
     expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
   });
 
-  it('retains the same lazy reactive-session cache key as ConversationView', () => {
+  it('does not fetch a duplicate queue in the panel', () => {
+    const service = vi.fn(() => ({ find: vi.fn(async () => ({ data: [] })) }));
+    renderPanel({ client: { service } as unknown as AgorClient });
+    expect(service.mock.calls.flat().some((name) => String(name).includes('/tasks/queue'))).toBe(
+      false
+    );
+  });
+
+  it('retains the same lean reactive-session cache key as ConversationView', () => {
     renderPanel();
 
     expect(reactive.useSharedReactiveSession).toHaveBeenLastCalledWith(null, session.session_id, {
       enabled: true,
-      reactiveOptions: { taskHydration: 'lazy' },
+      reactiveOptions: { taskHydration: 'lean' },
     });
   });
 });
@@ -466,4 +487,144 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       await screen.findByText('Failed to force-fail execution. You can try again.')
     ).toBeVisible();
   });
+});
+
+describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
+  afterEach(() => {
+    reactive.tasks = [];
+    viewport.isMobile = false;
+    vi.restoreAllMocks();
+  });
+
+  it('sends the canonical task-fenced Stop once and surfaces permission denial without fallback', async () => {
+    viewport.isMobile = width < MOBILE_SHELL_MAX_WIDTH;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const taskId = '018f0000-0000-7000-8000-000000000010';
+    reactive.tasks = [
+      { task_id: taskId, session_id: session.session_id, status: 'running' } as Task,
+    ];
+    let rejectStop!: (error: Error) => void;
+    const create = vi.fn(
+      () =>
+        new Promise<never>((_, reject) => {
+          rejectStop = reject;
+        })
+    );
+    const service = vi.fn((path: string) => ({
+      create: path === `sessions/${session.session_id}/stop` ? create : vi.fn(),
+      find: vi.fn().mockResolvedValue({ data: [] }),
+      on: vi.fn(),
+      off: vi.fn(),
+    }));
+    renderPanel({
+      client: { io: stopIo(), service } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+    // Proves the width actually selected the shell, so this cannot quietly run the desktop path twice.
+    const closeLabel = viewport.isMobile ? 'Close' : 'Close panel';
+    expect(screen.getByRole('button', { name: closeLabel })).toBeInTheDocument();
+    // Text lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
+    // calculation; real-browser QA covers the visible button and touch target.
+    const stop = screen.getByText('Stop').closest('button')!;
+    fireEvent.click(stop);
+    fireEvent.click(stop);
+    expect(stop).toBeDisabled();
+    expect(create).toHaveBeenCalledExactlyOnceWith({ expected_task_id: taskId });
+    expect(service).toHaveBeenCalledWith(`sessions/${session.session_id}/stop`);
+    rejectStop(Object.assign(new Error('Not allowed to stop this session'), { code: 403 }));
+    await screen.findByText('Failed to stop execution. You can try again.');
+    expect(create).toHaveBeenCalledOnce();
+    await waitFor(() => expect(stop).toBeEnabled());
+  });
+});
+
+describe('SessionPanel mobile header', () => {
+  afterEach(() => {
+    viewport.isMobile = false;
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('shows a leading Close (X) and no far-right Back on the mobile shell', () => {
+    viewport.isMobile = true;
+    const { onClose } = renderPanel();
+
+    // Leading close uses the "Close" label; the old right-side "Back" is gone.
+    const close = screen.getByRole('button', { name: 'Close' });
+    expect(close).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    // Desktop's trailing "Close panel" is not rendered on mobile.
+    expect(screen.queryByRole('button', { name: 'Close panel' })).not.toBeInTheDocument();
+
+    // The X is the leading control (before Search / More actions in DOM order).
+    const search = screen.getByRole('button', { name: 'Search session' });
+    expect(close.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the desktop trailing Close panel and no leading Close', () => {
+    viewport.isMobile = false;
+    renderPanel();
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  });
+});
+
+describe('SessionPanel archive feedback', () => {
+  afterEach(() => {
+    setRealtimeAuthorityScope(null);
+    agorStore.getState().reset();
+    vi.restoreAllMocks();
+  });
+
+  it.each(['read-failure', 'mutation-failure', 'confirmed'] as const)(
+    'renders the correct archive outcome for %s',
+    async (outcome) => {
+      setRealtimeAuthorityScope('tenant-a:user-a:1');
+      agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps([session]) }));
+      const archived = { ...session, archived: true };
+      const create = vi.fn(async () => {
+        if (outcome === 'mutation-failure') throw new Error('Archive denied');
+        return { session: archived };
+      });
+      const get = vi.fn(async () => {
+        if (outcome === 'read-failure') throw new Error('Read unavailable');
+        return archived;
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const client = {
+        service: (name: string) => {
+          if (name === `sessions/${session.session_id}/archive`) return { create };
+          if (name === 'sessions') return { get };
+          if (name === 'tasks') return { on: vi.fn(), off: vi.fn() };
+          if (name.endsWith('/tasks/queue')) return { find: async () => ({ data: [] }) };
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      } as unknown as AgorClient;
+      const { onClose } = renderPanel({ client });
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Archive session/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Archive', exact: true }));
+      const expected =
+        outcome === 'read-failure'
+          ? 'Session and same-branch children archived; refresh required to update the session list.'
+          : outcome === 'mutation-failure'
+            ? 'Failed to archive session'
+            : 'Session and same-branch children archived';
+      expect(await screen.findByText(expected)).toBeVisible();
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledTimes(outcome === 'mutation-failure' ? 0 : 1);
+      if (outcome === 'confirmed') expect(onClose).toHaveBeenCalledTimes(1);
+      else expect(onClose).not.toHaveBeenCalled();
+      if (outcome === 'read-failure') {
+        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
+        expect(
+          screen.queryByText('Session and same-branch children archived')
+        ).not.toBeInTheDocument();
+        expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
+      }
+    }
+  );
 });

@@ -30,6 +30,37 @@ describe('MCPOAuthRecoveryAlert', () => {
     expect(screen.queryByText(/dcr_registration|HTTP 400/)).not.toBeInTheDocument();
   });
 
+  it('shows the closed reason with the authoritative failure policy, without triggering recovery', () => {
+    const onRetry = vi.fn();
+    const onConfigure = vi.fn();
+    const { container } = render(
+      <MCPOAuthRecoveryAlert
+        failure={{
+          message: 'Dynamic Client Registration is explicitly disabled.',
+          recovery: {
+            category: 'client_registration_required',
+            action: 'configure_client',
+            message: 'Dynamic Client Registration is explicitly disabled.',
+            failure_reason: 'dcr_disabled',
+            oauth_policy: {
+              effective_mode: 'strict',
+              effective_dcr_mode: 'disabled',
+              dcr_mode_source: 'explicit',
+            },
+          },
+        }}
+        onRetry={onRetry}
+        onConfigure={onConfigure}
+      />
+    );
+    expect(screen.getByText('dcr_disabled')).toBeVisible();
+    expect(container).toHaveTextContent(
+      'Policy at failure: compatibility strict; DCR disabled (explicit).'
+    );
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(onConfigure).not.toHaveBeenCalled();
+  });
+
   it('does not recommend manual client settings for unrelated failures', () => {
     render(<MCPOAuthRecoveryAlert failure={{ message: 'The MCP server did not return 401' }} />);
 

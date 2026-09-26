@@ -4,10 +4,11 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BoardID, BranchID, UUID } from '@agor/core/types';
+import type { BoardID, Branch, BranchID, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
+import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS } from '../../types/branch';
 import { update } from '../database-wrapper';
 import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
@@ -17,6 +18,20 @@ import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
+
+dbTest('repo protection override preserves the branch preference', async ({ db }) => {
+  const repoRepository = new RepoRepository(db);
+  const branchRepository = new BranchRepository(db);
+  const repo = await repoRepository.create(createRepoData());
+  const branch = await branchRepository.create(createBranchData({ repo_id: repo.repo_id }));
+  expect(branch.cleanup_protected).toBe(false);
+  await branchRepository.update(branch.branch_id, { cleanup_protected: true });
+  await repoRepository.update(repo.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: false },
+  });
+  await branchRepository.update(branch.branch_id, { notes: 'An unrelated patch' });
+  expect((await branchRepository.findById(branch.branch_id))?.cleanup_protected).toBe(true);
+});
 
 /**
  * Create test repo data (needed as FK for branches)
@@ -49,6 +64,7 @@ function createBranchData(overrides?: {
   board_id?: UUID;
   created_by?: UUID;
   primary_owner_user_id?: UUID;
+  base_source?: Branch['base_source'];
   base_ref?: string;
   base_remote_url?: string;
   base_sha?: string;
@@ -85,6 +101,7 @@ function createBranchData(overrides?: {
     created_by: overrides?.created_by ?? ('test-user' as UUID),
     primary_owner_user_id: overrides?.primary_owner_user_id,
     base_ref: overrides?.base_ref,
+    base_source: overrides?.base_source,
     base_remote_url: overrides?.base_remote_url,
     base_sha: overrides?.base_sha,
     last_commit_sha: overrides?.last_commit_sha,
@@ -210,6 +227,7 @@ describe('BranchRepository.create', () => {
       board_id: boardId,
       base_ref: 'main',
       base_remote_url: 'https://github.com/example/template-source.git',
+      base_source: { name: 'main', remote_url: 'https://example.test/source.git' },
       base_sha: 'abc123',
       last_commit_sha: 'def456',
       tracking_branch: 'origin/feature',
@@ -235,6 +253,7 @@ describe('BranchRepository.create', () => {
     expect(created.base_ref).toBe('main');
     expect(created.base_remote_url).toBe('https://github.com/example/template-source.git');
     expect(created.base_sha).toBe('abc123');
+    expect(created.base_source).toEqual(data.base_source);
     expect(created.last_commit_sha).toBe('def456');
     expect(created.tracking_branch).toBe('origin/feature');
     expect(created.new_branch).toBe(true);
@@ -901,39 +920,100 @@ describe('BranchRepository.update', () => {
     });
   });
 
+  dbTest('preserves inherited binding when moving boards under the row lock', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const sourceBoardId = generateId() as BoardID;
+    const destinationBoardId = generateId() as BoardID;
+    for (const boardId of [sourceBoardId, destinationBoardId]) {
+      await (db as any).insert(boards).values({
+        board_id: boardId,
+        created_at: new Date(),
+        created_by: 'test-user' as UUID,
+        primary_owner_user_id: 'test-user' as UUID,
+        name: `Board ${boardId}`,
+        data: {},
+      });
+    }
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        board_id: sourceBoardId,
+        permission_source: 'board',
+      })
+    );
+
+    await expect(
+      branchRepo.update(branch.branch_id, { board_id: destinationBoardId })
+    ).resolves.toMatchObject({ board_id: destinationBoardId, permission_binding: 'inherit' });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      board_id: destinationBoardId,
+      permission_binding: 'inherit',
+    });
+  });
+
   dbTest(
-    'revalidates inherited binding under the row lock before moving boards',
+    'environment clears are explicit while omitted and nested patch fields still merge',
     async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const repo = await repoRepo.create(createRepoData());
-      const sourceBoardId = generateId() as BoardID;
-      const destinationBoardId = generateId() as BoardID;
-      for (const boardId of [sourceBoardId, destinationBoardId]) {
-        await (db as any).insert(boards).values({
-          board_id: boardId,
-          created_at: new Date(),
-          created_by: 'test-user' as UUID,
-          primary_owner_user_id: 'test-user' as UUID,
-          name: `Board ${boardId}`,
-          data: {},
-        });
-      }
-      const branch = await branchRepo.create(
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branches = new BranchRepository(db);
+      const branch = await branches.create(
         createBranchData({
           repo_id: repo.repo_id,
-          board_id: sourceBoardId,
-          permission_source: 'board',
+          environment_instance: {
+            status: 'error',
+            last_error: 'failed',
+            process: { pid: 123, started_at: 'old' },
+          },
         })
       );
-
-      await expect(
-        branchRepo.update(branch.branch_id, { board_id: destinationBoardId })
-      ).rejects.toThrow('explicit permission override');
-      await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
-        board_id: sourceBoardId,
-        permission_binding: 'inherit',
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'starting', process: { started_at: 'new' } },
       });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'starting',
+        last_error: 'failed',
+        process: { pid: 123, started_at: 'new' },
+      });
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'stopped', process: undefined, last_error: undefined },
+      });
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toEqual({
+        status: 'stopped',
+      });
+    }
+  );
+
+  dbTest(
+    'clears only explicitly supplied snapshot fields, preserving omitted fields',
+    async ({ db }) => {
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const repository = new BranchRepository(db);
+      const snapshot = Object.fromEntries(
+        BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, 'old'])
+      );
+      const branch = await repository.create({
+        ...createBranchData({ repo_id: repo.repo_id }),
+        ...snapshot,
+      });
+      await repository.update(branch.branch_id, {
+        notes: 'unrelated patch',
+        health_check_url: undefined,
+      });
+      const partial = await repository.findById(branch.branch_id);
+      expect(partial?.health_check_url).toBeUndefined();
+      expect(partial?.start_command).toBe('old');
+      expect(partial?.app_url).toBe('old');
+
+      await repository.update(
+        branch.branch_id,
+        Object.fromEntries(BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS.map((key) => [key, undefined]))
+      );
+      const cleared = await repository.findById(branch.branch_id);
+      for (const field of BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS)
+        expect(cleared?.[field]).toBeUndefined();
+      expect(cleared?.notes).toBe('unrelated patch');
     }
   );
 
@@ -1028,6 +1108,7 @@ describe('BranchRepository.update', () => {
     const updated = await wtRepo.update(data.branch_id, {
       board_id: boardId,
       base_ref: 'develop',
+      base_source: { name: 'develop', remote_url: 'https://example.test/personal.git' },
       base_sha: 'abc123',
       last_commit_sha: 'def456',
       tracking_branch: 'origin/feature',
@@ -1043,6 +1124,10 @@ describe('BranchRepository.update', () => {
     expect(updated.board_id).toBe(boardId);
     expect(updated.base_ref).toBe('develop');
     expect(updated.base_sha).toBe('abc123');
+    expect((await wtRepo.findById(data.branch_id))?.base_source).toEqual({
+      name: 'develop',
+      remote_url: 'https://example.test/personal.git',
+    });
     expect(updated.last_commit_sha).toBe('def456');
     expect(updated.tracking_branch).toBe('origin/feature');
     expect(updated.new_branch).toBe(true);
@@ -1136,7 +1221,7 @@ describe('BranchRepository.update', () => {
 // ============================================================================
 
 describe('BranchRepository.delete', () => {
-  dbTest('should delete by full UUID and short ID', async ({ db }) => {
+  dbTest('rejects metadata-only deletion by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
 
@@ -1155,18 +1240,18 @@ describe('BranchRepository.delete', () => {
     await wtRepo.create(data2);
 
     // Delete by full UUID
-    await wtRepo.delete(data1.branch_id);
+    await expect(wtRepo.delete(data1.branch_id)).rejects.toThrow('Metadata-only');
     const found1 = await wtRepo.findById(data1.branch_id);
-    expect(found1).toBeNull();
+    expect(found1).not.toBeNull();
 
     // Delete by short ID
     const idPrefix = shortId(data2.branch_id);
-    await wtRepo.delete(idPrefix);
+    await expect(wtRepo.delete(idPrefix)).rejects.toThrow('Metadata-only');
     const found2 = await wtRepo.findById(data2.branch_id);
-    expect(found2).toBeNull();
+    expect(found2).not.toBeNull();
   });
 
-  dbTest('should isolate deletions across branches and repos', async ({ db }) => {
+  dbTest('rejects bypass deletion without affecting other branches or repos', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
 
@@ -1192,12 +1277,12 @@ describe('BranchRepository.delete', () => {
     await wtRepo.create(data2);
     await wtRepo.create(data3);
 
-    await wtRepo.delete(data1.branch_id);
+    await expect(wtRepo.delete(data1.branch_id)).rejects.toThrow('Metadata-only');
 
-    // Verify only data1 deleted
+    // Rejected bypass leaves every branch intact
     const remaining = await wtRepo.findAll();
-    expect(remaining).toHaveLength(2);
-    expect(remaining.map((w) => w.name).sort()).toEqual(['wt2', 'wt3']);
+    expect(remaining).toHaveLength(3);
+    expect(remaining.map((w) => w.name).sort()).toEqual(['wt1', 'wt2', 'wt3']);
 
     const repo2Branches = await wtRepo.findAll({ repo_id: repo2.repo_id });
     expect(repo2Branches).toHaveLength(1);
@@ -1320,6 +1405,8 @@ describe('BranchRepository.findTeammateBranches', () => {
       });
       const repo = await repos.create(createRepoData({ slug: `teammate-discovery-${Date.now()}` }));
 
+      const { KnowledgeNamespaceRepository } = await import('./knowledge');
+      const namespace = await new KnowledgeNamespaceRepository(db).create({ slug: 'team-kb' });
       const markedCloneTeammate = await branches.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
@@ -1332,7 +1419,7 @@ describe('BranchRepository.findTeammateBranches', () => {
               kind: 'teammate',
               displayName: 'Hodor-like',
               kb: {
-                primary_namespace_id: generateId(),
+                primary_namespace_id: namespace.namespace_id,
                 primary_namespace_slug: 'team-kb',
                 memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
                 default_visibility: 'public',

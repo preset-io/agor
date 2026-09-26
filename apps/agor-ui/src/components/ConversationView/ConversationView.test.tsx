@@ -1,3 +1,4 @@
+import type { SessionID } from '@agor-live/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,14 +11,8 @@ const MessageRole = {
   ASSISTANT: 'assistant',
 } as const;
 
-vi.mock('@agor-live/client', () => ({
-  TaskStatus: {
-    COMPLETED: 'completed',
-    QUEUED: 'queued',
-  },
-  MessageRole: {
-    ASSISTANT: 'assistant',
-  },
+vi.mock('@agor-live/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor-live/client')>()),
   shortId: () => 'short-id',
 }));
 
@@ -26,13 +21,13 @@ vi.mock('@agor-live/client', () => ({
 // unit-test the library here — instead we mock it and assert OUR integration
 // wiring: onScrollRef exposes the hook's scrollToBottom + a working
 // scrollToTop, the open/session-switch effect calls scrollToBottom, and the
-// new-task expand logic honors the hook's SYNCHRONOUS live `state`
+// scroll integration honors the hook's SYNCHRONOUS live `state`
 // (`state.escapedFromLock`), not the lagging returned `isAtBottom`.
 //
 // `mockState` is a mutable object mirroring the library's live `state`: the
 // real hook mutates `state.escapedFromLock`/`state.isAtBottom` synchronously,
-// so tests flip these fields to drive the expand logic deterministically.
-let mockState: { escapedFromLock: boolean; isAtBottom: boolean };
+// so tests flip these fields to drive the scroll integration deterministically.
+let mockState: { escapedFromLock: boolean; isAtBottom: boolean; resizeDifference?: number };
 const mockScrollToBottom = vi.fn();
 const mockStopScroll = vi.fn();
 type CallbackRef = ((el: HTMLElement | null) => void) & { current: HTMLElement | null };
@@ -66,11 +61,11 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
 }));
 
 vi.mock('../TaskBlock', () => ({
-  TaskBlock: ({ task, isExpanded, onExpandChange, taskMessagesLoaded }: any) => (
-    <section data-testid={`task-${task.task_id}`} data-expanded={String(isExpanded)}>
+  TaskBlock: ({ task, onLoadTaskMessages, taskMessagesLoaded }: any) => (
+    <section data-testid={`task-${task.task_id}`} data-continuous="true">
       <h2>{task.full_prompt}</h2>
-      <button type="button" onClick={() => onExpandChange(task.task_id, !isExpanded)}>
-        toggle {task.task_id}
+      <button type="button" onClick={() => onLoadTaskMessages(task.task_id)}>
+        load tools {task.task_id}
       </button>
       {taskMessagesLoaded ? <div>messages loaded for {task.task_id}</div> : null}
     </section>
@@ -137,6 +132,58 @@ describe('ConversationView auto-scroll integration', () => {
 
   afterEach(() => {
     mockUseSharedReactiveSession.mockReset();
+  });
+
+  it('keeps the latest viewport resize guarded when consecutive deltas match', () => {
+    vi.useFakeTimers();
+    let resize: (() => void) | undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const state = makeState({ loading: false, tasks: [makeTask('task-1', 'a')] });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+    const { unmount } = render(
+      <ConversationView client={null} sessionId={'session-1' as SessionID} sessionModel="loaded" />
+    );
+    const scroller = screen.getByTestId('conversation-scroll-container');
+    let height = 4;
+    Object.defineProperty(scroller, 'clientHeight', { get: () => height });
+    try {
+      act(() => resize?.());
+      // The first frame schedules its delayed reset, but another ResizeObserver
+      // delivery arrives before that timer. Equal deltas are not equal resizes.
+      act(() => vi.advanceTimersToNextFrame());
+      height = 8;
+      act(() => resize?.());
+      act(() => vi.advanceTimersByTime(1));
+      expect(mockState.resizeDifference).toBe(4);
+      act(() => vi.advanceTimersToNextFrame());
+      act(() => vi.advanceTimersByTime(1));
+      expect(mockState.resizeDifference).toBe(0);
+
+      mockState.escapedFromLock = true;
+      mockScrollToBottom.mockClear();
+      height = 12;
+      act(() => resize?.());
+      expect(mockScrollToBottom).not.toHaveBeenCalled();
+      unmount();
+      expect(mockState.resizeDifference).toBe(0);
+      // A replacement viewport may publish the same delta before old timers run.
+      mockState.resizeDifference = 4;
+      act(() => vi.runAllTimers());
+      expect(mockState.resizeDifference).toBe(4);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('exposes a working scrollToBottom and scrollToTop via onScrollRef', () => {
@@ -273,7 +320,7 @@ describe('ConversationView auto-scroll integration', () => {
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
-  it('collapses older tasks and focuses the new one when the user is at bottom', () => {
+  it('keeps both turns visible when a new turn arrives at bottom', () => {
     mockState.escapedFromLock = false;
     let tasks = [makeTask('task-1', 'first task')];
     let state = makeState({ loading: false, tasks });
@@ -282,7 +329,7 @@ describe('ConversationView auto-scroll integration', () => {
     const { rerender } = render(
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="one-task" />
     );
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
 
     tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'new task')];
     state = makeState({ loading: false, tasks });
@@ -290,12 +337,12 @@ describe('ConversationView auto-scroll integration', () => {
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="two-tasks" />
     );
 
-    // At bottom → only the latest task stays expanded.
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'false');
-    expect(screen.getByTestId('task-task-2')).toHaveAttribute('data-expanded', 'true');
+    // At bottom → older and newer turns both stay visible.
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
+    expect(screen.getByTestId('task-task-2')).toHaveAttribute('data-continuous', 'true');
   });
 
-  it('keeps older tasks expanded when the user has scrolled away', () => {
+  it('keeps older turns visible when the user has scrolled away', () => {
     let tasks = [makeTask('task-1', 'first task')];
     let state = makeState({ loading: false, tasks });
     mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
@@ -303,7 +350,7 @@ describe('ConversationView auto-scroll integration', () => {
     const { rerender } = render(
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="one-task" />
     );
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
 
     // The user scrolls up after the view has landed — escape the bottom lock
     // only now, so the mount landing (which clears it) doesn't clobber the setup.
@@ -316,16 +363,16 @@ describe('ConversationView auto-scroll integration', () => {
     );
 
     // Scrolled away → new task is expanded but the old one is preserved.
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
-    expect(screen.getByTestId('task-task-2')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
+    expect(screen.getByTestId('task-task-2')).toHaveAttribute('data-continuous', 'true');
   });
 
   // Behavior 2 regression: a user who deliberately scrolled up (escaped the
-  // bottom lock) must NOT be yanked back when a new task arrives. The expand
-  // logic reads the SYNCHRONOUS `state.escapedFromLock`, so even if the
+  // bottom lock) must NOT be yanked back when a new task arrives. The scroll
+  // integration reads the SYNCHRONOUS `state.escapedFromLock`, so even if the
   // returned/async `isAtBottom` were still stale-true, the escaped flag wins:
-  // older tasks stay expanded and no auto-scroll fires.
-  it('does not collapse expanded tasks or scroll when an escaped user gets a new task', () => {
+  // older turns stay visible and no auto-scroll fires.
+  it('does not hide older turns or scroll when an escaped user gets a new task', () => {
     // The async/near-bottom value still reads true — exactly the race the
     // synchronous read defends against.
     mockState.isAtBottom = true;
@@ -338,10 +385,10 @@ describe('ConversationView auto-scroll integration', () => {
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="two-tasks" />
     );
 
-    // Expand an older task to simulate what the user is reading, then clear the
+    // Request older tool details to simulate what the user is reading, then clear the
     // mount-time scroll so we only assert on the new-task arrival below.
-    fireEvent.click(screen.getByRole('button', { name: 'toggle task-1' }));
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'load tools task-1' }));
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
     mockScrollToBottom.mockClear();
 
     // The user scrolls up after landing — escape only now so the mount landing
@@ -358,26 +405,31 @@ describe('ConversationView auto-scroll integration', () => {
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="three-tasks" />
     );
 
-    // Escaped → the new task expands but nothing the user was reading collapses,
+    // Escaped → the new turn appears but nothing the user was reading disappears,
     // and there is NO yank back to the bottom.
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
-    expect(screen.getByTestId('task-task-3')).toHaveAttribute('data-expanded', 'true');
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
+    expect(screen.getByTestId('task-task-3')).toHaveAttribute('data-continuous', 'true');
     expect(mockScrollToBottom).not.toHaveBeenCalled();
   });
 
-  it('toggles task expansion on user click without forcing a scroll', () => {
+  it('loads tool details on user click without forcing a scroll', () => {
     const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
     const state = makeState({ loading: false, tasks, loadedTaskIds: new Set(['task-2']) });
-    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+    const loadTaskMessages = vi.fn().mockResolvedValue([]);
+    mockUseSharedReactiveSession.mockImplementation(() => ({
+      handle: { loadTaskMessages } as any,
+      state,
+    }));
 
     render(<ConversationView client={null} sessionId={'session-1' as any} sessionModel="loaded" />);
 
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'false');
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
     mockScrollToBottom.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'toggle task-1' }));
-    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
-    // Manual expand/collapse must not trigger an auto-scroll.
+    fireEvent.click(screen.getByRole('button', { name: 'load tools task-1' }));
+    expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-continuous', 'true');
+    expect(loadTaskMessages).toHaveBeenCalledWith('task-1');
+    // Loading tool details must not trigger an auto-scroll.
     expect(mockScrollToBottom).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,5 @@
 import type { DatadogTracer } from '../tracing/datadog';
+import { instrumentPostgresTransactions } from './postgres-transaction-tracing';
 
 export type { DatadogTracer };
 
@@ -21,10 +22,12 @@ export type { DatadogTracer };
  * driver directly, bypassing `prepareQuery`. Agor's normal query paths do not
  * use them, so they are intentionally out of scope; the real-Drizzle regression
  * test asserts the covered paths and fails loudly if the chokepoint moves.
+ * Root transactions additionally get acquisition/setup timing and a body span
+ * via postgres-transaction-tracing.ts; BEGIN/COMMIT bypass prepareQuery.
  *
  * Safety contract: this is best-effort and additive. Any failure to resolve the
  * tracer, reach the Drizzle internals, install the patch, OR run the per-query
- * wrapper leaves the query untouched — it can never break, slow, duplicate, or
+ * wrapper leaves the query untouched — it must never break, duplicate, or
  * change a query. Worst case is "no DB spans".
  */
 
@@ -139,11 +142,12 @@ interface DrizzleSessionLike {
  */
 export function instrumentDrizzlePostgresForTracing(
   db: unknown,
-  options: { tracer?: DatadogTracer | null } = {}
+  options: { tracer?: DatadogTracer | null; poolMax?: number } = {}
 ): boolean {
   try {
     const tracer = options.tracer ?? null;
     if (!tracer) return false;
+    instrumentPostgresTransactions(db, tracer, options.poolMax);
 
     // The session is shared by prototype across the top-level db AND every
     // transaction sub-session, so patching the prototype covers transactional

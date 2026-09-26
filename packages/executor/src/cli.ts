@@ -275,6 +275,7 @@ async function handlePromptPayload(
     permissionMode: payload.params.permissionMode,
     daemonUrl: resolvedDaemonUrl,
     messageSource: payload.params.messageSource,
+    promptOrigin: payload.params.promptOrigin,
     agenticToolContext: payload.agenticToolContext,
     resolvedConfig: payload.resolvedConfig,
   });

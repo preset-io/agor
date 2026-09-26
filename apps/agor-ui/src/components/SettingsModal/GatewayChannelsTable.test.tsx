@@ -642,7 +642,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(writeText.mock.calls[0][0]).toContain('"channels:history"');
   });
 
-  it('tests an existing channel via gatewayChannelId (never form tokens)', async () => {
+  it('tests an existing channel via gatewayChannelId when no tokens are typed', async () => {
     const result = {
       ok: true,
       team: { id: 'T123', name: 'Acme' },
@@ -660,6 +660,49 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(testCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
     expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
     expect(screen.getByText('Acme')).toBeInTheDocument();
+  });
+
+  it('probes the tokens typed into the edit form instead of the stored ones', async () => {
+    const { client, testCreate } = makeClient();
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Credentials');
+
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'xoxb-fresh' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: 'xapp-fresh' },
+    });
+    clickButton(/Test connection/);
+
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({
+      gatewayChannelId: 'channel-1',
+      config: { bot_token: 'xoxb-fresh', app_token: 'xapp-fresh' },
+    });
+  });
+
+  it('sanitizes pasted Slack edit tokens the same way as Save', async () => {
+    const { client, testCreate } = makeClient();
+    const onUpdate = vi.fn();
+    renderEditTable(client, makeSlackChannel(), { onUpdate });
+    expandPanel('Credentials');
+
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: ' xoxb-\u200bfresh ' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: ' xapp-\u2060fresh ' },
+    });
+    clickButton(/Test connection/);
+
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    const tokens = { bot_token: 'xoxb-fresh', app_token: 'xapp-fresh' };
+    expect(testCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1', config: tokens });
+
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1].config).toMatchObject(tokens);
   });
 
   it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
@@ -875,7 +918,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       ...makeSlackChannel(),
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
       },
     } as unknown as GatewayChannel;
     const onUpdate = vi.fn();
@@ -892,7 +935,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'xhigh' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'xhigh' },
       },
     });
   });
@@ -902,7 +945,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
       ...makeSlackChannel(),
       agentic_config: {
         agent: 'codex',
-        modelConfig: { mode: 'alias', model: 'gpt-5.6-sol', effort: 'medium' },
+        modelConfig: { mode: 'alias', model: 'gpt-6-sol', effort: 'medium' },
       },
       mcp_server_ids: ['mcp-server-1'],
     } as unknown as GatewayChannel;
@@ -1082,6 +1125,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
     selectChannelType('Microsoft Teams');
     await waitForAvailableStep('Setup');
+    expect(screen.getByRole('switch', { name: 'Enabled' })).not.toBeChecked();
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -1123,6 +1167,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'teams',
+      enabled: false,
       name: 'My Teams',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',

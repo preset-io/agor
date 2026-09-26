@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgenticToolInvokePayloadSchema,
+  BranchFilesReadPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
   ExecutorPayloadSchema,
@@ -24,6 +25,36 @@ import {
   parseExecutorPayload,
   ZellijAttachPayloadSchema,
 } from './payload-types.js';
+
+describe('BranchFilesReadPayloadSchema', () => {
+  const payload = {
+    command: 'branch.files.read',
+    sessionToken: 'jwt-token-here',
+    params: {
+      branchId: '550e8400-e29b-41d4-a716-446655440000',
+      filePath: 'src/example.ts',
+    },
+  };
+
+  it('accepts a staged source-control preview', () => {
+    expect(
+      BranchFilesReadPayloadSchema.parse({
+        ...payload,
+        params: { ...payload.params, gitStatusSource: 'staged' },
+      }).params.gitStatusSource
+    ).toBe('staged');
+  });
+
+  it('defaults to the combined preview and rejects unknown snapshots', () => {
+    expect(BranchFilesReadPayloadSchema.parse(payload).params.gitStatusSource).toBe('combined');
+    expect(() =>
+      BranchFilesReadPayloadSchema.parse({
+        ...payload,
+        params: { ...payload.params, gitStatusSource: 'unknown' },
+      })
+    ).toThrow();
+  });
+});
 
 describe('PromptPayloadSchema', () => {
   it('should parse valid prompt payload', () => {
@@ -59,6 +90,7 @@ describe('PromptPayloadSchema', () => {
         prompt: 'Hello!',
         tool: 'gemini',
         permissionMode: 'auto',
+        promptOrigin: { kind: 'channel', server: 'slack' },
         cwd: '/home/user/project',
       },
     };
@@ -68,6 +100,24 @@ describe('PromptPayloadSchema', () => {
     expect(result.env?.ANTHROPIC_API_KEY).toBe('key');
     expect(result.agenticToolContext).toEqual({ nativeHome: '/data/agor' });
     expect(result.params.permissionMode).toBe('auto');
+    expect(result.params.promptOrigin).toEqual({ kind: 'channel', server: 'slack' });
+  });
+
+  it('rejects malformed prompt provenance at the private executor boundary', () => {
+    expect(() =>
+      PromptPayloadSchema.parse({
+        command: 'prompt',
+        sessionToken: 'jwt-token-here',
+        params: {
+          sessionId: '550e8400-e29b-41d4-a716-446655440000',
+          taskId: '550e8400-e29b-41d4-a716-446655440001',
+          prompt: 'Hello!',
+          tool: 'claude-code',
+          cwd: '/home/user/project',
+          promptOrigin: { kind: 'channel', server: '' },
+        },
+      })
+    ).toThrow();
   });
 
   it('should reject invalid tool type', () => {
@@ -288,7 +338,13 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         branchPath: '/data/agor/worktrees/repo/feature',
         action: 'start',
         startCommand: 'docker compose up -d --build',
-        appUrl: 'http://localhost:3000',
+        attempt: {
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          claimDeadline: '2026-01-01T00:00:00.000Z',
+          commandDeadline: '2026-01-01T00:05:00.000Z',
+          resultDeadline: '2026-01-01T00:06:00.000Z',
+          externalJobDeadlineMs: 365000,
+        },
       },
     };
 
@@ -305,7 +361,15 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         sessionToken: 'jwt-token-here',
         params: {
           branchId: '550e8400-e29b-41d4-a716-446655440000',
+          branchPath: '/data/agor/worktrees/repo/feature',
           action: 'start',
+          attempt: {
+            id: '550e8400-e29b-41d4-a716-446655440001',
+            claimDeadline: '2026-01-01T00:00:00.000Z',
+            commandDeadline: '2026-01-01T00:05:00.000Z',
+            resultDeadline: '2026-01-01T00:06:00.000Z',
+            externalJobDeadlineMs: 365000,
+          },
         },
       })
     ).toThrow();
@@ -377,6 +441,7 @@ describe('GitBranchRemovePayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
+        repoPath: '/data/agor/repos/repo',
       },
     };
 
@@ -394,6 +459,7 @@ describe('GitBranchRemovePayloadSchema', () => {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         branchPath: '/data/agor/worktrees/user/repo/feature-x',
         branchesRoot: '/data/agor/worktrees',
+        repoPath: '/data/agor/repos/repo',
         force: true,
       },
     };
@@ -720,6 +786,9 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('zellij.tab');
     expect(commands).toContain('agentic-tool.invoke');
     expect(commands).toContain('codex.auth-file');
-    expect(commands.length).toBe(28);
+    expect(commands).toContain('claude.auth-file');
+    expect(commands).toContain('branch.clean');
+    expect(commands).toContain('branch.archive');
+    expect(commands.length).toBe(31);
   });
 });

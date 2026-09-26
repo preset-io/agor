@@ -24,7 +24,7 @@ import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_TTL_MS } from './upload-stagin
 const HANDLE_PATTERN = /^upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type S3Metadata = Record<string, string | undefined>;
-const PROVENANCE = new Set(['browser', 'gateway-slack', 'mcp-slack']);
+const PROVENANCE = new Set(['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack']);
 
 interface ParsedS3Metadata {
   tenantId: string;
@@ -208,7 +208,7 @@ export class S3UploadStagingStore implements UploadStagingStore {
     }
     const ttlMs = input.ttlMs ?? this.ttlMs;
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 0) throw new Error('Invalid upload ttlMs');
-    const ref = `upl_${randomUUID()}` as UploadRef;
+    const ref = input.reservedRef ?? (`upl_${randomUUID()}` as UploadRef);
     const Key = this.key(input.owner.tenantId, ref);
     const now = new Date();
     const expiresAt = ttlMs === 0 ? null : new Date(now.getTime() + ttlMs).toISOString();

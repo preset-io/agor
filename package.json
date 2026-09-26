@@ -20,6 +20,8 @@
     "docs:dev": "pnpm --filter @agor/docs dev",
     "docs:build": "pnpm --filter @agor/docs build",
     "docs:generate": "pnpm --filter @agor/docs generate",
+    "audit:mcp-catalog": "NODE_OPTIONS=--conditions=source tsx scripts/audit-mcp-catalog.mts",
+    "typecheck:mcp-catalog-audit": "tsc -p scripts/tsconfig.mcp-catalog-audit.json",
     "lint": "biome check --diagnostic-level=warn --error-on-warnings . && node scripts/test-frontend-color-plugins.mjs",
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",
@@ -42,6 +44,7 @@
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
     "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
     "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
+    "test:multitenancy-boundaries": "node --test scripts/check-multitenancy-boundaries.test.mjs",
     "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
     "check:realtime-boundaries": "node scripts/check-realtime-boundaries.mjs",
     "check:ci-test-coverage": "node scripts/check-ci-test-coverage.mjs",
@@ -49,22 +52,24 @@
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
     "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
-    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
+    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs",
+    "test:ha:tenant-links": "node scripts/test-ha-tenant-links.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.7",
+    "@biomejs/biome": "2.5.13",
     "@google-analytics/admin": "^9.2.0",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
-    "lint-staged": "^17.2.0",
+    "lint-staged": "^17.5.1",
     "postgres": "^3.4.9",
     "prettier": "^3.9.6",
-    "rollup": "4.62.4",
+    "rollup": "4.63.3",
     "rollup-plugin-dts": "^6.5.1",
     "socket.io-client": "^4.8.3",
-    "tsx": "4.23.11",
-    "turbo": "^2.10.9",
-    "typescript": "^6.0.3"
+    "tsx": "4.23.13",
+    "turbo": "^2.10.13",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.1"
   },
   "packageManager": "pnpm@11.17.0",
   "engines": {

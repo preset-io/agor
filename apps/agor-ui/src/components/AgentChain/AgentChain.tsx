@@ -6,42 +6,26 @@
  * - Tool uses (with results)
  *
  * Displays as:
- * - Collapsed (default): Summary with thought icon, counts, and stats
+ * - Collapsed (default): Tool count or latest activity
  * - Expanded: ToolBlock items showing sequential thoughts and tool uses
  *
  * Note: Regular assistant responses (text meant for user) are shown
  * as green message bubbles, NOT in AgentChain.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment, Message } from '@agor-live/client';
-import {
-  BranchesOutlined,
-  BulbOutlined,
-  CheckCircleOutlined,
-  CheckSquareOutlined,
-  CloseCircleOutlined,
-  CodeOutlined,
-  CopyOutlined,
-  DownOutlined,
-  EditOutlined,
-  FileAddOutlined,
-  FileOutlined,
-  FileSearchOutlined,
-  FileTextOutlined,
-  FolderOpenOutlined,
-  GlobalOutlined,
-  RightOutlined,
-  SearchOutlined,
-  ThunderboltOutlined,
-  ToolOutlined,
-} from '@ant-design/icons';
-import { Popover, Space, Typography, theme } from 'antd';
-import React, { useMemo, useState } from 'react';
-import { copyToClipboard } from '../../utils/clipboard';
+import type {
+  ContentBlock as CoreContentBlock,
+  DiffEnrichment,
+  Message,
+  ToolExecutionState,
+  TranscriptTruncation,
+} from '@agor-live/client';
+import { BulbOutlined } from '@ant-design/icons';
+import { ConfigProvider, Typography, theme } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
-import { Tag } from '../Tag';
 import {
   buildBashDescriptionNode,
   deriveToolStatus,
@@ -50,7 +34,9 @@ import {
   shouldExpandToolByDefault,
   ToolBlock,
 } from '../ToolBlock';
+import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 
 interface ToolUseBlock {
   type: 'tool_use';
@@ -60,16 +46,12 @@ interface ToolUseBlock {
 }
 
 interface ToolResultBlock {
+  transcript_truncation?: TranscriptTruncation;
   type: 'tool_result';
   tool_use_id: string;
   content: string | CoreContentBlock[];
   is_error?: boolean;
   diff?: DiffEnrichment;
-}
-
-interface TextBlock {
-  type: 'text';
-  text: string;
 }
 
 interface AgentChainProps {
@@ -83,63 +65,33 @@ interface AgentChainProps {
   isLatest?: boolean;
   /** Remove desktop transcript indentation at phone widths. */
   compact?: boolean;
+  revealRequested?: boolean;
+  latestActivity?: ToolExecutionState;
+  hasFollowingResponse?: boolean;
 }
 
 interface ChainItem {
   type: 'thought' | 'tool';
   content: string | { toolUse: ToolUseBlock; toolResult?: ToolResultBlock };
   message: Message;
-}
-
-/**
- * Get the appropriate Ant Design icon for a tool name
- */
-function getToolIcon(toolName: string): React.ReactElement {
-  const iconProps = { style: { fontSize: 12 } };
-
-  switch (toolName) {
-    case 'Read':
-      return <FileOutlined {...iconProps} />;
-    case 'Write':
-      return <FileAddOutlined {...iconProps} />;
-    case 'Edit':
-      return <EditOutlined {...iconProps} />;
-    case 'Bash':
-      return <CodeOutlined {...iconProps} />;
-    case 'Grep':
-      return <SearchOutlined {...iconProps} />;
-    case 'Glob':
-      return <FolderOpenOutlined {...iconProps} />;
-    case 'Task':
-      return <BranchesOutlined {...iconProps} />;
-    case 'TodoWrite':
-      return <CheckSquareOutlined {...iconProps} />;
-    case 'WebFetch':
-      return <GlobalOutlined {...iconProps} />;
-    case 'WebSearch':
-      return <SearchOutlined {...iconProps} />;
-    case 'NotebookEdit':
-      return <FileTextOutlined {...iconProps} />;
-    case 'Skill':
-    case 'SlashCommand':
-      return <ThunderboltOutlined {...iconProps} />;
-    // Codex tools
-    case 'edit_files':
-      return <EditOutlined {...iconProps} />;
-    // MCP tools
-    case 'ListMcpResourcesTool':
-    case 'ReadMcpResourceTool':
-      return <FileSearchOutlined {...iconProps} />;
-    // Fallback for unknown tools
-    default:
-      return <ToolOutlined {...iconProps} />;
-  }
+  transcript_truncation?: TranscriptTruncation;
 }
 
 export const AgentChain = React.memo<AgentChainProps>(
-  ({ messages, isTaskRunning = false, isLatest, compact = false }) => {
+  ({
+    messages,
+    isTaskRunning = false,
+    isLatest,
+    compact = false,
+    revealRequested = false,
+    latestActivity,
+    hasFollowingResponse = false,
+  }) => {
     const { token } = theme.useToken();
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(revealRequested);
+    useEffect(() => {
+      if (revealRequested) setExpanded(true);
+    }, [revealRequested]);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {
@@ -152,9 +104,13 @@ export const AgentChain = React.memo<AgentChainProps>(
 
       // First pass: collect ALL tool results from ALL messages (including user messages)
       const globalToolResultMap = new Map<string, ToolResultBlock>();
+      const renderedToolUseIds = new Set<string>();
       for (const message of messages) {
         if (Array.isArray(message.content)) {
           for (const block of message.content) {
+            if (block.type === 'tool_use' && message.role !== 'user') {
+              renderedToolUseIds.add((block as unknown as ToolUseBlock).id);
+            }
             if (block.type === 'tool_result') {
               const toolResult = block as unknown as ToolResultBlock;
               globalToolResultMap.set(toolResult.tool_use_id, toolResult);
@@ -186,13 +142,21 @@ export const AgentChain = React.memo<AgentChainProps>(
           if (toolResults.length > 0) {
             for (const block of toolResults) {
               const toolResult = block as unknown as ToolResultBlock;
-              const resultText = toolResultToDisplayText(toolResult.content);
+              const truncation = toolResult.transcript_truncation;
+              const isProjected = Object.keys(truncation ?? {}).length > 0;
+              // Paired projected results belong to ToolUseRenderer: a second
+              // text-only thought could hide the notice behind a different
+              // toggle, or duplicate it. Task results live in a separate chain
+              // from their call, so their thought must own the disclosure.
+              if (isProjected && renderedToolUseIds.has(toolResult.tool_use_id)) continue;
 
-              if (resultText.trim()) {
+              const resultText = toolResultToDisplayText(toolResult.content);
+              if (resultText.trim() || isProjected) {
                 items.push({
                   type: 'thought',
                   content: resultText,
                   message,
+                  transcript_truncation: truncation,
                 });
               }
             }
@@ -208,8 +172,16 @@ export const AgentChain = React.memo<AgentChainProps>(
 
         // Collect blocks from this message
         for (const block of message.content) {
-          if (block.type === 'text') {
-            const text = (block as unknown as TextBlock).text.trim();
+          if (block.type === 'text' || block.type === 'thinking') {
+            // Normalized blocks use text; Claude SDK thinking blocks use thinking.
+            // ContentBlock fields are unknown and may be absent in partial payloads.
+            const text = (
+              typeof block.text === 'string'
+                ? block.text
+                : block.type === 'thinking' && typeof block.thinking === 'string'
+                  ? block.thinking
+                  : ''
+            ).trim();
             if (text) {
               if (hasSeenTool) {
                 textBlocksAfterTools.push(text);
@@ -259,54 +231,18 @@ export const AgentChain = React.memo<AgentChainProps>(
       return items;
     }, [messages]);
 
-    // Calculate stats
-    const stats = useMemo(() => {
-      let thoughtCount = 0;
-      let toolCount = 0;
-      let successCount = 0;
-      let errorCount = 0;
-      const toolNames = new Map<string, number>();
-      const filesAffected = new Set<string>();
-
+    const toolCount = useMemo(() => {
+      const ids = new Set<string>();
       for (const item of chainItems) {
-        if (item.type === 'thought') {
-          thoughtCount++;
-        } else {
-          toolCount++;
-          const { toolUse, toolResult } = item.content as {
-            toolUse: ToolUseBlock;
-            toolResult?: ToolResultBlock;
-          };
-
-          // Count tool names (use display name for MCP proxy tools)
-          const displayName = getToolDisplayName(toolUse.name, toolUse.input);
-          toolNames.set(displayName, (toolNames.get(displayName) || 0) + 1);
-
-          // Track files
-          if (['Edit', 'Read', 'Write'].includes(toolUse.name) && toolUse.input.file_path) {
-            filesAffected.add(toolUse.input.file_path as string);
-          }
-
-          // Count results
-          if (toolResult) {
-            if (toolResult.is_error) {
-              errorCount++;
-            } else {
-              successCount++;
-            }
-          }
+        if (item.type === 'tool' && typeof item.content !== 'string') {
+          ids.add(item.content.toolUse.id);
         }
       }
-
-      return {
-        thoughtCount,
-        toolCount,
-        successCount,
-        errorCount,
-        toolNames,
-        filesAffected: Array.from(filesAffected).sort(),
-      };
-    }, [chainItems]);
+      // TaskBlock assigns the event to its owning group. Do not count its
+      // eventual persisted payload twice, or borrow the turn-wide snapshot.
+      if (latestActivity) ids.add(latestActivity.toolUseId);
+      return ids.size;
+    }, [chainItems, latestActivity]);
 
     // Generate smart description for tool
     const getToolDescription = (toolUse: ToolUseBlock): string | null => {
@@ -417,27 +353,30 @@ export const AgentChain = React.memo<AgentChainProps>(
         const oneLine = thoughtContent.replace(/\s+/g, ' ').trim();
 
         return (
-          <ToolBlock
-            key={`thought-${index}`}
-            icon={<BulbOutlined style={{ fontSize: 14 }} />}
-            name="Thinking"
-            description={oneLine || undefined}
-            status="success"
-          >
-            {thoughtContent.trim() && (
-              <CollapsibleText
-                maxLines={8}
-                preserveWhitespace
-                style={{
-                  fontSize: token.fontSizeSM,
-                  margin: 0,
-                  color: token.colorTextTertiary,
-                }}
-              >
-                {thoughtContent}
-              </CollapsibleText>
-            )}
-          </ToolBlock>
+          <React.Fragment key={`thought-${index}`}>
+            {/* Keep omission visible even while the result text is collapsed. */}
+            <TranscriptTruncationNotice truncations={[item.transcript_truncation]} />
+            <ToolBlock
+              icon={<BulbOutlined style={{ fontSize: 14 }} />}
+              name="Thinking"
+              description={oneLine || undefined}
+              status="success"
+            >
+              {thoughtContent.trim() && (
+                <CollapsibleText
+                  maxLines={8}
+                  preserveWhitespace
+                  style={{
+                    fontSize: token.fontSizeSM,
+                    margin: 0,
+                    color: token.colorTextTertiary,
+                  }}
+                >
+                  {thoughtContent}
+                </CollapsibleText>
+              )}
+            </ToolBlock>
+          </React.Fragment>
         );
       }
 
@@ -496,156 +435,75 @@ export const AgentChain = React.memo<AgentChainProps>(
       );
     };
 
-    // Summary section
-    const summaryDescription = (
-      <Space size={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit / 2 }}>
-        {/* Tool name tags */}
-        {stats.toolNames.size > 0 &&
-          Array.from(stats.toolNames.entries()).map(([name, count]) => (
-            <Tag key={name} icon={getToolIcon(name)} style={{ fontSize: 11, margin: 0 }}>
-              {name} × {count}
-            </Tag>
-          ))}
+    const latestToolItem = [...chainItems].reverse().find((item) => item.type === 'tool');
+    const latestToolName =
+      latestToolItem && typeof latestToolItem.content !== 'string'
+        ? latestToolItem.content.toolUse.name
+        : undefined;
 
-        {/* Result stats */}
-        {stats.successCount > 0 && (
-          <Tag icon={<CheckCircleOutlined />} color="success" style={{ fontSize: 11, margin: 0 }}>
-            {stats.successCount} success
-          </Tag>
-        )}
-        {stats.errorCount > 0 && (
-          <Tag icon={<CloseCircleOutlined />} color="error" style={{ fontSize: 11, margin: 0 }}>
-            {stats.errorCount} error
-          </Tag>
-        )}
-
-        {/* Files affected */}
-        {stats.filesAffected.length > 0 && (
-          <Popover
-            content={
-              <div style={{ maxWidth: 450 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                  }}
-                >
-                  {stats.filesAffected.map((file) => (
-                    <div
-                      key={file}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
-                        padding: '4px 0',
-                        fontSize: token.fontSizeSM,
-                        color: token.colorTextSecondary,
-                        fontFamily: 'monospace',
-                        wordBreak: 'break-all',
-                      }}
-                    >
-                      <span style={{ flex: 1 }}>{file}</span>
-                      <CopyOutlined
-                        style={{
-                          fontSize: 10,
-                          color: token.colorTextTertiary,
-                          cursor: 'pointer',
-                          opacity: 0.5,
-                          transition: 'opacity 0.2s',
-                          flexShrink: 0,
-                        }}
-                        onClick={() => copyToClipboard(file)}
-                        title="Copy to clipboard"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            }
-            title={`${stats.filesAffected.length} ${stats.filesAffected.length === 1 ? 'file' : 'files'} affected`}
-            trigger="hover"
-          >
-            <Typography.Text type="secondary" style={{ fontSize: 11, cursor: 'pointer' }}>
-              <FileTextOutlined /> {stats.filesAffected.length}{' '}
-              {stats.filesAffected.length === 1 ? 'file' : 'files'} affected
-            </Typography.Text>
-          </Popover>
-        )}
-      </Space>
-    );
-
-    const _totalCount = stats.thoughtCount + stats.toolCount;
-    const hasErrors = stats.errorCount > 0;
-
-    // Early return if no items (prevents empty bordered boxes)
-    if (chainItems.length === 0) {
+    // Empty streamed text is not a boundary; its live tool event can own
+    // this disclosure until the corresponding payload arrives.
+    if (chainItems.length === 0 && !latestActivity) {
       return null;
     }
 
     return (
       <div style={{ margin: `${token.sizeUnit * 1.5}px 0` }}>
-        {/* Collapsed summary - clickable */}
-        <div
+        {/* Tool failures are normal agent iteration, not the turn outcome.
+            Keep error status/details on the inner tools, not this summary. */}
+        <ToolDisclosureHeader
+          count={toolCount}
+          label={
+            isTaskRunning && isLatest && latestActivity
+              ? `${latestActivity.status === 'executing' ? 'Running' : 'Latest'}: ${latestActivity.toolName}`
+              : isTaskRunning && isLatest && latestToolName
+                ? `${latestToolItem && typeof latestToolItem.content !== 'string' && !latestToolItem.content.toolResult ? 'Running' : 'Latest'}: ${latestToolName}`
+                : toolCount
+                  ? 'Tool calls'
+                  : 'Reasoning'
+          }
+          expanded={expanded}
+          executing={
+            !!(
+              isTaskRunning &&
+              isLatest &&
+              (!hasFollowingResponse ||
+                latestActivity?.status === 'executing' ||
+                (!latestActivity &&
+                  latestToolItem &&
+                  typeof latestToolItem.content !== 'string' &&
+                  !latestToolItem.content.toolResult &&
+                  !IMPLICIT_RESULT_TOOLS.has(latestToolItem.content.toolUse.name)))
+            )
+          }
           onClick={() => setExpanded(!expanded)}
-          style={{
-            padding: token.sizeUnit * 1.5,
-            borderRadius: token.borderRadius,
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorder}`,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = token.colorPrimaryBorder;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = token.colorBorder;
-          }}
-        >
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, flexWrap: 'wrap' }}
-          >
-            {/* Expand/collapse icon */}
-            {expanded ? (
-              <DownOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 12, color: token.colorTextSecondary }} />
-            )}
-
-            {/* Status icon */}
-            {hasErrors ? (
-              <CloseCircleOutlined style={{ color: token.colorError, fontSize: 16 }} />
-            ) : (
-              <CheckCircleOutlined style={{ color: token.colorTextSecondary, fontSize: 16 }} />
-            )}
-
-            {/* Summary text */}
-            <Typography.Text strong>
-              <BulbOutlined /> {stats.thoughtCount > 0 && `${stats.thoughtCount} thoughts`}
-              {stats.thoughtCount > 0 && stats.toolCount > 0 && ', '}
-              {stats.toolCount > 0 && `${stats.toolCount} tools`}
-            </Typography.Text>
-
-            {/* Only show details when collapsed */}
-            {!expanded && summaryDescription}
-          </div>
-        </div>
+        />
 
         {/* Expanded chain */}
         {expanded && (
-          <div
-            style={{
-              paddingLeft: compact ? 0 : token.sizeUnit * 8,
-              marginTop: token.sizeUnit,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
+          <ConfigProvider
+            theme={{
+              token: {
+                fontSize: token.fontSizeSM,
+                fontSizeSM: token.fontSizeSM,
+                colorText: token.colorTextSecondary,
+              },
             }}
           >
-            {chainItems.map(renderChainItem)}
-          </div>
+            <div
+              style={{
+                fontSize: token.fontSizeSM,
+                color: token.colorTextSecondary,
+                paddingLeft: compact ? 0 : token.sizeUnit * 8,
+                marginTop: token.sizeUnit,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              {chainItems.map(renderChainItem)}
+            </div>
+          </ConfigProvider>
         )}
       </div>
     );

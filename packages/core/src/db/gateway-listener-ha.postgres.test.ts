@@ -303,7 +303,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantA = `gateway-a-${generateId()}` as TenantID;
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
-    await seedChannel(db, tenantB);
+    const b = await seedChannel(db, tenantB);
     const discord = await seedChannel(db, tenantA, { channelType: 'discord' });
 
     const refs = await runWithSystemDatabaseScope(
@@ -317,11 +317,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     expect(refs).toContainEqual({ channel_id: discord.channel.id, tenant_id: tenantA });
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
-      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidates(
+      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(
         100
       );
-      expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
-      expect(candidates.some((channel) => channel.id === discord.channel.id)).toBe(true);
+      expect(candidates.includes(a.channel.id)).toBe(true);
+      expect(candidates.includes(discord.channel.id)).toBe(true);
 
       await new GatewayChannelRepository(scoped).claimListener({
         channelId: a.channel.id,
@@ -343,6 +343,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     });
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidateIds(
+        100
+      );
+      expect(candidates).toContain(b.channel.id);
+      // Use an unclaimed foreign channel: a held lease would independently
+      // exclude the row and mask a missing tenant boundary.
+      expect(candidates).not.toContain(discord.channel.id);
       expect(await new GatewayChannelRepository(scoped).findById(a.channel.id)).toBeNull();
       expect(
         await new GatewayChannelRepository(scoped).claimListener({

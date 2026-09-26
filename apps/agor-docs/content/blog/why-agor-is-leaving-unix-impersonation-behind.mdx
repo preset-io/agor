@@ -197,16 +197,10 @@ reviewers to reason about sudoers rules, host accounts, password synchronization
 ACL inheritance, recursive repair, stale memberships, and storage-specific behavior, even though
 our future architecture no longer relies on any of it.
 
-We preserved a final 0.24 transition release containing the migration scripts and documentation,
-then made 0.25 intentionally breaking. The practical migration is:
-
-1. back up the database, configuration, and storage;
-2. drain work and stop Agor;
-3. record existing per-user home paths where continuity matters;
-4. make repositories, branches, and homes accessible to the daemon account, typically by changing
-   owner/group in a controlled, mount-bounded migration;
-5. enable sandbox mode and verify home continuity, Git writes, branch RBAC, and secret masking;
-6. upgrade to 0.25 or later, which no longer contains strict/insulated machinery.
+**Migration note:** There is no published 0.24 bridge release. Existing installations
+need an offline 0.24.7 → 0.25.1 cutover with tested backups and every daemon stopped.
+Follow the [current migration instructions](/guide/multiplayer-unix-isolation#migrating-from-024)
+for the versioned scripts, ownership preflight, verification, and rollback requirements.
 
 The existing migration scripts are a reference implementation, not a promise that Agor can infer
 the safe ownership operation for every host. Automatic cleanup of old users and groups would be

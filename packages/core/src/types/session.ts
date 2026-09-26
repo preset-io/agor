@@ -19,6 +19,7 @@ import type {
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { ContextFilePath } from './context';
+import type { ChannelType } from './gateway';
 import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
 import type { TaskStatus, TerminationCoordinationPendingCode } from './task';
@@ -217,7 +218,19 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
 export const SESSION_SDK_HOME_SCOPES = ['execution_home', 'branch'] as const;
 export type SessionSdkHomeScope = (typeof SESSION_SDK_HOME_SCOPES)[number];
 
+export interface SessionUsageSummary {
+  total: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  cost: number;
+}
+
 export interface Session {
+  /** Read-only, opt-in aggregate over all tasks, independent of transcript paging. */
+  usage_summary?: SessionUsageSummary;
+
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
 
@@ -399,6 +412,8 @@ export interface Session {
    * Access in templates: {{ session.context.teamName }}
    */
   custom_context?: Record<string, unknown> & {
+    /** Server-owned provenance for sessions admitted by a gateway channel. */
+    gateway_source?: GatewaySource;
     /**
      * Scheduled run metadata (populated by scheduler)
      *
@@ -621,15 +636,20 @@ export type SchedulerInitializationFailureCode =
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<
   Partial<Session>,
-  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config' | 'sdk_home_scope'
+  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config' | 'sdk_home_scope' | 'usage_summary'
 > & {
   agentic_tool?: AgenticToolName;
   agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
   model_config?: Partial<NonNullable<Session['model_config']>> | null;
+  /** MCP server IDs to attach in the same create call (issue #2629). */
+  mcpServerIds?: string[];
 };
 
 /** Session patch semantics: omit/undefined preserves, string sets, null clears. */
-export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id' | 'sdk_home_scope'> & {
+export type SessionUpdate = Omit<
+  Partial<Session>,
+  'sdk_session_id' | 'sdk_home_scope' | 'usage_summary'
+> & {
   sdk_session_id?: string | null;
 };
 
@@ -708,7 +728,7 @@ export interface SessionRelationship {
 export interface GatewaySource {
   channel_id: string;
   channel_name: string;
-  channel_type: string;
+  channel_type: ChannelType;
   thread_id: string;
   /** GitHub-specific: "owner/repo" format */
   github_repo?: string;

@@ -18,6 +18,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgorConfig } from '@agor/core/config';
 import {
+  isMissingTenantContextError,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -30,16 +31,25 @@ import {
   UserApiKeysRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
+import {
+  MCP_CLIENT_HINT_HEADER,
+  PERSONAL_API_KEY_PREFIX,
+  type Session,
+  type SessionID,
+  type TenantContext,
+  type UserID,
+} from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
+import { createApiKeyHostTenantResolver } from '../auth/api-key-host-tenant.js';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
+import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
 import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
-import { validateVerifiedSessionToken, verifySessionToken } from './tokens.js';
+import { validateVerifiedSessionToken, verifySessionTokenDetailed } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
@@ -59,6 +69,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerUserTools } from './tools/users.js';
 import { registerWidgetTools } from './tools/widgets.js';
+import { createMcpTracing } from './tracing.js';
 
 const DEBUG_MCP_REQUESTS =
   process.env.AGOR_DEBUG_MCP_REQUESTS === '1' || process.env.DEBUG?.includes('mcp-requests');
@@ -336,7 +347,8 @@ function getRegistry(): {
 function createMcpServer(
   ctx: McpContext,
   toolSearchEnabled: boolean,
-  serverVersion: string
+  serverVersion: string,
+  tracing: ReturnType<typeof createMcpTracing>
 ): McpServer {
   const server = new McpServer(
     {
@@ -368,10 +380,13 @@ function createMcpServer(
     // though progressive discovery intentionally omits it from tools/list.
     // Both paths retain the same authenticated tenant wrapper and SDK input /
     // output validation.
-    registerDomainTools(tenantScopedToolProxy(toolDispatcherProxy(server, dispatcher), ctx), ctx);
+    registerDomainTools(
+      tenantScopedToolProxy(tracing.toolProxy(toolDispatcherProxy(server, dispatcher)), ctx),
+      ctx
+    );
 
     // Register search/detail/execute as the complete visible MCP catalog.
-    registerSearchTools(server, registry, dispatcher);
+    registerSearchTools(tracing.toolProxy(server, dispatcher), registry, dispatcher);
 
     // Keep the advertised catalog to the three progressive-discovery facade
     // tools without removing direct tools/call compatibility. This uses the
@@ -385,7 +400,7 @@ function createMcpServer(
       throw new Error(`Expected 3 progressive-discovery MCP tools, got ${toolsList.tools.length}`);
     }
   } else {
-    registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
+    registerDomainTools(tenantScopedToolProxy(tracing.toolProxy(server), ctx), ctx);
   }
 
   // McpServer.registerTool() conservatively advertises listChanged=true.
@@ -409,18 +424,23 @@ export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy'> = { multi_tenancy: undefined },
+  config: Pick<AgorConfig, 'multi_tenancy' | 'metrics' | 'external_launch'> = {
+    multi_tenancy: undefined,
+  },
   options: { serverVersion?: string } = {}
 ): void {
   const serverVersion = options.serverVersion ?? '0.0.0';
+  const tracing = createMcpTracing(config.metrics?.apm?.trace_services ?? 'off');
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
     getRegistry();
     console.log(`✅ MCP tool registry built (${cachedRegistry!.size} tools cached)`);
   }
 
+  const logAuthRejection = createMcpAuthRejectionLogger();
   const personalApiKeys = new UserApiKeysRepository(db);
   const multiTenancy = resolveMultiTenancyConfig(config);
+  const resolveApiKeyHostTenant = createApiKeyHostTenantResolver({ db, config });
   const requestContext = new AsyncLocalStorage<McpContext>();
 
   const protocolHandler = createMcpHandler(
@@ -430,7 +450,7 @@ export function setupMCPRoutes(
         throw new Error('Authenticated MCP request context is unavailable');
       }
       mcpRequestDebug(`🔌 Serving MCP ${era} protocol request`);
-      return createMcpServer(ctx, toolSearchEnabled, serverVersion);
+      return createMcpServer(ctx, toolSearchEnabled, serverVersion, tracing);
     },
     {
       // One endpoint serves the 2026-07-28 per-request protocol and every
@@ -539,7 +559,7 @@ export function setupMCPRoutes(
     return fromHeader ?? fromQuery;
   };
 
-  const handler = async (req: Request, res: Response) => {
+  const handleRequest = async (req: Request, res: Response) => {
     try {
       mcpRequestDebug(`🔌 Incoming MCP request: ${req.method} /mcp`);
 
@@ -563,6 +583,7 @@ export function setupMCPRoutes(
 
       let requestedSessionId: string | undefined;
       let credential: string | undefined;
+      let credentialSource: 'authorization' | 'api_key' | 'none' = 'none';
       try {
         const authorization = getSingleHeader(req, 'Authorization');
         const xApiKey = getSingleHeader(req, 'X-API-Key');
@@ -572,6 +593,7 @@ export function setupMCPRoutes(
           throw new MalformedHeaderError('Mcp-Session-Id must contain only visible ASCII');
         }
         credential = getCredential(authorization, xApiKey);
+        credentialSource = authorization ? 'authorization' : xApiKey ? 'api_key' : 'none';
       } catch (error) {
         if (error instanceof MalformedHeaderError) {
           return res.status(400).json({
@@ -582,7 +604,8 @@ export function setupMCPRoutes(
       }
 
       if (!credential) {
-        console.warn('⚠️  MCP request missing credentials');
+        // Credential-free discovery is expected traffic, not a JWT failure.
+        // Still reject before tenant resolution, database access, or protocol dispatch.
         return res.status(401).json({
           ...jsonRpcError(
             req,
@@ -596,17 +619,23 @@ export function setupMCPRoutes(
       let userId: UserID;
       let sessionId: SessionID | undefined;
       let tenant: TenantContext;
-      const isPersonalApiKey = credential.startsWith('agor_sk_');
+      const isPersonalApiKey = credential.startsWith(PERSONAL_API_KEY_PREFIX);
 
       if (isPersonalApiKey) {
         try {
           // Opaque personal keys do not contain a signed tenant claim. Resolve
           // static mode or the configured trusted edge header before touching
-          // the tenant-owned key table. Auth-claim-only hosted deployments must
-          // use an internal tenant-bound MCP token instead.
-          tenant = resolveTenantContext(multiTenancy, {
-            headers: getTenantResolutionHeaders(req),
-          });
+          // the tenant-owned key table. Hosted claim-only deployments route the
+          // key by the trusted workspace Host instead (see api-key-host-tenant).
+          const tenantHeaders = getTenantResolutionHeaders(req);
+          try {
+            tenant = resolveTenantContext(multiTenancy, { headers: tenantHeaders });
+          } catch (error) {
+            // Only a missing identity may fall back to Host routing; malformed
+            // or conflicting trusted tenant headers stay terminal.
+            if (!isMissingTenantContextError(error) || !resolveApiKeyHostTenant) throw error;
+            tenant = await resolveApiKeyHostTenant(tenantHeaders);
+          }
         } catch (error) {
           if (error instanceof TenantResolutionError) {
             return res.status(401).json({
@@ -622,7 +651,13 @@ export function setupMCPRoutes(
           )
         );
         if (!keyRow) {
-          console.warn('⚠️  Invalid MCP personal API key');
+          logAuthRejection(
+            'invalid_personal_key',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid personal API key'),
           });
@@ -651,14 +686,21 @@ export function setupMCPRoutes(
         }
         sessionId = requestedSessionId as SessionID | undefined;
       } else {
-        const verifiedToken = verifySessionToken(app, credential);
-        if (!verifiedToken) {
-          console.warn('⚠️  Invalid MCP session token');
+        const verification = verifySessionTokenDetailed(app, credential);
+        if (!verification.context) {
+          logAuthRejection(
+            verification.reason,
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
           });
         }
 
+        const verifiedToken = verification.context;
         try {
           // The signed token binding is an authenticated tenant signal. Static
           // configuration and a configured trusted header, when present, must
@@ -678,7 +720,13 @@ export function setupMCPRoutes(
 
         const context = await validateVerifiedSessionToken(verifiedToken);
         if (!context) {
-          console.warn('⚠️  Invalid MCP session token');
+          logAuthRejection(
+            'session_missing',
+            req.method,
+            credentialSource,
+            req.body,
+            req.headers[MCP_CLIENT_HINT_HEADER]
+          );
           return res.status(401).json({
             ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
           });
@@ -794,6 +842,9 @@ export function setupMCPRoutes(
       }
     }
   };
+
+  const handler = (req: Request, res: Response) =>
+    tracing.request(req.body, () => handleRequest(req, res));
 
   // GET and DELETE remain registered only to return an explicit, authenticated
   // 405 response to Streamable HTTP clients that optimistically probe them.

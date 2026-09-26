@@ -14,7 +14,7 @@ safe release.
 ```text
 Prompt
   |
-  `-- durable admission --> QUEUED
+  `-- durable admission --> QUEUED (or directly DISPATCHING when idle)
                                |
                      queue-head/Session claim
                                v
@@ -88,6 +88,14 @@ QUEUED -----> DISPATCHING <----- CREATED
                        STOPPED or FAILED
 ```
 
+Claude completion requires an SDK result, not merely iterator exhaustion or a
+persisted assistant-message ID. A result with `is_error: true` is a failure even
+when its subtype is `success`; a synthesized missing-assistant notice is also a
+failure, not model output. A stream closing without a result fails unless it
+was interrupted. Real assistant/tool messages already persisted remain intact.
+These adapter outcomes use the existing executor terminal patch; they do not
+supersede daemon-owned containment or retry/replay the prompt.
+
 Terminal task state is immutable at the row-locked repository boundary. A late
 executor claim, result, or permission resume cannot revive or overwrite it.
 `dispatching`, `running`, `stopping`, and permission/input waits are
@@ -98,9 +106,22 @@ still block admission until it is dispatched or settled.
 Queue materialization and draining are documented separately in
 [task-queueing.md](task-queueing.md).
 
-Prompt admission normally enters through `queued` even for an idle Session, so
-ordering and idle-vs-waiting are one database decision. `created` remains for
-the explicit create-then-run API and scheduled compatibility/reconciliation.
+Fresh ordinary prompts can be admitted directly as `dispatching` when the
+locked Session is eligible and has no unfinished Tasks. Admission inserts the
+Task and projects the Session atomically; only its caller may launch after
+commit. Busy/pending Sessions and stable-ID producers retain `queued` admission.
+`created` remains for the explicit create-then-run API and scheduled
+compatibility/reconciliation. Direct admission has the same dispatch
+connection timeout/recovery contract: a crash after commit never silently
+requeues or replays a possibly launched prompt.
+
+Teams queue admission additionally checks the verified inbound event's processing
+token, lease, installation identity, and configuration generation inside that
+same transaction, immediately before inserting the Task. Channel and event locks
+hold through commit: revocation before admission refuses the Task; revocation
+after admission does not retroactively cancel it. Outbound delivery separately
+uses its durable effect-start marker as the revocation cutoff and never replays
+an ambiguous provider effect.
 
 ## The runtime facts stored on a task
 
@@ -188,6 +209,16 @@ an explicit mapping-review point.
   coordination token and expiring lease unconditionally fence normal
   containment settlement. Guarded-unverified state clears the token and
   rejects any later stale-coordinator settlement.
+- A `stopping` request claimed before a templated executor connected is
+  pending (`awaiting_remote_executor`), not stranded: it holds no coordination
+  lease and no unverified guard, and the stranded-termination scan skips it
+  until the same remote startup deadline the dispatch scan uses, evaluated in
+  database time and anchored on dispatch time rather than on the Stop. The
+  skip applies only to templated rows with neither a connection nor a fenced
+  quiescence report; local rows and quiesced rows stay discoverable so a
+  daemon crash never delays their recovery. Once discovered past that deadline
+  the reconciler settles the request as guarded unverified with a "never
+  connected" diagnosis.
 - A replacement daemon resumes an existing durable `stopping` request after
   the prior claim expires. Durable unverified containment is excluded from
   rediscovery and remains owner/admin-guarded unless a first, correctly
@@ -242,17 +273,23 @@ transaction, eliminating a daemon-death gap between durable commits.
 
 Containment then depends on execution mode:
 
-| Runtime                   | Evidence required before terminal settlement                                                                                                                                                |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local executor            | Cooperative quiescence when available, followed by process-group absence verification by the daemon application that owns the PID/PGID handle; escalation can use `SIGTERM` then `SIGKILL`. |
-| Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host.                                                                          |
-| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                              |
+| Runtime                   | Evidence required before terminal settlement                                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local executor            | Cooperative quiescence when available, followed by process-group absence verification by the daemon application that owns the PID/PGID handle; escalation can use `SIGTERM` then `SIGKILL`.    |
+| Templated/remote executor | The scoped executor's fenced quiescence report, because the daemon cannot inspect a process group on another host. Before that executor has connected, Stop is pending rather than unverified. |
+| OpenCode provider work    | Local process absence is insufficient to prove server-side work stopped, so termination can remain unverified.                                                                                 |
 
 Local cooperative shutdown gives the process wrapper 250 ms to disappear before
 signaling. A PGID probe may still be `unverified` because of an OS inspection
 error; only an explicit later `absent` result verifies termination. Persistent
 uncertainty fails closed. Templated/remote executors get a 15 second cooperative
-window because the daemon has no local signal fallback.
+window because the daemon has no local signal fallback; the unverified
+diagnosis reports the wait actually spent. A templated executor that has not
+claimed its dispatch cannot have received the request, so Stop returns
+`pending` with `awaiting_remote_executor` and the request stays durable. The
+late executor's startup recovery reads it, reports quiescence, and settles the
+task without ever connecting. Only the remote startup deadline turns that
+pending request into a guarded unverified one.
 
 After provider cleanup returns, the executor makes bounded, idempotent retries
 to report its exact Task/request-fenced quiescence fact. A failed write is
@@ -312,6 +349,22 @@ heartbeat, containment, or startup orphan ownership.
 is not equivalent to promptability and must not be checked alone. Use the
 central session/task helpers at execution boundaries instead of inventing a
 second busy-state test.
+
+## Diagnosing a runtime interruption
+
+The UI's "Task interrupted" notice covers every verified non-user,
+non-authorization termination. `heartbeat_lost` has two producers: a stale
+heartbeat found by the reconciler, and any local/authoritative executor
+process exit while its Task is active (including the SIGTERM a standalone
+daemon sends on graceful shutdown). Correlate by `task_id`:
+
+| Log line                                                | Answers                                                                                                        |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `[executor.exit] event=process_exited`                  | pid, exit code, signal, and `daemon_shutdown` for every prompt-executor exit                                   |
+| `[distributed-work.task-runtime] event=heartbeat_stale` | approximate heartbeat age vs threshold (daemon clock), last pulse, and whether the tracked process still lives |
+| `[executor.heartbeat] event=write_failed` / `recovered` | executor-side heartbeat write error class and outage length                                                    |
+| `[task.termination] event=request_committed`            | winning cause, connection state, heartbeat/pulse age, and SDK failure reason                                   |
+| `[task.termination] event=settled`                      | outcome, containment result, and request-to-settle time                                                        |
 
 ## Change invariants
 

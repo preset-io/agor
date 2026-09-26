@@ -28,6 +28,9 @@ import type {
 } from '@agor/core/sdk';
 import type { ContextUsageSnapshot, SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { CLAUDE_CODE_TODO_TOOLS } from './constants.js';
+
+const CLAUDE_CODE_TODO_TOOL_NAMES = new Set<string>(CLAUDE_CODE_TODO_TOOLS);
 
 /**
  * Content block interface for SDK messages
@@ -41,6 +44,7 @@ interface ContentBlock {
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
+  tool_use_result?: unknown;
   [key: string]: unknown;
 }
 
@@ -74,6 +78,7 @@ export type ProcessedEvent =
         input?: Record<string, unknown>;
         tool_use_id?: string;
         content?: unknown;
+        tool_use_result?: unknown;
         is_error?: boolean;
         signature?: string; // For thinking blocks
         status?: string; // For system_status blocks
@@ -189,6 +194,7 @@ interface ProcessorState {
   capturedAgentSessionId?: string;
   messageCount: number;
   assistantMessageCount: number;
+  hasTextDeltas: boolean;
   lastAssistantMessageTime: number;
   resolvedModel?: string;
   enableTokenStreaming: boolean;
@@ -204,6 +210,8 @@ interface ProcessorState {
   // Available slash commands and skills (captured from init message)
   slashCommands: string[];
   skills: string[];
+  /** Built-in tool names keyed by call ID until the matching result arrives. */
+  toolNamesByUseId: Map<string, string>;
 }
 
 /**
@@ -222,6 +230,7 @@ export class SDKMessageProcessor {
       capturedAgentSessionId: undefined,
       messageCount: 0,
       assistantMessageCount: 0,
+      hasTextDeltas: false,
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
       minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
@@ -230,6 +239,7 @@ export class SDKMessageProcessor {
       textChunkBufferSize: 0,
       slashCommands: [],
       skills: [],
+      toolNamesByUseId: new Map(),
     };
   }
 
@@ -313,6 +323,9 @@ export class SDKMessageProcessor {
 
     const contentBlocks = this.processContentBlocks(msg.message?.content as ContentBlock[]);
     const toolUses = this.extractToolUses(contentBlocks);
+    for (const toolUse of toolUses) {
+      this.state.toolNamesByUseId.set(toolUse.id, toolUse.name);
+    }
 
     return [
       {
@@ -346,6 +359,35 @@ export class SDKMessageProcessor {
       // Tool result messages - save to database for conversation continuity
       const toolResults = content.filter((b) => b.type === 'tool_result');
 
+      // The SDK exposes structured built-in-tool output (including the ID
+      // assigned by TaskCreate) on SDKUserMessage.tool_use_result rather than
+      // inside the Anthropic tool_result content block. Preserve it on the
+      // single matching block so persistence/realtime consumers receive the
+      // provider's correlation data. Do not guess when one SDK message contains
+      // parallel results because the top-level value has no tool-use ID.
+      const structuredResultBlock = toolResults.length === 1 ? toolResults[0] : undefined;
+      const structuredResultToolName = structuredResultBlock?.tool_use_id
+        ? this.state.toolNamesByUseId.get(structuredResultBlock.tool_use_id)
+        : undefined;
+      const topLevelToolUseResult =
+        structuredResultToolName &&
+        CLAUDE_CODE_TODO_TOOL_NAMES.has(structuredResultToolName) &&
+        'tool_use_result' in msg
+          ? (msg as SDKUserMessage).tool_use_result
+          : undefined;
+      const normalizedContent =
+        topLevelToolUseResult !== undefined && toolResults.length === 1
+          ? content.map((block) =>
+              block === structuredResultBlock
+                ? { ...block, tool_use_result: topLevelToolUseResult }
+                : block
+            )
+          : content;
+
+      for (const result of toolResults) {
+        if (result.tool_use_id) this.state.toolNamesByUseId.delete(result.tool_use_id);
+      }
+
       // A tool is complete when Claude reports its result, not when the
       // preceding tool-use content block finishes streaming.
       return [
@@ -363,7 +405,7 @@ export class SDKMessageProcessor {
         {
           type: 'complete',
           role: MessageRole.USER,
-          content: content, // Tool result content
+          content: normalizedContent, // Tool result content plus structured SDK output
           toolUses: undefined,
           parent_tool_use_id: msg.parent_tool_use_id || null,
           agentSessionId: this.state.capturedAgentSessionId,
@@ -423,6 +465,7 @@ export class SDKMessageProcessor {
       if (block?.type === 'tool_use') {
         const toolName = block.name as string;
         const toolId = block.id as string;
+        this.state.toolNamesByUseId.set(toolId, toolName);
 
         events.push({
           type: 'tool_start',
@@ -452,6 +495,7 @@ export class SDKMessageProcessor {
         | undefined;
       if (delta?.type === 'text_delta') {
         const textChunk = delta.text as string;
+        this.state.hasTextDeltas ||= textChunk.length > 0;
 
         // Accumulate chunk in buffer
         this.state.textChunkBuffer += textChunk;
@@ -531,7 +575,8 @@ export class SDKMessageProcessor {
     // Never copy it into conversation content: messages are persisted and published
     // in realtime before any downstream UI can distinguish a provider failure from
     // a local command result.
-    if (projectClaudeResultResponse(msg)?.subtype === 'success') {
+    const result = projectClaudeResultResponse(msg);
+    if (result?.subtype === 'success' && result.is_error !== true) {
       const hasAssistantMessages = this.state.assistantMessageCount > 0;
       if (!hasAssistantMessages) {
         events.push({
@@ -849,7 +894,15 @@ export class SDKMessageProcessor {
       } else if (block.type === 'thinking') {
         return {
           type: 'thinking',
-          text: block.text,
+          // Claude's SDK stores reasoning on `thinking`, unlike text blocks.
+          // Normalize before persistence, retaining already-normalized legacy
+          // input and representing an absent/partial value as empty text.
+          text:
+            typeof block.thinking === 'string'
+              ? block.thinking
+              : typeof block.text === 'string'
+                ? block.text
+                : '',
           signature: block.signature as string | undefined, // Cryptographic signature for verification
         };
       } else {

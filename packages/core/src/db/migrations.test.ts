@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './client';
-import { pendingOfflineCutoverMigrations, preflightSQLiteCapabilityPolicyOwners } from './migrate';
+import {
+  classifyMigrationWatermark,
+  pendingOfflineCutoverMigrations,
+  preflightSQLiteCapabilityPolicyOwners,
+} from './migrate';
 
 interface JournalEntry {
   idx: number;
@@ -21,7 +25,88 @@ const readJournals = () =>
     ].map(async (url) => JSON.parse(await readFile(url, 'utf8')) as { entries: JournalEntry[] })
   );
 
+describe('management ownership migration', () => {
+  it('removes only SQLite immutability triggers without rewriting owners or authorship', async () => {
+    const client = createClient({ url: ':memory:' });
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE users (user_id TEXT PRIMARY KEY);
+        CREATE TABLE boards (board_id TEXT PRIMARY KEY, primary_owner_user_id TEXT, created_by TEXT);
+        CREATE TABLE branches (branch_id TEXT PRIMARY KEY, primary_owner_user_id TEXT, created_by TEXT);
+        CREATE TRIGGER boards_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON boards
+          WHEN NEW.primary_owner_user_id IS NOT OLD.primary_owner_user_id
+          BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+        CREATE TRIGGER branches_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON branches
+          WHEN NEW.primary_owner_user_id IS NOT OLD.primary_owner_user_id
+          BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+        CREATE TRIGGER users_protected_owner_restrict BEFORE DELETE ON users
+          WHEN EXISTS (SELECT 1 FROM boards WHERE primary_owner_user_id=OLD.user_id)
+            OR EXISTS (SELECT 1 FROM branches WHERE primary_owner_user_id=OLD.user_id)
+          BEGIN SELECT RAISE(ABORT, 'owns resources'); END;
+        INSERT INTO users VALUES ('creator'), ('successor');
+        INSERT INTO boards VALUES ('board', 'creator', 'creator');
+        INSERT INTO branches VALUES ('branch', 'creator', 'creator');
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0111_management_ownership_transfer.sql', import.meta.url),
+        'utf8'
+      );
+      await client.executeMultiple(migration);
+      for (const table of ['boards', 'branches']) {
+        expect(
+          (await client.execute(`SELECT primary_owner_user_id, created_by FROM ${table}`)).rows[0]
+        ).toEqual({ primary_owner_user_id: 'creator', created_by: 'creator' });
+        await client.execute(`UPDATE ${table} SET primary_owner_user_id='successor'`);
+        expect(
+          (await client.execute(`SELECT primary_owner_user_id, created_by FROM ${table}`)).rows[0]
+        ).toEqual({ primary_owner_user_id: 'successor', created_by: 'creator' });
+      }
+      await expect(client.execute("DELETE FROM users WHERE user_id='successor'")).rejects.toThrow(
+        'owns resources'
+      );
+    } finally {
+      client.close();
+    }
+  });
+});
+
 describe('Postgres migrations', () => {
+  it('keeps ownership transfer pending after the provider-grant migration in both journals', async () => {
+    for (const journal of await readJournals()) {
+      const previous = journal.entries.find(
+        ({ tag }) => tag === '0110_user_provider_oauth_grants'
+      )!;
+      const status = classifyMigrationWatermark(journal.entries, previous.when);
+      expect(status.pending).toContain('0111_management_ownership_transfer');
+    }
+  });
+  it('keeps provider grants pending and offline after the shipped branch-cleanup watermark', async () => {
+    const journals = await readJournals();
+    for (const [index, dialect] of (['postgresql', 'sqlite'] as const).entries()) {
+      const entries = journals[index]!.entries;
+      expect(entries.find(({ tag }) => tag === '0109_branch_cleanup_policy')).toMatchObject({
+        idx: 108,
+        when: 1789344000003,
+      });
+      const status = classifyMigrationWatermark(entries, 1789344000003);
+      expect(status.pending[0]).toBe('0110_user_provider_oauth_grants');
+      expect(pendingOfflineCutoverMigrations(dialect, status)).toContain(
+        '0110_user_provider_oauth_grants'
+      );
+    }
+  });
+
+  it('keeps branch-local deletion pending after the previously published ledger migration', async () => {
+    // Development environments may already have applied the earlier PR revision.
+    // Drizzle uses timestamps, not tags or hashes, to decide what to apply.
+    const publishedLedgerTimestamp = 1789344000000;
+    for (const journal of await readJournals()) {
+      const entry = journal.entries.find(({ tag }) => tag === '0107_branch_permanent_deletion');
+      expect(entry).toBeDefined();
+      expect(entry!.when).toBeGreaterThan(publishedLedgerTimestamp);
+    }
+  });
+
   it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),
@@ -138,6 +223,51 @@ describe('Postgres migrations', () => {
         pending: ['0000_cuddly_captain_america', '0092_add_user_credential_generation'],
       })
     ).toEqual([]);
+  });
+
+  it('enforces the Claude OAuth mutation-authority migration as an offline cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0093_scheduler_poison_recovery'],
+        pending: ['0100_claude_oauth_attempts'],
+      })
+    ).toEqual(['0100_claude_oauth_attempts']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0096_scheduler_poison_recovery'],
+        pending: ['0103_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0100_claude_oauth_attempts'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces the PostgreSQL DCR authority as an offline cohort cutover after current main', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0100_claude_oauth_attempts'],
+        pending: ['0102_mcp_oauth_client_registrations'],
+      })
+    ).toEqual(['0102_mcp_oauth_client_registrations']);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0102_mcp_oauth_client_registrations'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces the old-PR OAuth authority collision repair as an offline cohort cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0099_shared_session_prompting'],
+        pending: ['0103_oauth_authority_watermark_reconciliation'],
+      })
+    ).toEqual(['0103_oauth_authority_watermark_reconciliation']);
   });
 
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
@@ -880,6 +1010,78 @@ describe('MCP OAuth pending-flow migrations', () => {
       client.close();
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('MCP OAuth client-registration migrations', () => {
+  it('does not advance SQLite schema history for PostgreSQL-only DCR authority', async () => {
+    const [, sqliteJournal] = await readJournals();
+    expect(sqliteJournal.entries.find(({ idx }) => idx === 103)).toMatchObject({
+      idx: 103,
+      tag: '0103_claude_oauth_attempts',
+    });
+    expect(sqliteJournal.entries.some(({ tag }) => tag.includes('client_registrations'))).toBe(
+      false
+    );
+    expect(await import('./schema.sqlite')).not.toHaveProperty('mcpOauthClientRegistrations');
+  });
+
+  it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
+    const [postgresJournal] = await readJournals();
+    expect(postgresJournal.entries.filter(({ idx }) => idx >= 100 && idx <= 103)).toEqual([
+      expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
+      expect.objectContaining({ idx: 101, tag: '0101_environment_command_discovery' }),
+      expect.objectContaining({ idx: 102, tag: '0102_mcp_oauth_client_registrations' }),
+      expect.objectContaining({
+        idx: 103,
+        tag: '0103_oauth_authority_watermark_reconciliation',
+      }),
+    ]);
+    expect(postgresJournal.entries.find(({ idx }) => idx === 103)!.when).toBeGreaterThan(
+      postgresJournal.entries.find(({ idx }) => idx === 102)!.when
+    );
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0102_mcp_oauth_client_registrations.sql', import.meta.url),
+      'utf8'
+    );
+    expect(migration).toContain('FOREIGN KEY ("tenant_id", "mcp_server_id")');
+    expect(migration).toContain('DEFERRABLE INITIALLY IMMEDIATE');
+    expect(migration).toContain(
+      'ALTER TABLE "mcp_oauth_client_registrations" FORCE ROW LEVEL SECURITY'
+    );
+    expect(migration).toContain("'mcp_oauth_client_registration_maintenance'");
+    expect(migration).toContain('"sealed_material" text');
+    expect(migration).toContain('"claim_generation" bigint');
+    expect(migration).toContain('"lease_expires_at" timestamp with time zone');
+    expect(migration).toContain('mcp_oauth_client_registrations_registering_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_registered_maintenance_idx');
+    expect(migration).toContain('mcp_oauth_client_registrations_terminal_maintenance_idx');
+    expect(migration).not.toContain('CREATE SEQUENCE');
+    expect(migration).not.toContain('registration_generation');
+    expect(migration).not.toMatch(/"client_id"\s/);
+    expect(migration).not.toMatch(/"client_secret"\s/);
+
+    const reconciliation = await readFile(
+      new URL(
+        '../../drizzle/postgres/0103_oauth_authority_watermark_reconciliation.sql',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    expect(reconciliation).toContain('agor_0102_relation_fingerprint');
+    expect(reconciliation).toContain('agor_0102_legacy_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_final_dcr_expected');
+    expect(reconciliation).toContain('agor_0102_claude_expected');
+    expect(reconciliation).toContain('pg_temp.agor_0102_relation_matches');
+    expect(reconciliation).toContain(
+      'DROP SEQUENCE public.mcp_oauth_client_registration_generation_seq'
+    );
+    expect(reconciliation).not.toContain(
+      'DROP SEQUENCE IF EXISTS "mcp_oauth_client_registration_generation_seq"'
+    );
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "claude_oauth_attempts"');
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "mcp_oauth_client_registrations"');
+    expect(reconciliation).toContain('unrecognized mcp_oauth_client_registrations schema');
   });
 });
 

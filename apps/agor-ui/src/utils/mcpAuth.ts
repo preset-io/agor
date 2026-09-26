@@ -6,9 +6,9 @@ import type { MCPServer } from '@agor-live/client';
  * OAuth authentication has one non-secret source of truth:
  * `userAuthenticatedMcpServerIds`, populated from the dedicated
  * `/mcp-servers/oauth-status` resource. Generic server reads deliberately do
- * not load per-user grants. Realtime OAuth events and a periodic status poll
- * refresh the Set so an expired or invalid grant is removed without exposing
- * its token or expiry through the ordinary server resource.
+ * not load per-user grants. Bootstrap, reconnect and explicit OAuth events
+ * refresh this last-observed snapshot. It is not a live provider-health check
+ * or execution authorization; execution resolves credentials independently.
  *
  * Bearer/JWT rows can intentionally remain saved after an explicit secret
  * clear. Their redacted sentinel counts as a configured saved value; absence

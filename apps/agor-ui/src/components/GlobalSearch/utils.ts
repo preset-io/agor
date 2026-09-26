@@ -66,3 +66,21 @@ export function sectionOffsets(results: ResultsByType): Map<SearchResultItem['ty
   }
   return offsets;
 }
+
+/** Stable React key per result row. Uses `-` separator so the same value is a
+ * valid CSS selector when reused as a DOM id (see `rowDomId`). */
+export function searchResultKey(result: SearchResultItem): string {
+  switch (result.type) {
+    case 'session':
+      return `session-${result.item.session_id}`;
+    case 'branch':
+    case 'teammate':
+      return `${result.type}-${result.item.branch_id}`;
+    case 'artifact':
+      return `artifact-${result.item.artifact_id}`;
+    case 'board':
+      return `board-${result.item.board_id}`;
+    case 'mcp':
+      return `mcp-${result.item.mcp_server_id}`;
+  }
+}

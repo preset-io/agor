@@ -23,6 +23,28 @@ describe('ApiKeyStrategy tenant propagation', () => {
     expect(params.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
 
+  it.each([
+    ['key row', { id: 'key-1', user_id: 'user-1', tenant_id: 'tenant-b' }, 'tenant-a'],
+    ['owning user', { id: 'key-1', user_id: 'user-1', tenant_id: 'tenant-a' }, 'tenant-b'],
+  ])('rejects a %s from another tenant than the request', async (_label, keyRow, userTenant) => {
+    const strategy = new ApiKeyStrategy();
+    const apiKeysRepo = {
+      verifyKey: vi.fn(async () => keyRow),
+      updateLastUsed: vi.fn(async () => undefined),
+    };
+    const usersService = {
+      get: vi.fn(async () => ({ user_id: 'user-1', tenant_id: userTenant })),
+    };
+    strategy.setDependencies(apiKeysRepo as never, usersService as never);
+
+    await expect(
+      strategy.authenticate(
+        { apiKey: 'agor_sk_test' },
+        { tenant: { tenant_id: 'tenant-a', source: 'trusted_host' } }
+      )
+    ).rejects.toMatchObject({ name: 'NotAuthenticated', message: 'Invalid API key' });
+  });
+
   it('leaves Socket.IO header authentication to the namespace boundary', async () => {
     const strategy = new ApiKeyStrategy();
     const handshake = {

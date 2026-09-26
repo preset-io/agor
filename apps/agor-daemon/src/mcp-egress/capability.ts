@@ -22,8 +22,15 @@ export interface MCPEgressCapabilityClaims {
   mcp_server_id: MCPServerID | string;
   config_version: number;
   material_hash: string;
+  /** Secret-free fingerprint distinguishing runtime tool-policy changes. */
+  tool_policy_hash?: string;
+  /** Keyed hash of this server's complete projected authority snapshot. */
+  authority_fingerprint?: string;
   grant_identity?: string;
   rollout_mode: MCPEgressGatewayMode;
+  /** Durable Task recovery fence at issuance; unrelated to provider authority. */
+  recovery_generation?: number;
+  recovery_request_id?: string;
   jti: string;
 }
 
@@ -57,6 +64,27 @@ function validateClaims(value: unknown): MCPEgressCapabilityClaims {
   }
   if (claims.grant_identity !== undefined && typeof claims.grant_identity !== 'string') {
     throw new Error('Invalid MCP grant identity');
+  }
+  if (claims.tool_policy_hash !== undefined && typeof claims.tool_policy_hash !== 'string') {
+    throw new Error('Invalid MCP tool policy fingerprint');
+  }
+  if (
+    claims.authority_fingerprint !== undefined &&
+    typeof claims.authority_fingerprint !== 'string'
+  ) {
+    throw new Error('Invalid MCP authority fingerprint');
+  }
+  if (
+    claims.recovery_generation !== undefined &&
+    (!Number.isSafeInteger(claims.recovery_generation) || claims.recovery_generation < 0)
+  ) {
+    throw new Error('Invalid MCP recovery generation');
+  }
+  if (
+    claims.recovery_request_id !== undefined &&
+    (typeof claims.recovery_request_id !== 'string' || !claims.recovery_request_id)
+  ) {
+    throw new Error('Invalid MCP recovery request');
   }
   return claims;
 }

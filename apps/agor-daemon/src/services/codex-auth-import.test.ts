@@ -1,7 +1,10 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import {
+  CodexAuthCredentialWriteError,
+  writeCodexAuthCredential,
+} from '../utils/executor-codex-auth.js';
 import { createCodexAuthImportService } from './codex-auth-import';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './codex-auth-shared.js';
 
@@ -155,7 +158,7 @@ describe('codex-auth-import', () => {
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',
-      { agentic_auth_methods: { 'claude-code': 'api_key', codex: 'subscription' } },
+      { agentic_auth_methods: { codex: 'subscription' } },
       expect.objectContaining({ authenticated: true })
     );
 
@@ -198,7 +201,36 @@ describe('codex-auth-import', () => {
     });
   });
 
-  it('maps write failures to a friendly error and logs only the error class', async () => {
+  it('revalidates the route after mutation authority wins and never writes a retired home', async () => {
+    const { app } = makeApp();
+    const coordinator = {
+      runCredentialMutation: vi.fn(
+        async (
+          _tenantId: string,
+          _userId: string,
+          _reason: string,
+          work: (generation?: number) => Promise<unknown>,
+          preflight?: () => Promise<void>
+        ) => {
+          loadConfigSyncMock.mockReturnValue({
+            multi_tenancy: { mode: 'required_from_auth' },
+          } as never);
+          await preflight?.();
+          return work(undefined);
+        }
+      ),
+    };
+    const delegate = createCodexAuthImportService(app as never, TEST_DB, coordinator);
+
+    await expect(
+      runWithTenantContext('tenant-test', () =>
+        delegate.create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)
+      )
+    ).rejects.toThrow(/execution home changed/i);
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
+  });
+
+  it('maps write failures to a friendly error without logging raw details', async () => {
     writeCodexAuthCredentialMock.mockImplementationOnce(async () => {
       throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
@@ -209,9 +241,27 @@ describe('codex-auth-import', () => {
         /Could not write/
       );
       const logged = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
-      expect(logged).toContain('Error');
+      expect(logged).toContain('code=UNEXPECTED');
       expect(logged).not.toContain('refresh-xyz');
       expect(logged).not.toContain('password is required');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('logs the reviewed executor failure code and duration without credential data', async () => {
+    writeCodexAuthCredentialMock.mockRejectedValueOnce(
+      new CodexAuthCredentialWriteError('EXECUTOR_TIMEOUT', 10005)
+    );
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { app } = makeApp();
+      await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
+        /Could not write/
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[CodexAuth] Failed to write auth.json: code=EXECUTOR_TIMEOUT duration_ms=10005'
+      );
     } finally {
       errorSpy.mockRestore();
     }

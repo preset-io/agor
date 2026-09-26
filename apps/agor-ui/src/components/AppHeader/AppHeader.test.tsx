@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MCPCatalogModalProvider, useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { AppHeader } from './AppHeader';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -44,10 +45,18 @@ vi.mock('./GlobalPresenceFacepile', () => ({
   GlobalPresenceFacepile: () => <div data-testid="presence-facepile" />,
 }));
 
+function CatalogState() {
+  const catalog = useMCPCatalogModal();
+  return <output data-testid="catalog-open">{String(catalog?.open)}</output>;
+}
+
 function renderHeader(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader {...props} />
+      <MCPCatalogModalProvider>
+        <AppHeader {...props} />
+        <CatalogState />
+      </MCPCatalogModalProvider>
     </MemoryRouter>
   );
 }
@@ -95,35 +104,33 @@ describe('AppHeader navigation entries', () => {
     renderHeader();
 
     // The whole set, so adding or removing an entry has to be a deliberate
-    // edit here rather than something that slips in. Order matters: Marketplace
+    // edit here rather than something that slips in. Order matters: Catalog
     // is last of the two because it sits immediately left of the gear.
     const linkNames = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
 
-    expect(linkNames).toEqual(['Knowledge Base', 'Marketplace']);
+    expect(linkNames).toEqual(['Knowledge Base']);
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeVisible();
   });
 
-  it('renders the Marketplace entry as a real link to /marketplace', () => {
+  it('opens Catalog without navigation', () => {
     renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
+    expect(screen.getByTestId('catalog-open')).toHaveTextContent('true');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 
-    // The href is what makes middle-click and cmd-click open a tab, so assert
-    // the resolved basename-aware path rather than merely that a button exists.
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toHaveAttribute(
-      'href',
-      '/ui/marketplace'
+  it('omits Catalog safely in provider-free marketing headers', () => {
+    render(
+      <MemoryRouter>
+        <AppHeader />
+      </MemoryRouter>
     );
+    expect(screen.queryByRole('button', { name: 'Open MCP Catalog' })).not.toBeInTheDocument();
   });
 
-  it('navigates to /marketplace via SPA navigation on plain click', () => {
-    renderHeader();
-
-    fireEvent.click(screen.getByRole('link', { name: 'Marketplace' }));
-
-    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/marketplace');
-  });
-
-  it('promotes Marketplace to the header rather than the gear dropdown', async () => {
+  it('promotes Catalog to the header rather than the gear dropdown', async () => {
     renderHeader();
 
     // Option A from the spec: a marketplace is a surface people revisit, so
@@ -132,17 +139,17 @@ describe('AppHeader navigation entries', () => {
     await screen.findByText('Settings');
 
     // The header entry is an icon button carrying its name on aria-label, so a
-    // rendered "Marketplace" text node could only be a dropdown menu item.
-    expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    // rendered "Catalog" text node could only be a dropdown menu item.
+    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
   });
 
-  it('shows the Marketplace entry to a viewer', () => {
+  it('shows the Catalog entry to a viewer', () => {
     // Browsing the catalog is authenticated-only on the daemon, so no role is
     // filtered out of the entry. Connect is gated separately, in the surface.
     renderHeader({ user: { user_id: 'u1', email: 'v@agor.live', role: 'viewer' } as never });
 
-    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open MCP Catalog' })).toBeInTheDocument();
   });
 
   it('bounds the always-visible board switcher slot', () => {

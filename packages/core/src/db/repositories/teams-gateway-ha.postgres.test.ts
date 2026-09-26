@@ -7,13 +7,19 @@
  * independent replica claims against PostgreSQL row-level security.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { BranchID, MessageID, SessionID, TenantID, UUID } from '../../types';
-import { MessageRole } from '../../types';
+import { MessageRole, TaskStatus } from '../../types';
 import { createDatabase, type Database } from '../client';
-import { getDatabaseNow } from '../database-wrapper';
+import {
+  executeRaw,
+  getDatabaseNow,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import {
   BranchRepository,
@@ -22,11 +28,13 @@ import {
   MessagesRepository,
   RepoRepository,
   SessionRepository,
+  TaskRepository,
   TeamsMessageDeliveryRepository,
   ThreadSessionMapRepository,
   UsersRepository,
 } from '../repositories';
-import { gatewayChannels } from '../schema';
+import { getPostgresSqlState } from '../sanitize-error';
+import { gatewayChannels, gatewayInboundEvents, tasks, teamsMessageDeliveries } from '../schema';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from '../tenant-scope';
 import {
   TEAMS_CONVERSATION_ADDRESS_TTL_MS,
@@ -98,6 +106,31 @@ async function seedTeamsChannel(db: Database, tenantId: TenantID) {
       metadata: {},
     });
     return { appId, channel, session, mapping };
+  });
+}
+
+async function seedClaimedTeamsDelivery(db: Database, tenantId: TenantID) {
+  const { channel, session } = await seedTeamsChannel(db, tenantId);
+  return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const deliveries = new TeamsMessageDeliveryRepository(scoped);
+    const messages = new MessagesRepository(scoped, (tx, message) =>
+      deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+    );
+    const message = await messages.create({
+      message_id: generateId() as MessageID,
+      session_id: session.session_id,
+      type: 'assistant',
+      role: MessageRole.ASSISTANT,
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'effect cutoff',
+      content: 'effect cutoff',
+    });
+    const delivery = await deliveries.findByMessageId(message.message_id);
+    if (!delivery) throw new Error('missing fixture delivery');
+    const claim = await deliveries.claim(delivery.delivery_id, 'effect-owner', 30_000);
+    if (!claim) throw new Error('missing fixture delivery claim');
+    return { channel, claim };
   });
 }
 
@@ -554,5 +587,257 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
       outboundRetryStartedAt + 55_000
     );
     expect(new Date(failedDelivery.next_attempt_at).getTime()).toBeLessThan(callerAhead.getTime());
+  });
+  it.each(['disable', 'policy', 'reclaim'] as const)(
+    'rejects stale admission after another replica commits %s',
+    async (mutation) => {
+      const tenantId = `teams-cutoff-${generateId()}` as TenantID;
+      const { appId, channel, session } = await seedTeamsChannel(dbA, tenantId);
+      const claim = await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const inbound = new GatewayInboundEventRepository(scoped);
+        const admitted = await inbound.admitVerifiedHttp(
+          admission(channel.id, tenantId, 'cutoff', appId)
+        );
+        return inbound.claimQueued(admitted.event.id, 'replica-a', 30_000);
+      });
+      if (!claim) throw new Error('missing claim');
+      let resume!: () => void;
+      const pause = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const work = (async () => {
+        await pause;
+        return runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          runDatabaseTransaction(scoped, async (tx) => {
+            await new GatewayInboundEventRepository(tx).assertTeamsTaskAdmission(claim);
+            return new TaskRepository(tx).createPending({
+              status: TaskStatus.QUEUED,
+              session_id: session.session_id,
+              full_prompt: 'stale',
+              created_by: session.created_by!,
+            });
+          })
+        );
+      })();
+      await runWithTenantDatabaseScope(dbB, tenantId, async (scoped) => {
+        if (mutation === 'reclaim') {
+          await update(scoped, gatewayInboundEvents)
+            .set({ processing_expires_at: new Date(0) })
+            .where(eq(gatewayInboundEvents.id, claim.id))
+            .run();
+          expect(
+            await new GatewayInboundEventRepository(scoped).claimQueued(
+              claim.id,
+              'replica-b',
+              30_000
+            )
+          ).toBeTruthy();
+        } else {
+          await new GatewayChannelRepository(scoped).update(
+            channel.id,
+            mutation === 'disable'
+              ? { enabled: false }
+              : { config: { ...channel.config, allowed_user_aad_object_ids: ['revoked'] } }
+          );
+        }
+      });
+      const rejected = expect(work).rejects.toThrow('admission authority');
+      resume();
+      await rejected;
+      expect(
+        await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          select(scoped).from(tasks).where(eq(tasks.session_id, session.session_id)).all()
+        )
+      ).toEqual([]);
+    }
+  );
+
+  it('rejects a foreign-tenant admission capability even with its exact event token', async () => {
+    const tenantA = `teams-owner-${generateId()}` as TenantID;
+    const tenantB = `teams-foreign-${generateId()}` as TenantID;
+    const { appId, channel } = await seedTeamsChannel(dbA, tenantA);
+    await seedTeamsChannel(dbB, tenantB);
+    const claim = await runWithTenantDatabaseScope(dbA, tenantA, async (scoped) => {
+      const inbound = new GatewayInboundEventRepository(scoped);
+      const admitted = await inbound.admitVerifiedHttp(
+        admission(channel.id, tenantA, 'foreign', appId)
+      );
+      return inbound.claimQueued(admitted.event.id, 'owner-token', 30_000);
+    });
+    if (!claim) throw new Error('missing claim');
+    await expect(
+      runWithTenantDatabaseScope(dbB, tenantB, (scoped) =>
+        runDatabaseTransaction(scoped, (tx) =>
+          new GatewayInboundEventRepository(tx).assertTeamsTaskAdmission(claim)
+        )
+      )
+    ).rejects.toThrow('admission authority');
+  });
+  it('holds channel and event locks through Task insertion and commit', async () => {
+    const tenantId = `teams-locks-${generateId()}` as TenantID;
+    const { appId, channel, session } = await seedTeamsChannel(dbA, tenantId);
+    const claim = await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+      const inbound = new GatewayInboundEventRepository(scoped);
+      const admitted = await inbound.admitVerifiedHttp(
+        admission(channel.id, tenantId, 'locked', appId)
+      );
+      return inbound.claimQueued(admitted.event.id, 'owner', 30_000);
+    });
+    if (!claim) throw new Error('missing claim');
+    let locked!: () => void;
+    let resume!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const pause = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const work = runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      runDatabaseTransaction(scoped, async (tx) => {
+        await new GatewayInboundEventRepository(tx).assertTeamsTaskAdmission(claim);
+        locked();
+        await pause;
+        return new TaskRepository(tx).createPending({
+          status: TaskStatus.QUEUED,
+          session_id: session.session_id,
+          full_prompt: 'current',
+          created_by: session.created_by!,
+        });
+      })
+    );
+    try {
+      await Promise.race([ready, work]);
+      for (const target of ['channel', 'event'] as const) {
+        await expect(
+          runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            runDatabaseTransaction(scoped, async (tx) => {
+              await executeRaw(tx, sql`SET LOCAL lock_timeout = '100ms'`);
+              if (target === 'channel') {
+                await new GatewayChannelRepository(tx).update(channel.id, { enabled: false });
+              } else {
+                await update(tx, gatewayInboundEvents)
+                  .set({ processing_token: 'stale-reclaimer' })
+                  .where(eq(gatewayInboundEvents.id, claim.id))
+                  .run();
+              }
+            })
+          )
+        ).rejects.toThrow();
+      }
+    } finally {
+      resume();
+    }
+    expect((await work).session_id).toBe(session.session_id);
+  });
+  it.each(['disable', 'config-change'] as const)(
+    'denies the effect marker and send when another replica commits %s first',
+    async (mutation) => {
+      const tenantId = `teams-effect-${generateId()}` as TenantID;
+      const { channel, claim } = await seedClaimedTeamsDelivery(dbA, tenantId);
+      // The worker has read the enabled channel and claimed the delivery. Pause
+      // its asynchronous address/pre-send preparation before the atomic marker.
+      let resume!: () => void;
+      const pause = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      let sent = false;
+      const work = (async () => {
+        await pause;
+        await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new TeamsMessageDeliveryRepository(scoped).markEffectStarted({
+            deliveryId: claim.delivery_id,
+            claimToken: claim.claim_token,
+            claimGeneration: claim.claim_generation,
+          })
+        );
+        sent = true;
+      })();
+      try {
+        await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new GatewayChannelRepository(scoped).update(
+            channel.id,
+            mutation === 'disable'
+              ? { enabled: false }
+              : { config: { ...channel.config, catch_up: { mode: 'off' } } }
+          )
+        );
+      } finally {
+        resume();
+      }
+      await expect(work).rejects.toThrow();
+      expect(sent).toBe(false);
+      expect(
+        await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new TeamsMessageDeliveryRepository(scoped).findById(claim.delivery_id)
+        )
+      ).toMatchObject({ effect_started_at: null });
+    }
+  );
+
+  it('holds channel and delivery locks until the effect marker transaction commits', async () => {
+    const tenantId = `teams-effect-locks-${generateId()}` as TenantID;
+    const { channel, claim } = await seedClaimedTeamsDelivery(dbA, tenantId);
+    let marked!: () => void;
+    let resume!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      marked = resolve;
+    });
+    const pause = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const work = runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      runDatabaseTransaction(scoped, async (tx) => {
+        // markEffectStarted's nested transaction releases its savepoint, not
+        // the outer transaction's row locks. Pause before the durable commit.
+        const result = await new TeamsMessageDeliveryRepository(tx).markEffectStarted({
+          deliveryId: claim.delivery_id,
+          claimToken: claim.claim_token,
+          claimGeneration: claim.claim_generation,
+        });
+        marked();
+        await pause;
+        return result;
+      })
+    );
+    try {
+      await Promise.race([ready, work]);
+      expect(
+        await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new TeamsMessageDeliveryRepository(scoped).findById(claim.delivery_id)
+        )
+      ).toMatchObject({ effect_started_at: null });
+      for (const target of ['channel', 'delivery'] as const) {
+        const outcome = await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          runDatabaseTransaction(scoped, async (tx) => {
+            await executeRaw(tx, sql`SET LOCAL lock_timeout = '100ms'`);
+            if (target === 'channel') {
+              await new GatewayChannelRepository(tx).update(channel.id, { enabled: false });
+            } else {
+              await update(tx, teamsMessageDeliveries)
+                .set({ claim_token: 'foreign-worker' })
+                .where(eq(teamsMessageDeliveries.delivery_id, claim.delivery_id))
+                .run();
+            }
+          })
+        ).then(
+          () => 'unexpected_success',
+          (error: unknown) => getPostgresSqlState(error)
+        );
+        expect(outcome).toBe('55P03');
+      }
+    } finally {
+      resume();
+    }
+    expect((await work).effect_started_at).toBeTruthy();
+    // Once the marker commits, revocation is allowed, but it cannot retract
+    // the already-authorized provider effect (the documented cutoff).
+    await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+      new GatewayChannelRepository(scoped).update(channel.id, { enabled: false })
+    );
+    expect(
+      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).findById(claim.delivery_id)
+      )
+    ).toMatchObject({ effect_started_at: expect.any(String), claim_token: claim.claim_token });
   });
 });

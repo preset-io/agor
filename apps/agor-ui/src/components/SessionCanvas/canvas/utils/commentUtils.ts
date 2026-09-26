@@ -11,6 +11,9 @@ import {
   type BoardCommentReposition,
   type Branch,
   boardCommentZoneParentObjectKey,
+  hasMinimumRole,
+  ROLES,
+  type User,
 } from '@agor-live/client';
 
 export interface ParentInfo {
@@ -29,6 +32,16 @@ export interface CommentSpatialParent {
 export interface BoardCommentRepositionPlan {
   data: BoardCommentReposition;
   reactFlowParentId?: string;
+}
+
+/** Mirror the route's author-or-admin gate for spatial comment movement. */
+export function canRepositionBoardComment(
+  comment: BoardComment,
+  user: User | null | undefined
+): boolean {
+  return Boolean(
+    user && (comment.created_by === user.user_id || hasMinimumRole(user.role, ROLES.ADMIN))
+  );
 }
 
 /**

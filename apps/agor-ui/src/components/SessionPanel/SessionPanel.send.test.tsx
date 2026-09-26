@@ -1,16 +1,20 @@
 import type { AgorClient, Session } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { getPromptDraft, savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
 import SessionPanel from './SessionPanel';
 
 const uploadMockState = vi.hoisted(() => ({
   uploadFilesToSession: vi.fn(),
 }));
+
+// Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
 
 vi.mock('../FileUpload/upload', () => ({
   uploadFilesToSession: uploadMockState.uploadFilesToSession,
@@ -65,6 +69,7 @@ function renderSessionPanel({
   onBtwFork = vi.fn(),
   session = makeSession(),
   currentUserId = 'user-a',
+  strictMode = false,
 }: {
   onSendPrompt?: (
     sessionId: string,
@@ -74,6 +79,7 @@ function renderSessionPanel({
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   session?: Session;
   currentUserId?: string;
+  strictMode?: boolean;
 } = {}) {
   let activeSession = session;
   let activeUserId: string | undefined = currentUserId;
@@ -100,7 +106,7 @@ function renderSessionPanel({
       </ConnectionProvider>
     </App>
   );
-  const renderResult = render(renderTree());
+  const renderResult = render(renderTree(), { wrapper: strictMode ? StrictMode : undefined });
   return {
     onSendPrompt,
     onFork,
@@ -122,6 +128,7 @@ describe('SessionPanel composer send', () => {
     agorStore.getState().reset();
     uploadMockState.uploadFilesToSession.mockReset();
     localStorage.clear();
+    sessionStorage.clear();
     Object.defineProperty(URL, 'createObjectURL', {
       value: vi.fn(() => 'blob:preview'),
       configurable: true,
@@ -130,6 +137,91 @@ describe('SessionPanel composer send', () => {
       value: vi.fn(),
       configurable: true,
     });
+  });
+
+  it('hydrates a Catalog starter prompt as a one-shot editable unsent draft', async () => {
+    const onSendPrompt = vi.fn();
+    stagePromptDraftSeed('user-a', 'session-1', 'Editable Catalog starter');
+
+    const { container } = renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    expect(textarea).toHaveValue('Editable Catalog starter');
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByText('Starter prompt suggestion')).not.toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'Edited before sending' } });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Edited before sending',
+        expect.any(String)
+      )
+    );
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('preserves an existing user draft instead of replacing it with a starter', () => {
+    savePromptDraft('user-a', 'session-1', 'Already typed');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Already typed');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it('retains the seed until authenticated composer bootstrap completes', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ currentUserId: '' });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    view.rerenderUser('user-a');
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(view.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps an untouched starter tab-local through debounce, unmount, and remount', async () => {
+    savePromptDraft('user-a', 'session-other-tab', 'Important typed text');
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ strictMode: true });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    view.unmount();
+    expect(getPromptDraft('user-a', 'session-other-tab')).toBe('Important typed text');
+    const next = renderSessionPanel();
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+    expect(next.onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('hydrates exactly once under StrictMode even when localStorage writes are denied', () => {
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Storage denied');
+    });
+    try {
+      const view = renderSessionPanel({ strictMode: true });
+      expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('Catalog starter');
+      expect(view.onSendPrompt).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('does not rehydrate an already-sent starter when admission completes after navigation', async () => {
+    const admitted = deferred<boolean>();
+    const onSendPrompt = vi.fn(() => admitted.promise);
+    stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
+    const view = renderSessionPanel({ onSendPrompt });
+    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    view.rerenderSession(makeSession({ session_id: 'session-other' as Session['session_id'] }));
+    await act(async () => {
+      admitted.resolve(true);
+    });
+    view.rerenderSession(makeSession());
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue('');
+    expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
   });
 
   it('sends prompt edits typed while attachment upload is in flight with the upload-start attachments', async () => {
@@ -415,6 +507,33 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
   });
 
+  it('keeps an upload failure visible and preserves its reason on repeated send', async () => {
+    const reason = 'A file exceeds the upload size limit (reference: request-123)';
+    uploadMockState.uploadFilesToSession.mockRejectedValue(new Error(reason));
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+    fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
+      dataTransfer: {
+        types: ['Files'],
+        files: [new File(['image'], 'chart.png', { type: 'image/png' })],
+      },
+    });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Describe this chart' } });
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
+    fireEvent.click(sendButton as HTMLButtonElement);
+    expect(
+      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+    ).toBeVisible();
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('Describe this chart');
+  });
+
   it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {
     uploadMockState.uploadFilesToSession.mockResolvedValue({
       success: true,
@@ -486,26 +605,30 @@ describe('SessionPanel composer send', () => {
     expect(onBtwFork).not.toHaveBeenCalled();
   });
 
-  it('shows unsupported file intake errors before upload/send', async () => {
+  it('shows oversized file intake errors before upload/send', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
     fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
       dataTransfer: {
         types: ['Files'],
-        files: [new File(['<script>'], 'unsafe.html', { type: 'text/html' })],
+        files: [
+          new File([new Uint8Array(51 * 1024 * 1024)], 'huge.bin', {
+            type: 'application/octet-stream',
+          }),
+        ],
       },
     });
 
     await waitFor(() => {
       expect(
-        screen.getAllByText(/unsafe.html: Unsupported file type: text\/html/).length
+        screen.getAllByText(/huge.bin: File is 51 MB; the per-file limit is 50 MB/).length
       ).toBeGreaterThan(0);
     });
 
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Preview unsafe.html')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Preview huge.bin')).not.toBeInTheDocument();
   });
 
   it('shows a visible cap error and rejects an incoming batch over 10 files', async () => {
@@ -539,12 +662,14 @@ describe('SessionPanel composer send', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 
-  it('prioritizes the visible cap error for mixed invalid and over-cap batches', async () => {
+  it('prioritizes the visible cap error for mixed oversized and over-cap batches', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
     const files = [
-      new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
+      new File([new Uint8Array(51 * 1024 * 1024)], 'huge.bin', {
+        type: 'application/octet-stream',
+      }),
       ...Array.from(
         { length: 11 },
         (_, index) =>
@@ -568,10 +693,27 @@ describe('SessionPanel composer send', () => {
       ).toBeGreaterThan(0);
     });
 
-    expect(screen.queryByText(/bad.svg: Unsupported file type/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/huge.bin: File is/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Preview pending-00.txt')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Preview pending-10.txt')).not.toBeInTheDocument();
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('responsive shared prompt input', () => {
+  it('retains the mobile no-autozoom font and matching mention overlay metrics', () => {
+    const viewport = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+    try {
+      renderSessionPanel();
+      const textarea = screen.getByPlaceholderText(/Prompt here/);
+      expect(textarea.style.fontSize).toBe('16px');
+      fireEvent.change(textarea, { target: { value: 'Ask @alice about the fictional project' } });
+      const overlay = textarea.parentElement?.querySelector<HTMLElement>('div[aria-hidden="true"]');
+      expect(overlay).not.toBeNull();
+      expect(overlay?.style.fontSize).toBe(textarea.style.fontSize);
+    } finally {
+      viewport.mockRestore();
+    }
   });
 });

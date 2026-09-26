@@ -1,9 +1,11 @@
+import { normalizeUploadMimeType, UPLOAD_PREVIEW_IMAGE_MIME_TYPES } from '@agor/core/types';
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
+import { openUploadBlob } from '../../utils/uploadBlob';
 import type { UploadedFile } from './upload';
 import { uploadFilesToSession } from './upload';
 
@@ -45,17 +47,19 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const fileListRef = useRef<UploadFile[]>([]);
   fileListRef.current = fileList;
 
-  // Build an UploadFile, generating a local thumbnail URL for images so Ant
-  // Design's picture list can render a preview without any server round-trip.
+  // Build an UploadFile, generating a local thumbnail URL for raster images so
+  // Ant Design's picture list can render a preview without any server
+  // round-trip. SVG and other active content never get a same-origin blob URL.
   const buildUploadFile = useCallback((file: File): UploadFile => {
     const rc = file as RcFile; // Ant Design's extended File type
-    const isImage = file.type.startsWith('image/');
+    const isImage = UPLOAD_PREVIEW_IMAGE_MIME_TYPES.has(normalizeUploadMimeType(file.type));
     return {
       uid: rc.uid || `${Date.now()}-${file.name}`,
       name: file.name,
       status: 'done',
       originFileObj: rc,
-      thumbUrl: isImage ? URL.createObjectURL(file) : undefined,
+      // '' (not undefined) stops Ant Design auto-generating a thumbnail.
+      thumbUrl: isImage ? URL.createObjectURL(file) : '',
     };
   }, []);
 
@@ -160,6 +164,11 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           multiple
           listType="picture"
           fileList={fileList}
+          // Without onPreview the thumbnail is a raw target=_blank link to its
+          // blob URL; route it through the same safe open/download policy.
+          onPreview={(file) => {
+            if (file.originFileObj) openUploadBlob(file.originFileObj, file.name, false);
+          }}
           beforeUpload={(file) => {
             setFileList((prev) => [...prev, buildUploadFile(file)]);
             return false; // Prevent auto upload
