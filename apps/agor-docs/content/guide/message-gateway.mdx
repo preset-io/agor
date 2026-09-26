@@ -279,9 +279,9 @@ Discord is intentionally narrow and explicit:
   The configured auto-archive setting applies to threads Agor creates.
 - The channel and author boundaries are separate. Public parent channels,
   Discord user IDs, and Discord role IDs are all explicit allowlists; at least
-  one author allowlist entry is required. DMs, private threads, wrong guild or
+  one author allowlist entry is required. Private threads, wrong guild or
   channel, bot/self messages, webhooks, embeds, components, stickers, polls,
-  and messages without a structured mention are ignored. Attachment handling
+  and server messages without a structured mention are ignored. DMs are off by default. Attachment handling
   is controlled separately by the explicit `files` capability below.
 - `files:false` is the default text-only behavior. With the explicit
   `files:true` capability, a live mentioned message may include PNG/JPEG
@@ -296,9 +296,45 @@ Discord is intentionally narrow and explicit:
   fixed Agor user. These modes are mutually exclusive. There is no fallback
   from an absent map entry to a fixed user.
 
+### Direct messages
+
+Enable **Direct messages** in the Discord settings (`direct_messages_enabled:true`,
+or `directMessages:true` in the setup tool) to receive 1:1 DMs. This adds the
+non-privileged `DIRECT_MESSAGES` gateway intent; it needs no extra portal toggle.
+Group DMs and events without an explicit 1:1 DM type are ignored.
+
+The sender must currently belong to the configured server and match an allowed
+user or role. Membership and roles are looked up live for each message. A failed,
+rate-limited, or timed-out lookup silently rejects that message without stopping
+the listener. No mention is required. Identity alignment and the `files` setting
+work as in server channels.
+
+Each person's DM conversation uses one session on the target branch, without a
+public thread. **DM content is visible to people with access to that branch.**
+The first message posts the session link; follow-ups do not post routing notices.
+There is no conversation-reset command.
+
+DMs never use Discord history as prompt context. Messages sent while the listener
+was down, DMs were disabled, or the sender was not allowed must be resent. Reply
+delivery may read the latest 100 messages to recover a send by nonce; those texts
+are discarded, not stored or used as context.
+
+As in channel sessions, assistant replies and prompts marked as coming from Agor
+are delivered to the DM, including UI/agent prompts and replies to callbacks or
+widget continuations. A child-session callback prompt itself is not echoed.
+Prompt labels name the task creator, not verified authorship. Anyone able to
+prompt that session can make it write to the person even with proactive outbound
+messaging disabled or after they leave the server. The gateway route method
+cannot directly target DM mappings. Every send verifies the recorded channel is
+still a 1:1 DM with that person; replies do not re-check server membership.
+
+Turning DMs off takes effect after listener refresh. Queued tasks still run in
+Agor, but their replies are not delivered to Discord. Existing sessions remain.
+The connection probe reports the switch, but cannot verify end-to-end DM delivery.
+
 ### Catch-up and durability
 
-The live mention is the only wake-up trigger. After the mapping's last admitted
+For server channels, the live mention is the only wake-up trigger. After the mapping's last admitted
 Discord message cursor, Agor uses Discord REST history to fetch the bounded
 interval through the live mention, oldest first. The defaults are 5 pages, 200
 messages, 32 KiB of prompt context, a 30-second request timeout, 2 rate-limit

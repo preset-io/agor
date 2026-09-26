@@ -20,10 +20,12 @@ import {
   buildDiscordDeliveryMetadata,
   buildDiscordDeliveryNonce,
   chunkDiscordMessage,
+  DiscordDirectMessageError,
   gatewayFailureCode,
   getConnector,
   normalizeOutbound,
   normalizeSendReceipt,
+  parseDiscordThreadKey,
 } from '@agor/core/gateway';
 import type {
   DiscordMessageDelivery,
@@ -32,6 +34,7 @@ import type {
   MessageID,
   TenantID,
 } from '@agor/core/types';
+import { isDiscordDirectMessagesEnabled } from '@agor/core/types';
 
 const DELIVERY_LEASE_MS = 30_000;
 const DELIVERY_SCAN_BATCH = 25;
@@ -429,6 +432,12 @@ export class DiscordMessageDeliveryWorker {
     ) {
       throw new DeliveryControlError('config_generation_changed', 'canceled');
     }
+    if (
+      parseDiscordThreadKey(context.mapping.thread_id)?.kind === 'direct_message' &&
+      !isDiscordDirectMessagesEnabled(context.channel.config)
+    ) {
+      throw new DeliveryControlError('direct_messages_disabled', 'canceled');
+    }
     const metadata = (context.mapping.metadata as Record<string, unknown> | null) ?? {};
     if (typeof metadata.outbound_seed_id === 'string') {
       throw new DeliveryControlError('proactive_seed_mapping', 'canceled');
@@ -569,6 +578,9 @@ export class DiscordMessageDeliveryWorker {
         } catch (error) {
           // Only an error explicitly proving non-acceptance may clear the
           // durable effect marker and permit another provider attempt.
+          if (error instanceof DiscordDirectMessageError) {
+            throw new DeliveryControlError(error.code, 'dead_letter');
+          }
           if (providerStatus(error) === 429) {
             await this.deliveryRepo.clearChunkEffectMarker({
               deliveryId: claim.delivery_id,

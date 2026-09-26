@@ -99,6 +99,7 @@ export const DISCORD_REQUIRED_GATEWAY_INTENTS = [
 ] as const;
 
 export interface DiscordSetupDecisions {
+  directMessagesEnabled?: boolean;
   applicationId: string;
   guildId: string;
   /** Explicit operator acknowledgement of the privileged Message Content intent. */
@@ -176,6 +177,7 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     align_discord_users: decisions.alignUsers ?? false,
     ...(decisions.userMap ? { user_map: decisions.userMap } : {}),
     files: decisions.files ?? false,
+    direct_messages_enabled: decisions.directMessagesEnabled ?? false,
     outbound_enabled: decisions.outboundEnabled ?? false,
     default_outbound_target: decisions.defaultOutboundTarget ?? null,
     catch_up: { ...DEFAULT_DISCORD_CATCH_UP, ...(decisions.catchUp ?? {}) },

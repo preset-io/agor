@@ -2927,6 +2927,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         rate_limit_max_total_delay_ms: 10000,
       },
       files: false,
+      direct_messages_enabled: false,
       agent_tools: [],
       outbound_enabled: true,
       default_outbound_target: 'channel:333333333333333333',
@@ -3011,6 +3012,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
 
     const result = await tools.agor_gateway_discord_setup.handler({
       ...base,
+      directMessages: true,
       catchUp: {
         maxPages: 10,
         maxMessages: 500,
@@ -3021,6 +3023,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       },
     });
     const payload = JSON.parse(result.content[0].text);
+    expect(payload.config_hint.direct_messages_enabled).toBe(true);
     expect(payload.config_hint.catch_up).toEqual({
       max_pages: 10,
       max_messages: 500,

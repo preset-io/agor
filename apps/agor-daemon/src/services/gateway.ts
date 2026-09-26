@@ -59,6 +59,7 @@ import type {
   SlackThreadHistoryResult,
 } from '@agor/core/gateway';
 import {
+  buildDiscordDirectMessageThreadKey,
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,
   DISCORD_METADATA_KEY,
@@ -75,6 +76,7 @@ import {
   normalizeOutbound,
   normalizeSendReceipt,
   parseDiscordAuthorityMetadata,
+  parseDiscordThreadKey,
   parseGitHubThreadId,
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
@@ -113,6 +115,7 @@ import {
   DEFAULT_DISCORD_CATCH_UP,
   GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   hasMinimumRole,
+  isDiscordDirectMessagesEnabled,
   isDiscordSnowflake,
   isTerminalTaskStatus,
   ROLES,
@@ -133,7 +136,11 @@ import {
   ingestDiscordInboundImages,
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
-import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
+import {
+  fetchGatewayCatchUp,
+  formatDiscordDirectMessagePrompt,
+  GatewayCatchUpError,
+} from '../utils/gateway-catch-up.js';
 import {
   classifyGatewayReadFailure,
   type GatewayReadFailureCategory,
@@ -516,11 +523,6 @@ function discordInboundMetadataIsAuthoritative(
   const roleAllowlist = Array.isArray(config.allowed_role_ids) ? config.allowed_role_ids : [];
   if (
     !snowflake(guildId) ||
-    !Array.isArray(allowedChannels) ||
-    allowedChannels.length === 0 ||
-    allowedChannels.some((id) => !snowflake(id)) ||
-    !snowflake(metadata[DISCORD_METADATA_KEY.guildId]) ||
-    metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
     !snowflake(authorId) ||
     !snowflake(botUserId) ||
     botUserId !== config.application_id ||
@@ -533,7 +535,6 @@ function discordInboundMetadataIsAuthoritative(
     roles.some((role) => !snowflake(role)) ||
     userAllowlist.some((id) => !snowflake(id)) ||
     roleAllowlist.some((id) => !snowflake(id)) ||
-    metadata[DISCORD_METADATA_KEY.hasMention] !== true ||
     typeof isThread !== 'boolean'
   ) {
     return false;
@@ -541,6 +542,29 @@ function discordInboundMetadataIsAuthoritative(
   if (!userAllowlist.includes(authorId) && !roles.some((role) => roleAllowlist.includes(role))) {
     return false;
   }
+  if (metadata[DISCORD_METADATA_KEY.directMessage] === true) {
+    return (
+      isDiscordDirectMessagesEnabled(config) &&
+      isThread === false &&
+      [
+        DISCORD_METADATA_KEY.guildId,
+        DISCORD_METADATA_KEY.parentChannelId,
+        DISCORD_METADATA_KEY.replyToMessageId,
+        DISCORD_METADATA_KEY.threadId,
+        DISCORD_METADATA_KEY.thread,
+        DISCORD_METADATA_KEY.hasMention,
+      ].every((key) => metadata[key] === undefined) &&
+      data.thread_id === buildDiscordDirectMessageThreadKey(channelId, authorId)
+    );
+  }
+  if (
+    !Array.isArray(allowedChannels) ||
+    allowedChannels.length === 0 ||
+    allowedChannels.some((id) => !snowflake(id)) ||
+    metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
+    metadata[DISCORD_METADATA_KEY.hasMention] !== true
+  )
+    return false;
   if (isThread) {
     if (!snowflake(parentChannelId) || !allowedChannels.includes(parentChannelId)) return false;
     if (allowedChannels.includes(channelId)) return false;
@@ -600,6 +624,7 @@ function discordCanonicalThreadId(data: PostMessageData): string {
 /** Legacy composite lookup retained only to adopt mappings written by DG-01. */
 function discordLegacyThreadId(data: PostMessageData): string | undefined {
   const metadata = parseDiscordAuthorityMetadata(data.metadata);
+  if (metadata?.[DISCORD_METADATA_KEY.directMessage] === true) return undefined;
   if (metadata?.[DISCORD_METADATA_KEY.isThread] === true) {
     const parent = metadata[DISCORD_METADATA_KEY.parentChannelId];
     const channel = metadata[DISCORD_METADATA_KEY.channelId];
@@ -4530,6 +4555,7 @@ export class GatewayService {
     }
     const discordMetadata =
       channel.channel_type === 'discord' ? parseDiscordAuthorityMetadata(data.metadata) : null;
+    const discordDm = discordMetadata?.[DISCORD_METADATA_KEY.directMessage] === true;
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -4676,6 +4702,7 @@ export class GatewayService {
 
     if (
       channel.channel_type === 'discord' &&
+      !discordDm &&
       discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true
     ) {
       console.debug(
@@ -4984,7 +5011,8 @@ export class GatewayService {
       !!existingMapping && typeof existingMappingSeedId !== 'string';
     if (
       (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
-      !threadOwnedByUnseededMapping
+      !threadOwnedByUnseededMapping &&
+      !discordDm
     ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
       if (outboundAdmission) {
@@ -5033,6 +5061,7 @@ export class GatewayService {
     // to the same unrelated human message do not share a session.
     if (
       channel.channel_type === 'discord' &&
+      !discordDm &&
       !existingMapping &&
       !outboundAdmission &&
       (() => {
@@ -5130,7 +5159,7 @@ export class GatewayService {
       }
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
-      if (sessionUrl && channel.channel_type !== 'slack') {
+      if (sessionUrl && channel.channel_type !== 'slack' && !discordDm) {
         this.sendSystemMessage(
           channel,
           data.thread_id,
@@ -5544,7 +5573,13 @@ export class GatewayService {
           );
         }
         const discordMetadata = parseDiscordAuthorityMetadata(data.metadata);
-        if (connector?.fetchProviderHistory) {
+        if (discordDm) {
+          promptText = formatDiscordDirectMessagePrompt({
+            threadId: data.thread_id,
+            currentText: data.text,
+          });
+          discordCursorToWrite = liveCursor;
+        } else if (connector?.fetchProviderHistory) {
           const afterCursor =
             mappingForCursor?.discord_last_admitted_message_id ??
             extractDiscordStarterMessageId(mappingMetadata);
@@ -5932,6 +5967,14 @@ export class GatewayService {
     data: RouteMessageData,
     params?: AuthenticatedParams
   ): Promise<RouteMessageResult> {
+    return this.routeSessionMessage(data, params, false);
+  }
+
+  private async routeSessionMessage(
+    data: RouteMessageData,
+    params: AuthenticatedParams | undefined,
+    committedMessage: boolean
+  ): Promise<RouteMessageResult> {
     let transportedSession: Session | null | undefined;
     // Direct service calls are daemon-internal. Every transported invocation
     // must carry trusted auth and prove authority over the session's branch
@@ -5961,13 +6004,6 @@ export class GatewayService {
       }
     }
 
-    // Mapped Discord assistant Messages now have a durable intent inserted in
-    // the Message transaction. The independent delivery worker owns those
-    // rows; never send them through the legacy after-hook path as well.
-    if (data.message_id && (await this.deliveryRepo.findByMessageId(data.message_id))) {
-      return { routed: true, channelType: 'discord' };
-    }
-
     // Fast path: skip DB lookup entirely when no channels are configured
     if (!(await this.shouldQueryGatewayRouting())) {
       return { routed: false };
@@ -5989,6 +6025,25 @@ export class GatewayService {
 
     if (!channel?.enabled) {
       return { routed: false };
+    }
+
+    if (
+      channel.channel_type === 'discord' &&
+      parseDiscordThreadKey(mapping.thread_id)?.kind === 'direct_message'
+    ) {
+      if (
+        !committedMessage ||
+        !isDiscordDirectMessagesEnabled(channel.config) ||
+        data.metadata?.is_agor_callback === true
+      ) {
+        return { routed: false };
+      }
+    }
+    // Mapped Discord assistant Messages now have a durable intent inserted in
+    // the Message transaction. The independent delivery worker owns those
+    // rows; never send them through the legacy after-hook path as well.
+    if (data.message_id && (await this.deliveryRepo.findByMessageId(data.message_id))) {
+      return { routed: true, channelType: 'discord' };
     }
 
     if (params?.provider) {
@@ -6083,7 +6138,7 @@ export class GatewayService {
     deferWithTenantContext(
       params,
       async () => {
-        await this.routeMessage(data);
+        await this.routeSessionMessage(data, undefined, true);
       },
       () => {
         console.warn('[gateway] Failed to route message after commit');
@@ -6962,6 +7017,7 @@ export class GatewayService {
             (() => {
               const discordMetadata = parseDiscordAuthorityMetadata(msg.metadata);
               return (
+                discordMetadata?.[DISCORD_METADATA_KEY.directMessage] !== true &&
                 discordMetadata?.[DISCORD_METADATA_KEY.isThread] === false &&
                 typeof discordMetadata?.[DISCORD_METADATA_KEY.channelId] === 'string' &&
                 typeof discordMetadata?.[DISCORD_METADATA_KEY.replyToMessageId] === 'string'

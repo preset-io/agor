@@ -17,7 +17,11 @@ import {
   ThreadSessionMapRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { getConnector } from '@agor/core/gateway';
+import {
+  buildDiscordDirectMessageMetadata,
+  buildDiscordDirectMessageThreadKey,
+  getConnector,
+} from '@agor/core/gateway';
 import type { Session, TaskID, TenantID, User } from '@agor/core/types';
 import { DEFAULT_DISCORD_CATCH_UP, TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -112,7 +116,7 @@ function discordInboundData(
   };
 }
 
-async function seedGateway(db: Database, tenantId: TenantID) {
+async function seedGateway(db: Database, tenantId: TenantID, directMessages = false) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const users = new UsersRepository(scoped);
     const repos = new RepoRepository(scoped);
@@ -156,6 +160,7 @@ async function seedGateway(db: Database, tenantId: TenantID) {
       created_by: user.user_id,
       config: {
         bot_token: 'discord-test-token',
+        direct_messages_enabled: directMessages,
         application_id: activeBotId,
         guild_id: guildId,
         allowed_channel_ids: [channelId],
@@ -269,6 +274,69 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway reply admission (P
     else process.env.AGOR_BASE_URL = previousBaseUrl;
     await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
   });
+
+  it('admits consecutive DMs into one tenant-scoped session without seeds or Discord history', async () => {
+    const tenantId = `gateway-dm-${generateId()}` as TenantID;
+    const otherTenantId = `gateway-dm-other-${generateId()}` as TenantID;
+    const { channel, user } = await seedGateway(db, tenantId, true);
+    const { app, promptCreate } = makeApp(db, tenantId, user, { persistPromptTasks: true });
+    const service = new GatewayService(
+      createTenantScopedDatabaseProxy(db, { requireScope: true, label: 'DM admission' }),
+      app as never
+    );
+    const connector = {
+      sendMessage: vi.fn(async () => ({ messageId: 'notice' })),
+      fetchProviderHistory: vi.fn(),
+    };
+    vi.mocked(getConnector).mockReturnValue(connector as never);
+    const dmChannelId = '999999999999999999';
+    const threadId = buildDiscordDirectMessageThreadKey(dmChannelId, authorId);
+    const inbound = (messageId: string) => ({
+      ...discordInboundData(channel.channel_key, threadId, messageId, {
+        idempotencyTaskId: generateId(),
+      }),
+      metadata: buildDiscordDirectMessageMetadata({
+        channelId: dmChannelId,
+        authorId,
+        messageId,
+        botUserId: activeBotId,
+        roleIds: [],
+      }),
+    });
+    const first = await runWithTenantContext(tenantId, () =>
+      service.create(inbound('800000000000000001'))
+    );
+    await vi.waitFor(() => expect(connector.sendMessage).toHaveBeenCalledOnce());
+    const firstNoticeCount = connector.sendMessage.mock.calls.length;
+    const second = await runWithTenantContext(tenantId, () =>
+      service.create(inbound('800000000000000002'))
+    );
+    expect(first).toMatchObject({ success: true, created: true });
+    expect(second).toMatchObject({ success: true, created: false, sessionId: first.sessionId });
+    expect(promptCreate).toHaveBeenCalledTimes(2);
+    expect(connector.fetchProviderHistory).not.toHaveBeenCalled();
+    expect(connector.sendMessage.mock.calls.length).toBe(firstNoticeCount);
+    for (const [prompt] of promptCreate.mock.calls) {
+      expect(prompt.prompt).toContain('"previous_messages":[]');
+      expect(prompt.prompt).toContain('untrusted');
+    }
+    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+      expect(
+        await new ThreadSessionMapRepository(scoped).findByChannelAndThread(channel.id, threadId)
+      ).toMatchObject({
+        session_id: first.sessionId,
+        discord_last_admitted_message_id: '800000000000000002',
+      });
+      expect(
+        await new TaskRepository(scoped).findById(promptCreate.mock.calls[0][0].idempotencyTaskId!)
+      ).toMatchObject({ created_by: user.user_id });
+    });
+    await runWithTenantDatabaseScope(db, otherTenantId, async (scoped) => {
+      expect(
+        await new ThreadSessionMapRepository(scoped).findByChannelAndThread(channel.id, threadId)
+      ).toBeNull();
+    });
+  }, 30_000);
 
   it('admits one stable session for concurrent aliases and rejects a cross-tenant lookup', async () => {
     const tenantId = `gateway-race-${generateId()}` as TenantID;

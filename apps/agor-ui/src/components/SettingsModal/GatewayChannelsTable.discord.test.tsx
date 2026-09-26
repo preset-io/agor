@@ -192,10 +192,12 @@ async function fillDiscordWizard({
   allowedUserId,
   allowedRoleId,
   files = false,
+  directMessages = false,
 }: {
   allowedUserId?: string;
   allowedRoleId?: string;
   files?: boolean;
+  directMessages?: boolean;
 }) {
   clickButton(/Add Channel/);
   selectDiscord();
@@ -224,6 +226,7 @@ async function fillDiscordWizard({
 
   expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
+  if (directMessages) fireEvent.click(screen.getByLabelText('Direct messages'));
   if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
   addTag('Allowed public text channel IDs', CHANNEL_ID);
   if (allowedUserId) addTag('Allowed user IDs', allowedUserId);
@@ -259,6 +262,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
         allowed_channel_ids: [CHANNEL_ID],
         allowed_user_ids: [USER_ID],
         allowed_role_ids: [],
+        direct_messages_enabled: false,
       },
     });
     expect(channelCreate.mock.calls[0][0].config.bot_token).toBeUndefined();
@@ -274,7 +278,12 @@ describe('GatewayChannelsTable Discord create wizard', () => {
   it('submits the complete draft, verifies stored credentials, then enables', async () => {
     const { client, channelCreate, channelPatch, testCreate } = makeClient();
     renderTable(client);
-    await fillDiscordWizard({ allowedUserId: USER_ID, allowedRoleId: ROLE_ID, files: true });
+    await fillDiscordWizard({
+      allowedUserId: USER_ID,
+      allowedRoleId: ROLE_ID,
+      files: true,
+      directMessages: true,
+    });
     await createDraft(channelCreate);
 
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
@@ -302,6 +311,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
           rate_limit_max_total_delay_ms: 10000,
         },
         files: true,
+        direct_messages_enabled: true,
         agent_tools: [],
       },
     });

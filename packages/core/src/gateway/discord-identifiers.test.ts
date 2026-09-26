@@ -3,6 +3,8 @@ import type { DiscordMessageDeliveryID } from '../types/gateway';
 import {
   buildDiscordDeliveryMetadata,
   buildDiscordDeliveryNonce,
+  buildDiscordDirectMessageMetadata,
+  buildDiscordDirectMessageThreadKey,
   buildDiscordInboundMetadata,
   buildDiscordMessageThreadKey,
   DISCORD_METADATA_KEY,
@@ -114,4 +116,29 @@ describe('Discord authority identifiers', () => {
       /canonical delivery nonce/
     );
   });
+});
+
+it('round-trips explicit DM identity and rejects drift', () => {
+  const channelId = '333333333333333333';
+  const authorId = '444444444444444444';
+  expect(parseDiscordThreadKey(buildDiscordDirectMessageThreadKey(channelId, authorId))).toEqual({
+    kind: 'direct_message',
+    channelId,
+    userId: authorId,
+  });
+  const metadata = buildDiscordDirectMessageMetadata({
+    channelId,
+    authorId,
+    messageId: '555555555555555555',
+    botUserId: '666666666666666666',
+    roleIds: [],
+  });
+  expect(parseDiscordAuthorityMetadata(metadata)).toEqual(metadata);
+  expect(metadata[DISCORD_METADATA_KEY.directMessage]).toBe(true);
+  expect(metadata[DISCORD_METADATA_KEY.guildId]).toBeUndefined();
+  expect(
+    parseDiscordAuthorityMetadata({ ...metadata, [DISCORD_METADATA_KEY.directMessage]: 'true' })
+  ).toBeNull();
+  expect(parseDiscordThreadKey(`discord:dm:${channelId}:bad`)).toBeNull();
+  expect(parseDiscordThreadKey(`discord:dm:${channelId}:${authorId}:extra`)).toBeNull();
 });

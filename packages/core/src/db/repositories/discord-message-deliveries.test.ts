@@ -139,6 +139,33 @@ describe('DiscordMessageDeliveryRepository', () => {
     }
   );
 
+  dbTest(
+    'delivers all assistant replies in a DM session regardless of prompt origin',
+    async ({ db }) => {
+      const { mapping, session } = await seedMappedDiscord(db);
+      await new ThreadSessionMapRepository(db).update(mapping.id, {
+        thread_id: 'discord:dm:333333333333333333:444444444444444444',
+      });
+      const deliveries = new DiscordMessageDeliveryRepository(db);
+      const messages = new MessagesRepository(db, (tx, message) =>
+        deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+      );
+      const origins: Message['metadata'][] = [
+        { source: 'gateway' },
+        { source: 'agor' },
+        { source: 'agor', is_agor_callback: true },
+        undefined,
+      ];
+      for (const metadata of origins) {
+        const message = await messages.create(assistantMessage(session.session_id, { metadata }));
+        expect(await deliveries.findByMessageId(message.message_id)).toMatchObject({
+          status: 'pending',
+          thread_session_map_id: mapping.id,
+        });
+      }
+    }
+  );
+
   dbTest('rolls back the Message when durable intent insertion fails', async ({ db }) => {
     const { session } = await seedMappedDiscord(db);
     const message = assistantMessage(session.session_id);
