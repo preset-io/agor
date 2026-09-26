@@ -326,12 +326,9 @@ function applySessionPatchToBranchBuckets(
     // surrogates point their genealogy at this session, so leaving them would
     // re-root them in the tree once the archived creator is no longer rendered.
     // The remote targets themselves keep their independent lifecycle.
+    const archivedIds = new Set([session.session_id]);
     for (const [branchId, bucket] of next) {
-      const filtered = bucket.filter(
-        (item) =>
-          item.session_id !== session.session_id &&
-          item.remote_surrogate?.source_session_id !== session.session_id
-      );
+      const filtered = bucket.filter((item) => !isSessionRowRemovedWith(item, archivedIds));
       if (filtered.length !== bucket.length) {
         changed = true;
         if (filtered.length > 0) next.set(branchId, filtered);
@@ -637,6 +634,24 @@ export function createRemoteSurrogateSession(
       target_branch_id: targetSession.branch_id,
     },
   };
+}
+
+/**
+ * Whether a branch-bucket row leaves with `removedSessionIds`: the session
+ * itself, or a remote surrogate whose creator or target is being removed.
+ * A surrogate hangs off its creator in the tree, so it must leave with it.
+ */
+export function isSessionRowRemovedWith(
+  row: Session,
+  removedSessionIds: ReadonlySet<string>
+): boolean {
+  if (removedSessionIds.has(row.session_id)) return true;
+  const surrogate = row.remote_surrogate;
+  return (
+    !!surrogate &&
+    (removedSessionIds.has(surrogate.source_session_id) ||
+      removedSessionIds.has(surrogate.relationship.target_session_id))
+  );
 }
 
 export function findSessionInBranchBuckets(

@@ -381,14 +381,18 @@ describe('SessionsService archive routes', () => {
         archived: false,
       });
       // Every affected row is published, and creators carry their remote edges
-      // so clients can retire (and later re-project) remote surrogates.
-      expect(emit).toHaveBeenCalledTimes(4);
-      const emittedGrandchild = archived.affectedSessions.find(
-        (session) => session.session_id === grandchild.session_id
-      );
-      expect(emittedGrandchild?.remote_relationships?.as_source).toEqual([
+      // on the realtime payload so clients can retire (and later re-project)
+      // remote surrogates.
+      const emittedGrandchild = () =>
+        emit.mock.calls
+          .map(([, payload]) => payload as Session)
+          .find((session) => session.session_id === grandchild.session_id);
+      const grandchildRemoteEdges = [
         expect.objectContaining({ target_session_id: remoteChild.session_id }),
-      ]);
+      ];
+      expect(emit).toHaveBeenCalledTimes(4);
+      expect(emittedGrandchild()).toMatchObject({ archived: true });
+      expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
 
       emit.mockClear();
       const restored = await service.unarchive(root.session_id, {});
@@ -401,10 +405,8 @@ describe('SessionsService archive routes', () => {
         });
       }
       expect(emit).toHaveBeenCalledTimes(4);
-      expect(
-        restored.affectedSessions.find((session) => session.session_id === grandchild.session_id)
-          ?.remote_relationships?.as_source
-      ).toHaveLength(1);
+      expect(emittedGrandchild()).toMatchObject({ archived: false });
+      expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
     }
   );
 
