@@ -1,7 +1,11 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getCurrentTenantId, runWithTenantContext } from '@agor/core/db';
+import {
+  getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
+  runWithTenantContext,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, Branch } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -196,8 +200,13 @@ describe('ReposService .agor.yml normalized branch access', () => {
   };
 
   function service() {
+    // Minimal handle for the real tenant-scope wrapper to open a unit on.
+    const db = {
+      run: vi.fn(),
+      transaction: vi.fn(async (work: (scoped: unknown) => Promise<unknown>) => work(db)),
+    };
     return new ReposService(
-      {} as never,
+      db as never,
       {
         get: () => ({}),
         service: vi.fn(),
@@ -229,7 +238,20 @@ describe('ReposService .agor.yml normalized branch access', () => {
       sandboxWorktreesRoot: '/data/worktrees',
       sandboxBaseRepoPath: '/data/repos/preset-io/agor',
     };
-    sandboxMountMocks.resolve.mockResolvedValue(sandboxMounts);
+    // Export enters on a long route with tenant identity only; launch
+    // preparation must open its own short tenant database unit, and the
+    // executor must run outside it.
+    let resolvedInScope = false;
+    let executedInScope = true;
+    sandboxMountMocks.resolve.mockImplementation(async () => {
+      const scope = getCurrentTenantDatabaseScope();
+      resolvedInScope = scope?.kind === 'tenant' && scope.tenantId === 'default';
+      return sandboxMounts;
+    });
+    executorMocks.requestExecutor.mockImplementation(async () => {
+      executedInScope = getCurrentTenantDatabaseScope() !== undefined;
+      return { success: true, data: {} };
+    });
     const instance = service();
 
     await runWithTenantContext('default', () =>
@@ -267,6 +289,8 @@ describe('ReposService .agor.yml normalized branch access', () => {
     expect(sandboxMountMocks.resolve).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: 'default', executionUserId: user.user_id, branch })
     );
+    expect(resolvedInScope).toBe(true);
+    expect(executedInScope).toBe(false);
   });
 
   it('fails export closed when write access is missing', async () => {
@@ -279,17 +303,19 @@ describe('ReposService .agor.yml normalized branch access', () => {
     const instance = service();
 
     await expect(
-      (
-        instance as unknown as {
-          runAgorYmlExecutorCommand(
-            repoInput: typeof repo,
-            branchInput: typeof branch,
-            command: 'branch.agor-yml.export',
-            params: Record<string, unknown>,
-            serviceParams: unknown
-          ): Promise<unknown>;
-        }
-      ).runAgorYmlExecutorCommand(repo, branch, 'branch.agor-yml.export', {}, { user })
+      runWithTenantContext('default', () =>
+        (
+          instance as unknown as {
+            runAgorYmlExecutorCommand(
+              repoInput: typeof repo,
+              branchInput: typeof branch,
+              command: 'branch.agor-yml.export',
+              params: Record<string, unknown>,
+              serviceParams: unknown
+            ): Promise<unknown>;
+          }
+        ).runAgorYmlExecutorCommand(repo, branch, 'branch.agor-yml.export', {}, { user })
+      )
     ).rejects.toThrow('branch filesystem write access required');
     expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
   });

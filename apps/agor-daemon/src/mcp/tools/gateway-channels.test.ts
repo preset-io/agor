@@ -2303,6 +2303,41 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       expect(payload).toMatchObject({ uploaded: true });
     });
 
+    it('mounts the caller home store for branch file uploads under a per-user sandbox', async () => {
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { uploaded: { id: 'F456', name: 'chart.png' } },
+      });
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue({
+        filesystem_home: null,
+      } as any);
+      const config = {
+        paths: { data_home: '/srv/agor-data' },
+        execution: { unix_user_mode: 'sandbox', sandbox: { enabled: true, home_mode: 'per_user' } },
+      };
+
+      const tools = await captureTools('member', makeFakeApp({}, config));
+      await tools.agor_gateway_slack_file_upload.handler({
+        source: { kind: 'branch', branchPath: 'chart.png' },
+      });
+
+      // The caller (user-1), not the branch owner, is the execution principal.
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'branch.gateway.slack-file-upload',
+          params: expect.objectContaining({
+            sandboxHomeStore: '/srv/agor-data/tenants/tenant-test/homes/user-1',
+          }),
+        }),
+        expect.any(Object)
+      );
+    });
+
     it('rejects branch file uploads without filesystem read access', async () => {
       vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
         can: 'session',
