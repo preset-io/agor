@@ -16,6 +16,9 @@
  *   - PR #1116 added `status='requesting'`.
  *   - PR #1172 added `task_updated` and lifted both rules into this shared
  *     module so the executor + UI no longer hardcode the same literals.
+ *   - Added `commands_changed` plus the `@internal` host signals
+ *     (`vcs_state_changed`, `code_change_published`, `dev_intent`,
+ *     `task_summary`), which surfaced as raw JSON rows after git push/commit.
  *
  * This module is browser-safe: it imports types only from
  * `@anthropic-ai/claude-agent-sdk` (erased at runtime).
@@ -56,6 +59,8 @@ export type ClaudeSystemStatus = Extract<
  */
 export const SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<ClaudeSystemSubtype> = new Set([
   'background_tasks_changed',
+  // Replacement slash-command list after a mid-session change; plumbing only.
+  'commands_changed',
   'files_persisted',
   'hook_started',
   'hook_progress',
@@ -66,6 +71,27 @@ export const SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<ClaudeSystemSubtype>
   'task_notification',
   'thinking_tokens',
 ] as const);
+
+/**
+ * Suppressed subtypes the SDK marks `@internal`: the bundled CLI emits them on
+ * the stdout stream, but they are absent from the public `SDKMessage` union,
+ * so they cannot be checked against `ClaudeSystemSubtype`.
+ *
+ * - `vcs_state_changed`: cache-invalidation hint after a foreground Bash git
+ *   commit/push/merge/rebase (`kind`, `cwd`, optional `branch`). The payload is
+ *   deliberately minimal; consumers are told to re-read the repository.
+ * - `code_change_published`: best-effort PR/MR URL scraped from command
+ *   output (e.g. `gh pr create`, a push to a branch with a PR). Unverified.
+ * - `dev_intent`: project-kind hint for Claude Code Desktop tooling.
+ * - `task_summary`: debounced mid-turn progress phrase; same family as the
+ *   suppressed `task_*` telemetry.
+ */
+export const SUPPRESSED_INTERNAL_CLAUDE_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
+  'code_change_published',
+  'dev_intent',
+  'task_summary',
+  'vcs_state_changed',
+]);
 
 /**
  * `SDKStatusMessage.status` values we suppress. `requesting` fires on every
@@ -116,7 +142,10 @@ export function shouldSuppressClaudeSystemEvent(event: {
   const subtype = event.subtype;
   if (!subtype) return false;
 
-  if ((SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype)) {
+  if (
+    (SUPPRESSED_CLAUDE_SYSTEM_SUBTYPES as ReadonlySet<string>).has(subtype) ||
+    SUPPRESSED_INTERNAL_CLAUDE_SYSTEM_SUBTYPES.has(subtype)
+  ) {
     return true;
   }
 
