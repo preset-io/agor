@@ -11,6 +11,18 @@ Agor can attach external MCP servers to individual sessions. Use **Catalog** for
 
 Open **MCP Catalog** from the header’s shop icon or the same icon in the session’s **MCP** popover. Search the session picker to find existing servers; its no-match action also opens the Catalog. Catalog **Connect** adds a server to **My Servers**, without creating a session. Choose **Start new session** afterward to select an eligible teammate and agent tool; its starter prompt opens in the composer as editable, unsent text. To attach a saved server to the current conversation, select it in that picker.
 
+## Reading the server list
+
+Settings keeps transport, scope, configured **Enabled/Disabled** state, ownership,
+and authentication/discovered capabilities beside each server name. **Shared**
+means no private owner; it does not identify who added the server. **View details**
+shows creation/update timestamps. Creator and last-modifier identities are not
+recorded, so ownership must not be interpreted as an audit trail.
+
+**Not signed in** needs authentication. A discovered tool count is saved capability
+information, not a live connectivity check; use the editor's connection test when
+checking reachability.
+
 ## Catalog visibility
 
 The Catalog shows servers available for new connections. Hidden entries cannot

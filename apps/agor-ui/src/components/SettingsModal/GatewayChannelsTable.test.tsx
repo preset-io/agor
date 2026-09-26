@@ -1159,3 +1159,89 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     // channel-type Select, so it's among the heaviest tests in this file.
   }, 30_000);
 });
+
+describe('gateway inventory boundaries', () => {
+  it('does not resolve a branch or user per row, including after filtering', () => {
+    const service = vi.fn(() => ({ get: vi.fn() }));
+    const user = makeUser();
+    const channels = Array.from(
+      { length: 25 },
+      (_, index) =>
+        ({
+          ...makeSlackChannel(),
+          id: `channel-${index}`,
+          name: `Channel ${index}`,
+          target_branch_id: `hidden-${index}`,
+          created_by: 'unavailable-creator',
+        }) as GatewayChannel
+    );
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={{ service } as unknown as AgorClient}
+        gatewayChannelById={new Map(channels.map((channel) => [channel.id, channel]))}
+        branchById={new Map()}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map()}
+        currentUser={user}
+      />
+    );
+    expect(service).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText('Search name, type, target branch, or person'), {
+      target: { value: 'Channel 24' },
+    });
+    expect(screen.getByText('Channel 24')).toBeInTheDocument();
+    expect(service).not.toHaveBeenCalled();
+    expect(screen.getByText('Created by: Unknown user')).toBeInTheDocument();
+    expect(screen.getByText('Execution owner: Ada Lovelace')).toBeInTheDocument();
+  });
+
+  it('keeps non-admin gateway mutation controls disabled', () => {
+    const user = makeUser({ role: 'member' });
+    const channel = makeSlackChannel();
+    const onDelete = vi.fn();
+    const onUpdate = vi.fn();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map([[channel.id, channel]])}
+        branchById={new Map()}
+        userById={new Map()}
+        mcpServerById={new Map()}
+        currentUser={user}
+        onDelete={onDelete}
+        onUpdate={onUpdate}
+      />
+    );
+    expect(queryButton(/^Add Channel$/)).toBeDisabled();
+    expect(screen.getByLabelText('Edit')).toBeDisabled();
+    expect(screen.getByLabelText('Delete')).toBeDisabled();
+    expect(document.querySelector('[role="switch"]')).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+});
+
+it('resolves only the opened target and preserves its ID when access is denied', async () => {
+  const get = vi.fn().mockRejectedValue(new Error('Forbidden'));
+  const client = { service: vi.fn(() => ({ get })) } as unknown as AgorClient;
+  const user = makeUser();
+  const channel = {
+    ...makeSlackChannel(),
+    channel_type: 'discord',
+    target_branch_id: 'hidden-target',
+  } as GatewayChannel;
+  renderWithProviders(
+    <GatewayChannelsTable
+      client={client}
+      gatewayChannelById={new Map([[channel.id, channel]])}
+      branchById={new Map()}
+      userById={new Map([[user.user_id, user]])}
+      mcpServerById={new Map()}
+      currentUser={user}
+    />
+  );
+  expect(get).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByLabelText('Edit'));
+  await waitFor(() => expect(get).toHaveBeenCalledExactlyOnceWith('hidden-target'));
+  expect(screen.getByLabelText('branch-select')).toHaveValue('hidden-target');
+});
