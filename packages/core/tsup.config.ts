@@ -100,8 +100,8 @@ export default defineConfig({
   shims: true, // Enable shims for import.meta.url in CJS builds
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
-    // Tenant-aware config resolution must use the DB entrypoint's ambient scope,
-    // not an inlined copy.
+    // Independently bundled tools and tenant-aware config resolution must share
+    // the DB entrypoint's stateful authority and ambient scope, not inlined copies.
     '@agor/core/db',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',

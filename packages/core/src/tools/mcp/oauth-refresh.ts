@@ -1,14 +1,20 @@
 /** PostgreSQL-coordinated MCP OAuth refresh with rotating-token fencing. */
 
-import { getCurrentTenantId, isPostgresDatabaseHandle, runWithTenantDatabaseScope } from '../../db';
-import type { Database, TenantScopeAwareDatabase } from '../../db/client';
+// Keep the daemon's guarded handle, scope registry, and repositories in the
+// same runtime module. The independently bundled tools entry point must not
+// manufacture a second tenant proxy WeakMap/AsyncLocalStorage owner.
 import {
+  type Database,
+  getCurrentTenantId,
+  isPostgresDatabaseHandle,
   type MCPOAuthGrantStatusRecord,
   type MCPOAuthRefreshVersion,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
-} from '../../db/repositories';
+} from '@agor/core/db';
 import {
   ROTATING_GRANT_OBSERVE_INTERVAL_MS,
   ROTATING_GRANT_OBSERVE_TIMEOUT_MS,

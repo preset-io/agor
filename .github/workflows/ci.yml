@@ -107,6 +107,7 @@ jobs:
 
       # Docs have their own PR/push workflow and are intentionally excluded.
       - run: pnpm turbo run build typecheck --filter='!@agor/docs'
+      - run: pnpm check:mcp-oauth-build
 
       # Source aliases hide cross-entrypoint AsyncLocalStorage duplication.
       - run: pnpm --filter @agor/core test:runtime
@@ -116,6 +117,7 @@ jobs:
       # all of its workspace declaration dependencies cheaply or reliably.
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
+      - run: pnpm --filter @agor/executor test:claude-auth-precedence
 
       # Every @agor/core dist entry imported by plain Node, then the tenant
       # scope stores driven across those entries. Vitest resolves this package
