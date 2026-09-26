@@ -89,6 +89,8 @@ test('deletion steps require exact authenticated command, tenant and invocation,
       branchDeletionCommandId(invocation),
       user.user_id,
       branch.branch_id,
+      undefined,
+      undefined,
       'safety-recovery'
     );
     await expect(
