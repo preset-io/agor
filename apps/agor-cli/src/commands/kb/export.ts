@@ -1,7 +1,7 @@
 import { knowledgeTransferSlug } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
-import { knowledgeDirectoryAnchor } from '../../lib/knowledge/directory';
+import { assertKnowledgeDirectorySupported } from '../../lib/knowledge/directory';
 import { exportKnowledge, knowledgeTransferClient } from '../../lib/knowledge/transfer';
 import { withKnowledgeTransfer } from '../../lib/knowledge/transfer-lifecycle';
 
@@ -24,7 +24,7 @@ export default class KnowledgeExport extends BaseCommand {
     const namespace = knowledgeTransferSlug.parse(flags.namespace);
     try {
       // Unsupported platforms fail before any remote work or resume advice.
-      knowledgeDirectoryAnchor();
+      assertKnowledgeDirectorySupported();
     } catch (error) {
       this.error((error as Error).message);
     }

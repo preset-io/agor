@@ -190,13 +190,8 @@ agor kb import ./team-docs-export --namespace migrated-docs --apply
 
 Import defaults to planning only; **`--apply` is required for writes**. Export writes
 by default and creates the output directory with mode `0700`. Existing output
-directories must be private and owned by the CLI user. Export and import run on
-**Linux and macOS** (and other POSIX systems); Windows is not supported yet, so use WSL.
-On Linux every file operation resolves through an opened directory handle, so a
-symlink or swap of the directory path cannot redirect it. On macOS, whose Node runtime
-has no equivalent, every parent of the bundle directory must be owned by you or root
-and not writable by other users (sticky shared directories such as `/tmp` are fine),
-and the directory is re-verified before each file operation. It does not write files
+directories must be private and owned by the CLI user. Export and import run on Linux
+and macOS; on Windows, use WSL. The CLI does not write files
 on the daemon or require an Agor session, S3 or a background migration job.
 
 Typical progress looks like:
