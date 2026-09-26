@@ -46,7 +46,10 @@ import type {
 } from '@agor-live/client';
 import {
   GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
+  hasMinimumRole,
   isAgenticToolName,
+  ROLES,
   resolveDiscordAgentTools,
   resolveSlackAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
@@ -163,27 +166,6 @@ function getChannelTypeIcon(type: ChannelType): React.ReactNode {
       return <ThunderboltOutlined />;
     default:
       return <MessageOutlined />;
-  }
-}
-
-function getChannelTypeColor(type: ChannelType): string {
-  switch (type) {
-    case 'slack':
-      return 'purple';
-    case 'github':
-      return 'default';
-    case 'teams':
-      return 'geekblue';
-    case 'shortcut':
-      return 'gold';
-    case 'discord':
-      return 'blue';
-    case 'whatsapp':
-      return 'green';
-    case 'telegram':
-      return 'cyan';
-    default:
-      return 'default';
   }
 }
 
@@ -3674,6 +3656,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
   );
   const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
+  const canManage = !!currentUser && hasMinimumRole(currentUser.role, ROLES.ADMIN);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
@@ -3708,8 +3691,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [referencedBranchesById, setReferencedBranchesById] = useState<Map<string, Branch>>(
     () => new Map()
   );
-  const loadingReferencedBranchIds = useRef<Set<string>>(new Set());
-  const referencedBranchesByIdRef = useRef<Map<string, Branch>>(new Map());
 
   // ── Unified create-wizard step (0 = universal "Channel" step) ──
   const [createStep, setCreateStep] = useState(0);
@@ -3731,59 +3712,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // be overwritten by a slower earlier response.
   const slackAppInfoChannelIdRef = useRef<string | null>(null);
 
-  // Keep referenced target branches resolvable in CRUD even when archived branches
-  // are excluded from the core store.
-  useEffect(() => {
-    referencedBranchesByIdRef.current = referencedBranchesById;
-  }, [referencedBranchesById]);
-
+  // Resolve only the open editor's missing target, never every inventory row.
+  // The authorized get keeps hidden branches hidden; failures leave the saved ID intact.
   useEffect(() => {
     const operation = operationGuard.begin();
-    if (!client || !operation.isCurrent()) return;
-
-    const targetIds = new Set<string>();
-    for (const channel of gatewayChannelById.values()) {
-      if (channel.target_branch_id) {
-        targetIds.add(channel.target_branch_id);
-      }
-    }
-
-    const missingIds = Array.from(targetIds).filter(
-      (id) => !branchById.has(id) && !referencedBranchesByIdRef.current.has(id)
-    );
-    if (missingIds.length === 0) return;
-
-    void Promise.all(
-      missingIds.map(async (id) => {
-        if (loadingReferencedBranchIds.current.has(id)) return null;
-        loadingReferencedBranchIds.current.add(id);
-        try {
-          const branch = (await client.service('branches').get(id)) as Branch;
-          return branch;
-        } catch {
-          return null;
-        } finally {
-          loadingReferencedBranchIds.current.delete(id);
-        }
+    const id = editingChannel?.target_branch_id;
+    if (!client || !editModalOpen || !id || branchById.has(id) || !operation.isCurrent()) return;
+    void client
+      .service('branches')
+      .get(id)
+      .then((branch) => {
+        if (operation.isCurrent()) setReferencedBranchesById(new Map([[id, branch as Branch]]));
       })
-    ).then((results) => {
-      if (!operation.isCurrent()) return;
-      const resolved = results.filter((wt): wt is Branch => wt !== null);
-      if (resolved.length === 0) return;
-
-      setReferencedBranchesById((prev) => {
-        const next = new Map(prev);
-        for (const wt of resolved) {
-          next.set(wt.branch_id, wt);
-        }
-        return next;
+      .catch(() => {
+        // Missing or unauthorized targets must not reveal metadata.
       });
-    });
-
-    return () => {
-      operation.cancel();
-    };
-  }, [client, gatewayChannelById, branchById, operationGuard]);
+    return () => operation.cancel();
+  }, [client, editModalOpen, editingChannel?.target_branch_id, branchById, operationGuard]);
 
   const branchOptionsById = useMemo(() => {
     const merged = new Map<string, Branch>();
@@ -3835,8 +3780,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setRequiresSupportedToolSelection(false);
     setCreating(false);
     setReferencedBranchesById(new Map());
-    referencedBranchesByIdRef.current = new Map();
-    loadingReferencedBranchIds.current.clear();
     resetCreateFlow();
   }, [createForm, currentUser?.role, currentUser?.user_id, editForm, resetCreateFlow]);
 
@@ -4347,6 +4290,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleEdit = (channel: GatewayChannel) => {
+    if (!canManage) return;
     resetConnectionTest();
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
@@ -4540,13 +4484,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
   };
 
-  const handleToggleEnabled = (channel: GatewayChannel) => {
-    const operation = operationGuard.begin();
-    if (!operation.isCurrent()) return;
-    onUpdate?.(channel.id, { enabled: !channel.enabled }, operation.isCurrent);
-  };
-
   const handleDelete = (channelId: string) => {
+    if (!canManage) return;
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     onDelete?.(channelId, operation.isCurrent);
@@ -4554,70 +4493,47 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const columns = [
     {
-      title: '',
-      key: 'status',
-      width: 40,
-      render: (_: unknown, channel: GatewayChannel) => (
-        <Badge
-          status={channel.enabled ? 'success' : 'default'}
-          title={channel.enabled ? 'Enabled' : 'Disabled'}
-        />
-      ),
-    },
-    {
-      title: 'Name',
-      dataIndex: 'name',
+      title: 'Channel',
       key: 'name',
-      width: 180,
-      render: (name: string) => <HighlightMatch text={name} query={searchTerm} />,
-    },
-    {
-      title: 'Type',
-      dataIndex: 'channel_type',
-      key: 'channel_type',
-      width: 120,
-      render: (type: ChannelType) => (
-        <Tag icon={getChannelTypeIcon(type)} color={getChannelTypeColor(type)}>
-          {type.charAt(0).toUpperCase() + type.slice(1)}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Target Branch',
-      dataIndex: 'target_branch_id',
-      key: 'target_branch_id',
-      width: 180,
-      render: (branchId: string) => {
-        const wt = branchOptionsById.get(branchId);
+      render: (_: unknown, channel: GatewayChannel) => {
+        const creator = userById.get(channel.created_by);
+        const alignmentKey =
+          GATEWAY_USER_ALIGNMENT_CONFIG_KEYS[
+            channel.channel_type as keyof typeof GATEWAY_USER_ALIGNMENT_CONFIG_KEYS
+          ];
+        const aligned = alignmentKey && channel.config[alignmentKey] === true;
+        const executionUser = channel.agor_user_id ? userById.get(channel.agor_user_id) : null;
         return (
-          <Typography.Text type="secondary">
-            <HighlightMatch
-              text={
-                wt
-                  ? `${wt.name || wt.ref || branchId}${wt.archived ? ' (archived)' : ''}`
-                  : branchId
-              }
-              query={searchTerm}
-            />
-          </Typography.Text>
+          <Space
+            orientation="vertical"
+            size={token.marginXXS}
+            style={{ width: '100%', minWidth: 0 }}
+          >
+            <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
+              {getChannelTypeIcon(channel.channel_type)}{' '}
+              <HighlightMatch text={channel.name} query={searchTerm} />
+            </Typography.Text>
+            <Space wrap size={token.marginXXS}>
+              <Tag>{channel.channel_type}</Tag>
+              <Badge
+                status={channel.enabled ? 'success' : 'default'}
+                text={channel.enabled ? 'Enabled' : 'Disabled'}
+              />
+            </Space>
+            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
+              Created by: {creator?.name || creator?.email || 'Unknown user'}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
+              Execution owner:{' '}
+              {aligned
+                ? 'Aligned sender'
+                : channel.agor_user_id
+                  ? executionUser?.name || executionUser?.email || 'Unavailable user'
+                  : 'Unavailable user'}
+            </Typography.Text>
+          </Space>
         );
       },
-    },
-    {
-      title: 'Last Message',
-      dataIndex: 'last_message_at',
-      key: 'last_message_at',
-      width: 160,
-      render: (time: string | null) =>
-        time ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {new Date(time).toLocaleString()}
-          </Typography.Text>
-        ) : (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Never
-          </Typography.Text>
-        ),
     },
     {
       title: 'Actions',
@@ -4631,14 +4547,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             icon={<EditOutlined />}
             onClick={() => handleEdit(channel)}
             title="Edit"
-          />
-          <Switch
-            size="small"
-            checked={channel.enabled}
-            onChange={() => handleToggleEnabled(channel)}
-            title={channel.enabled ? 'Disable' : 'Enable'}
+            aria-label="Edit"
+            disabled={!canManage}
           />
           <Popconfirm
+            disabled={!canManage}
             title="Delete gateway channel?"
             description={`Are you sure you want to delete "${channel.name}"? All thread mappings will be lost.`}
             onConfirm={() => handleDelete(channel.id)}
@@ -4646,7 +4559,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             cancelText="Cancel"
             okButtonProps={{ danger: true }}
           >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              title="Delete"
+              disabled={!canManage}
+              aria-label="Delete"
+            />
           </Popconfirm>
         </SettingsActionGroup>
       ),
@@ -4654,22 +4575,24 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   ];
 
   const channels = useMemo(() => {
-    const sorted = mapToSortedArray(gatewayChannelById, (a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    const sorted = mapToSortedArray(
+      gatewayChannelById,
+      (a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id)
     );
     return filterBySettingsSearch(sorted, searchTerm, [
       (channel) => channel.name,
       (channel) => channel.channel_type,
-      (channel) => channel.channel_key,
       (channel) => (channel.enabled ? 'enabled' : 'disabled'),
       (channel) => channel.last_message_at,
       (channel) => {
         const branch = branchOptionsById.get(channel.target_branch_id);
         return [branch?.name, branch?.ref, channel.target_branch_id];
       },
-      (channel) => JSON.stringify(channel.config ?? {}),
+      (channel) => userById.get(channel.created_by)?.name,
+      (channel) => (channel.agor_user_id ? userById.get(channel.agor_user_id)?.name : undefined),
     ]);
-  }, [gatewayChannelById, searchTerm, branchOptionsById]);
+  }, [gatewayChannelById, searchTerm, branchOptionsById, userById]);
 
   return (
     <div>
@@ -4679,7 +4602,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
               allowClear
-              placeholder="Search name, type, target branch, key, or config"
+              placeholder="Search name, type, target branch, or person"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
@@ -4687,6 +4610,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             <Button
               type="primary"
               icon={<PlusOutlined />}
+              disabled={!canManage}
               onClick={() => {
                 resetConnectionTest();
                 createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
@@ -4731,7 +4655,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         >
           <MessageOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-            No channels configured.
+            {searchTerm ? 'No matching channels.' : 'No channels configured.'}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Add a channel to route messages from Slack, Discord, Teams, or other platforms to Agor
@@ -4740,9 +4664,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         </div>
       ) : (
         <ResponsiveTable
+          primaryColumnKey="name"
           dataSource={channels}
           columns={columns}
-          scroll={{ x: 1050 }}
+          tableLayout="fixed"
+          key={searchTerm}
           rowKey="id"
           pagination={{ defaultPageSize: 10, showSizeChanger: true }}
           size="small"
@@ -4843,6 +4769,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             description="Its saved configuration is preserved. Choose a supported tool before saving any changes."
             style={{ marginTop: 16 }}
           />
+        )}
+        {editingChannel && (
+          <Typography.Paragraph type="secondary">
+            Last message:{' '}
+            {editingChannel.last_message_at
+              ? new Date(editingChannel.last_message_at).toLocaleString()
+              : 'Never'}
+          </Typography.Paragraph>
         )}
         <Form
           form={editForm}

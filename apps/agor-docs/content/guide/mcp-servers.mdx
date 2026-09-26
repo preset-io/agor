@@ -35,6 +35,18 @@ lists: pruning the last branch entry would change the list to empty and thereby
 activate user-default inheritance. Creation-time handling also covers existing
 stale lists and a server deleted while a session is being created.
 
+## Reading the server list
+
+Settings keeps transport, scope, configured **Enabled/Disabled** state, ownership,
+and authentication/discovered capabilities beside each server name. **Shared**
+means no private owner; it does not identify who added the server. **View details**
+shows creation/update timestamps. Creator and last-modifier identities are not
+recorded, so ownership must not be interpreted as an audit trail.
+
+**Not signed in** needs authentication. A discovered tool count is saved capability
+information, not a live connectivity check; use the editor's connection test when
+checking reachability.
+
 ## Catalog visibility
 
 The Catalog shows servers available for new connections. Hidden entries cannot

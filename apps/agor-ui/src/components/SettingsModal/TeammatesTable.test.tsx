@@ -83,3 +83,28 @@ describe('TeammatesTable', () => {
     expect(container.querySelectorAll('.ant-table-row')).toHaveLength(20);
   });
 });
+
+it('resets the inventory page on search and distinguishes primary owner from creator', () => {
+  const branches = makeTeammates(21);
+  const user = {
+    user_id: 'user-1',
+    name: 'Original creator',
+    email: 'creator@example.test',
+  } as User;
+  renderWithProviders(
+    <TeammatesTable
+      branchById={branches}
+      repoById={new Map()}
+      boardById={new Map()}
+      sessionsByBranch={new Map()}
+      userById={new Map([[user.user_id, user]])}
+    />
+  );
+  fireEvent.click(screen.getByTitle('3'));
+  fireEvent.change(screen.getByPlaceholderText('Search teammates...'), {
+    target: { value: 'Teammate 20' },
+  });
+  expect(screen.getByText('Teammate 20')).toBeInTheDocument();
+  expect(screen.getByText('Created by: Original creator')).toBeInTheDocument();
+  expect(screen.getByText('Primary owner: Unavailable user')).toBeInTheDocument();
+});
