@@ -154,7 +154,7 @@ export class GatewayOutboundMessageRepository {
   ): Promise<
     Pick<GatewayOutboundMessage, 'platform_message_id' | 'created_at' | 'message_text'>[]
   > {
-    // ponytail: read the full window for an exact omitted count; observed high DM
+    // Read the full window for an exact omitted count; observed high DM
     // volume would justify a per-user outbound limit and a bounded/counting query.
     const rows = await select(this.db, {
       platform_message_id: gatewayOutboundMessages.platform_message_id,
