@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import { App, ConfigProvider, Form, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { agorStore } from '../../store/agorStore';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow/AgenticConfigChipRow';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
@@ -22,7 +22,11 @@ beforeEach(() => {
   localStorage.clear();
   agorStore.getState().setAgenticToolSettings([]);
 });
-afterEach(cleanup);
+const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+afterEach(async () => {
+  cleanup();
+  await page.viewport(originalViewport.width, originalViewport.height);
+});
 function footerProps(managed: boolean, tool = 'gemini'): SessionFooterProps {
   return {
     session: {
@@ -98,43 +102,61 @@ it('actual SessionFooter non-Gemini permissions can change', async () => {
   expect(props.onPermissionModeChange).toHaveBeenCalledTimes(1);
   expect(vi.mocked(props.onPermissionModeChange).mock.calls[0][0]).toBe('acceptEdits');
 });
-it('admin-only preset creation chip provides Gemini recovery guidance', async () => {
-  agorStore.getState().setAgenticToolSettings([
-    {
-      tool: 'gemini',
-      enabled: true,
-      deployment_available: true,
-      inline_configuration_allowed: false,
-      resolution_policy: 'user_preferred',
-      connection: {},
-    } as TenantAgenticToolSettings,
-  ]);
-  const client = {
-    service: () => ({
-      find: async () => [
-        {
-          preset_id: 'qa-preset',
-          tool: 'gemini',
-          name: 'Legacy QA preset',
-          configuration: { permissionMode: 'default' },
-          is_default: true,
-        },
-      ],
-      on: vi.fn(),
-      off: vi.fn(),
-    }),
-  } as unknown as AgorClient;
-  render(
-    <Shell>
-      <Form initialValues={{ agenticToolPresetId: 'qa-preset' }}>
-        <AgenticConfigChipRow tool="gemini" client={client} mcpServerById={new Map()} />
-      </Form>
-    </Shell>
-  );
-  const chip = await screen.findByTestId('permission-chip');
-  await waitFor(() => expect(chip).toHaveTextContent('Manual (unavailable)'));
-  await userEvent.click(chip);
-  await waitFor(() => expect(screen.getByText(/workspace admin/)).toBeVisible());
-  expect(screen.getByText(/Switch to Accept edits or Bypass/)).toBeVisible();
-  expect(chip).toHaveTextContent('Manual (unavailable)');
-});
+it.each([
+  [320, 568],
+  [390, 844],
+  [1280, 900],
+])(
+  'admin-only preset creation chip keeps Gemini recovery in view at %dx%d',
+  async (width, height) => {
+    await page.viewport(width, height);
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'gemini',
+        enabled: true,
+        deployment_available: true,
+        inline_configuration_allowed: false,
+        resolution_policy: 'user_preferred',
+        connection: {},
+      } as TenantAgenticToolSettings,
+    ]);
+    const client = {
+      service: () => ({
+        find: async () => [
+          {
+            preset_id: 'qa-preset',
+            tool: 'gemini',
+            name: 'Legacy QA preset',
+            configuration: { permissionMode: 'default' },
+            is_default: true,
+          },
+        ],
+        on: vi.fn(),
+        off: vi.fn(),
+      }),
+    } as unknown as AgorClient;
+    render(
+      <Shell>
+        <Form initialValues={{ agenticToolPresetId: 'qa-preset' }}>
+          <AgenticConfigChipRow tool="gemini" client={client} mcpServerById={new Map()} />
+        </Form>
+      </Shell>
+    );
+    const chip = await screen.findByTestId('permission-chip');
+    await waitFor(() => expect(chip).toHaveTextContent('Manual (unavailable)'));
+    await userEvent.click(chip);
+    const guidance = await screen.findByText(/workspace admin/);
+    await waitFor(() => expect(guidance).toBeVisible());
+    // Visibility alone does not detect recovery text clipped outside the viewport.
+    const popup = guidance.closest('.ant-popover')!;
+    await waitFor(() => {
+      const bounds = popup.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    });
+    expect(screen.getByText(/Switch to Accept edits or Bypass/)).toBeVisible();
+    expect(chip).toHaveTextContent('Manual (unavailable)');
+  }
+);

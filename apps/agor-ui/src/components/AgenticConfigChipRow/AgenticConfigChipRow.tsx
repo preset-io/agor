@@ -579,31 +579,17 @@ const EditableChip: React.FC<EditableChipProps> = ({
     </Button>
   );
 
-  if (!editable) {
-    return (
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        trigger="click"
-        placement="bottomLeft"
-        title={title}
-        content={managedNote}
-      >
-        {chip}
-      </Popover>
-    );
-  }
-
   return (
     <Popover
       open={open}
       onOpenChange={setOpen}
       trigger="click"
       placement="bottomLeft"
+      align={editable ? undefined : { overflow: { adjustX: true, adjustY: true, shiftX: true } }}
       title={title}
       content={
         <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
-          {renderContent(() => setOpen(false))}
+          {editable ? renderContent(() => setOpen(false)) : managedNote}
         </div>
       }
     >
