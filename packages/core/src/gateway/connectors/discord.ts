@@ -117,7 +117,14 @@ export function createDiscordRest(token: string, makeRequest?: RESTOptions['make
 
 export class DiscordDirectMessageError extends Error {
   readonly name = 'DiscordDirectMessageError';
-  constructor(readonly code: 'discord_direct_messages_disabled' | 'discord_dm_channel_mismatch') {
+  constructor(
+    readonly code:
+      | 'discord_direct_messages_disabled'
+      | 'discord_dm_channel_mismatch'
+      | 'discord_dm_target_not_member'
+      | 'discord_dm_unreachable',
+    readonly status?: number
+  ) {
     super(code);
   }
 }
@@ -148,8 +155,14 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 /** Keep only numeric retry metadata when sanitizing a provider error. */
 function withDeliveryErrorMetadata(error: unknown, message: string): Error {
-  const wrapped = new Error(message);
   const record = asRecord(error);
+  if (record?.code === 50007 || record?.code === 50278) {
+    return new DiscordDirectMessageError(
+      'discord_dm_unreachable',
+      typeof record.status === 'number' ? record.status : undefined
+    );
+  }
+  const wrapped = new Error(message);
   if (!record) return wrapped;
   const status = record.status ?? record.statusCode ?? record.code;
   if (typeof status === 'number') {
@@ -910,9 +923,9 @@ export class DiscordConnector implements GatewayConnector {
     channelId: string,
     threadId: string,
     ids: string[],
-    permalink = true
+    permalink = true,
+    directMessage = parseDiscordThreadKey(threadId)?.kind === 'direct_message'
   ): GatewaySendReceipt {
-    const directMessage = parseDiscordThreadKey(threadId)?.kind === 'direct_message';
     const firstId = ids[0];
     const lastId = ids[ids.length - 1];
     return {
@@ -1045,19 +1058,46 @@ export class DiscordConnector implements GatewayConnector {
     metadata?: Record<string, unknown>;
   }): Promise<GatewaySendReceipt> {
     this.validate();
-    const match = /^channel:(\d{17,20})$/.exec(req.target.trim());
-    if (!match) throw new Error('Invalid Discord outbound target. Expected channel:<snowflake>');
-    const channelId = match[1];
-    if (!configuredChannelIds(this.config).includes(channelId)) {
-      throw new Error('Discord outbound target must be one of the allowed channels');
+    const match = /^(channel|user):(\d{17,20})$/.exec(req.target.trim());
+    if (!match) {
+      throw new Error(
+        'Invalid Discord outbound target. Expected channel:<snowflake> or user:<snowflake>'
+      );
+    }
+    const directMessage = match[1] === 'user';
+    let channelId = match[2];
+    if (directMessage && !isDiscordDirectMessagesEnabled(this.config)) {
+      throw new DiscordDirectMessageError('discord_direct_messages_disabled');
     }
     if (req.threadId) throw new Error('Discord proactive outbound does not accept thread targets');
+    if (directMessage) {
+      if (!(await this.lookupGuildMember(match[2]))) {
+        throw new DiscordDirectMessageError('discord_dm_target_not_member');
+      }
+      let dm: Record<string, unknown> | null;
+      try {
+        dm = asRecord(
+          await this.transport.rest.post(Routes.userChannels(), {
+            body: { recipient_id: match[2] },
+          })
+        );
+      } catch (error) {
+        throw withDeliveryErrorMetadata(error, `Discord API failure: ${gatewayFailureCode(error)}`);
+      }
+      const dmId = snowflake(dm?.id);
+      if (!dmId || dm?.type !== 1) {
+        throw new DiscordDirectMessageError('discord_dm_channel_mismatch');
+      }
+      channelId = dmId;
+    } else if (!configuredChannelIds(this.config).includes(channelId)) {
+      throw new Error('Discord outbound target must be one of the allowed channels');
+    }
     const ids: string[] = [];
     for (const chunk of chunkDiscordMessage(req.text)) {
       ids.push((await this.sendChunk(channelId, chunk)).id);
     }
     const threadId = messageThreadId(channelId, ids[0]);
-    return this.receipt(channelId, threadId, ids);
+    return this.receipt(channelId, threadId, ids, true, directMessage);
   }
 
   formatMessage(markdown: string): string {

@@ -11,6 +11,7 @@ import {
 } from '@agor/core/db';
 import {
   buildSlackManifest,
+  DiscordDirectMessageError,
   getConnector,
   requiredBotEvents,
   requiredBotScopes,
@@ -1265,6 +1266,7 @@ describe('agor_gateway_channels MCP tools', () => {
 
     for (const target of [
       'channel:C123',
+      'user:444444444444444444',
       '#project-updates',
       'channel_name:project-updates',
       'user@example.com',
@@ -1376,6 +1378,41 @@ describe('gateway session branch binding (MCP)', () => {
       payload.channels.map((c: { gateway_channel_id: string }) => c.gateway_channel_id)
     ).toEqual(['chan-b1', 'chan-b2']);
     expect(sessionSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('advertises user targets only with DMs enabled (%s)', async (enabled) => {
+    spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+    vi.spyOn(GatewayChannelRepository.prototype, 'findAll').mockResolvedValue([
+      {
+        ...outboundChannelBranch1,
+        channel_type: 'discord',
+        config: { ...outboundChannelBranch1.config, direct_messages_enabled: enabled },
+      },
+    ] as never);
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    expect(JSON.parse(result.content[0].text).channels[0].accepted_target_formats).toEqual(
+      enabled ? ['channel:<snowflake>', 'user:<snowflake>'] : ['channel:<snowflake>']
+    );
+  });
+
+  it.each([
+    'discord_direct_messages_disabled',
+    'discord_dm_target_not_member',
+    'discord_dm_unreachable',
+  ] as const)('passes %s through the MCP handler', async (code) => {
+    const error = new DiscordDirectMessageError(code, 403);
+    const emitMessage = vi.fn().mockRejectedValue(error);
+    const tools = await captureTools('admin', makeFakeApp({ gateway: { emitMessage } }));
+    await expect(
+      tools.agor_gateway_emit_message.handler({
+        gatewayChannelId: 'chan-1',
+        target: 'user:444444444444444444',
+        message: 'hello',
+      })
+    ).rejects.toBe(error);
+    expect(emitMessage).toHaveBeenCalledOnce();
   });
 
   it('hints when no outbound channel targets the session branch', async () => {

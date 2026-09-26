@@ -170,7 +170,8 @@ and no superuser daemon connection is required.
 
 Proactive outbound emits (`agor_gateway_emit_message`) and Slack thread history reads made from a session are bound to that session's own branch: the gateway channel's target branch must match the calling session's branch, and there is no admin-role bypass. `agor_gateway_outbound_targets_list` only returns channels a session can actually use. Calls made without session context (personal API keys) follow the regular user-permission model instead.
 
-Discord outbound emits use a `channel:<snowflake>` target. A Discord outbound
+Discord outbound emits use a `channel:<snowflake>` target, or `user:<snowflake>`
+for a direct message when **Direct messages** is enabled. A server-channel outbound
 seed is recorded durably; the first eligible human reply to any seed chunk
 consumes that seed and starts the mapped session. Replies to later response
 chunks continue the same session.
@@ -313,6 +314,30 @@ Each person's DM conversation uses one session on the target branch, without a
 public thread. **DM content is visible to people with access to that branch.**
 The first message posts the session link; follow-ups do not post routing notices.
 There is no conversation-reset command.
+
+For a proactive DM, call `agor_gateway_emit_message` with `target: "user:<snowflake>"`.
+The channel must allow outbound messages, the caller must have emit permission,
+and a calling session must belong to the target branch. The recipient must be a
+current member of the configured server; unlike inbound DMs, they need not match
+an author allowlist. Membership is checked live before opening the DM.
+
+Failures are content-free and distinct: `discord_direct_messages_disabled`,
+`discord_dm_target_not_member`, or `discord_dm_unreachable` (Discord refuses the
+DM, including closed DMs or no mutual server). Refused sends are not recorded as
+delivered or retried. Discord may rate-limit or block a bot that opens many DMs;
+that can affect the whole bot. There is no bulk-send API.
+
+The person's next eligible message, plain or a Discord reply, goes to their one
+DM session—not the session that sent the proactive message. Earlier proactive
+DM texts since the last admitted message are included from Agor's stored records
+as untrusted context. The oldest texts are dropped first to fit the configured
+prompt-byte limit, with the exact omitted count; the person's message is always
+admitted. Several proactive messages do not create competing reply sessions.
+
+Stored proactive context is included at most once after admission. A message
+sent but not yet recorded when the reply is admitted can be missing from that
+context; it remains in Discord and the sending session. Deleting the DM session
+can cause older stored texts to appear again in the next new session.
 
 DMs never use Discord history as prompt context. Messages sent while the listener
 was down, DMs were disabled, or the sender was not allowed must be resent. Reply

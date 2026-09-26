@@ -296,6 +296,11 @@ export function isDiscordSnowflake(value: unknown): value is string {
   }
 }
 
+/** Decode the provider timestamp of an already-validated Discord Snowflake. */
+export function discordSnowflakeTimestampMs(id: string): number {
+  return Number((BigInt(id) >> 22n) + 1420070400000n);
+}
+
 /** Compare two already-validated Discord Snowflakes without losing precision. */
 export function compareDiscordSnowflakes(a: string, b: string): number {
   if (!isDiscordSnowflake(a) || !isDiscordSnowflake(b)) {

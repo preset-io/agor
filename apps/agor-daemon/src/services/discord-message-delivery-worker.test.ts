@@ -825,17 +825,20 @@ it('cancels queued DM deliveries when DMs are disabled', async () => {
   expect(h.recoverMessageByNonce).not.toHaveBeenCalled();
 });
 
-it('dead-letters a DM verification mismatch on its first attempt without recovery retry', async () => {
-  const h = makeHarness({ channel: { config: { direct_messages_enabled: true } } });
-  h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
-  h.sendMessage.mockRejectedValue(new DiscordDirectMessageError('discord_dm_channel_mismatch'));
-  await h.makeWorker().checkOnce();
-  await h.makeWorker().checkOnce();
-  expect(h.repository.row).toMatchObject({
-    status: 'dead_letter',
-    last_error_code: 'discord_dm_channel_mismatch',
-    attempt_count: 1,
-  });
-  expect(h.sendMessage).toHaveBeenCalledOnce();
-  expect(h.recoverMessageByNonce).toHaveBeenCalledOnce();
-});
+it.each(['discord_dm_channel_mismatch', 'discord_dm_unreachable'] as const)(
+  'dead-letters %s on its first attempt without recovery retry',
+  async (code) => {
+    const h = makeHarness({ channel: { config: { direct_messages_enabled: true } } });
+    h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+    h.sendMessage.mockRejectedValue(new DiscordDirectMessageError(code));
+    await h.makeWorker().checkOnce();
+    await h.makeWorker().checkOnce();
+    expect(h.repository.row).toMatchObject({
+      status: 'dead_letter',
+      last_error_code: code,
+      attempt_count: 1,
+    });
+    expect(h.sendMessage).toHaveBeenCalledOnce();
+    expect(h.recoverMessageByNonce).toHaveBeenCalledOnce();
+  }
+);

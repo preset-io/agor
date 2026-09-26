@@ -36,6 +36,7 @@ import {
   getGatewaySource,
   getRequiredSecretFields,
   hasMinimumRole,
+  isDiscordDirectMessagesEnabled,
   isDiscordSnowflake,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
@@ -288,10 +289,10 @@ const outboundTargetSchema = z
   .string()
   .trim()
   .regex(
-    /^(channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
+    /^(user:\d{17,20}|channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
   )
   .describe(
-    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake>. Thread targets are intentionally not supported for a new seed.'
+    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake> or user:<snowflake> (when DMs are enabled). Thread targets are intentionally not supported for a new seed.'
   );
 
 const envVarSchema = z.strictObject({
@@ -1886,7 +1887,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               : {}),
             accepted_target_formats:
               channel.channel_type === 'discord'
-                ? ['channel:<snowflake>']
+                ? [
+                    'channel:<snowflake>',
+                    ...(isDiscordDirectMessagesEnabled(channel.config) ? ['user:<snowflake>'] : []),
+                  ]
                 : [
                     'channel:C123',
                     '#project-updates',
@@ -2332,7 +2336,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_emit_message',
     {
       description:
-        "Send a proactive Slack or Discord message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake>. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
+        "Send a proactive Slack or Discord message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake> or user:<snowflake> when DMs are enabled. DM targets require current server membership; replies go to the recipient’s DM session, not the sending session. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: z.strictObject({
         gatewayChannelId: mcpRequiredId(
@@ -2344,7 +2348,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         target: outboundTargetSchema.optional().describe('Omit to use default_outbound_target.'),
         threadTs: slackOptionalTimestampSchema(
           'threadTs',
-          'Optional Slack thread timestamp. Discord proactive outbound is always a fresh channel:<snowflake> seed.'
+          'Optional Slack thread timestamp. Discord proactive outbound does not accept thread targets.'
         ),
         purpose: mcpOptionalNonEmptyString('purpose', 'Optional audit purpose.'),
       }),

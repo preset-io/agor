@@ -63,6 +63,7 @@ import {
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,
   DISCORD_METADATA_KEY,
+  DiscordDirectMessageError,
   extractDiscordStarterMessageId,
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
@@ -112,7 +113,9 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  compareDiscordSnowflakes,
   DEFAULT_DISCORD_CATCH_UP,
+  discordSnowflakeTimestampMs,
   GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   hasMinimumRole,
   isDiscordDirectMessagesEnabled,
@@ -4378,7 +4381,7 @@ export class GatewayService {
         : undefined);
     if (!target) throw new Error('No usable default outbound target configured');
     if (channel.channel_type === 'discord' && data.threadTs) {
-      throw new Error('Discord proactive outbound requires a fresh channel:<snowflake> seed');
+      throw new Error('Discord proactive outbound does not accept thread targets');
     }
 
     const connector = getConnector(channel.channel_type as ChannelType, channel.config);
@@ -4405,6 +4408,7 @@ export class GatewayService {
         })
       );
     } catch (error) {
+      if (error instanceof DiscordDirectMessageError) throw error;
       const failure = gatewayFailureCode(error);
       throw new Error(
         `${channel.channel_type === 'slack' ? 'Slack' : 'Discord'} API failure: ${failure}`
@@ -5574,9 +5578,30 @@ export class GatewayService {
         }
         const discordMetadata = parseDiscordAuthorityMetadata(data.metadata);
         if (discordDm) {
+          const cursor = mappingForCursor?.discord_last_admitted_message_id;
+          const sentMessages = await this.outboundRepo.listDiscordDirectMessageSends(
+            channel.id,
+            discordMetadata![DISCORD_METADATA_KEY.channelId]!,
+            cursor ? new Date(discordSnowflakeTimestampMs(cursor) - 5 * 60_000) : null
+          );
           promptText = formatDiscordDirectMessagePrompt({
             threadId: data.thread_id,
             currentText: data.text,
+            sentMessages: sentMessages
+              .filter(
+                (message) =>
+                  (!cursor || compareDiscordSnowflakes(message.platform_message_id, cursor) > 0) &&
+                  compareDiscordSnowflakes(message.platform_message_id, liveCursor) < 0
+              )
+              .sort((a, b) =>
+                compareDiscordSnowflakes(a.platform_message_id, b.platform_message_id)
+              )
+              .map((message) => ({
+                providerMessageId: message.platform_message_id,
+                timestamp: message.created_at,
+                text: message.message_text,
+              })),
+            maxPromptBytes: discordCatchUpMaxPromptBytes(channel.config),
           });
           discordCursorToWrite = liveCursor;
         } else if (connector?.fetchProviderHistory) {

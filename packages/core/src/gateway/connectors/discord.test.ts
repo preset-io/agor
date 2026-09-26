@@ -8,6 +8,7 @@ import {
   chunkDiscordMessage,
   createDiscordRest,
   DiscordConnector,
+  DiscordDirectMessageError,
   extractDiscordInboundFiles,
   hasStructuredDiscordBotMention,
   stripDiscordBotMention,
@@ -1292,5 +1293,95 @@ describe('Discord direct messages', () => {
       expect(result.directMessages).toEqual({ enabled });
       expect(result.notVerifiable.some((line) => line.includes('DM delivery'))).toBe(enabled);
     }
+  });
+});
+
+describe('Discord proactive DMs', () => {
+  const target = 'user:444444444444444444';
+  const dm = '999999999999999999';
+
+  it('checks live membership, opens the DM, and sends chunks with a per-message receipt', async () => {
+    const { transport, rest } = makeTransport();
+    rest.post.mockImplementation(async (route) =>
+      route === '/users/@me/channels'
+        ? { id: dm, type: 1 }
+        : { id: String(777777777777777777n + BigInt(rest.post.mock.calls.length)) }
+    );
+    const connector = new DiscordConnector({ ...config, direct_messages_enabled: true }, transport);
+    const receipt = await connector.sendDirectMessage({ target, text: 'x'.repeat(2100) });
+    expect(rest.get).toHaveBeenCalledOnce();
+    expect(rest.get).toHaveBeenCalledWith(`/guilds/${config.guild_id}/members/444444444444444444`, {
+      signal: expect.any(AbortSignal),
+    });
+    expect(rest.get.mock.invocationCallOrder[0]).toBeLessThan(
+      rest.post.mock.invocationCallOrder[0]
+    );
+    expect(rest.post.mock.calls.map(([route]) => route)).toEqual([
+      '/users/@me/channels',
+      `/channels/${dm}/messages`,
+      `/channels/${dm}/messages`,
+    ]);
+    expect(rest.post.mock.calls[0][1]).toEqual({ body: { recipient_id: '444444444444444444' } });
+    expect(receipt).toMatchObject({
+      platformChannelId: dm,
+      threadId: `discord:message:${dm}:777777777777777779`,
+      messageId: '777777777777777780',
+      replyAliases: [],
+      permalink: `https://discord.com/channels/@me/${dm}/777777777777777779`,
+    });
+    expect(rest.post.mock.calls[1][1]?.body).not.toHaveProperty('message_reference');
+  });
+
+  it('refuses disabled DMs without REST and nonmembers before opening a DM', async () => {
+    const { transport, rest } = makeTransport();
+    await expect(
+      new DiscordConnector(config, transport).sendDirectMessage({ target, text: 'hi' })
+    ).rejects.toMatchObject({ code: 'discord_direct_messages_disabled' });
+    expect(rest.get).not.toHaveBeenCalled();
+    expect(rest.post).not.toHaveBeenCalled();
+    rest.get.mockRejectedValue({ status: 404 });
+    await expect(
+      new DiscordConnector(
+        { ...config, direct_messages_enabled: true },
+        transport
+      ).sendDirectMessage({ target, text: 'hi' })
+    ).rejects.toMatchObject({ code: 'discord_dm_target_not_member' });
+    expect(rest.post).not.toHaveBeenCalled();
+  });
+
+  it.each([50007, 50278])('preserves refusal %s on open and send without retry', async (code) => {
+    for (const failOnOpen of [true, false]) {
+      const { transport, rest } = makeTransport();
+      rest.post.mockImplementation(async (route) => {
+        if (!failOnOpen && route === '/users/@me/channels') return { id: dm, type: 1 };
+        throw { code, status: 403, message: 'private provider details' };
+      });
+      const promise = new DiscordConnector(
+        { ...config, direct_messages_enabled: true },
+        transport
+      ).sendDirectMessage({ target, text: 'hi' });
+      await expect(promise).rejects.toBeInstanceOf(DiscordDirectMessageError);
+      await expect(promise).rejects.toMatchObject({
+        code: 'discord_dm_unreachable',
+        status: 403,
+        message: 'discord_dm_unreachable',
+      });
+      expect(rest.post).toHaveBeenCalledTimes(failOnOpen ? 1 : 2);
+    }
+  });
+
+  it('does not open a DM after a membership outage, or send to a malformed DM response', async () => {
+    const { transport, rest } = makeTransport();
+    const connector = new DiscordConnector({ ...config, direct_messages_enabled: true }, transport);
+    rest.get.mockRejectedValueOnce({ status: 429 });
+    await expect(connector.sendDirectMessage({ target, text: 'hi' })).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(rest.post).not.toHaveBeenCalled();
+    rest.post.mockResolvedValue({ id: dm, type: 3 });
+    await expect(connector.sendDirectMessage({ target, text: 'hi' })).rejects.toMatchObject({
+      code: 'discord_dm_channel_mismatch',
+    });
+    expect(rest.post).toHaveBeenCalledOnce();
   });
 });

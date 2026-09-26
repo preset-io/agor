@@ -15,7 +15,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { GatewayListenerError, getConnector } from '@agor/core/gateway';
+import { DiscordDirectMessageError, GatewayListenerError, getConnector } from '@agor/core/gateway';
 import type {
   GatewayChannel,
   GatewayOutboundMessage,
@@ -390,6 +390,7 @@ function makeGatewayHarness(args: {
     }
   ).usersRepo = { findByEmailForAlignment };
   const outboundRepo = {
+    listDiscordDirectMessageSends: vi.fn(async () => []),
     admitReplySession,
     completeReplyAdmission,
   };
@@ -4161,6 +4162,30 @@ describe('GatewayService Discord beta routing', () => {
     });
   });
 
+  it.each([
+    'discord_direct_messages_disabled',
+    'discord_dm_target_not_member',
+    'discord_dm_unreachable',
+  ] as const)('preserves %s through emit without recording or retrying', async (code) => {
+    const { service } = makeGatewayHarness({ channel: discordChannel });
+    const outboundRepo = { create: vi.fn() };
+    (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
+    const error = new DiscordDirectMessageError(code, 403);
+    const sendDirectMessage = vi.fn().mockRejectedValue(error);
+    vi.mocked(getConnector).mockReturnValue({ sendDirectMessage } as never);
+    await expect(
+      service.emitMessage({
+        gatewayChannelId: discordChannel.id,
+        target: 'user:444444444444444444',
+        message: 'private update',
+        emittedByUserId: user.user_id as UserID,
+        userRole: 'admin',
+      })
+    ).rejects.toBe(error);
+    expect(sendDirectMessage).toHaveBeenCalledOnce();
+    expect(outboundRepo.create).not.toHaveBeenCalled();
+  });
+
   it('rejects Discord threadTs proactive sends before connector admission', async () => {
     const { service } = makeGatewayHarness({ channel: discordChannel });
     vi.mocked(getConnector).mockReturnValue({ sendDirectMessage: vi.fn() } as never);
@@ -4173,7 +4198,7 @@ describe('GatewayService Discord beta routing', () => {
         emittedByUserId: user.user_id as UserID,
         userRole: 'admin',
       })
-    ).rejects.toThrow('fresh channel:<snowflake> seed');
+    ).rejects.toThrow('does not accept thread targets');
   });
 });
 
@@ -4453,6 +4478,7 @@ describe('GatewayService outbound emit session branch binding', () => {
     vi.mocked(getConnector).mockReturnValue({ sendSlackMessage, sendDirectMessage } as never);
     const outboundRepo = {
       create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
+      listDiscordDirectMessageSends: vi.fn(async () => []),
       admitReplySession: vi.fn(async () => null),
       completeReplyAdmission: vi.fn(async () => undefined),
     };
