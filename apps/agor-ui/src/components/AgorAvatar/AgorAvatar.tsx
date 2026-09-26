@@ -4,18 +4,18 @@
  * Provides consistent styling for user avatars throughout the application,
  * using colorPrimaryBg for the background to match the facepile in the navbar.
  *
- * Standard size: 40px (do not override unless absolutely necessary)
+ * Sized from IDENTITY_AVATAR_SIZE so every speaker in the transcript shares
+ * the navbar's avatar diameter. The size is deliberately not overridable.
  */
 
 import { Avatar, type AvatarProps, theme } from 'antd';
 import type { CSSProperties } from 'react';
-
-const STANDARD_AVATAR_SIZE = 40;
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 
 export interface AgorAvatarProps extends Omit<AvatarProps, 'style' | 'size'> {
   /** Optional style overrides */
   style?: CSSProperties;
-  /** Override font size (defaults to 24px for emoji) */
+  /** Override the emoji glyph size */
   fontSize?: string;
 }
 
@@ -28,11 +28,12 @@ export const AgorAvatar: React.FC<AgorAvatarProps> = ({ style, fontSize, childre
   return (
     <Avatar
       {...props}
-      size={STANDARD_AVATAR_SIZE}
+      size={IDENTITY_AVATAR_SIZE}
       style={{
         backgroundColor: token.colorPrimaryBg,
         color: token.colorText,
-        fontSize: fontSize ?? '24px',
+        // Large enough for an emoji to read as a face inside the circle.
+        fontSize: fontSize ?? token.fontSizeXL,
         ...style,
       }}
     >

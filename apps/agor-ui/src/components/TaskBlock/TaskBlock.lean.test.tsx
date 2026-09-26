@@ -167,8 +167,6 @@ describe('lean task presentation', () => {
     );
     expect(screen.getByRole('button', { name: /Approve/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /Deny/ })).toBeVisible();
-    const promptRegion = screen.getByRole('region', { name: 'User prompt and turn metadata' });
-    expect(Number.parseFloat(promptRegion.style.paddingBottom)).toBeGreaterThan(0);
   });
 });
 
@@ -460,11 +458,11 @@ it('retains prompt disclosure and surrounding message order when history supplie
     );
   }
   const { container, rerender } = render(<Harness rows={[before]} />);
-  const promptSection = screen.getByRole('region', { name: 'User prompt and turn metadata' });
+  const turnSection = screen.getByRole('region', { name: 'Turn and its metadata' });
   fireEvent.click(screen.getByRole('button', { name: /show less/i }));
   expect(screen.getByRole('button', { name: /show more/i })).toBeInTheDocument();
   rerender(<Harness rows={[before, initial, after]} />);
-  expect(screen.getByRole('region', { name: 'User prompt and turn metadata' })).toBe(promptSection);
+  expect(screen.getByRole('region', { name: 'Turn and its metadata' })).toBe(turnSection);
   expect(screen.getByRole('button', { name: /show more/i })).toBeInTheDocument();
   const text = Array.from(container.querySelectorAll('[data-conversation-block]'))
     .map((el) => el.textContent)

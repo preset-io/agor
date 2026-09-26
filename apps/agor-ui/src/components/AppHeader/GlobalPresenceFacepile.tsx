@@ -1,6 +1,7 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { useGlobalPresenceHeartbeat } from '../../hooks/useGlobalPresenceHeartbeat';
 import { usePresence } from '../../hooks/usePresence';
 import { Facepile } from '../Facepile';
@@ -83,7 +84,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       activeUsers={allActiveUsers}
       currentUserId={currentUser?.user_id}
       maxVisible={maxVisible}
-      avatarSize={32}
+      avatarSize={IDENTITY_AVATAR_SIZE}
       boardById={boardById}
       onUserClick={onUserClick}
       style={{

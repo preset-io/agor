@@ -55,3 +55,11 @@ export const DEFAULT_BACKGROUNDS = {
     // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-keyed default for board backgrounds
     'radial-gradient(75% 55% at 50% -8%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 60%), radial-gradient(60% 45% at 88% 108%, rgba(203, 213, 229, 0.5) 0%, rgba(203, 213, 229, 0) 60%), linear-gradient(180deg, #eef1f6 0%, #e7ebf2 55%, #e2e7ef 100%)',
 } as const;
+
+/**
+ * The one avatar diameter for Agor's identity surfaces: the navbar facepile
+ * and every speaker avatar in the session transcript. Import it rather than
+ * spelling a number, so the transcript's left gutter stays aligned with the
+ * chrome above it.
+ */
+export const IDENTITY_AVATAR_SIZE = 32;

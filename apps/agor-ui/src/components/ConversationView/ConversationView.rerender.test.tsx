@@ -8,9 +8,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // message subtrees of other tasks — nor untouched messages of task X itself.
 const messageRenders = new Map<string, number>();
 
-vi.mock('../MessageBlock', async () => {
+vi.mock('../MessageBlock', async (importOriginal) => {
   const React = await import('react');
+  // Keep the module's non-component exports (e.g. getMessageSpeaker, which
+  // TaskBlock uses to group avatars) real — only the component is stubbed.
+  const actual = await importOriginal<typeof import('../MessageBlock')>();
   return {
+    ...actual,
     __esModule: true,
     // Memoized like the real MessageBlock — the pin is that props (above all
     // `message`) keep their identity, which is exactly what lets the real,

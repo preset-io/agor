@@ -1,1 +1,1 @@
-export { MessageBlock } from './MessageBlock';
+export { getMessageSpeaker, MessageBlock } from './MessageBlock';

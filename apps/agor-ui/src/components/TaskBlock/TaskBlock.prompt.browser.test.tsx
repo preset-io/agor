@@ -45,17 +45,15 @@ it.each(['task-first', 'message-first', 'task-patch-before-message'])(
     );
     const { container, rerender } = render(view(order === 'message-first' ? [message] : []));
     const bubble = container.querySelector('.ant-bubble')!;
-    const metadata = container.querySelector('[aria-label="User prompt and turn metadata"]')!;
+    const promptWrapper = bubble.closest('[data-conversation-block]')!;
     expect(bubble).not.toBeNull();
     expect(bubble.textContent).toContain('bold and code');
     expect(bubble.textContent).not.toContain('**bold**');
     const height = bubble.getBoundingClientRect().height;
     const sample = () => {
-      expect(metadata.querySelectorAll('.ant-bubble')).toHaveLength(1);
+      expect(promptWrapper.querySelectorAll('.ant-bubble')).toHaveLength(1);
       expect(container.querySelector('.ant-bubble')).toBe(bubble);
-      expect(container.querySelector('[aria-label="User prompt and turn metadata"]')).toBe(
-        metadata
-      );
+      expect(bubble.closest('[data-conversation-block]')).toBe(promptWrapper);
       expect(bubble.getBoundingClientRect().height).toBeCloseTo(height, 1);
     };
     // A confirmed status patch can arrive before the initial message.
