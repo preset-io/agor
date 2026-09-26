@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
+import { hostname } from 'node:os';
 import * as path from 'node:path';
+import { promisify } from 'node:util';
 import { PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import type * as SDK from '@google/gemini-cli-core';
 
@@ -72,6 +75,28 @@ export async function findGeminiRecording(sdk: typeof SDK, config: SDK.Config, s
   }
 }
 
+// A negative PID lookup is meaningful only in the same boot and PID namespace.
+async function processNamespace(): Promise<string | undefined> {
+  try {
+    if (process.platform === 'linux') {
+      const [boot, namespace] = await Promise.all([
+        fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+        fs.readlink('/proc/self/ns/pid'),
+      ]);
+      return `${boot.trim()}:${namespace}`;
+    }
+    if (process.platform === 'darwin') {
+      const { stdout } = await promisify(execFile)('/usr/sbin/sysctl', ['-n', 'kern.boottime'], {
+        timeout: 1000,
+      });
+      return `${hostname()}:${stdout.trim()}`;
+    }
+  } catch {
+    // Unknown ownership is retained, never interpreted as a dead local process.
+  }
+  return undefined;
+}
+
 /** Executors are task-scoped processes. Suppress SDK console output even on report-write failure. */
 export async function enterGeminiRuntime() {
   const home = process.env.GEMINI_CLI_HOME;
@@ -82,18 +107,34 @@ export async function enterGeminiRuntime() {
   }
   const root = path.join(home, '.gemini', 'agor-task-tmp');
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  const namespace = await processNamespace();
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-    const match = /^(\d+)-/.exec(entry.name);
-    if (!entry.isDirectory() || !match) continue;
+    if (!namespace || !entry.isDirectory()) continue;
+    const directory = path.join(root, entry.name);
+    let owner: { namespace?: string; pid?: number };
     try {
-      process.kill(Number(match[1]), 0);
+      owner = JSON.parse(await fs.readFile(path.join(directory, 'owner.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (owner?.namespace !== namespace || !Number.isSafeInteger(owner.pid) || owner.pid! <= 0)
+      continue;
+    try {
+      process.kill(owner.pid!, 0);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-        await fs.rm(path.join(root, entry.name), { recursive: true, force: true });
+        await fs.rm(directory, { recursive: true, force: true });
       }
     }
   }
   const temp = await fs.mkdtemp(path.join(root, `${process.pid}-`));
+  await fs.writeFile(
+    path.join(temp, 'owner.json'),
+    JSON.stringify({ namespace, pid: process.pid }),
+    {
+      mode: 0o600,
+    }
+  );
   await fs.chmod(temp, 0o700);
   const previous = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
   process.env.TMPDIR = process.env.TMP = process.env.TEMP = temp;

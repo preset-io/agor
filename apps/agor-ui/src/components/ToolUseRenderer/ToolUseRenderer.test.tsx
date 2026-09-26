@@ -58,6 +58,17 @@ describe('ToolUseRenderer transcript projections', () => {
     }
   );
 
+  it.each(['Write', 'Edit'])('renders rejected %s calls without a valid path', (name) => {
+    render(
+      <ToolUseRenderer
+        toolUse={{ ...toolUse, name, input: {} }}
+        toolResult={{ ...toolResult, is_error: true, content: 'file_path is required' }}
+      />
+    );
+    expect(screen.getByText('file_path is required')).toBeInTheDocument();
+    expect(screen.queryByText('Full diff renderer')).not.toBeInTheDocument();
+  });
+
   it('shows the notice before the tool result arrives', () => {
     render(
       <ToolUseRenderer

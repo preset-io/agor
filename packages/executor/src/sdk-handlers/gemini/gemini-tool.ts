@@ -44,10 +44,13 @@ import type {
 import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 import { createUserMessage } from '../claude/message-builder.js';
 import { GeminiPromptService } from './prompt-service.js';
+import { GeminiIntegrationError } from './runtime.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 interface GeminiExecutionResult {
   wasStopped?: boolean;
+  hadError?: boolean;
+  errorDetails?: string[];
   userMessageId: MessageID;
   assistantMessageIds: MessageID[];
   tokenUsage?: TokenUsage;
@@ -175,97 +178,104 @@ export class GeminiTool implements ITool {
     let streamStartTime = Date.now();
     let firstTokenTime: number | null = null;
     let rawSdkResponse: unknown;
+    let failure: GeminiIntegrationError | undefined;
 
-    for await (const event of this.promptService.promptSessionStreaming(
-      sessionId,
-      prompt,
-      taskId,
-      permissionMode,
-      streamingCallbacks?.onPulse,
-      abortController?.signal
-    )) {
-      if (event.type === 'stopped') {
-        wasStopped = true;
-        continue;
-      }
-      if (event.type === 'partial') {
-        resolvedModel = event.resolvedModel ?? resolvedModel;
-      } else if (event.type === 'complete') {
-        resolvedModel = event.resolvedModel ?? resolvedModel;
-      }
+    try {
+      for await (const event of this.promptService.promptSessionStreaming(
+        sessionId,
+        prompt,
+        taskId,
+        permissionMode,
+        streamingCallbacks?.onPulse,
+        abortController?.signal
+      )) {
+        if (event.type === 'stopped') {
+          wasStopped = true;
+          continue;
+        }
+        if (event.type === 'partial') {
+          resolvedModel = event.resolvedModel ?? resolvedModel;
+        } else if (event.type === 'complete') {
+          resolvedModel = event.resolvedModel ?? resolvedModel;
+        }
 
-      // Capture token usage from complete event
-      if (event.type === 'complete' && event.usage) {
-        tokenUsage = event.usage;
-      }
+        // Capture token usage from complete event
+        if (event.type === 'complete' && event.usage) {
+          tokenUsage = event.usage;
+        }
 
-      // Capture raw SDK response for token accounting
-      if (event.type === 'complete' && event.rawSdkResponse) {
-        rawSdkResponse = event.rawSdkResponse;
-      }
+        // Capture raw SDK response for token accounting
+        if (event.type === 'complete' && event.rawSdkResponse) {
+          rawSdkResponse = event.rawSdkResponse;
+        }
 
-      // Handle partial streaming events (token-level chunks)
-      if (event.type === 'partial' && event.textChunk) {
-        // Start new message if needed
-        if (!currentMessageId) {
-          currentMessageId = generateId() as MessageID;
-          firstTokenTime = Date.now();
-          const ttfb = firstTokenTime - streamStartTime;
-          console.debug(`⏱️  [Gemini] TTFB: ${ttfb}ms`);
+        // Handle partial streaming events (token-level chunks)
+        if (event.type === 'partial' && event.textChunk) {
+          // Start new message if needed
+          if (!currentMessageId) {
+            currentMessageId = generateId() as MessageID;
+            firstTokenTime = Date.now();
+            const ttfb = firstTokenTime - streamStartTime;
+            console.debug(`⏱️  [Gemini] TTFB: ${ttfb}ms`);
 
+            if (streamingCallbacks) {
+              streamingCallbacks.onStreamStart(currentMessageId, {
+                role: MessageRole.ASSISTANT,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Emit chunk immediately
           if (streamingCallbacks) {
-            streamingCallbacks.onStreamStart(currentMessageId, {
-              role: MessageRole.ASSISTANT,
-              timestamp: new Date().toISOString(),
-            });
+            streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
           }
         }
+        // Handle complete message (save to database)
+        else if (event.type === 'complete' && event.content.length > 0) {
+          // End streaming if active
+          if (currentMessageId && streamingCallbacks) {
+            const streamEndTime = Date.now();
+            streamingCallbacks.onStreamEnd(currentMessageId);
+            const totalTime = streamEndTime - streamStartTime;
+            const streamingTime = firstTokenTime ? streamEndTime - firstTokenTime : 0;
+            console.debug(
+              `⏱️  [Streaming] Complete - TTFB: ${firstTokenTime ? firstTokenTime - streamStartTime : 0}ms, streaming: ${streamingTime}ms, total: ${totalTime}ms`
+            );
+          }
 
-        // Emit chunk immediately
-        if (streamingCallbacks) {
-          streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
-        }
-      }
-      // Handle complete message (save to database)
-      else if (event.type === 'complete' && event.content.length > 0) {
-        // End streaming if active
-        if (currentMessageId && streamingCallbacks) {
-          const streamEndTime = Date.now();
-          streamingCallbacks.onStreamEnd(currentMessageId);
-          const totalTime = streamEndTime - streamStartTime;
-          const streamingTime = firstTokenTime ? streamEndTime - firstTokenTime : 0;
-          console.debug(
-            `⏱️  [Streaming] Complete - TTFB: ${firstTokenTime ? firstTokenTime - streamStartTime : 0}ms, streaming: ${streamingTime}ms, total: ${totalTime}ms`
+          // Use existing message ID or generate new one
+          const assistantMessageId = currentMessageId || (generateId() as MessageID);
+
+          // Best-effort diff enrichment for Edit/Write tool results
+          enrichContentBlocks(event.content);
+
+          // Create complete message in DB
+          await this.createAssistantMessage(
+            sessionId,
+            assistantMessageId,
+            event.content,
+            event.toolUses,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
           );
+          assistantMessageIds.push(assistantMessageId);
+
+          // Reset for next message
+          currentMessageId = null;
+          streamStartTime = Date.now();
+          firstTokenTime = null;
         }
-
-        // Use existing message ID or generate new one
-        const assistantMessageId = currentMessageId || (generateId() as MessageID);
-
-        // Best-effort diff enrichment for Edit/Write tool results
-        enrichContentBlocks(event.content);
-
-        // Create complete message in DB
-        await this.createAssistantMessage(
-          sessionId,
-          assistantMessageId,
-          event.content,
-          event.toolUses,
-          taskId,
-          nextIndex++,
-          resolvedModel,
-          extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
-        );
-        assistantMessageIds.push(assistantMessageId);
-
-        // Reset for next message
-        currentMessageId = null;
-        streamStartTime = Date.now();
-        firstTokenTime = null;
       }
+    } catch (error) {
+      if (!(error instanceof GeminiIntegrationError)) throw error;
+      failure = error;
     }
 
     return {
+      ...(failure ? { hadError: true, errorDetails: [failure.message] } : {}),
       userMessageId: userMessage.message_id,
       assistantMessageIds,
       wasStopped,
@@ -376,60 +386,68 @@ export class GeminiTool implements ITool {
     let _contextWindow: number | undefined;
     let _contextWindowLimit: number | undefined;
     let rawSdkResponse: unknown;
+    let failure: GeminiIntegrationError | undefined;
 
-    for await (const event of this.promptService.promptSessionStreaming(
-      sessionId,
-      prompt,
-      taskId,
-      permissionMode
-    )) {
-      if (event.type === 'stopped') {
-        wasStopped = true;
-        continue;
+    try {
+      for await (const event of this.promptService.promptSessionStreaming(
+        sessionId,
+        prompt,
+        taskId,
+        permissionMode
+      )) {
+        if (event.type === 'stopped') {
+          wasStopped = true;
+          continue;
+        }
+        if (event.type === 'partial') {
+          resolvedModel = event.resolvedModel ?? resolvedModel;
+        } else if (event.type === 'complete') {
+          resolvedModel = event.resolvedModel ?? resolvedModel;
+        }
+
+        // Capture token usage from complete event
+        if (event.type === 'complete' && event.usage) {
+          tokenUsage = event.usage;
+        }
+
+        if (event.type === 'complete' && event.rawSdkResponse)
+          rawSdkResponse = event.rawSdkResponse;
+
+        // Skip partial and tool events in non-streaming mode
+        if (
+          event.type === 'partial' ||
+          event.type === 'tool_start' ||
+          event.type === 'tool_complete'
+        ) {
+          continue;
+        }
+
+        // Handle complete messages only
+        if (event.type === 'complete' && event.content && event.content.length > 0) {
+          // Best-effort diff enrichment for Edit/Write tool results
+          enrichContentBlocks(event.content);
+
+          const messageId = generateId() as MessageID;
+          await this.createAssistantMessage(
+            sessionId,
+            messageId,
+            event.content,
+            event.toolUses,
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
+          );
+          assistantMessageIds.push(messageId);
+        }
       }
-      if (event.type === 'partial') {
-        resolvedModel = event.resolvedModel ?? resolvedModel;
-      } else if (event.type === 'complete') {
-        resolvedModel = event.resolvedModel ?? resolvedModel;
-      }
-
-      // Capture token usage from complete event
-      if (event.type === 'complete' && event.usage) {
-        tokenUsage = event.usage;
-      }
-
-      if (event.type === 'complete' && event.rawSdkResponse) rawSdkResponse = event.rawSdkResponse;
-
-      // Skip partial and tool events in non-streaming mode
-      if (
-        event.type === 'partial' ||
-        event.type === 'tool_start' ||
-        event.type === 'tool_complete'
-      ) {
-        continue;
-      }
-
-      // Handle complete messages only
-      if (event.type === 'complete' && event.content && event.content.length > 0) {
-        // Best-effort diff enrichment for Edit/Write tool results
-        enrichContentBlocks(event.content);
-
-        const messageId = generateId() as MessageID;
-        await this.createAssistantMessage(
-          sessionId,
-          messageId,
-          event.content,
-          event.toolUses,
-          taskId,
-          nextIndex++,
-          resolvedModel,
-          extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
-        );
-        assistantMessageIds.push(messageId);
-      }
+    } catch (error) {
+      if (!(error instanceof GeminiIntegrationError)) throw error;
+      failure = error;
     }
 
     return {
+      ...(failure ? { hadError: true, errorDetails: [failure.message] } : {}),
       userMessageId: userMessage.message_id,
       assistantMessageIds,
       wasStopped,

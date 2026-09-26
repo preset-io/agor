@@ -12,6 +12,7 @@ export function buildGeminiPolicy(
   const rules: SDK.PolicyRule[] = [];
   const source = 'Agor permission policy';
   for (const [name, server] of Object.entries(servers)) {
+    if (name.includes('*')) throw new Error('MCP server names must be exact');
     for (const tool of server.excludeTools ?? []) {
       rules.push({
         toolName: sdk.generateValidName(`${name}_${tool}`),
@@ -116,13 +117,16 @@ export function installGeminiPolicy(sdk: typeof SDK, config: SDK.Config): void {
   for (const agent of config.getAgentRegistry().getAllDefinitions()) {
     const declared = Object.keys(('mcpServers' in agent ? agent.mcpServers : undefined) ?? {});
     const clashes = declared.filter((name) => Object.hasOwn(servers, name));
-    if (clashes.length) {
+    const wildcard = declared.some((name) => name.includes('*'));
+    if (clashes.length || wildcard) {
       engine.addRule({
         toolName: agent.name,
         decision: sdk.PolicyDecision.DENY,
         priority: 100,
         source: 'Agor MCP name clash',
-        denyMessage: `Agent MCP server name clashes with Agor configuration: ${clashes.join(', ')}.`,
+        denyMessage: wildcard
+          ? 'Agent MCP server names must be exact; wildcards are not supported.'
+          : `Agent MCP server name clashes with Agor configuration: ${clashes.join(', ')}.`,
       });
     } else {
       for (const name of declared) {

@@ -50,6 +50,7 @@ test('agent environment removes CI markers and credentials, not ordinary env pro
   for (const name of ['GITHUB_SHA', 'SURFACE', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'NODE_OPTIONS'])
     assert.equal(env[name], undefined);
   assert.equal(env.GITHUB_TOKEN, visibleEnvMarker);
+  assert.equal(env.GEMINI_CLI_HOME, '/home/fixture');
 });
 
 test('only matched stored successful tool results count, not prose or errors', () => {
@@ -143,3 +144,18 @@ test('sub-agent SDK completion envelope rejects failure/turn-limit despite succe
     assert.throws(() => assertSubagent(result(reason)));
   assert.throws(() => assertSubagent(transcript('smoke_worker', 'I completed')));
 });
+
+for (const offlineProbe of ['success', 'failure']) {
+  test(`packaged fake-key ${offlineProbe} persists task usage without provider requests`, {
+    skip: !process.env.GEMINI_SMOKE_TEST_PACKAGE,
+  }, async () => {
+    const { runSmoke } = await import('./gemini-live-smoke.mjs');
+    const result = await runSmoke({
+      packageRoot: process.env.GEMINI_SMOKE_TEST_PACKAGE,
+      tools: process.env.GEMINI_SMOKE_TEST_TOOLS,
+      apiKey: 'offline-not-a-real-key',
+      offlineProbe,
+    });
+    assert.deepEqual(result, { status: 'not validated', stage: 'offline packaged adapter' });
+  });
+}

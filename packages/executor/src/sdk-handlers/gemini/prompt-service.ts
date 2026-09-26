@@ -1,6 +1,5 @@
 import { constants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import {
   getMcpServersForSession,
@@ -49,9 +48,9 @@ import {
   geminiError,
   geminiSessionId,
 } from './runtime.js';
+import { Gemini } from './sdk.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
-const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ContentBlock = {
   type: string;
   text?: string;

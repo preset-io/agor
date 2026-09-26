@@ -260,3 +260,15 @@ export function resolveBranchSdkHomeLaunch(input: {
   }
   return { branchHomeDir, envVars, ensureDirs: [...dirs] };
 }
+
+/** Project the launch owner's selected home without relocating historical SDK state. */
+export function resolveExecutionSdkHomeEnv(input: {
+  tool: AgenticToolName;
+  executionHome: string;
+  branchEnv?: Record<string, string>;
+}): Record<string, string> {
+  return {
+    ...(input.tool === 'gemini' ? { GEMINI_CLI_HOME: input.executionHome } : {}),
+    ...input.branchEnv,
+  };
+}

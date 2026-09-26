@@ -36,6 +36,9 @@ for (const transport of [http, https]) {
     },
   });
 }
+const debugFile = path.join(root, 'inherited-debug.log');
+process.env.GEMINI_DEBUG_LOG_FILE = debugFile;
+await import('../src/sdk-handlers/gemini/permission-mapper.js');
 const G = await import('@google/gemini-cli-core');
 const workspace = path.join(root, 'workspace');
 await fs.mkdir(workspace, { recursive: true });
@@ -66,6 +69,7 @@ await fs.mkdir(agentDirectory, { recursive: true });
 for (const [name, server] of [
   ['own_agent', 'private-server'],
   ['clash_agent', 'agor'],
+  ['wildcard_agent', '"*"'],
 ]) {
   await fs.writeFile(
     path.join(agentDirectory, `${name}.md`),
@@ -173,20 +177,48 @@ try {
   process.env.GEMINI_API_KEY = 'HOSTILE_PROVIDER_KEY';
   process.env.ANTHROPIC_API_KEY = 'HOSTILE_PROVIDER_KEY';
   process.env.GITHUB_TOKEN = 'ordinary-user-variable';
+  assert.throws(
+    () =>
+      buildGeminiPolicy(G, G.ApprovalMode.YOLO, {
+        '*': new G.MCPServerConfig(),
+      }),
+    /MCP server names must be exact/
+  );
   const taskRoot = path.join(process.env.HOME!, '.gemini', 'agor-task-tmp');
   await fs.mkdir(taskRoot, { recursive: true });
-  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], {
-    encoding: 'utf8',
-  });
+  const dead = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '-e',
+      `import { enterGeminiRuntime } from ${JSON.stringify(new URL('../src/sdk-handlers/gemini/runtime.ts', import.meta.url).href)};
+     await enterGeminiRuntime(); process.stdout.write(process.env.TMPDIR); process.exit(0);`,
+    ],
+    { encoding: 'utf8', env: process.env, timeout: 30000 }
+  );
   assert.equal(dead.status, 0);
-  const stale = path.join(taskRoot, `${dead.stdout}-crash-fixture`);
+  const stale = dead.stdout;
+  const owner = JSON.parse(await fs.readFile(path.join(stale, 'owner.json'), 'utf8'));
   const live = path.join(taskRoot, `${process.pid}-live-fixture`);
-  await fs.mkdir(stale);
-  await fs.mkdir(live);
+  const foreign = path.join(taskRoot, `${owner.pid}-foreign-fixture`);
+  const unknown = path.join(taskRoot, `${owner.pid}-unknown-fixture`);
+  for (const directory of [live, foreign, unknown]) await fs.mkdir(directory);
+  await fs.writeFile(path.join(live, 'owner.json'), JSON.stringify({ ...owner, pid: process.pid }));
+  await fs.writeFile(
+    path.join(foreign, 'owner.json'),
+    JSON.stringify({ ...owner, namespace: 'foreign' })
+  );
   cleanup = await enterGeminiRuntime();
   assert.equal(await fs.stat(stale).catch(() => null), null);
-  assert.ok((await fs.stat(live)).isDirectory(), 'Live-process directories must survive cleanup');
-  await fs.rmdir(live);
+  for (const directory of [live, foreign, unknown]) {
+    assert.ok(
+      (await fs.stat(directory)).isDirectory(),
+      'Live, foreign and unknown owners survive cleanup'
+    );
+    await fs.rm(directory, { recursive: true });
+  }
   const temp = process.env.TMPDIR!;
   assert.equal((await fs.stat(temp)).mode & 0o777, 0o700);
   assert.equal(process.env.GEMINI_API_KEY, undefined);
@@ -293,6 +325,7 @@ try {
       ['private-server', 'own_agent', G.PolicyDecision.ALLOW],
       ['private-server', undefined, G.PolicyDecision.DENY],
       ['private-server', 'other_agent', G.PolicyDecision.DENY],
+      ['rogue', 'wildcard_agent', G.PolicyDecision.DENY],
     ] as const) {
       assert.equal(
         (
@@ -306,15 +339,13 @@ try {
         decision
       );
     }
-    assert.equal(
-      (
-        await engine.check({
-          name: 'invoke_agent',
-          args: { agent_name: 'clash_agent', task: 'test' },
-        })
-      ).decision,
-      G.PolicyDecision.DENY
-    );
+    for (const agent of ['clash_agent', 'wildcard_agent']) {
+      assert.equal(
+        (await engine.check({ name: 'invoke_agent', args: { agent_name: agent, task: 'test' } }))
+          .decision,
+        G.PolicyDecision.DENY
+      );
+    }
     assert.equal(
       (
         await engine.check(
@@ -467,6 +498,8 @@ try {
     !/HOSTILE_PROVIDER_BODY|HOSTILE_PROMPT|HOSTILE_PROVIDER_KEY/.test(JSON.stringify(capturedLogs)),
     'Private marker reached SDK logs'
   );
+  const debugLog = await fs.readFile(debugFile, 'utf8').catch(() => '');
+  assert.doesNotMatch(debugLog, /HOSTILE_PROVIDER_BODY|HOSTILE_PROMPT|HOSTILE_PROVIDER_KEY/);
   for (const entry of await fs.readdir(process.env.HOME!, {
     recursive: true,
     withFileTypes: true,

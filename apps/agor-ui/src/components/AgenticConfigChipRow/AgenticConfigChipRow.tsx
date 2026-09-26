@@ -3,6 +3,7 @@ import {
   agenticToolRequiresModelSelection,
   getAgenticToolModelSelectionError,
 } from '@agor/agentic-tools';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolName,
   AgorClient,
@@ -346,7 +347,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         label={permissionLabel}
         title="Permission mode"
         editable={inlineAllowed}
-        managedNote={managedNote}
+        managedNote={
+          tool === 'gemini' && isGeminiManualMode(resolvedPermission) ? (
+            <Typography.Text type="warning">
+              {GEMINI_MANUAL_MESSAGE} Ask a workspace admin to update the preset.
+            </Typography.Text>
+          ) : (
+            managedNote
+          )
+        }
         color={permissionColor}
         width={340}
         testid="permission-chip"

@@ -19,6 +19,7 @@ export function agentEnvironment(home, tools, version, daemonUrl) {
   return {
     PATH: process.env.PATH,
     HOME: home,
+    GEMINI_CLI_HOME: home,
     TMPDIR: join(home, 'tmp'),
     LANG: 'C.UTF-8',
     NODE_NO_WARNINGS: '1',
@@ -119,7 +120,13 @@ export async function reportSmoke(status, stage) {
     await fs.appendFile(process.env.GITHUB_OUTPUT, `validation=${status}\n`);
 }
 
-export async function runSmoke({ packageRoot, tools, apiKey, missingKeyProbe = false }) {
+export async function runSmoke({
+  packageRoot,
+  tools,
+  apiKey,
+  missingKeyProbe = false,
+  offlineProbe,
+}) {
   const root = await fs.mkdtemp(join(tmpdir(), 'agor-gemini-live-'));
   await fs.chmod(root, 0o700);
   const home = join(root, 'home');
@@ -268,6 +275,7 @@ export async function runSmoke({ packageRoot, tools, apiKey, missingKeyProbe = f
         prompt,
         permissionMode: mode,
         apiKey,
+        offlineProbe,
       });
       try {
         if (stop) {
@@ -295,7 +303,10 @@ export async function runSmoke({ packageRoot, tools, apiKey, missingKeyProbe = f
         if (child.exitCode !== null || child.signalCode !== null) children.delete(child);
       }
       const stored = await state.repos.tasks.findById(t.task_id);
-      assertTask(stored, missingKeyProbe ? 'failed' : stop ? 'stopped' : 'completed');
+      assertTask(
+        stored,
+        missingKeyProbe || offlineProbe === 'failure' ? 'failed' : stop ? 'stopped' : 'completed'
+      );
       const messages = (await state.repos.messages.findBySessionId(s.session_id)).filter(
         (m) => m.task_id === t.task_id
       );
@@ -309,6 +320,34 @@ export async function runSmoke({ packageRoot, tools, apiKey, missingKeyProbe = f
         stored.error_message?.includes('Gemini needs an API key'),
         'missing-key failure not stored'
       );
+      return { status: 'not validated', stage };
+    }
+    if (offlineProbe) {
+      stage = 'offline packaged adapter';
+      const { stored, messages } = await task(a, 'Offline startup fixture.', 'autoEdit');
+      assert.ok(
+        stored.normalized_sdk_response?.tokenUsage?.inputTokens === 11,
+        'task input usage missing'
+      );
+      assert.ok(
+        stored.normalized_sdk_response?.tokenUsage?.outputTokens === 3,
+        'task output usage missing'
+      );
+      assert.ok(stored.computed_context_window === 14, 'last-turn context missing');
+      if (offlineProbe === 'failure') {
+        assert.ok(
+          stored.error_message === 'Gemini rejected the API key. Check it in Settings → Gemini.',
+          'fixed failure missing'
+        );
+        assert.ok(
+          successfulToolResults(messages, 'Read').length === 1,
+          'completed tool round missing'
+        );
+        assert.ok(
+          !JSON.stringify({ stored, messages }).includes('PRIVATE_PROVIDER_MARKER'),
+          'provider text persisted'
+        );
+      }
       return { status: 'not validated', stage };
     }
     stage = 'journey A';
