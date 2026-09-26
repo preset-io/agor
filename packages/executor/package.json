@@ -17,8 +17,9 @@
     "test:runtime": "node scripts/runtime-smoke.mjs",
     "test:claude-auth-precedence": "node scripts/claude-auth-precedence-smoke.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && pnpm test:runtime && pnpm test:claude-auth-precedence && pnpm test:gemini-contract",
-    "test:watch": "vitest"
+    "test": "vitest run && pnpm test:runtime && pnpm test:claude-auth-precedence && pnpm test:gemini-contract && pnpm test:gemini-smoke",
+    "test:watch": "vitest",
+    "test:gemini-smoke": "node --test scripts/gemini-live-smoke.test.mjs"
   },
   "dependencies": {
     "@agor/agentic-tool-opencode": "workspace:*",

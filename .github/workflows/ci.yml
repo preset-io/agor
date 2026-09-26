@@ -117,6 +117,7 @@ jobs:
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
       - run: pnpm --filter @agor/executor test:gemini-contract
+      - run: pnpm --filter @agor/executor test:gemini-smoke
 
       # Every @agor/core dist entry imported by plain Node, then the tenant
       # scope stores driven across those entries. Vitest resolves this package

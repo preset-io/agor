@@ -1,0 +1,87 @@
+name: Gemini packaged-agent live smoke
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gemini-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # Environment branch protection is also required; see the runbook. This
+    # workflow is intentionally not callable from PR or reusable workflows.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    environment: gemini-live-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Check live validation availability
+        id: key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            node packages/executor/scripts/gemini-live-smoke.mjs
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@v6
+        if: steps.key.outputs.available == 'true'
+        with:
+          version: '11.17.0'
+
+      - name: Build exact release artifacts without credentials
+        if: steps.key.outputs.available == 'true'
+        run: |
+          npm install -g --ignore-scripts npm@11.16.0
+          pnpm install --frozen-lockfile
+          packages/agor-live/build.sh --skip-install
+        env:
+          AGOR_BUILD_SHA: ${{ github.sha }}
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Install packaged agent without credentials
+        if: steps.key.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE="$PWD/packages/agor-live/release"
+          ROOT="$RUNNER_TEMP/gemini-install"
+          mkdir -p "$ROOT"
+          npm install --prefix "$ROOT" --ignore-scripts --no-fund --no-audit \
+            "$RELEASE"/agor-live-[0-9]*.tgz "$RELEASE"/agor-live-client-*.tgz
+          VERSION=$(node -p "require('$ROOT/node_modules/agor-live/package.json').version")
+          npm install --prefix "$ROOT/tools/$VERSION/gemini" --ignore-scripts --no-fund --no-audit \
+            "$RELEASE"/agor-live-gemini-*.tgz
+          echo "PACKAGE_ROOT=$ROOT/node_modules/agor-live" >> "$GITHUB_ENV"
+          echo "TOOLS_ROOT=$ROOT/tools" >> "$GITHUB_ENV"
+
+      - name: Exercise both live journeys
+        if: steps.key.outputs.available == 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node packages/executor/scripts/gemini-live-smoke.mjs "$PACKAGE_ROOT" "$TOOLS_ROOT"
+
+      # No artifact upload: transcripts, prompts, provider bodies, SDK homes and
+      # logs must not escape the disposable fixture. Only fixed verdicts print.
+      - name: Remove installed artifacts
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gemini-install"
