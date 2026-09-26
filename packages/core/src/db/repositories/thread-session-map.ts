@@ -16,7 +16,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
-import { and, eq, like, lt } from 'drizzle-orm';
+import { and, eq, isNull, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
 import type { Database } from '../client';
@@ -66,6 +66,7 @@ export class ThreadSessionMapRepository
       status: row.status as ThreadStatus,
       metadata: (row.metadata as Record<string, unknown>) ?? null,
       discord_last_admitted_message_id: row.discord_last_admitted_message_id ?? null,
+      teams_last_admitted_activity_id: row.teams_last_admitted_activity_id ?? null,
     };
   }
 
@@ -87,6 +88,7 @@ export class ThreadSessionMapRepository
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
       discord_last_admitted_message_id: data.discord_last_admitted_message_id ?? null,
+      teams_last_admitted_activity_id: data.teams_last_admitted_activity_id ?? null,
     };
   }
 
@@ -209,6 +211,7 @@ export class ThreadSessionMapRepository
           last_message_at: insertData.last_message_at,
           metadata: insertData.metadata,
           discord_last_admitted_message_id: insertData.discord_last_admitted_message_id,
+          teams_last_admitted_activity_id: insertData.teams_last_admitted_activity_id,
         })
         .where(eq(threadSessionMap.id, fullId))
         .run();
@@ -405,6 +408,50 @@ export class ThreadSessionMapRepository
           .where(eq(threadSessionMap.id, id))
           .run();
         return true;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Advance the Teams activity cursor only after deterministic Task admission. */
+  async advanceTeamsLastAdmittedActivityId(
+    id: ThreadSessionMapID,
+    cursor: string,
+    expectedPreviousCursor?: string | null
+  ): Promise<boolean> {
+    if (!cursor.trim()) throw new RepositoryError('Invalid Teams activity ID');
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const previous = row.teams_last_admitted_activity_id;
+        if (previous === cursor) return false;
+        const result = await update(txDb, threadSessionMap)
+          .set({ teams_last_admitted_activity_id: cursor })
+          .where(
+            expectedPreviousCursor === undefined
+              ? eq(threadSessionMap.id, id)
+              : and(
+                  eq(threadSessionMap.id, id),
+                  expectedPreviousCursor === null
+                    ? isNull(threadSessionMap.teams_last_admitted_activity_id)
+                    : eq(threadSessionMap.teams_last_admitted_activity_id, expectedPreviousCursor)
+                )
+          )
+          .run();
+        if (result.rowsAffected < 1) return false;
+        const updated = await select(txDb, {
+          cursor: threadSessionMap.teams_last_admitted_activity_id,
+        })
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        return updated?.cursor === cursor;
       },
       { sqliteImmediate: true }
     );

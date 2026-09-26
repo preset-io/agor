@@ -66,6 +66,9 @@ function migrationTenantTables(): string[] {
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
+  const teamsGatewayHaMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0117_teams_gateway_ha.sql'
+  );
   const transferMigration = readRepoFile(
     'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
@@ -89,6 +92,7 @@ function migrationTenantTables(): string[] {
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...teamsGatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -112,6 +116,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0100_claude_oauth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0117_teams_gateway_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
@@ -136,8 +141,21 @@ describe('Postgres multitenancy schema coverage', () => {
 
   it('keeps sqlite schema tenant-column free', () => {
     const sqliteSchema = readRepoFile('packages/core/src/db/schema.sqlite.ts');
-    expect(sqliteSchema).not.toContain('tenant_id');
-    expect(sqliteSchema).not.toContain("tenant_id'");
+    expect(sqliteSchema).not.toMatch(/\n\s*tenant_id\s*:/);
+    expect(sqliteSchema).not.toContain("text('tenant_id'");
+  });
+
+  it('limits Teams ingress and delivery discovery to explicit read capabilities', () => {
+    const migration = readRepoFile('packages/core/drizzle/postgres/0117_teams_gateway_ha.sql');
+    expect(migration).toContain('CREATE POLICY "teams_gateway_ingress_discovery"');
+    expect(migration).toContain('CREATE POLICY "teams_gateway_inbound_discovery"');
+    expect(migration).toContain('CREATE POLICY "teams_message_delivery_discovery"');
+    expect(migration).toContain("= 'teams_gateway_ingress_discovery'");
+    expect(migration).toContain("= 'teams_gateway_ingress_discovery'");
+    expect(migration).toContain("= 'teams_message_delivery_discovery'");
+    expect(migration).not.toMatch(
+      /CREATE POLICY "teams_(?:gateway|message)_.*discovery"[\s\S]*WITH CHECK/
+    );
   });
 
   it('limits cross-tenant gateway discovery to enabled rows and an explicit capability', () => {

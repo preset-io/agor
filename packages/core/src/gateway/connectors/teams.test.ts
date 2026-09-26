@@ -1,5 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { extractQuotedReplyText, parseThreadId, stripMention, TeamsConnector } from './teams';
+import {
+  createTeamsAuthConfiguration,
+  extractQuotedReplyText,
+  normalizeTeamsActivity,
+  parseThreadId,
+  stripMention,
+  TeamsConnector,
+} from './teams';
 
 describe('parseThreadId', () => {
   it('parses a valid thread ID', () => {
@@ -247,5 +254,152 @@ describe('TeamsConnector', () => {
       expect(output).toContain('**Full diff**');
       expect(output).not.toContain('<details>');
     });
+  });
+});
+
+describe('createTeamsAuthConfiguration', () => {
+  it('builds a channel-local Agents SDK connection registry for authorizeJWT', () => {
+    const auth = createTeamsAuthConfiguration({
+      app_id: 'app-123',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-1',
+    });
+    expect(auth.connections?.get('teams')).toMatchObject({
+      clientId: 'app-123',
+      tenantId: 'tenant-1',
+      validateIssuer: true,
+    });
+    expect(auth.connectionsMap).toEqual([
+      { serviceUrl: '*', audience: 'app-123', connection: 'teams' },
+    ]);
+  });
+});
+
+describe('normalizeTeamsActivity', () => {
+  const config = { app_id: 'app-123' };
+
+  function activity(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'activity-1',
+      type: 'message',
+      channelId: 'msteams',
+      serviceUrl: 'https://smba.trafficmanager.net/teams/',
+      timestamp: '2026-08-27T12:00:00.000Z',
+      conversation: { id: '19:conversation@thread.v2', conversationType: 'personal' },
+      from: { id: '29:user-1', name: 'Ada', aadObjectId: 'aad-1' },
+      recipient: { id: '28:app-123', name: 'Agor' },
+      channelData: { tenant: { id: 'tenant-1' }, channel: { type: 'standard' } },
+      text: 'hello',
+      ...overrides,
+    };
+  }
+
+  it('maps personal and group chats to the whole conversation', () => {
+    expect(normalizeTeamsActivity(activity(), config).threadId).toBe('19:conversation@thread.v2');
+    expect(
+      normalizeTeamsActivity(
+        activity({
+          id: 'activity-2',
+          conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        }),
+        config
+      ).threadId
+    ).toBe('19:group@thread.v2');
+  });
+
+  it('maps channel replies to the root reply chain and strips a structured mention', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: {
+          id: '19:channel@thread.tacv2;messageid=1700000000000',
+          conversationType: 'channel',
+        },
+        replyToId: '1700000000000',
+        text: '<at>Agor</at> please review',
+        entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: 'app-123' } }],
+      }),
+      config
+    );
+    expect(normalized.threadId).toBe('19:channel@thread.tacv2|1700000000000');
+    expect(normalized.rootMessageId).toBe('1700000000000');
+    expect(normalized.hasMention).toBe(true);
+    expect(normalized.text).toBe('please review');
+    expect(normalized.metadata.teams_channel_type).toBe('standard');
+    expect(normalized.providerEventId).toBe(
+      'teams:activity:["19:channel@thread.tacv2","activity-1"]'
+    );
+  });
+
+  it('deduplicates by base conversation and activity, not activity alone or reply-chain suffix', () => {
+    const eventId = (conversationId: string, id = 'same-activity') =>
+      normalizeTeamsActivity(
+        activity({
+          id,
+          conversation: { id: conversationId, conversationType: 'channel' },
+          replyToId: 'root',
+        }),
+        config
+      ).providerEventId;
+    expect(eventId('first')).toBe(eventId('first'));
+    expect(eventId('first')).not.toBe(eventId('second'));
+    expect(eventId('first;messageid=root')).toBe(eventId('first'));
+    expect(eventId('first', 'next-activity')).not.toBe(eventId('first'));
+  });
+
+  it('does not collide when opaque IDs contain delimiters or JSON characters', () => {
+    const pairs = [
+      ['a|b', 'c'],
+      ['a', 'b|c'],
+      ['a:b', 'c'],
+      ['a', 'b:c'],
+      ['a"', 'b\\c'],
+    ];
+    const eventIds = pairs.map(
+      ([conversationId, id]) =>
+        normalizeTeamsActivity(
+          activity({ id, conversation: { id: conversationId, conversationType: 'personal' } }),
+          config
+        ).providerEventId
+    );
+    expect(new Set(eventIds).size).toBe(pairs.length);
+    expect(eventIds.map((id) => JSON.parse(id.slice('teams:activity:'.length)))).toEqual(pairs);
+  });
+
+  it('matches only the exact Teams app ID forms in structured mentions', () => {
+    for (const mentionedId of ['app-123', '28:app-123']) {
+      expect(
+        normalizeTeamsActivity(
+          activity({
+            text: '<at>Agor</at> please review',
+            entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: mentionedId } }],
+          }),
+          config
+        ).hasMention
+      ).toBe(true);
+    }
+    expect(
+      normalizeTeamsActivity(
+        activity({
+          text: '<at>Agor</at> please review',
+          entities: [
+            { type: 'mention', text: '<at>Someone</at>', mentioned: { id: 'prefix-app-123' } },
+          ],
+        }),
+        config
+      ).hasMention
+    ).toBe(false);
+  });
+
+  it('does not treat a display-name at-tag as a structured app mention', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        text: '<at>Agor</at> please review',
+      }),
+      config
+    );
+
+    expect(normalized.hasMention).toBe(false);
+    expect(normalized.text).toBe('Agor please review');
   });
 });

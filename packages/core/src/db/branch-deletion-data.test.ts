@@ -6,6 +6,7 @@ import {
   reconcileBranchDeletionReferencesBatch,
   scrubBranchDeletionReferences,
 } from './branch-deletion-references';
+import { proveBoundedTeamsCleanup } from './branch-deletion-teams.test-support';
 import { executeRaw, insert, runDatabaseTransaction, select } from './database-wrapper';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
 import { BranchRepository } from './repositories/branches';
@@ -186,4 +187,10 @@ test('completed reference scan fences late teammate dependencies and namespace o
       teammate: { kind: 'teammate', kb: { primary_namespace_id: shared.namespace_id } },
     },
   });
+});
+
+test('drains Teams children in bounded batches without deleting neighboring channel data', async ({
+  db,
+}) => {
+  await proveBoundedTeamsCleanup((work) => work(db));
 });

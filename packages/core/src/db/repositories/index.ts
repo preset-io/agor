@@ -50,6 +50,8 @@ export * from './session-mcp-servers';
 export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
+export * from './teams-conversation-addresses';
+export * from './teams-message-deliveries';
 export * from './tenant-agentic-tools';
 export * from './tenant-public-routing';
 export * from './thread-session-map';

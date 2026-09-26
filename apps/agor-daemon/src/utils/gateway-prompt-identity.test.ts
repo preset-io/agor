@@ -106,17 +106,39 @@ describe('resolveGatewayPromptIdentity', () => {
     expect(verdict.aligned).toBe(true);
   });
 
-  it('is NOT aligned for a platform with no alignment switch', async () => {
-    // Teams is inbound via webhook and a Teams channel is multi-member, but it
-    // has no alignment flag at all — so `gateway.ts` falls through to
-    // `user = channel.agor_user_id` unconditionally. An earlier version of this
-    // guard read "no switch" as "no shared-account fallback to be caught by",
-    // which is the opposite of what the gateway actually does.
-    const verdict = await resolveGatewayPromptIdentity(teamsSession, channel({}));
-    expect(verdict.aligned).toBe(false);
-    // Nothing to name: there is no setting an admin could turn on.
-    expect(verdict.configKey).toBeUndefined();
-    expect(verdict.source?.channel_type).toBe('teams');
+  it('Teams requires a nonempty valid immutable user map on the actual Teams channel', async () => {
+    const mapped = { user_map: { aad: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' } };
+    expect(
+      await resolveGatewayPromptIdentity(teamsSession, async () => ({
+        channel_type: 'teams',
+        config: mapped,
+      }))
+    ).toEqual({ aligned: true });
+    for (const config of [
+      {},
+      { user_map: {} },
+      { user_map: null },
+      { user_map: { aad: 'user@example.com' } },
+      { user_map: [] },
+    ]) {
+      expect(
+        await resolveGatewayPromptIdentity(teamsSession, async () => ({
+          channel_type: 'teams',
+          config,
+        }))
+      ).toMatchObject({ aligned: false, configKey: 'user_map' });
+    }
+    expect((await resolveGatewayPromptIdentity(teamsSession, channel(mapped))).aligned).toBe(false);
+    expect((await resolveGatewayPromptIdentity(teamsSession, async () => null)).aligned).toBe(
+      false
+    );
+    expect(
+      (
+        await resolveGatewayPromptIdentity(teamsSession, async () => {
+          throw new Error('unavailable');
+        })
+      ).aligned
+    ).toBe(false);
   });
 
   it('is NOT aligned for shortcut until its own flag is on', async () => {
@@ -168,11 +190,11 @@ describe('gatewayIdentityRefusalMessage', () => {
     expect(message).toMatch(/whole\s+channel/);
   });
 
-  it('names no setting when the platform has none, rather than inventing one', async () => {
+  it('names the Teams mapping required for per-sender attribution', async () => {
     const verdict = await resolveGatewayPromptIdentity(teamsSession, channel({}));
     const message = gatewayIdentityRefusalMessage(verdict);
     expect(message).toContain('ops');
-    expect(message).not.toMatch(/align_\w+/);
+    expect(message).toContain('user_map');
     expect(message).toMatch(/Agor canvas/);
   });
 });

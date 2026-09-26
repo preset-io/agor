@@ -42,6 +42,14 @@ export function isCanonicalFullUuid(value: unknown): value is UUID {
   );
 }
 
+/** Full lowercase hyphenated UUIDv7 form required by immutable user mappings. */
+export function isCanonicalUuidV7(value: unknown): value is UUID {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
 export type GroupID = UUID & { readonly __entity: 'Group' };
 
 /**

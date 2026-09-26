@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isCanonicalFullUuid, prefixToLikePattern, SHORT_ID_LENGTH, toShortId } from '../types/id';
+import {
+  isCanonicalFullUuid,
+  isCanonicalUuidV7,
+  prefixToLikePattern,
+  SHORT_ID_LENGTH,
+  toShortId,
+} from '../types/id';
 import {
   expandPrefix,
   findByShortIdPrefix,
@@ -88,6 +94,20 @@ describe('isCanonicalFullUuid', () => {
     expect(isCanonicalFullUuid('01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F')).toBe(false);
     expect(isCanonicalFullUuid('not-a-uuid')).toBe(false);
     expect(isCanonicalFullUuid('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f0')).toBe(false);
+  });
+});
+
+describe('isCanonicalUuidV7', () => {
+  it('accepts the full lowercase hyphenated UUIDv7 form', () => {
+    expect(isCanonicalUuidV7('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f')).toBe(true);
+  });
+
+  it('rejects emails, malformed, short, UUIDv4, and uppercase values', () => {
+    expect(isCanonicalUuidV7('user@example.com')).toBe(false);
+    expect(isCanonicalUuidV7('not-a-uuid')).toBe(false);
+    expect(isCanonicalUuidV7('01933e4a')).toBe(false);
+    expect(isCanonicalUuidV7('01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f')).toBe(false);
+    expect(isCanonicalUuidV7('01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F')).toBe(false);
   });
 });
 

@@ -10,6 +10,28 @@ import {
 } from './migrate';
 
 describe('migration status introspection', () => {
+  it.each(['sqlite', 'postgresql'] as const)(
+    'requires Teams admin opt-in and an offline %s cutover',
+    (dialect) => {
+      const report = introspectMigrationStatus(dialect, {
+        applied: ['0000_init'],
+        pending: ['0117_teams_gateway_ha'],
+        dbAheadOfBinary: false,
+      });
+      expect(report.requiresOfflineCutover).toBe(true);
+      expect(report.pendingMigrations[0]?.impact).toMatchObject({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+      });
+      expect(report.pendingMigrations[0]?.impact.summary).toContain(
+        'Disables existing Teams channels'
+      );
+      expect(report.pendingMigrations[0]?.impact.summary).toContain(
+        'never replay ambiguous deliveries'
+      );
+    }
+  );
   it('classifies a later reconciliation watermark as database-ahead for an old binary', () => {
     expect(
       classifyMigrationWatermark(

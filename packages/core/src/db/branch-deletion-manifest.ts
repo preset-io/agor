@@ -93,6 +93,18 @@ export const BRANCH_DELETION_RELATIONS: Readonly<Record<string, BranchDeletionRe
     'Remove session associations, not external provider threads.'
   ),
   'thread_session_map.branch_id': owned('Restrictive FK must be drained before branch removal.'),
+  'teams_conversation_addresses.gateway_channel_id': owned(
+    'Remove encrypted channel-owned provider addresses after quiescence.'
+  ),
+  'teams_message_deliveries.message_id': owned(
+    'Quiesce delivery claims before deleting message descendants.'
+  ),
+  'teams_message_deliveries.gateway_channel_id': owned(
+    'Quiesce delivery claims before deleting channel descendants.'
+  ),
+  'teams_message_deliveries.thread_session_map_id': owned(
+    'Drain delivery children before thread mappings.'
+  ),
   'discord_message_deliveries.message_id': owned(
     'Quiesce delivery claims before deleting message descendants.'
   ),

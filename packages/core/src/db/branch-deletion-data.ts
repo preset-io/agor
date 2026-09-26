@@ -43,6 +43,12 @@ export const BRANCH_DELETION_DATA_STEPS: readonly DataStep[] = [
     'delivery_id',
     'message_id IN (SELECT id FROM om) OR gateway_channel_id IN (SELECT id FROM oc) OR thread_session_map_id IN (SELECT id FROM ox)'
   ),
+  del(
+    'teams_message_deliveries',
+    'delivery_id',
+    'message_id IN (SELECT id FROM om) OR gateway_channel_id IN (SELECT id FROM oc) OR thread_session_map_id IN (SELECT id FROM ox)'
+  ),
+  del('teams_conversation_addresses', 'address_id', 'gateway_channel_id IN (SELECT id FROM oc)'),
   del('gateway_inbound_events', 'id', 'gateway_channel_id IN (SELECT id FROM oc)'),
   clear('gateway_inbound_events', 'id', 'session_id', 'os'),
   clear('gateway_inbound_events', 'id', 'task_id', 'ot'),
