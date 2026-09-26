@@ -1,3 +1,5 @@
+import { assertUserAccessEnabled } from './token-invalidation.js';
+import type { UserAuthorityCheck } from './user-authority.js';
 /**
  * API Key Authentication Strategy
  *
@@ -12,12 +14,21 @@ import { markAuthenticationUserLookup } from '../services/users.js';
 import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
+  private checkUserAuthority?: UserAuthorityCheck;
+  private staticTenant?: string;
   private apiKeysRepo: UserApiKeysRepository | null = null;
   // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
   private usersService: any = null;
 
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-  setDependencies(apiKeysRepo: UserApiKeysRepository, usersService: any) {
+  setDependencies(
+    apiKeysRepo: UserApiKeysRepository,
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+    usersService: any,
+    checkUserAuthority?: UserAuthorityCheck,
+    staticTenant?: string
+  ) {
+    this.checkUserAuthority = checkUserAuthority;
+    this.staticTenant = staticTenant;
     this.apiKeysRepo = apiKeysRepo;
     this.usersService = usersService;
   }
@@ -65,12 +76,21 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       throw new NotAuthenticated('Invalid API key');
     }
 
+    assertUserAccessEnabled(user);
+    if (this.checkUserAuthority) {
+      await this.checkUserAuthority(
+        params?.tenant?.tenant_id ?? user.tenant_id ?? this.staticTenant ?? '',
+        user.user_id,
+        { type: 'api-key', source_api_key_id: keyRow.id }
+      );
+    }
     return {
       // Non-secret key identity so the caller can manage its own credential
       // (e.g. `agor logout` deleting the key a CLI login minted).
       authentication: {
         strategy: 'api-key',
         api_key_id: keyRow.id,
+        source_api_key_id: keyRow.id,
         api_key_source: isUserApiKeySource(keyRow.source) ? keyRow.source : 'manual',
       },
       user,

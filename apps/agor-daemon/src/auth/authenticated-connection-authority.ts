@@ -2,6 +2,10 @@ import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedUser, TenantContext } from '@agor/core/types';
 import {
+  browserAuthorityLeaseCurrent,
+  retireBrowserAuthorityLease,
+} from './browser-authority-lease.js';
+import {
   type ExecutorConnectionRevocationFence,
   getExecutorConnectionCandidate,
 } from './executor-connection-admission.js';
@@ -259,7 +263,7 @@ export function isAuthenticatedConnectionAuthorityCurrent(
 export function getAuthenticatedConnectionAuthority(
   connection: unknown
 ): AuthenticatedConnectionAuthority | undefined {
-  return connection && typeof connection === 'object'
+  return connection && typeof connection === 'object' && browserAuthorityLeaseCurrent(connection)
     ? (connection as AuthorityCarrier)[CONNECTION_AUTHORITY]
     : undefined;
 }
@@ -267,6 +271,7 @@ export function getAuthenticatedConnectionAuthority(
 /** Retire connection-scoped tenant/executor authority on logout or disconnect. */
 export function retireAuthenticatedConnectionAuthority(connection: unknown): void {
   if (!connection || typeof connection !== 'object') return;
+  retireBrowserAuthorityLease(connection);
   const feathersConnection = connection as AuthenticatedConnection & AuthorityCarrier;
   Reflect.deleteProperty(feathersConnection, CONNECTION_AUTHORITY);
   delete feathersConnection.authenticated;

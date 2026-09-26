@@ -1,5 +1,11 @@
-import { resolveClaudeOAuthCapability } from '@agor/core/config';
+import {
+  resolveClaudeOAuthCapability,
+  resolveExternalUserAuthorityBinding,
+} from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
+import { createExternalAuthorityService } from './auth/external-authority.js';
+import { assertUserAccessEnabled } from './auth/token-invalidation.js';
+import { installUserAuthorityCheck } from './auth/user-authority.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -365,7 +371,9 @@ export class AgorLocalStrategy extends LocalStrategy {
     markAuthenticationUserLookup(params);
     const current = (await super.getEntity(result, params)) as {
       credential_generation?: unknown;
+      access_disabled?: boolean;
     };
+    assertUserAccessEnabled(current);
     const verified = result as { credential_generation?: unknown };
     const verifiedGeneration =
       typeof verified.credential_generation === 'number' ? verified.credential_generation : 0;
@@ -1099,10 +1107,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Register the runtime JWT strategy for user, executor, terminal, and daemon credentials.
   const { RuntimeJWTStrategy } = await import('./auth/runtime-jwt-strategy.js');
 
-  // Register authentication strategies
+  const checkUserAuthority = installUserAuthorityCheck(
+    app,
+    db,
+    resolveExternalUserAuthorityBinding(config)
+  );
+
   authentication.register(
     'jwt',
     new RuntimeJWTStrategy({
+      checkUserAuthority,
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
@@ -1118,7 +1132,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Initialize API key strategy with dependencies
   const { UserApiKeysRepository } = await import('@agor/core/db');
   const userApiKeysRepo = new UserApiKeysRepository(db);
-  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
+  apiKeyStrategy.setDependencies(
+    userApiKeysRepo,
+    usersService,
+    checkUserAuthority,
+    multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined
+  );
 
   // SECURITY: Rate-limit the authentication + refresh endpoints.
   //
@@ -1201,7 +1220,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // One-time launch-code authentication endpoint
   // ============================================================================
 
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers Application vs Express middleware overload
+  // Dedicated verified administrative channel, not ordinary user CRUD.
+  // Separate IP budget: bulk synchronization must not consume browser login quota.
+  const authorityRateLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 600,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
+  // biome-ignore lint/suspicious/noExplicitAny: Express middleware overload
+  app.use('/auth/external-authority', authorityRateLimiter as any);
+  app.use(
+    '/auth/external-authority',
+    createExternalAuthorityService({
+      db,
+      config,
+      invalidated: (tenantId, userId) =>
+        app.emit('realtime:authorization-invalidated', { tenantId, userId }),
+    })
+  );
+  // biome-ignore lint/suspicious/noExplicitAny: Express middleware overload
   app.use('/auth/launch', authRateLimiter as any);
   app.use(
     '/auth/launch',
@@ -1240,6 +1278,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       tenantClaim: tenantTokenClaim,
+      multiTenancy,
+      checkUserAuthority,
       usersService,
     })
   );

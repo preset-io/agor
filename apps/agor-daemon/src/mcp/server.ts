@@ -1,3 +1,4 @@
+import { getUserAuthorityCheck } from '../auth/user-authority.js';
 /**
  * MCP Server — Official SDK integration
  *
@@ -19,6 +20,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgorConfig } from '@agor/core/config';
 import {
   isMissingTenantContextError,
+  resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolveTenantContext,
   TenantResolutionError,
@@ -424,7 +426,7 @@ export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  config: Pick<AgorConfig, 'multi_tenancy' | 'metrics' | 'external_launch'> = {
+  config: Pick<AgorConfig, 'multi_tenancy' | 'metrics' | 'identity' | 'external_launch'> = {
     multi_tenancy: undefined,
   },
   options: { serverVersion?: string } = {}
@@ -749,6 +751,12 @@ export function setupMCPRoutes(
         }
       }
 
+      if (resolveIdentityAuthority(config).userLifecycle === 'external') {
+        await getUserAuthorityCheck(app)(tenant.tenant_id, authenticatedUser.user_id);
+      }
+      if (authenticatedUser.access_disabled) {
+        return res.status(401).json(jsonRpcError(req, -32001, 'User access is disabled'));
+      }
       if (!authenticatedUserTenantMatches(authenticatedUser, tenant)) {
         console.warn('⚠️  MCP authenticated user tenant does not match request tenant');
         return res.status(401).json({
@@ -833,6 +841,9 @@ export function setupMCPRoutes(
         return requestContext.run(mcpContext, () => nodeProtocolHandler(req, res, req.body));
       });
     } catch (error) {
+      if ((error as { code?: number })?.code === 401 && !res.headersSent) {
+        return res.status(401).json(jsonRpcError(req, -32001, 'User authority unavailable'));
+      }
       console.error('❌ MCP request failed:', error);
       if (!res.headersSent) {
         return res.status(500).json({

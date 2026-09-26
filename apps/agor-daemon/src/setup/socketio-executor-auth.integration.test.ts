@@ -301,7 +301,7 @@ async function startHarness(
       userTokensValidAfter = new Date(Date.now() + 1_000);
     },
     userToken: jwt.sign(
-      { sub: USER_ID, type: 'access', tenant_id: REPLACEMENT_TENANT_ID },
+      { sub: USER_ID, type: 'access', auth_format: 1, tenant_id: REPLACEMENT_TENANT_ID },
       JWT_SECRET,
       {
         algorithm: 'HS256',
@@ -774,7 +774,7 @@ describe('executor Socket.IO connection capability', () => {
     const harness = await startHarness();
     harnesses.push(harness);
     const expiringToken = jwt.sign(
-      { sub: USER_ID, type: 'access', tenant_id: REPLACEMENT_TENANT_ID },
+      { sub: USER_ID, type: 'access', auth_format: 1, tenant_id: REPLACEMENT_TENANT_ID },
       JWT_SECRET,
       {
         algorithm: 'HS256',

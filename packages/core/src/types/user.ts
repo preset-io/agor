@@ -515,6 +515,8 @@ export interface BaseUserFields {
  * User type - Authentication and authorization
  */
 export interface User extends BaseUserFields {
+  /** Durable administrator access gate, independent of login revocation. */
+  access_disabled?: boolean;
   user_id: UserID;
   /**
    * Preferred image avatar URL for this user.
@@ -588,6 +590,7 @@ export interface User extends BaseUserFields {
  * auth services use it while validating or issuing browser tokens.
  */
 export type UserAuthMetadata = object & {
+  access_disabled?: boolean;
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
   /**
@@ -715,6 +718,9 @@ export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {
  * Update user input
  */
 export interface UpdateUserInput extends Partial<BaseUserFields> {
+  access_disabled?: boolean;
+  /** Command: invalidate existing runtime logins, not personal API keys. */
+  revoke_logins?: boolean;
   password?: string;
   avatar_url?: string | null;
   avatar?: string;
@@ -768,4 +774,15 @@ export interface SessionEnvSelection {
   session_id: string;
   env_var_name: string;
   created_at: Date;
+}
+
+/** Complete trusted external authority state; decimal strings avoid JS integer truncation. */
+export interface ExternalUserAuthorityState {
+  provider: string;
+  issuer: string;
+  subject: string;
+  revision: string;
+  login_epoch: string;
+  active: boolean;
+  role: UserRole;
 }

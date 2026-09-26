@@ -1,6 +1,10 @@
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
-import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
+import {
+  authCredentialGenerationClaim,
+  authTokenIssuedAtClaim,
+  sourceApiKeyClaims,
+} from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
 /**
@@ -76,6 +80,14 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
       refreshTokenTtl,
       {
         ...authCredentialGenerationClaim(context.result.user),
+        // Feathers replaces payload when it mints the initial strategy token.
+        // Raw-key lineage therefore lives on the trusted strategy result, not
+        // that intermediate payload. JWT reauthentication uses verified claims.
+        ...sourceApiKeyClaims(
+          context.result.authentication?.strategy === 'api-key'
+            ? context.result.authentication
+            : context.result.authentication?.payload
+        ),
         ...authTokenIssuedAtClaim(now(), context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),
       }

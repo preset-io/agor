@@ -42,6 +42,8 @@ export type {
  * Available in hook context and service params after authentication.
  */
 export interface AuthenticatedUser {
+  /** Current durable administrator gate when materialized from a user row. */
+  access_disabled?: boolean;
   /** Tenant associated with this authenticated identity when app-level multi-tenancy is enabled. */
   tenant_id?: import('./tenant').TenantID | string;
   /** User ID (UUIDv7) */

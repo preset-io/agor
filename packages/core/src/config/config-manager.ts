@@ -717,6 +717,7 @@ function validateConfig(config: AgorConfig): void {
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
+    'authority',
     'enabled',
     'exchange_url',
     'issuer',

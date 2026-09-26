@@ -173,6 +173,8 @@ export interface AgorUISettings {
  * normal runtime auth tokens.
  */
 export interface AgorExternalLaunchSettings {
+  /** Dedicated inbound authority verification; never the outbound exchange credential. */
+  authority?: { public_key: string; cell_id: string; tenant_ids: string[] };
   /** Enable POST /auth/launch (default: false). */
   enabled?: boolean;
 
