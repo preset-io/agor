@@ -1506,12 +1506,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
     }
 
-    const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
-      targets.map((target) => ({
-        id: target.session.session_id,
-        archived: target.archived,
-        archivedReason: target.archivedReason,
-      }))
+    // Carry remote relationships on the patched rows, as get/find do. The UI
+    // projects remote-created children as surrogates under their creator from
+    // these edges; a restored creator without them would lose its surrogates.
+    const affectedSessions = await this.enrichRemoteRelationships(
+      await this.sessionRepo.updateArchiveStateForTargets(
+        targets.map((target) => ({
+          id: target.session.session_id,
+          archived: target.archived,
+          archivedReason: target.archivedReason,
+        }))
+      )
     );
 
     for (const affectedSession of affectedSessions) {

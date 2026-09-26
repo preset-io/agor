@@ -361,7 +361,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
           ? 'Archive session and same-branch children?'
           : 'Unarchive session and same-branch children?';
         const description = nextArchived
-          ? 'This will archive this session and its same-branch forked or spawned descendants. Remote-created sessions remain active.'
+          ? 'This will archive this session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.'
           : 'This will restore this session and same-branch descendants archived because of their parent. Remote-created sessions are unchanged.';
         const tooltip = nextArchived
           ? 'Archive session and child sessions'

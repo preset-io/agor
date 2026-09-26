@@ -321,9 +321,21 @@ function applySessionPatchToBranchBuckets(
   };
 
   if (isArchived) {
+    // Drop the session itself (and any surrogate of it) from every bucket, plus
+    // the remote-created surrogates it projected under its own branch. Those
+    // surrogates point their genealogy at this session, so leaving them would
+    // re-root them in the tree once the archived creator is no longer rendered.
+    // The remote targets themselves keep their independent lifecycle.
     for (const [branchId, bucket] of next) {
-      if (bucket.some((item) => item.session_id === session.session_id)) {
-        removeFromBranch(branchId);
+      const filtered = bucket.filter(
+        (item) =>
+          item.session_id !== session.session_id &&
+          item.remote_surrogate?.source_session_id !== session.session_id
+      );
+      if (filtered.length !== bucket.length) {
+        changed = true;
+        if (filtered.length > 0) next.set(branchId, filtered);
+        else next.delete(branchId);
       }
     }
     return changed ? next : prevBuckets;
