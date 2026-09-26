@@ -26,6 +26,7 @@ export {
   SessionPill,
   SpawnPill,
   StatusPill,
+  StorageModePill,
   TeammatePill,
   TokenCountPill,
   ToolCountPill,
