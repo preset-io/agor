@@ -1,22 +1,88 @@
 import { randomUUID } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import { constants } from 'node:fs';
-import { type FileHandle, link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import {
+  type FileHandle,
+  link,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rename,
+  unlink,
+} from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { lock } from 'proper-lockfile';
 
-/** Flat, manifest-addressed bundle files. Directory FD pins the root against swaps. */
+/**
+ * How bundle entries are addressed relative to the opened root.
+ * - `proc-fd` (Linux): `/proc/self/fd/N/name` resolves through the pinned directory
+ *   FD, so a later swap of any path component cannot redirect an operation.
+ * - `path` (macOS, other POSIX): Node has no `openat`, so entries are addressed by
+ *   canonical path. Swap resistance instead comes from requiring every ancestor to
+ *   be modifiable only by root or the caller (sticky shared dirs allowed), plus a
+ *   dev/ino recheck of the root before every entry operation.
+ */
+export type KnowledgeDirectoryAnchor = 'proc-fd' | 'path';
+
+export function knowledgeDirectoryAnchor(
+  platform: NodeJS.Platform = process.platform
+): KnowledgeDirectoryAnchor {
+  if (platform === 'win32')
+    throw new Error(
+      'Knowledge export/import is not supported on Windows yet (no O_NOFOLLOW or POSIX ownership checks); run the CLI under WSL, macOS or Linux'
+    );
+  return platform === 'linux' ? 'proc-fd' : 'path';
+}
+
+const defaultTrustedOwners = () => [0, ...(process.getuid ? [process.getuid()] : [])];
+const sameInode = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
+
+/** Reject ancestors another non-root user could rename, replace or re-point. */
+export async function assertTrustedAncestors(
+  directory: string,
+  trustedOwners: readonly number[] = defaultTrustedOwners()
+) {
+  for (let current = directory; ; ) {
+    const stat = await lstat(current);
+    const trustedOwner = trustedOwners.includes(stat.uid);
+    const shared = (stat.mode & 0o022) !== 0;
+    if (!stat.isDirectory() || !trustedOwner || (shared && (stat.mode & 0o1000) === 0))
+      throw new Error(
+        `Unsafe Knowledge bundle location: ${current} must be a directory owned by you or root and not writable by others (sticky shared directories are allowed)`
+      );
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+/** Flat, manifest-addressed bundle files. The root is pinned against swaps (see anchor). */
 export class KnowledgeDirectory {
   private constructor(
     private handle: FileHandle,
     readonly path: string,
-    private writable: boolean
+    private writable: boolean,
+    private anchor: KnowledgeDirectoryAnchor,
+    private root: Stats
   ) {}
   private locked = false;
   private release: (() => Promise<void>) | undefined;
-  static async open(path: string, writable = false): Promise<KnowledgeDirectory> {
-    if (process.platform !== 'linux')
-      throw new Error('Safe Knowledge directory transfers currently require Linux');
-    const absolute = resolve(path);
+  static async open(
+    path: string,
+    writable = false,
+    {
+      anchor = knowledgeDirectoryAnchor(),
+      trustedOwners,
+    }: { anchor?: KnowledgeDirectoryAnchor; trustedOwners?: readonly number[] } = {}
+  ): Promise<KnowledgeDirectory> {
+    let absolute = resolve(path);
+    if (anchor === 'path') {
+      // Canonicalize only the parent so a symlinked final component is still refused.
+      const parent = await realpath(dirname(absolute));
+      await assertTrustedAncestors(parent, trustedOwners);
+      absolute = join(parent, basename(absolute));
+    }
     if (writable)
       await mkdir(absolute, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'EEXIST') throw error;
@@ -30,22 +96,40 @@ export class KnowledgeDirectory {
       await handle.close();
       throw new Error('Export directory must be owned by you and private (mode 0700)');
     }
-    return new KnowledgeDirectory(handle, absolute, writable);
+    const directory = new KnowledgeDirectory(handle, absolute, writable, anchor, stat);
+    try {
+      await directory.verifyRoot();
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+    return directory;
   }
-  private entry(name: string) {
+  private get base() {
+    return this.anchor === 'proc-fd' ? `/proc/self/fd/${this.handle.fd}` : this.path;
+  }
+  /** Path mode only: the path must still name the directory we opened. */
+  private async verifyRoot() {
+    if (this.anchor !== 'path') return;
+    const current = await lstat(this.path).catch(() => null);
+    if (!current?.isDirectory() || !sameInode(current, this.root))
+      throw new Error('Knowledge bundle directory was moved or replaced during transfer');
+  }
+  private async entry(name: string) {
     if (
       !/^(?:d[0-9]{6}(?:-[a-f0-9]{64})?\.md|manifest\.json|checkpoint\.json|\.lock|\.tmp-[a-f0-9-]+)$/.test(
         name
       )
     )
       throw new Error('Unsafe bundle filename');
-    return `/proc/self/fd/${this.handle.fd}/${name}`;
+    await this.verifyRoot();
+    return `${this.base}/${name}`;
   }
   async lock() {
     if (!this.writable) throw new Error('Read-only bundle');
-    this.release = await lock(`/proc/self/fd/${this.handle.fd}`, {
+    this.release = await lock(this.base, {
       realpath: false,
-      lockfilePath: this.entry('.lock'),
+      lockfilePath: await this.entry('.lock'),
       stale: 30_000,
       update: 10_000,
       onCompromised: () => {
@@ -56,7 +140,7 @@ export class KnowledgeDirectory {
   }
   async hasLock(): Promise<boolean> {
     try {
-      await lstat(this.entry('.lock'));
+      await lstat(await this.entry('.lock'));
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
@@ -67,7 +151,7 @@ export class KnowledgeDirectory {
     let file: FileHandle;
     try {
       file = await open(
-        this.entry(name),
+        await this.entry(name),
         constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
       );
     } catch (error) {
@@ -75,6 +159,7 @@ export class KnowledgeDirectory {
       throw error;
     }
     try {
+      await this.verifyRoot();
       const stat = await file.stat();
       if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit)
         throw new Error(`Unsafe or oversized bundle file: ${name}`);
@@ -98,7 +183,7 @@ export class KnowledgeDirectory {
   async write(name: string, content: string) {
     if (!this.locked) throw new Error('Bundle write requires exclusive lock');
     const temporary = `.tmp-${randomUUID()}`;
-    const file = await open(this.entry(temporary), 'wx', 0o600);
+    const file = await open(await this.entry(temporary), 'wx', 0o600);
     try {
       await file.writeFile(content, 'utf8');
       await file.sync();
@@ -106,11 +191,13 @@ export class KnowledgeDirectory {
       await file.close();
     }
     try {
-      if (name.startsWith('d')) await link(this.entry(temporary), this.entry(name));
-      else await rename(this.entry(temporary), this.entry(name));
+      if (name.startsWith('d')) await link(await this.entry(temporary), await this.entry(name));
+      else await rename(await this.entry(temporary), await this.entry(name));
       await this.handle.sync();
     } finally {
-      await unlink(this.entry(temporary)).catch(() => {});
+      await this.entry(temporary)
+        .then(unlink)
+        .catch(() => {});
     }
   }
   async close() {
