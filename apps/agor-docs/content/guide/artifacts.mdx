@@ -25,7 +25,7 @@ Under the hood, artifacts are powered by [Sandpack](https://sandpack.codesandbox
 
 ## How it works
 
-1. **Agent writes a folder** of ordinary source files (a regular `package.json`, `App.tsx`, etc.), typically inside the branch so the code is version-controlled.
+1. **Agent writes a folder** of UTF-8 text source files (a regular `package.json`, `App.tsx`, etc.), typically inside the branch so the code is version-controlled. Sandpack's file map is text-only: embed local images/fonts as data URLs in source or use controlled external URLs rather than placing binary files in the folder.
 2. **Agent calls `agor_artifacts_publish`** with the folder path, the board, the Sandpack template, and (optionally) declarative metadata: `requiredEnvVars`, `agorGrants`, `sandpackConfig`. The daemon serializes the file map into the database.
 3. **The artifact appears on the board** as an interactive node with a live Sandpack preview.
 4. **Agent edits files and republishes** with the same `artifactId`. The board hot-reloads via WebSocket.
@@ -373,6 +373,7 @@ Artifact filesystem operations include containment guards:
 
 - **Path traversal protection**: All file paths are resolved and validated to stay within the branch boundary
 - **Symlink filtering**: Symbolic links are skipped during file enumeration to prevent filesystem escape
+- **Text and size validation**: Binary files are rejected before transport (instead of being lossy-decoded as UTF-8), and the executor enforces bounded file-count, per-file, total-source, and serialized-request limits below the shared Socket.IO ceiling
 - **Browser sandboxing**: Artifacts render in [Sandpack's](https://sandpack.codesandbox.io/) in-browser bundler, isolated from the host
 
 ---

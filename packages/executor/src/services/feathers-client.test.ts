@@ -2,6 +2,7 @@ import type { AgorClient } from '@agor/core/api';
 import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import {
+  assertExecutorRequestDataWithinBudget,
   EXECUTOR_REQUEST_DATA_BUDGET_BYTES,
   registerExecutorRequestSizeGuard,
   registerTerminalTaskAcknowledgementHook,
@@ -11,6 +12,14 @@ describe('executor transport budget', () => {
   it('derives a budget below the shared Socket.IO ceiling', () => {
     expect(EXECUTOR_REQUEST_DATA_BUDGET_BYTES).toBe(800_000);
     expect(EXECUTOR_REQUEST_DATA_BUDGET_BYTES).toBeLessThan(SOCKET_IO_MAX_BUFFER_SIZE_BYTES);
+  });
+
+  it('rejects an oversized non-transcript request before Socket.IO disconnects', () => {
+    expect(() =>
+      assertExecutorRequestDataWithinBudget('artifacts', 'publishFromExecutor', {
+        files: { '/fictional.txt': 'x'.repeat(EXECUTOR_REQUEST_DATA_BUDGET_BYTES + 1) },
+      })
+    ).toThrow(/transport budget.*artifacts\.publishFromExecutor/);
   });
 });
 
