@@ -92,7 +92,7 @@
     "express-static-gzip": "^3.0.2",
     "feathers-swagger": "^3.0.0",
     "handlebars": "^4.7.8",
-    "inquirer": "^12.10.0",
+    "inquirer": "^14.2.2",
     "ioredis": "^5.11.1",
     "js-yaml": "^4.3.2",
     "jsonwebtoken": "^9.0.3",
