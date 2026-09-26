@@ -152,6 +152,7 @@ describe('executor acknowledgement failure convergence', () => {
     let handshakeAuthenticationCount = 0;
     let reconnectCount = 0;
     let shouldStrandAcknowledgement = true;
+    const terminalBoundaryOrder: string[] = [];
     let resolveReconnected!: () => void;
     const reconnected = new Promise<void>((resolve) => {
       resolveReconnected = resolve;
@@ -190,6 +191,17 @@ describe('executor acknowledgement failure convergence', () => {
     taskService.taskRepo = {
       async updateFromExecutor(_id, data) {
         task = { ...task, ...data };
+        if (data.status === TaskStatus.FAILED) {
+          // Production commits the terminal Task and its Session projection in
+          // one repository transaction. Keep this boundary fake faithful: the
+          // service may publish the Session immediately after the repo resolves.
+          session = {
+            ...session,
+            status: SessionStatus.FAILED,
+            ready_for_prompt: true,
+          };
+          terminalBoundaryOrder.push('repository-terminal-commit');
+        }
         return task;
       },
     };
@@ -209,6 +221,9 @@ describe('executor acknowledgement failure convergence', () => {
     app.use('sessions', {
       async get(_id: string, params?: SocketParams) {
         requireSocketAuthentication(params);
+        if (task.status === TaskStatus.FAILED) {
+          terminalBoundaryOrder.push('service-terminal-session-read');
+        }
         return session;
       },
       async patch(_id: string, data: Partial<Session>, params?: SocketParams) {
@@ -325,5 +340,9 @@ describe('executor acknowledgement failure convergence', () => {
     expect(task.error_message).toBe((rejection as Error).message);
     expect(task.error_message).toMatch(/disconnected|timed out/i);
     expect(session).toMatchObject({ status: SessionStatus.FAILED, ready_for_prompt: true });
+    expect(terminalBoundaryOrder).toEqual([
+      'repository-terminal-commit',
+      'service-terminal-session-read',
+    ]);
   });
 });

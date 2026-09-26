@@ -9,13 +9,7 @@
 import { generateId, shortId } from '@agor/core';
 import { AGOR_MCP_SERVER_NAME } from '@agor/core/mcp';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import {
-  MessageRole,
-  PermissionScope,
-  PermissionStatus,
-  SessionStatus,
-  TaskStatus,
-} from '@agor/core/types';
+import { MessageRole, PermissionScope, PermissionStatus, TaskStatus } from '@agor/core/types';
 import type {
   MCPServerRepository,
   MessagesRepository,
@@ -271,8 +265,10 @@ export function createCanUseToolCallback(
         console.log(`✅ [canUseTool] Permission request updated: ${permissionStatus}`);
       }
 
-      // Handle timeout: set task/session to timed_out, deny the tool call
-      // The executor will exit cleanly and the user can re-prompt to retry.
+      // Terminalize the Task and deny the tool call. The daemon projects every
+      // terminal Task state onto its Session before acknowledging this request.
+      // A follow-up executor request would be invalid because the terminal
+      // patch revokes this Task's scoped credential.
       if (decision.timedOut) {
         console.log(
           `⏰ [canUseTool] Permission timed out for ${toolName}, setting timed_out state...`
@@ -282,16 +278,6 @@ export function createCanUseToolCallback(
           status: TaskStatus.TIMED_OUT,
           completed_at: new Date().toISOString(),
         });
-
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.TIMED_OUT,
-            ready_for_prompt: true,
-          });
-          console.log(
-            `✅ [canUseTool] Session ${sessionId} set to timed_out after permission timeout`
-          );
-        }
 
         return {
           behavior: 'deny' as const,
