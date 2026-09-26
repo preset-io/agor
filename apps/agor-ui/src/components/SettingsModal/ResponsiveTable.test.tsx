@@ -124,3 +124,13 @@ describe('ResponsiveTable', () => {
     expect(screen.getByRole('table')).toBeInTheDocument();
   });
 });
+
+it('lets a composed identity occupy the full mobile card width', () => {
+  mockMobile = true;
+  render(
+    <ResponsiveTable<Row> primaryColumnKey="name" columns={columns} dataSource={data} rowKey="id" />
+  );
+  const identity = screen.getByText('Alpha').closest('dd');
+  expect(identity?.style.textAlign).not.toBe('right');
+  expect(screen.getByRole('button', { name: 'Edit Alpha' })).toBeInTheDocument();
+});

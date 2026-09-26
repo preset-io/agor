@@ -219,6 +219,15 @@ jobs:
       - run: node scripts/ci-test-matrix.mjs install ui-1
       - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
+      - name: Attach synthetic settings screenshots
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: settings-layout-${{ matrix.shard }}
+          path: apps/agor-ui/src/components/SettingsModal/.vitest/settings-*.png
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Do not rename this job: branch protection currently requires the generated
   # context `CI / Lint, typecheck, build, test (pull_request)`. `always()` makes

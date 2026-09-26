@@ -3,10 +3,12 @@
  * The shell removes the navigation rail and content padding from the modal,
  * so a standalone full-width table does not reproduce this layout contract.
  */
-import type { AgorClient, MCPServer, User } from '@agor-live/client';
+import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-live/client';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { App as AntdApp, ConfigProvider } from 'antd';
+import { App as AntdApp, ConfigProvider, theme } from 'antd';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
 import { SettingsModal } from './SettingsModal';
@@ -48,34 +50,69 @@ const client = {
   }),
 } as unknown as AgorClient;
 
-function renderSettings() {
+function renderSettings(dark = false, activeTab: 'mcp' | 'gateway' | 'teammates' = 'mcp') {
   agorStore.setState({
     mcpServerById: new Map([[SERVER.mcp_server_id, SERVER]]),
     userById: new Map([[ADMIN.user_id, ADMIN]]),
+    gatewayChannelById: new Map([
+      [
+        'fixture-channel',
+        {
+          id: 'fixture-channel',
+          name: 'A very long gateway name with an unbroken suffix ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789',
+          channel_type: 'discord',
+          created_by: ADMIN.user_id,
+          agor_user_id: ADMIN.user_id,
+          target_branch_id: 'not-in-inventory',
+          enabled: false,
+          config: {},
+        } as GatewayChannel,
+      ],
+    ]),
+    branchById: new Map([
+      [
+        'fixture-teammate',
+        {
+          branch_id: 'fixture-teammate',
+          name: 'A very long teammate name ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789',
+          primary_owner_user_id: ADMIN.user_id,
+          created_by: ADMIN.user_id,
+          notes: 'Keyboard and touch accessible teammate description.',
+          custom_context: { teammate: { kind: 'teammate' } },
+        } as unknown as Branch,
+      ],
+    ]),
   });
 
   return render(
-    <ConfigProvider theme={{ token: { motion: false } }}>
-      <AntdApp>
-        <ConnectionProvider
-          value={{
-            connected: true,
-            connecting: false,
-            authGeneration: 1,
-            outOfSync: false,
-            capturedSha: null,
-            currentSha: null,
-          }}
-        >
-          <SettingsModal
-            open
-            activeTab="mcp"
-            currentUser={ADMIN}
-            client={client}
-            onClose={vi.fn()}
-          />
-        </ConnectionProvider>
-      </AntdApp>
+    <ConfigProvider
+      theme={{
+        algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        token: { motion: false },
+      }}
+    >
+      <MemoryRouter>
+        <AntdApp>
+          <ConnectionProvider
+            value={{
+              connected: true,
+              connecting: false,
+              authGeneration: 1,
+              outOfSync: false,
+              capturedSha: null,
+              currentSha: null,
+            }}
+          >
+            <SettingsModal
+              open
+              activeTab={activeTab}
+              currentUser={ADMIN}
+              client={client}
+              onClose={vi.fn()}
+            />
+          </ConnectionProvider>
+        </AntdApp>
+      </MemoryRouter>
     </ConfigProvider>
   );
 }
@@ -109,11 +146,7 @@ async function expectTableFits() {
     .map((header) => header.textContent);
 
   expect(table.style.tableLayout).toBe('fixed');
-  expect(headers).toEqual(
-    window.innerWidth >= 1200
-      ? ['Name', 'Transport', 'Scope', 'Status', 'Health', 'Owner', 'Source', 'Actions']
-      : ['Server', 'Actions']
-  );
+  expect(headers).toEqual(['Server', 'Actions']);
   expect(tableViewport.scrollWidth).toBeLessThanOrEqual(tableViewport.clientWidth + 1);
   expectInside(tableViewport, actions);
   expectInside(tableViewport, view);
@@ -140,8 +173,47 @@ afterEach(() => {
 });
 
 describe('MCP Servers Settings table layout (real browser)', () => {
-  it('keeps the table and its complete action group inside the modal at every supported viewport', async () => {
-    renderSettings();
-    await expectTableFits();
-  });
+  it.each([false, true])(
+    'theme dark=%s keeps the table and its complete action group inside the modal at every supported viewport',
+    async (dark) => {
+      renderSettings(dark);
+      await expectTableFits();
+      await page.screenshot({
+        path: `./.vitest/settings-mcp-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
+      });
+    }
+  );
+});
+
+describe.each(['gateway', 'teammates'] as const)('%s settings layout', (tab) => {
+  it.each([false, true])(
+    'fits light/dark=%s with long identities and reachable actions',
+    async (dark) => {
+      renderSettings(dark, tab);
+      const edit = await screen.findByRole('button', {
+        name: tab === 'gateway' ? 'Edit' : 'Edit teammate',
+      });
+      const dialog = screen.getByRole('dialog');
+      expectInside(dialog, edit);
+      await waitFor(() => expect(edit).toBeVisible());
+      expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth + 1);
+      for (const table of dialog.querySelectorAll('table')) {
+        const viewport = table.closest('.ant-table-content') as HTMLElement;
+        expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
+        expectInside(viewport, edit);
+      }
+      edit.focus();
+      expect(edit).toHaveFocus();
+      await page.screenshot({
+        path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
+      });
+      if (tab === 'teammates') {
+        screen.getByRole('button', { name: /^Description for/ }).focus();
+        await userEvent.keyboard('{Enter}');
+        expect(
+          await screen.findByText('Keyboard and touch accessible teammate description.')
+        ).toBeVisible();
+      }
+    }
+  );
 });

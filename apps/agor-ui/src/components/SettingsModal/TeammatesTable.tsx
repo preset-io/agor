@@ -8,7 +8,13 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  AimOutlined,
+  EditOutlined,
+  InfoCircleOutlined,
+  PlusOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import { Button, Empty, Input, Popover, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -16,7 +22,6 @@ import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
-import { UserAvatar } from '../metadata/UserAvatar';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -81,7 +86,10 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       .sort((a, b) => {
         const nameA = getTeammateConfig(a)?.displayName ?? a.name;
         const nameB = getTeammateConfig(b)?.displayName ?? b.name;
-        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        return (
+          nameA.localeCompare(nameB, undefined, { sensitivity: 'base' }) ||
+          a.branch_id.localeCompare(b.branch_id)
+        );
       });
 
     if (!term) return teammateBranches;
@@ -94,6 +102,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         config?.displayName,
         w.name,
         w.notes,
+        userById.get(w.primary_owner_user_id ?? '')?.name,
         creator?.name,
         creator?.email,
         repo?.name,
@@ -107,89 +116,51 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
     {
       title: 'Teammate',
       key: 'teammate',
-      width: 220,
       render: (_: unknown, record: Branch) => {
         const config = getTeammateConfig(record);
+        const owner = userById.get(record.primary_owner_user_id ?? '');
+        const creator = userById.get(record.created_by);
         return (
-          <Space>
-            {config?.emoji ? (
-              <span style={{ fontSize: 18 }}>{config.emoji}</span>
-            ) : (
-              <RobotOutlined style={{ color: token.colorInfo }} />
-            )}
-            <Typography.Text strong>
-              <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
+          <Space
+            orientation="vertical"
+            size={token.marginXXS}
+            style={{ width: '100%', minWidth: 0 }}
+          >
+            <Space wrap>
+              <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
+                {config?.emoji || <RobotOutlined />}{' '}
+                <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
+              </Typography.Text>
+              {record.notes?.trim() && (
+                <Popover
+                  content={
+                    <div style={{ maxWidth: 'min(480px, 75vw)', maxHeight: 400, overflow: 'auto' }}>
+                      <MarkdownRenderer content={record.notes} showControls={false} />
+                    </div>
+                  }
+                  trigger="click"
+                >
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<InfoCircleOutlined />}
+                    aria-label={`Description for ${config?.displayName ?? record.name}`}
+                    onClick={(event) => event.stopPropagation()}
+                  />
+                </Popover>
+              )}
+            </Space>
+            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
+              Primary owner: {owner?.name || owner?.email || 'Unavailable user'}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
+              Created by:{' '}
+              {creator?.name ||
+                creator?.email ||
+                (record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown user')}
             </Typography.Text>
           </Space>
         );
-      },
-    },
-    {
-      title: 'Description',
-      key: 'description',
-      render: (_: unknown, record: Branch) => {
-        const notes = (record.notes ?? '').trim();
-        if (!notes) {
-          return (
-            <Typography.Text type="secondary" italic style={{ fontSize: 12 }}>
-              No description
-            </Typography.Text>
-          );
-        }
-        const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
-        // Cell shows plain first-line ellipsis; popover renders full markdown.
-        // MarkdownRenderer's `inline` is currently a no-op (Streamdown still
-        // emits block nodes), so plain text is the honest preview here.
-        return (
-          <Popover
-            content={
-              <div
-                className="markdown-compact"
-                style={{
-                  maxWidth: 480,
-                  maxHeight: 400,
-                  overflowY: 'auto',
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                }}
-              >
-                <MarkdownRenderer content={notes} showControls={false} />
-              </div>
-            }
-            trigger="hover"
-            placement="topLeft"
-            mouseEnterDelay={0.3}
-          >
-            <Typography.Text
-              type="secondary"
-              ellipsis
-              style={{
-                display: 'block',
-                maxWidth: 480,
-                fontSize: 12,
-                cursor: 'help',
-              }}
-            >
-              <HighlightMatch text={firstLine} query={searchTerm} />
-            </Typography.Text>
-          </Popover>
-        );
-      },
-    },
-    {
-      title: 'Creator',
-      key: 'creator',
-      width: 160,
-      render: (_: unknown, record: Branch) => {
-        const user = userById.get(record.created_by);
-        if (!user || record.created_by === 'anonymous') {
-          return (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown User'}
-            </Typography.Text>
-          );
-        }
-        return <UserAvatar user={user} showName size="small" />;
       },
     },
     {
@@ -204,6 +175,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
                 type="text"
                 size="small"
                 icon={<AimOutlined />}
+                aria-label="Center map on teammate"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleRecenter(record);
@@ -216,6 +188,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
               type="text"
               size="small"
               icon={<EditOutlined />}
+              aria-label="Edit teammate"
               onClick={(e) => {
                 e.stopPropagation();
                 onRowClick?.(record);
@@ -284,9 +257,11 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
       {(teammates.length > 0 || searchTerm) && (
         <ResponsiveTable
+          primaryColumnKey="teammate"
           dataSource={teammates}
           columns={columns}
-          scroll={{ x: 720 }}
+          tableLayout="fixed"
+          key={searchTerm}
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"

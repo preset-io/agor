@@ -850,7 +850,7 @@ describe('MCPServersTable ownership', () => {
 
     await waitFor(() => expect(find).toHaveBeenCalled());
 
-    expect(screen.getByText('Shared with workspace')).toBeInTheDocument();
+    expect(screen.getByText('Shared')).toBeInTheDocument();
   });
 
   it('names the owner of a private server', async () => {
@@ -863,7 +863,7 @@ describe('MCPServersTable ownership', () => {
     await waitFor(() => expect(find).toHaveBeenCalled());
 
     expect(screen.getByText('Bob Member')).toBeInTheDocument();
-    expect(screen.queryByText('Shared with workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Shared')).not.toBeInTheDocument();
   });
 
   it('marks the signed-in member as the owner of their own server', async () => {
